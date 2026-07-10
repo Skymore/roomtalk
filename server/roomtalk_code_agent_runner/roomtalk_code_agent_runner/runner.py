@@ -19,6 +19,8 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import urlparse
 
+from .room_context_broker import start_room_context_broker
+
 SCHEMA_VERSION = 1
 READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 WRITE_TOOLS = ("Write", "Edit")
@@ -293,7 +295,7 @@ def _static_publish_enabled(env: dict[str, str]) -> bool:
     )
 
 
-def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
+def system_prompt_for_tools(tool_names: Iterable[str], mode: str, *, room_context_enabled: bool = False) -> str:
     available = tuple(tool_names)
     unavailable = tuple(
         tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL, BACKGROUND_SHELL_TOOL, PUBLISH_STATIC_SITE_TOOL)
@@ -312,10 +314,15 @@ def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
     available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
     unavailable_line = ", ".join(unavailable) if unavailable else "none"
     mode_guidance = (
-        "This run is read-only. Shell commands run in an OS sandbox with a read-only filesystem, no background processes, and network disabled unless this turn has scoped read-only RoomTalk context access. "
+        "This run is read-only. Shell commands run in an OS sandbox with a read-only filesystem, no background processes, and no direct IP network access. RoomTalk context, when available, is reached through a turn-scoped local read-only broker. "
         "Use Shell for inspection and validation, but do not attempt to modify files. If the user asks you to make changes, explain the proposed changes without applying them."
         if mode == "plan"
         else "This run may use only the available tools listed below. Do not call any unavailable tools."
+    )
+    room_context_guidance = (
+        "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Do not load the full room history by default."
+        if room_context_enabled and SHELL_TOOL in available
+        else ""
     )
     return f"""You are Code Agent, a terminal coding assistant.
 
@@ -324,6 +331,7 @@ Available tools for this run:
 
 Unavailable tools for this run: {unavailable_line}.
 {mode_guidance}
+{room_context_guidance}
 
 Use Read / Glob / Grep to verify the workspace before editing. Edit requires old_string to match exactly once.
 Keep all downloaded repositories, fetched reference files, generated files, and publish roots inside the current workspace. In RoomTalk sandboxes this is normally /workspace. Do not work in /tmp or /var/tmp unless a tool explicitly needs an ephemeral cache; workspace-scoped tools cannot read, edit, or publish files outside the workspace.
@@ -663,21 +671,12 @@ def _create_publish_static_site_tool(Tool, ToolOutcome, ToolSpec, request: Runne
 
 
 def _read_only_shell_argv(command: str, cwd: Path, env: dict[str, str]) -> list[str]:
-    allow_room_context_network = bool((env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip()) and bool(
-        (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
-    )
     argv = [
         "bwrap",
         "--die-with-parent",
         "--new-session",
         "--unshare-all",
     ]
-    if allow_room_context_network:
-        # Bubblewrap can only grant or deny the network namespace as a whole.
-        # Plan receives no RoomTalk write credentials; the scoped room-context
-        # token remains the authorization boundary for the only advertised
-        # network-backed command.
-        argv.append("--share-net")
     argv.extend([
         "--ro-bind", "/", "/",
         "--dev", "/dev",
@@ -692,7 +691,7 @@ def _read_only_shell_argv(command: str, cwd: Path, env: dict[str, str]) -> list[
         "--setenv", "ROOMTALK_WORKSPACE", str(cwd),
         "--setenv", "ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only",
     ])
-    for key in ("ROOMTALK_ROOM_CONTEXT_URL", "ROOMTALK_ROOM_CONTEXT_TOKEN"):
+    for key in ("ROOMTALK_ROOM_CONTEXT_SOCKET",):
         value = (env.get(key) or "").strip()
         if value:
             argv.extend(["--setenv", key, value])
@@ -717,8 +716,8 @@ def _create_read_only_shell_tool(
                 name=SHELL_TOOL,
                 description=(
                     "Execute a foreground shell command in an OS-enforced read-only sandbox. "
-                    "The workspace and system filesystem cannot be modified. Network is disabled "
-                    "unless this turn has scoped read-only RoomTalk context access."
+                    "The workspace and system filesystem cannot be modified and direct IP network "
+                    "access is disabled. Scoped RoomTalk reads use a local Unix socket broker."
                 ),
                 input_schema={
                     "type": "object",
@@ -923,7 +922,11 @@ def create_code_agent_engine(
     return Engine(
         llm,
         tools,
-        system=system_prompt_for_tools(tool_names, request.mode),
+        system=system_prompt_for_tools(
+            tool_names,
+            request.mode,
+            room_context_enabled=bool((env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()),
+        ),
         permissions=permissions,
         allowed_tools=allowed_tools,
         workspace=workspace,
@@ -1328,7 +1331,7 @@ def run_request(
         "message": "Code agent runner starting",
     })
 
-    with scoped_workspace_cwd(request.workspace):
+    with start_room_context_broker(os.environ, request.turn_id), scoped_workspace_cwd(request.workspace):
         model_step_sequence = 0
         model_step_usage: dict[str, Any] | None = None
 

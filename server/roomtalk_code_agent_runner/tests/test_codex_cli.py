@@ -208,10 +208,11 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
 
     call = popen.calls[0]
     call_args = call["args"]
-    assert call_args[call_args.index("--sandbox") + 1] == "workspace-write"
+    assert "--sandbox" not in call_args
     assert "--ask-for-approval" not in call_args
     assert 'approval_policy="never"' in call_args
-    assert "sandbox_workspace_write.network_access=true" in call_args
+    assert "sandbox_workspace_write.network_access=true" not in call_args
+    assert 'default_permissions="roomtalk-room-context-workspace"' in call_args
     assert "roomtalk publish-static-site" in call_args[-1]
     assert "roomtalk room history --limit 20 --json" in call_args[-1]
     assert "RoomTalk is the source of truth for room conversation history" in call_args[-1]
@@ -223,12 +224,16 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in child_env
     assert "ROOMTALK_ROOM_CONTEXT_TOKEN" not in child_env
     config_toml = (Path(child_env["CODEX_HOME"]) / "config.toml").read_text(encoding="utf-8")
+    assert 'default_permissions = "roomtalk-room-context-workspace"' in config_toml
+    assert 'extends = ":workspace"' in config_toml
+    assert '"*" = "allow"' in config_toml
     assert 'ROOMTALK_CODE_AGENT_ROOM_ID = "room-codex"' in config_toml
     assert 'ROOMTALK_CODE_AGENT_TURN_ID = "turn-codex"' in config_toml
     assert 'ROOMTALK_CODE_AGENT_CLI_ACCESS = "full"' in config_toml
     assert 'ROOMTALK_STATIC_PUBLISH_TOKEN = "turn-token"' in config_toml
-    assert 'ROOMTALK_ROOM_CONTEXT_URL = "https://room.example/api/code-agent/room-context"' in config_toml
-    assert 'ROOMTALK_ROOM_CONTEXT_TOKEN = "room-context-token"' in config_toml
+    assert 'ROOMTALK_ROOM_CONTEXT_SOCKET = "' in config_toml
+    assert 'ROOMTALK_ROOM_CONTEXT_URL = ' not in config_toml
+    assert 'ROOMTALK_ROOM_CONTEXT_TOKEN = ' not in config_toml
     assert 'ROOMTALK_E2B_PORT_HOST_TEMPLATE = "{port}.sandbox.e2b.dev"' in config_toml
     assert f'[projects."{tmp_path}"]' in config_toml
     assert f'[projects."{workspace}"]' in config_toml
@@ -239,6 +244,7 @@ def test_codex_plan_shell_env_only_exposes_read_only_roomtalk_capabilities(tmp_p
     request = codex_request(tmp_path)
     values = codex_cli._roomtalk_tool_env(request, {
         "CODE_AGENT_WORKSPACE_ROOT": str(tmp_path),
+        "ROOMTALK_ROOM_CONTEXT_SOCKET": str(tmp_path / "context.sock"),
         "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
         "ROOMTALK_ROOM_CONTEXT_TOKEN": "room-context-token",
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH": "true",
@@ -248,7 +254,9 @@ def test_codex_plan_shell_env_only_exposes_read_only_roomtalk_capabilities(tmp_p
     }, tmp_path)
 
     assert values["ROOMTALK_CODE_AGENT_CLI_ACCESS"] == "read-only"
-    assert values["ROOMTALK_ROOM_CONTEXT_TOKEN"] == "room-context-token"
+    assert values["ROOMTALK_ROOM_CONTEXT_SOCKET"] == str(tmp_path / "context.sock")
+    assert "ROOMTALK_ROOM_CONTEXT_TOKEN" not in values
+    assert "ROOMTALK_ROOM_CONTEXT_URL" not in values
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in values
     assert "ROOMTALK_STATIC_PUBLISH_URL" not in values
     assert "ROOMTALK_E2B_PORT_HOST_TEMPLATE" not in values

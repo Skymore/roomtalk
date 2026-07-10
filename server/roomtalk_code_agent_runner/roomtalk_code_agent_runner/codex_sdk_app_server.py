@@ -46,6 +46,7 @@ from .codex_cli import (
     config_from_env,
 )
 from .runner import EventEmitter, RunnerError, RunnerRequest, validate_workspace_path
+from .room_context_broker import start_room_context_broker
 
 SdkClientFactory = Callable[[Any, Callable[[str, dict[str, Any] | None], dict[str, Any]]], Any]
 
@@ -137,6 +138,7 @@ def run_request(
     state = _AppServerRunState(roomtalk_turn_id=request.turn_id)
     approvals = _SdkApprovalCoordinator(request=request, emitter=emitter, state=state, config=config, codex_home=codex_home)
     client: Any | None = None
+    room_context_broker = start_room_context_broker(env, request.turn_id)
 
     emitter.emit({
         "type": "status",
@@ -163,7 +165,7 @@ def run_request(
                 workspace=workspace,
                 fallback_session_id=request.session_id,
             )
-            thread_id = _open_thread(client, request, workspace, emitter, mapper)
+            thread_id = _open_thread(client, request, env, workspace, emitter, mapper)
             mapper.session_id = thread_id
             state.set_thread_id(thread_id)
 
@@ -186,6 +188,7 @@ def run_request(
         if refreshed_auth.exists() and config.refreshed_auth_json_path:
             _write_private_file(config.refreshed_auth_json_path, refreshed_auth.read_text(encoding="utf-8"))
     finally:
+        room_context_broker.close()
         state.stop()
         approvals.stop()
         _close_client(client)
@@ -251,13 +254,14 @@ def run_thread_query_request(
 def _open_thread(
     client: Any,
     request: RunnerRequest,
+    env: dict[str, str],
     workspace: Path,
     emitter: EventEmitter,
     mapper: CodexAppServerJsonRpcMapper,
 ) -> str:
     if request.session_id:
         try:
-            response = client.thread_resume(request.session_id, _thread_resume_params(request, workspace))
+            response = client.thread_resume(request.session_id, _thread_resume_params(request, env, workspace))
             thread_id = _extract_nested_string(response, "thread", "id")
             if thread_id:
                 return thread_id
@@ -265,7 +269,7 @@ def _open_thread(
         except Exception:
             emitter.emit(mapper._status("running", "codex SDK app-server resume failed; starting a new thread"))
 
-    response = client.thread_start(_thread_start_params(request, workspace))
+    response = client.thread_start(_thread_start_params(request, env, workspace))
     thread_id = _extract_nested_string(response, "thread", "id")
     if not thread_id:
         raise RunnerError("Codex SDK thread/start response did not include thread.id", code="codex_sdk_app_server_protocol_error", turn_id=request.turn_id)

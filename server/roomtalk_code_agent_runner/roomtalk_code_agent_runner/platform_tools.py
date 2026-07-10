@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -93,7 +94,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     base_url = (env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip().rstrip("/")
     token = (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
-    if not base_url or not token:
+    socket_path = (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
+    if not socket_path and (not base_url or not token):
         raise RunnerError("Room context is not available for this turn", code="room_context_unavailable")
 
     if args.room_command == "history":
@@ -110,7 +112,43 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
     else:  # pragma: no cover - argparse prevents this.
         raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
 
+    if socket_path:
+        return _get_room_context_from_broker(socket_path, path)
     return _get_room_context(f"{base_url}{path}", token)
+
+
+def _get_room_context_from_broker(socket_path: str, path: str) -> dict[str, Any]:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(30)
+            client.connect(socket_path)
+            client.sendall((json.dumps({"path": path}, separators=(",", ":")) + "\n").encode("utf-8"))
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = client.recv(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 25 * 1024 * 1024:
+                    raise RunnerError("Room context broker response is too large", code="room_context_response_too_large")
+                chunks.append(chunk)
+        response = json.loads(b"".join(chunks).decode("utf-8"))
+    except RunnerError:
+        raise
+    except Exception as exc:
+        raise RunnerError(f"Room context broker request failed: {exc}", code="room_context_broker_failed") from exc
+    if not isinstance(response, dict):
+        raise RunnerError("Room context broker response was not a JSON object", code="invalid_room_context_response")
+    if response.get("success") is not True:
+        raise RunnerError(
+            str(response.get("error") or "Room context broker request failed"),
+            code=str(response.get("code") or "room_context_broker_failed"),
+        )
+    payload = response.get("payload")
+    if not isinstance(payload, dict):
+        raise RunnerError("Room context broker payload was not a JSON object", code="invalid_room_context_response")
+    return {"success": True, "tool": "RoomContext", **payload}
 
 
 def _get_room_context(url: str, token: str) -> dict[str, Any]:

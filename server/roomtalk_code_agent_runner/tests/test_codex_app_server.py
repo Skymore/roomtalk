@@ -196,7 +196,7 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
     assert not (Path(call["env"]["CODEX_HOME"]) / "config.toml").exists()
 
 
-def test_codex_app_server_allows_read_only_network_when_room_context_is_available(tmp_path: Path):
+def test_codex_app_server_uses_read_only_network_profile_when_room_context_is_available(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -225,8 +225,12 @@ def test_codex_app_server_allows_read_only_network_when_room_context_is_availabl
     )
 
     sent = jsonrpc_lines(popen.processes[0])
+    thread_resume = next(message for message in sent if message.get("method") == "thread/resume")
     turn_start = next(message for message in sent if message.get("method") == "turn/start")
-    assert turn_start["params"]["sandboxPolicy"] == {"type": "readOnly", "networkAccess": True}
+    assert thread_resume["params"]["permissions"] == "roomtalk-room-context-read"
+    assert "sandbox" not in thread_resume["params"]
+    assert turn_start["params"]["permissions"] == "roomtalk-room-context-read"
+    assert "sandboxPolicy" not in turn_start["params"]
 
 
 def test_codex_app_server_uses_workspace_write_for_approve_for_me_and_declines_approval_requests(tmp_path: Path):

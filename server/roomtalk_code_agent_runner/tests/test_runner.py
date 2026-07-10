@@ -203,6 +203,13 @@ def test_system_prompt_matches_the_actual_tool_set():
     assert "Unavailable tools for this run: Write, Edit, BackgroundShell, PublishStaticSite" in plan_prompt
     assert "read-only" in plan_prompt
     assert "OS sandbox" in plan_prompt
+    room_context_prompt = system_prompt_for_tools(
+        ("Read", "Glob", "Grep", "Shell"),
+        "plan",
+        room_context_enabled=True,
+    )
+    assert "RoomTalk is the source of truth" in room_context_prompt
+    assert "roomtalk room history --limit 20 --json" in room_context_prompt
 
     edit_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit"), "acceptEdits")
     assert "- Write:" in edit_prompt
@@ -230,15 +237,15 @@ def test_read_only_shell_uses_os_sandbox_and_disables_network_by_default(tmp_pat
     assert argv[-3:] == ["/bin/sh", "-lc", "git status --short"]
 
 
-def test_read_only_shell_only_shares_network_for_scoped_room_context(tmp_path: Path):
+def test_read_only_shell_keeps_network_off_and_exposes_scoped_room_context_socket(tmp_path: Path):
+    socket_path = str(tmp_path / "room-context.sock")
     argv = _read_only_shell_argv("roomtalk room history --json", tmp_path, {
-        "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
-        "ROOMTALK_ROOM_CONTEXT_TOKEN": "turn-token",
+        "ROOMTALK_ROOM_CONTEXT_SOCKET": socket_path,
     })
 
-    assert "--share-net" in argv
-    assert "ROOMTALK_ROOM_CONTEXT_URL" in argv
-    assert "ROOMTALK_ROOM_CONTEXT_TOKEN" in argv
+    assert "--share-net" not in argv
+    assert "ROOMTALK_ROOM_CONTEXT_SOCKET" in argv
+    assert argv[argv.index("ROOMTALK_ROOM_CONTEXT_SOCKET") + 1] == socket_path
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in argv
     assert argv[argv.index("ROOMTALK_CODE_AGENT_CLI_ACCESS") + 1] == "read-only"
 

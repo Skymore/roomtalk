@@ -17,7 +17,7 @@ from .codex_cli import (
     CodexCliRunConfig,
     _build_child_env,
     _codex_exec_permissions,
-    _codex_room_context_enabled,
+    _codex_room_context_permission_profile,
     _create_codex_home,
     _normalize_codex_model,
     _normalize_codex_reasoning_effort,
@@ -31,6 +31,7 @@ from .codex_cli import (
     config_from_env,
 )
 from .runner import EventEmitter, RunnerError, RunnerRequest, parse_request, validate_workspace_path
+from .room_context_broker import start_room_context_broker
 
 SCHEMA_VERSION = 1
 MAX_STDERR_TAIL_CHARS = 4_000
@@ -393,6 +394,7 @@ def run_request(
     persistent_codex_home = _persistent_app_server_home_enabled(env)
     codex_home = _create_persistent_app_server_home(config, request) if persistent_codex_home else _create_codex_home(config, request.turn_id)
     stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
+    room_context_broker = start_room_context_broker(env, request.turn_id)
 
     emitter.emit({
         "type": "status",
@@ -441,6 +443,7 @@ def run_request(
                 message = f"{message}: {tail}"
             raise RunnerError(message, code="codex_app_server_exit", turn_id=request.turn_id)
     finally:
+        room_context_broker.close()
         if process is not None and getattr(process, "returncode", None) is None:
             _terminate_process(process)
         if persistent_codex_home and not config.keep_codex_home:
@@ -597,7 +600,7 @@ def _drive_app_server(
     })
     send("initialized", {})
     thread_open_method = "thread/resume" if request.session_id else "thread/start"
-    thread_open_id = send(thread_open_method, _thread_open_params(thread_open_method, request, workspace))
+    thread_open_id = send(thread_open_method, _thread_open_params(thread_open_method, request, env, workspace))
     turn_start_id: int | None = None
     turn_completed = False
 
@@ -626,7 +629,7 @@ def _drive_app_server(
                         for mapped in [mapper._status("running", "codex app-server resume failed; starting a new thread")]:
                             emitter.emit(mapped)
                         thread_open_method = "thread/start"
-                        thread_open_id = send("thread/start", _thread_start_params(request, workspace))
+                        thread_open_id = send("thread/start", _thread_start_params(request, env, workspace))
                         continue
                     error = message.get("error") if isinstance(message.get("error"), dict) else {}
                     raise RunnerError(
@@ -802,31 +805,31 @@ def _safe_path_part(value: str) -> str:
     return safe[:80] or "room"
 
 
-def _thread_open_params(method: str, request: RunnerRequest, workspace: Path) -> dict[str, Any]:
+def _thread_open_params(method: str, request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, Any]:
     if method == "thread/resume":
-        return _thread_resume_params(request, workspace)
-    return _thread_start_params(request, workspace)
+        return _thread_resume_params(request, env, workspace)
+    return _thread_start_params(request, env, workspace)
 
 
-def _thread_start_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
+def _thread_start_params(request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, Any]:
     permission = _codex_app_server_permissions(request)
     return {
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
         "ephemeral": False,
-        "sandbox": permission.sandbox,
+        **_thread_permission_params(request, env, permission.sandbox),
         "approvalPolicy": permission.approval_policy,
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
 
 
-def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
+def _thread_resume_params(request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, Any]:
     permission = _codex_app_server_permissions(request)
     return {
         "threadId": request.session_id,
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
-        "sandbox": permission.sandbox,
+        **_thread_permission_params(request, env, permission.sandbox),
         "approvalPolicy": permission.approval_policy,
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
@@ -834,7 +837,7 @@ def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, 
 
 def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: Path, thread_id: str) -> dict[str, Any]:
     permission = _codex_app_server_permissions(request)
-    return {
+    params = {
         "threadId": thread_id,
         "input": [{"type": "text", "text": _prompt_with_app_server_tools(request, env)}],
         "cwd": str(workspace),
@@ -842,12 +845,20 @@ def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: P
         "effort": _normalize_codex_reasoning_effort(request.codex_reasoning_effort),
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
         "approvalPolicy": permission.approval_policy,
-        "sandboxPolicy": _sandbox_policy_for_permission(
-            permission.sandbox,
-            workspace,
-            allow_read_only_network=_codex_room_context_enabled(env),
-        ),
     }
+    room_context_profile = _codex_room_context_permission_profile(request, env)
+    if room_context_profile:
+        params["permissions"] = room_context_profile
+    else:
+        params["sandboxPolicy"] = _sandbox_policy_for_permission(permission.sandbox, workspace)
+    return params
+
+
+def _thread_permission_params(request: RunnerRequest, env: dict[str, str], sandbox: str) -> dict[str, str]:
+    room_context_profile = _codex_room_context_permission_profile(request, env)
+    if room_context_profile:
+        return {"permissions": room_context_profile}
+    return {"sandbox": sandbox}
 
 
 def _sandbox_policy_for_permission(

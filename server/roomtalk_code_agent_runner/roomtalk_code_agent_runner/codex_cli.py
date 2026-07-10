@@ -19,6 +19,7 @@ from .runner import (
     parse_request,
     validate_workspace_path,
 )
+from .room_context_broker import start_room_context_broker
 
 SCHEMA_VERSION = 1
 DEFAULT_CODEX_CLI_BIN = "codex"
@@ -38,6 +39,8 @@ ALLOWED_CODEX_MODELS = {
 ALLOWED_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 ALLOWED_CODEX_PERMISSION_MODES = {"plan", "edit", "approveForMe", "fullAccess"}
 MAX_STDERR_TAIL_CHARS = 4_000
+ROOM_CONTEXT_PERMISSION_PROFILE = "roomtalk-room-context-read"
+ROOM_CONTEXT_WORKSPACE_PERMISSION_PROFILE = "roomtalk-room-context-workspace"
 
 
 @dataclass
@@ -210,6 +213,7 @@ def run_request(
     codex_home = _create_codex_home(config, request.turn_id)
     last_message_path = codex_home / "last-message.txt"
     stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
+    room_context_broker = start_room_context_broker(env, request.turn_id)
 
     emitter.emit({
         "type": "status",
@@ -261,6 +265,7 @@ def run_request(
 
         emitter.emit(mapper.final_event(last_message_path.read_text(encoding="utf-8")))
     finally:
+        room_context_broker.close()
         if not config.keep_codex_home:
             shutil.rmtree(codex_home, ignore_errors=True)
 
@@ -290,14 +295,17 @@ def _build_codex_exec_args(
         "-c",
         f'service_tier="{service_tier}"',
     ]
-    if permission.sandbox == "workspace-write":
+    room_context_profile = _codex_room_context_permission_profile(request, env)
+    if permission.sandbox == "workspace-write" and not room_context_profile:
         args.extend([
             "-c",
             "sandbox_workspace_write.network_access=true",
         ])
+    if room_context_profile:
+        args.extend(["-c", f'default_permissions="{room_context_profile}"'])
+    else:
+        args.extend(["--sandbox", permission.sandbox])
     args.extend([
-        "--sandbox",
-        permission.sandbox,
         "--cd",
         str(workspace),
         "--output-last-message",
@@ -408,22 +416,50 @@ def _restore_auth_json(config: CodexCliRunConfig, codex_home: Path) -> None:
 
 def _write_codex_config(codex_home: Path, request: RunnerRequest, env: dict[str, str], workspace: Path) -> None:
     sandbox = _codex_exec_permissions(request).sandbox
+    room_context_socket = _codex_room_context_socket(env)
+    room_context_profile = _codex_room_context_permission_profile(request, env)
     lines = [
         'cli_auth_credentials_store = "file"',
-        f'sandbox_mode = "{sandbox}"',
-        "",
+    ]
+    if room_context_profile:
+        lines.extend([f'default_permissions = "{room_context_profile}"', ""])
+    else:
+        lines.extend([f'sandbox_mode = "{sandbox}"', ""])
+    lines.extend([
         "[shell_environment_policy]",
         'inherit = "core"',
         "ignore_default_excludes = false",
         'exclude = ["CODEX_HOME", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY", "*_TOKEN", "*_SECRET", "*_KEY"]',
         "",
-    ]
+    ])
     tool_env = _roomtalk_tool_env(request, env, workspace)
     if tool_env:
         lines.append("[shell_environment_policy.set]")
         for key in sorted(tool_env):
             lines.append(f"{key} = {_toml_string(tool_env[key])}")
         lines.append("")
+    if room_context_profile and room_context_socket:
+        extends = ":read-only" if room_context_profile == ROOM_CONTEXT_PERMISSION_PROFILE else ":workspace"
+        lines.extend([
+            f"[permissions.{room_context_profile}]",
+            'description = "RoomTalk shell permissions with a turn-scoped local context broker."',
+            f'extends = "{extends}"',
+            "",
+            f"[permissions.{room_context_profile}.network]",
+            "enabled = true",
+            "",
+        ])
+        if room_context_profile == ROOM_CONTEXT_WORKSPACE_PERMISSION_PROFILE:
+            lines.extend([
+                f"[permissions.{room_context_profile}.network.domains]",
+                '"*" = "allow"',
+                "",
+            ])
+        lines.extend([
+            f"[permissions.{room_context_profile}.network.unix_sockets]",
+            f"{_toml_string(room_context_socket)} = \"allow\"",
+            "",
+        ])
     trusted_projects = _trusted_project_paths(workspace, env)
     if trusted_projects:
         lines.append("[projects]")
@@ -477,12 +513,15 @@ def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: P
         "ROOMTALK_CODE_AGENT_CLI_ACCESS": "read-only" if read_only else "full",
         "ROOMTALK_WORKSPACE": str(workspace),
     }
+    room_context_keys = (
+        ("ROOMTALK_ROOM_CONTEXT_SOCKET",)
+        if (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
+        else ("ROOMTALK_ROOM_CONTEXT_URL", "ROOMTALK_ROOM_CONTEXT_TOKEN")
+    )
     read_only_keys = (
         "PYTHONPATH",
         "CODE_AGENT_WORKSPACE_ROOT",
-        "ROOMTALK_ROOM_CONTEXT_URL",
-        "ROOMTALK_ROOM_CONTEXT_TOKEN",
-    )
+    ) + room_context_keys
     write_keys = (
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH",
         "ROOMTALK_STATIC_PUBLISH_URL",
@@ -544,10 +583,28 @@ def _codex_static_publish_enabled(env: dict[str, str]) -> bool:
 
 
 def _codex_room_context_enabled(env: dict[str, str]) -> bool:
-    return (
+    return bool((env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()) or (
         bool((env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip())
         and bool((env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip())
     )
+
+
+def _codex_room_context_socket(env: dict[str, str]) -> str | None:
+    value = (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
+    if not value or not Path(value).is_absolute():
+        return None
+    return value
+
+
+def _codex_room_context_permission_profile(request: RunnerRequest, env: dict[str, str]) -> str | None:
+    if not _codex_room_context_socket(env):
+        return None
+    mode = _codex_exec_permissions(request).mode
+    if mode == "plan":
+        return ROOM_CONTEXT_PERMISSION_PROFILE
+    if mode in {"edit", "approveForMe"}:
+        return ROOM_CONTEXT_WORKSPACE_PERMISSION_PROFILE
+    return None
 
 
 def _roomtalk_tool_name(command: str) -> str | None:
