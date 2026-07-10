@@ -605,7 +605,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           </span>
           <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3 w-3" />
-            {t('sessionCost')}: {formatUsdCost(sessionCostUsd)}
+            Cost: {formatUsdCost(sessionCostUsd)}
           </span>
           {contextUsage ? (
             <span
@@ -614,7 +614,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               className="inline-flex items-center gap-1 rounded-full border border-[#b9c7ba] bg-[#f4f8f3] px-2 py-1 text-[11px] font-medium text-[#31533b] dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa]"
             >
               <Icon icon="lucide:gauge" className="h-3 w-3" />
-              {t('codeAgentContextUsed')}: {contextUsage.usedPercent}%
+              Context: {contextUsage.usedPercent}%
             </span>
           ) : null}
         </div>
