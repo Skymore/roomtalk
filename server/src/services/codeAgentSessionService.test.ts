@@ -189,6 +189,7 @@ class BlockingRunner implements CodeAgentRunnerClient {
       messageId: 'ai',
       answer: 'done',
       sessionId: 'session-blocking',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
     };
     return { events: [finalEvent], finalEvent };
   }
@@ -356,6 +357,10 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[3].content, '# RoomTalk');
     assert.equal(messages[4].status, 'complete');
     assert.equal(messages[4].content, 'Done');
+    assert.ok(Math.abs((messages[4].cost?.totalUsd || 0) - 0.000049) < 1e-12);
+    assert.ok(Math.abs(store.roomCost.totalUsd - 0.000049) < 1e-12);
+    const streamEnd = emitter.roomEmits.find(event => event.event === 'ai_stream_end' && (event.args[0] as any)?.messageId === messages[4].id);
+    assert.ok(Math.abs(((streamEnd?.args[0] as any)?.cost?.totalUsd || 0) - 0.000049) < 1e-12);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'idle');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
@@ -374,6 +379,45 @@ describe('CodeAgentSessionService', () => {
     assert.equal((observability.events[3].payload as any)?.message, 'starting');
     assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
     assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
+  });
+
+  it('fails loudly when a Coco runner omits provider usage', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { service, store } = createService({ runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    const messages = store.messages.get('room-1') || [];
+    const finalMessage = messages[messages.length - 1];
+    assert.equal(result.success, false);
+    assert.equal(finalMessage.status, 'error');
+    assert.match(finalMessage.content, /without provider-reported usage/);
+  });
+
+  it('rejects estimated usage from a Coco runner', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done',
+        sessionId: 'session-1',
+        usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120, source: 'estimated' },
+      },
+    ]);
+    const { service, store } = createService({ runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    const messages = store.messages.get('room-1') || [];
+    const finalMessage = messages[messages.length - 1];
+    assert.equal(result.success, false);
+    assert.equal(finalMessage.status, 'error');
+    assert.match(finalMessage.content, /without provider-reported usage/);
   });
 
   it('extends sandbox timeout while a turn is active and shortens it after completion', async () => {
@@ -749,6 +793,7 @@ describe('CodeAgentSessionService', () => {
         messageId: 'ai-1',
         answer: 'I will inspect.The current directory is empty.',
         sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
       },
     ]);
     const { service, store } = createService({ runner });
@@ -986,6 +1031,7 @@ describe('CodeAgentSessionService', () => {
         messageId: 'ai-1',
         answer: 'Done. The program prints Hello, World!',
         sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
       },
     ]);
     const { emitter, service, store } = createService({
@@ -1024,6 +1070,7 @@ describe('CodeAgentSessionService', () => {
         messageId: 'ai-1',
         answer: 'The script printed Hello, World!',
         sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
       },
     ]);
     const { emitter, service, store } = createService({
@@ -1052,7 +1099,14 @@ describe('CodeAgentSessionService', () => {
   it('stops the runner before broadcasting the final stream end', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
-      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done',
+        sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
     ]);
     const { emitter, sandboxService, service } = createService({ runner });
     const stopCountsAtStreamEnd: number[] = [];
@@ -1413,7 +1467,14 @@ describe('CodeAgentSessionService', () => {
     ]);
     store.addMember('room-1', 'admin-1', 'admin');
     const runner = new FakeCodeAgentRunnerClient([
-      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'ok',
+        sessionId: 's1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
     ]);
     const { service } = createService({ store, runner });
 
@@ -1438,7 +1499,14 @@ describe('CodeAgentSessionService', () => {
     ]);
     store.addMember('room-1', 'member-1', 'member');
     const runner = new FakeCodeAgentRunnerClient([
-      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'ok',
+        sessionId: 's1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
     ]);
     const { service } = createService({ store, runner });
 

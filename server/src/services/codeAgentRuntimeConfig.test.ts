@@ -60,6 +60,7 @@ describe('resolveCodeAgentRuntimeConfig', () => {
 
   it('accepts only implemented code-agent backends', () => {
     assert.equal(resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'code-agent' }).backend, 'code-agent');
+    assert.equal(resolveCodeAgentRuntimeConfig({ CODEX_CLI_BACKEND_ENABLED: 'true' }).backend, 'codex-app-server');
     assert.throws(
       () => resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }),
       /CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true/

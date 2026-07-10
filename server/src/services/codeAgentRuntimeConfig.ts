@@ -90,7 +90,8 @@ const readSandboxProvider = (env: NodeJS.ProcessEnv): CodeAgentSandboxProvider =
 };
 
 const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
-  const value = (env.CODE_AGENT_BACKEND || 'code-agent').toLowerCase();
+  const defaultBackend = env.CODEX_CLI_BACKEND_ENABLED === 'true' ? 'codex-app-server' : 'code-agent';
+  const value = (env.CODE_AGENT_BACKEND || defaultBackend).toLowerCase();
   if (value === 'code-agent') {
     return value;
   }

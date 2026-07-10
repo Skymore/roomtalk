@@ -420,7 +420,13 @@ export class CodeAgentSessionService {
 
       const answer = streamState.segmentContent || streamState.fullContent;
       const usage = runResult.finalEvent.usage;
+      if (turnBackend === 'code-agent' && usage?.source !== 'reported') {
+        throw new Error('Coco runner completed without provider-reported usage');
+      }
       const completionMetadata = this.completionMetadataForBackend(turnBackend, input.selectedModel, codexRunSettings, usage);
+      if (turnBackend === 'code-agent' && !completionMetadata.cost) {
+        throw new Error(`Coco model pricing is unavailable: ${input.selectedModel.id}`);
+      }
       const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, completionMetadata.cost || null);
 
       const finalActiveId = streamState.activeMessageId;
