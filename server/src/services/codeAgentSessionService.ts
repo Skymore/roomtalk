@@ -436,6 +436,18 @@ export class CodeAgentSessionService {
         throw new Error('code agent runner exited without a final event');
       }
 
+      // An interrupted Codex turn can still arrive as a terminal `final` event.
+      // Close any tool calls that never received a result so clients do not
+      // render them as running forever after the turn has ended.
+      await this.flushInterruptedToolCalls(
+        input.roomId,
+        turnId,
+        streamState,
+        new Error('agent turn ended before tool completion'),
+        aiMessage,
+        turnBackend
+      );
+
       if (turnBackend !== 'code-agent' && streamState.needsNewSegment) {
         await this.sealCurrentSegment(input.roomId, aiMessage, streamState);
       }

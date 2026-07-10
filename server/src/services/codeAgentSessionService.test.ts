@@ -1699,4 +1699,34 @@ describe('CodeAgentSessionService', () => {
     );
     assert.equal((toolResultBroadcast?.args[0] as Message | undefined)?.toolCallId, 'tool-1');
   });
+
+  it('closes pending tool calls with failed results when the runner finalizes after interruption', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'sleep 30' } },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: '',
+        sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
+    ]);
+    const { emitter, service, store } = createService({ runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    const messages = store.messages.get('room-1') || [];
+    assert.equal(result.success, true);
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result']);
+    assert.equal(messages[2].toolCallId, 'tool-1');
+    assert.equal(messages[2].status, 'error');
+    assert.equal(messages[2].isError, true);
+    assert.match(messages[2].content, /agent turn ended before tool completion/);
+    const toolResultBroadcast = emitter.roomEmits.find(event =>
+      event.event === 'new_message' && (event.args[0] as Message).messageType === 'tool_result'
+    );
+    assert.equal((toolResultBroadcast?.args[0] as Message | undefined)?.toolCallId, 'tool-1');
+  });
 });
