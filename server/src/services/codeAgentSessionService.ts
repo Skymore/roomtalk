@@ -1668,7 +1668,7 @@ export class CodeAgentSessionService {
       });
     }
 
-    if (this.options.roomContext && isCodexBackend(context.backend)) {
+    if (this.options.roomContext) {
       const publicBaseUrl = this.options.staticSitePublisher?.publicBaseUrlForRequest(
         context.clientOrigin,
         context.serverOrigin

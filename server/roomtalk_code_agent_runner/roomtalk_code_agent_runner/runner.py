@@ -7,6 +7,7 @@ import os
 import posixpath
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -269,7 +270,10 @@ def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[s
     if env is None:
         env = os.environ
     if mode == "plan":
-        return READ_ONLY_TOOLS
+        tools = [*READ_ONLY_TOOLS]
+        if env.get("ROOMTALK_CODE_AGENT_ALLOW_SHELL") == "true":
+            tools.append(SHELL_TOOL)
+        return tuple(tools)
     tools = [*READ_ONLY_TOOLS]
     if env.get("ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS") == "true":
         tools.extend(WRITE_TOOLS)
@@ -301,15 +305,15 @@ def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
         "Grep": "Search file contents",
         "Write": "Create or overwrite a complete file",
         "Edit": "Replace an exact unique string in an existing file",
-        "Shell": "Run foreground shell commands",
+        "Shell": "Run foreground shell commands within the current mode's filesystem and network sandbox",
         "BackgroundShell": "Start or manage tracked long-running background commands and exposed port URLs",
         "PublishStaticSite": "Publish a static HTML/CSS/JS site directory to a stable RoomTalk URL",
     }
     available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
     unavailable_line = ", ".join(unavailable) if unavailable else "none"
     mode_guidance = (
-        "This run is read-only. Do not call unavailable write or shell tools. "
-        "If the user asks you to create, edit, or run code, explain that this room is currently in plan mode and provide the code or commands inline."
+        "This run is read-only. Shell commands run in an OS sandbox with a read-only filesystem, no background processes, and network disabled unless this turn has scoped read-only RoomTalk context access. "
+        "Use Shell for inspection and validation, but do not attempt to modify files. If the user asks you to make changes, explain the proposed changes without applying them."
         if mode == "plan"
         else "This run may use only the available tools listed below. Do not call any unavailable tools."
     )
@@ -658,6 +662,135 @@ def _create_publish_static_site_tool(Tool, ToolOutcome, ToolSpec, request: Runne
     return PublishStaticSiteTool()
 
 
+def _read_only_shell_argv(command: str, cwd: Path, env: dict[str, str]) -> list[str]:
+    allow_room_context_network = bool((env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip()) and bool(
+        (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
+    )
+    argv = [
+        "bwrap",
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-all",
+    ]
+    if allow_room_context_network:
+        # Bubblewrap can only grant or deny the network namespace as a whole.
+        # Plan receives no RoomTalk write credentials; the scoped room-context
+        # token remains the authorization boundary for the only advertised
+        # network-backed command.
+        argv.append("--share-net")
+    argv.extend([
+        "--ro-bind", "/", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+        "--dir", "/tmp/home",
+        "--clearenv",
+        "--setenv", "HOME", "/tmp/home",
+        "--setenv", "TMPDIR", "/tmp",
+        "--setenv", "PATH", env.get("PATH") or "/usr/local/bin:/usr/bin:/bin",
+        "--setenv", "LANG", env.get("LANG") or "C.UTF-8",
+        "--setenv", "ROOMTALK_WORKSPACE", str(cwd),
+        "--setenv", "ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only",
+    ])
+    for key in ("ROOMTALK_ROOM_CONTEXT_URL", "ROOMTALK_ROOM_CONTEXT_TOKEN"):
+        value = (env.get(key) or "").strip()
+        if value:
+            argv.extend(["--setenv", key, value])
+    argv.extend(["--chdir", str(cwd), "/bin/sh", "-lc", command])
+    return argv
+
+
+def _create_read_only_shell_tool(
+    Tool,
+    ToolOutcome,
+    ToolSpec,
+    workspace: Path,
+    env: dict[str, str],
+    looks_like_background_command: Callable[[str], bool],
+):
+    workspace = workspace.resolve(strict=False)
+
+    class ReadOnlyShellTool(Tool):
+        @property
+        def spec(self):
+            return ToolSpec(
+                name=SHELL_TOOL,
+                description=(
+                    "Execute a foreground shell command in an OS-enforced read-only sandbox. "
+                    "The workspace and system filesystem cannot be modified. Network is disabled "
+                    "unless this turn has scoped read-only RoomTalk context access."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Foreground shell command to execute"},
+                        "cwd": {"type": "string", "description": "Working directory inside the workspace"},
+                        "timeout": {"type": "integer", "default": 600},
+                    },
+                    "required": ["command"],
+                },
+                # The command itself may be arbitrary, but its observable side
+                # effects are constrained by the outer OS sandbox profile.
+                is_read_only=True,
+                is_concurrency_safe=False,
+            )
+
+        def invoke(self, arguments: dict[str, Any]):
+            command = str(arguments.get("command") or "").strip()
+            if not command:
+                return ToolOutcome(success=False, content="Error: command is required")
+            if looks_like_background_command(command):
+                return ToolOutcome(success=False, content="Error: background commands are unavailable in Plan mode.")
+
+            cwd = workspace
+            cwd_raw = str(arguments.get("cwd") or "").strip()
+            if cwd_raw:
+                candidate = Path(cwd_raw)
+                if not candidate.is_absolute():
+                    candidate = workspace / candidate
+                candidate = candidate.resolve(strict=False)
+                try:
+                    candidate.relative_to(workspace)
+                except ValueError:
+                    return ToolOutcome(success=False, content="Error: cwd must stay inside the workspace.")
+                if not candidate.is_dir():
+                    return ToolOutcome(success=False, content="Error: cwd is not a directory.")
+                cwd = candidate
+
+            try:
+                timeout = max(1, min(int(arguments.get("timeout") or 600), 600))
+            except (TypeError, ValueError):
+                timeout = 600
+
+            try:
+                result = subprocess.run(
+                    _read_only_shell_argv(command, cwd, env),
+                    cwd=str(cwd),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return ToolOutcome(success=False, content=f"Error: command timed out after {timeout}s.")
+            except OSError as exc:
+                return ToolOutcome(success=False, content=f"Error: unable to start read-only shell sandbox: {exc}")
+
+            parts = []
+            if result.stdout.rstrip():
+                parts.append(result.stdout.rstrip())
+            if result.stderr.rstrip():
+                parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+            if result.returncode != 0:
+                parts.append(f"[exit code: {result.returncode}]")
+            content, truncated = _truncate_output("\n".join(parts))
+            if truncated:
+                content += "\n...[truncated]..."
+            return ToolOutcome(success=result.returncode == 0, content=content)
+
+    return ReadOnlyShellTool()
+
+
 @contextmanager
 def scoped_workspace_cwd(workspace: Path):
     resolved_workspace = validate_workspace_path(workspace)
@@ -729,6 +862,7 @@ def create_code_agent_engine(
     from core.models import AppSettings
     from core.permissions import PermissionChecker
     from core.tools import FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, ShellTool
+    from core.tools.shell import looks_like_background_command
     from core.tools.base import Tool, ToolOutcome, ToolSpec
     try:
         from core.tools import BackgroundShellTool
@@ -753,10 +887,20 @@ def create_code_agent_engine(
     if "Edit" in tool_names:
         tools.append(FileEditTool())
     if "Shell" in tool_names:
-        # Shell is intentionally env-gated because PermissionChecker runs with
-        # auto-approve below. The Node caller must only enable this for trusted
-        # sandbox processes with scoped credentials.
-        tools.append(ShellTool(workspace))
+        if request.mode == "plan":
+            tools.append(_create_read_only_shell_tool(
+                Tool,
+                ToolOutcome,
+                ToolSpec,
+                workspace,
+                env,
+                looks_like_background_command,
+            ))
+        else:
+            # Writable shell is intentionally env-gated because PermissionChecker
+            # runs with auto-approve below. The Node caller must only enable this
+            # for trusted sandbox processes with scoped credentials.
+            tools.append(ShellTool(workspace))
     if "BackgroundShell" in tool_names and BackgroundShellTool is not None:
         tools.append(BackgroundShellTool(workspace))
     if PUBLISH_STATIC_SITE_TOOL in tool_names:
@@ -775,7 +919,7 @@ def create_code_agent_engine(
     # File access enforcement is delegated to engine tools plus the outer sandbox.
     # This adapter validates requested roots but does not intercept each tool IO.
     permissions = PermissionChecker(auto_approve=True, mode="plan" if request.mode == "plan" else "acceptEdits")
-    allowed_tools = set(READ_ONLY_TOOLS) if request.mode == "plan" else None
+    allowed_tools = set(tool_names) if request.mode == "plan" else None
     return Engine(
         llm,
         tools,

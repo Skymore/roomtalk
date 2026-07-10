@@ -369,7 +369,10 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODE_AGENT_RUNNER_COMMAND);
     assert.deepEqual(sandboxService.startedRunnerTimeouts, [0]);
-    assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
+    assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
+      PYTHONUNBUFFERED: '1',
+      ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true',
+    });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].clientId, 'client-1');
     assert.deepEqual(runner.requests[0].priorMessages, []);
@@ -518,8 +521,8 @@ describe('CodeAgentSessionService', () => {
     ]);
     assert.deepEqual(contexts.map(context => context.backend), ['code-agent', 'code-agent']);
     assert.deepEqual(contexts.map(context => context.runnerEnv), [
-      { PYTHONUNBUFFERED: '1' },
-      { PYTHONUNBUFFERED: '1' },
+      { PYTHONUNBUFFERED: '1', ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true' },
+      { PYTHONUNBUFFERED: '1', ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true' },
     ]);
   });
 
@@ -1181,6 +1184,7 @@ describe('CodeAgentSessionService', () => {
       assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
         PYTHONUNBUFFERED: '1',
         CODE_AGENT_SOURCE_DIR: '/sandbox/code-agent-engine/src',
+        ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true',
       });
       assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
     } finally {
@@ -1209,6 +1213,7 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
       PYTHONUNBUFFERED: '1',
       DEEPSEEK_API_KEY: 'deepseek-key',
+      ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true',
     });
   });
 
@@ -1268,6 +1273,7 @@ describe('CodeAgentSessionService', () => {
         PYTHONUNBUFFERED: '1',
         CODE_AGENT_MODEL_PROXY_URL: 'https://model-proxy.internal',
         CODE_AGENT_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+        ROOMTALK_CODE_AGENT_ALLOW_SHELL: 'true',
       });
       assert.equal('OPENAI_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
       assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
@@ -1364,7 +1370,7 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'plan', codeAgentBackend: 'codex-app-server' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'plan', codeAgentBackend: 'code-agent' }), [userMessage()]);
     const staticSitePublisher = new PublishedStaticSiteService({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
       logger,
@@ -1383,13 +1389,6 @@ describe('CodeAgentSessionService', () => {
       defaultMode: 'plan',
       staticSitePublisher,
       roomContext,
-      codexBackendEnabled: true,
-      codexConnectionService: {
-        async withCodexAuth(_clientId: string, _runId: string, work: (authJson: string) => Promise<any>) {
-          const result = await work('{"tokens":{}}');
-          return result.result;
-        },
-      },
     });
 
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
@@ -1401,6 +1400,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(claims?.clientId, 'client-1');
     assert.equal(claims?.turnId, 'turn-1');
     assert.equal(claims?.mode, 'plan');
+    assert.equal(env.ROOMTALK_CODE_AGENT_ALLOW_SHELL, 'true');
     assert.equal(env.ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH, undefined);
   });
 

@@ -21,6 +21,7 @@ from roomtalk_code_agent_runner.runner import (
     _base_url_for,
     _collect_static_publish_files,
     _create_publish_static_site_tool,
+    _read_only_shell_argv,
     _model_step_event_from_response,
     canonical_allowed_paths_for_engine,
     main,
@@ -149,7 +150,8 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
     assert tool_names_for_mode("plan", {
         "ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS": "true",
         "ROOMTALK_CODE_AGENT_ALLOW_SHELL": "true",
-    }) == ("Read", "Glob", "Grep")
+    }) == ("Read", "Glob", "Grep", "Shell")
+    assert tool_names_for_mode("plan", {}) == ("Read", "Glob", "Grep")
 
     assert tool_names_for_mode("acceptEdits", {}) == ("Read", "Glob", "Grep")
     assert tool_names_for_mode("acceptEdits", {"ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS": "true"}) == (
@@ -194,11 +196,13 @@ def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):
 
 
 def test_system_prompt_matches_the_actual_tool_set():
-    plan_prompt = system_prompt_for_tools(("Read", "Glob", "Grep"), "plan")
+    plan_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Shell"), "plan")
     assert "- Read:" in plan_prompt
     assert "- Write:" not in plan_prompt
-    assert "Unavailable tools for this run: Write, Edit, Shell, BackgroundShell, PublishStaticSite" in plan_prompt
+    assert "- Shell:" in plan_prompt
+    assert "Unavailable tools for this run: Write, Edit, BackgroundShell, PublishStaticSite" in plan_prompt
     assert "read-only" in plan_prompt
+    assert "OS sandbox" in plan_prompt
 
     edit_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit"), "acceptEdits")
     assert "- Write:" in edit_prompt
@@ -213,6 +217,30 @@ def test_system_prompt_matches_the_actual_tool_set():
     publish_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "PublishStaticSite"), "acceptEdits")
     assert "- PublishStaticSite:" in publish_prompt
     assert "Use PublishStaticSite after creating a static site directory" in publish_prompt
+
+
+def test_read_only_shell_uses_os_sandbox_and_disables_network_by_default(tmp_path: Path):
+    argv = _read_only_shell_argv("git status --short", tmp_path, {"PATH": "/usr/bin:/bin"})
+
+    assert argv[0] == "bwrap"
+    assert "--unshare-all" in argv
+    assert "--share-net" not in argv
+    assert argv[argv.index("--ro-bind") + 1:argv.index("--ro-bind") + 3] == ["/", "/"]
+    assert ["--tmpfs", "/tmp"] == argv[argv.index("--tmpfs"):argv.index("--tmpfs") + 2]
+    assert argv[-3:] == ["/bin/sh", "-lc", "git status --short"]
+
+
+def test_read_only_shell_only_shares_network_for_scoped_room_context(tmp_path: Path):
+    argv = _read_only_shell_argv("roomtalk room history --json", tmp_path, {
+        "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+        "ROOMTALK_ROOM_CONTEXT_TOKEN": "turn-token",
+    })
+
+    assert "--share-net" in argv
+    assert "ROOMTALK_ROOM_CONTEXT_URL" in argv
+    assert "ROOMTALK_ROOM_CONTEXT_TOKEN" in argv
+    assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in argv
+    assert argv[argv.index("ROOMTALK_CODE_AGENT_CLI_ACCESS") + 1] == "read-only"
 
 
 def test_static_publish_file_collection_is_scoped_and_filters_non_static_files(tmp_path: Path):

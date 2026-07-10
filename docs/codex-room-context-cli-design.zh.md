@@ -1,9 +1,9 @@
-# Codex 房间上下文 CLI 设计
+# Coco / Codex 房间上下文 CLI 与受限 Shell 设计
 
 ## 状态
 
 - 方案：CLI-first，不新增 MCP server。
-- 适用范围：RoomTalk Workspace 房间中的 Codex CLI / Codex app-server backend。
+- 适用范围：RoomTalk Workspace 房间中的 Coco、Codex CLI 和 Codex app-server backend。
 - 数据所有者：RoomTalk。Codex thread 只保存 Codex 自己参与过的会话，不作为房间历史的权威来源。
 
 ## 问题
@@ -46,8 +46,9 @@ GET /api/code-agent/room-context/*
         v
 roomtalk room ... --json
         |
-        v
-Codex CLI / Codex app-server
+        +--> Coco restricted Shell
+        +--> Codex CLI command execution
+        +--> Codex app-server command execution
 ```
 
 ### Turn 环境
@@ -61,7 +62,7 @@ ROOMTALK_ROOM_CONTEXT_URL
 ROOMTALK_ROOM_CONTEXT_TOKEN
 ```
 
-这些值由 runner 写入该 turn 的 Codex shell environment policy。token 不进入普通子进程环境，只在 Codex 明确执行 `roomtalk` 命令时由 Codex 的受控 shell 环境提供。
+这些值由 runner 写入该 turn 的受控 shell 环境。Codex 通过 shell environment policy 获取；Coco 只把明确列入白名单的环境变量传给受限 Shell。
 
 ### Token
 
@@ -78,7 +79,18 @@ API 不接受调用者指定 `roomId`，只读取 token 声明中的房间。这
 
 CLI 按能力分为只读面和写入面：`roomtalk room ...` 属于只读面，`roomtalk publish-static-site` 等属于写入面。Plan 的 shell environment 只拿到 room-context 凭证，并设置 `ROOMTALK_CODE_AGENT_CLI_ACCESS=read-only`；写命令会在 CLI 入口再次拒绝。Edit、Approve for me 和 Full access 才能拿到对应写入凭证。
 
-默认 Plan 模式仍是文件只读；只有该 turn 同时具备房间上下文 URL 和 token 时，Codex 的只读 sandbox 才开放网络，让只读 CLI 可以访问 RoomTalk API。没有房间上下文能力的普通 Plan turn 继续保持断网。
+默认 Plan 模式仍是文件只读；只有该 turn 同时具备房间上下文 URL 和 token 时，只读 sandbox 才开放网络，让只读 CLI 可以访问 RoomTalk API。没有房间上下文能力的普通 Plan turn 继续保持断网。
+
+### 统一 Shell 权限
+
+| 模式 | Shell | 文件系统 | 网络 | 后台进程 |
+| --- | --- | --- | --- | --- |
+| Plan | 前台通用命令 | OS sandbox 强制只读；仅 `/tmp` 为临时可写 | 默认关闭；有 room-context token 时开启 | 禁止 |
+| Edit | 前台命令 | workspace 可写 | 开启 | 独立 `BackgroundShell` |
+| Approve for me | 前台命令 | workspace 可写 | 开启 | 独立 `BackgroundShell` |
+| Full access | 前台命令 | sandbox 内不额外限制 | 开启 | 独立 `BackgroundShell` |
+
+Coco 以前在 Plan 中直接过滤 `Shell`，因为 engine 的 `PermissionChecker` 只能按工具判断读写，不能可靠判断任意 shell 字符串。新实现不尝试维护“只读命令白名单”，而是提供同名的 Plan Shell，并在执行每条命令时使用 bubblewrap 建立只读 mount namespace。任意 `python`、`node` 或重定向写入都会由内核拒绝，而不是依赖命令解析。Coco 的 Plan `allowed_tools` 包含这个受限 Shell，但不包含 `Write`、`Edit` 或 `BackgroundShell`。
 
 ### 消息投影
 
