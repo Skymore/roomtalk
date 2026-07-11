@@ -372,10 +372,10 @@
 <h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
 
 <blockquote data-lang="zh">
-RoomTalk 是一个实时 AI 协作平台，核心是共享房间和沙盒化 Code Agent workspace。RoomTalk 在 Fly.io 上作为 control plane，负责身份、权限、持久化 turn、usage/cost、对象存储和 sandbox lifecycle；每个 Code Agent 房间在 E2B 中拥有隔离的 execution plane，通过可复用 JSONL daemon 运行 Coco（自研 CLI coding agent），也支持用户连接自己的 Codex 订阅后通过 Codex CLI 或 app-server 在房间里工作。浏览器里可以直接查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。普通聊天仍支持多 Provider AI streaming、私有媒体、Redis/PostgreSQL 组合存储和移动端恢复。
+RoomTalk 是一个实时 AI 协作平台：多人和 AI 可以在共享房间中对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器里可以查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。架构上，Fly.io 上的 RoomTalk control plane 负责身份、权限、持久化 turn、事件顺序、usage/cost、对象存储和 sandbox lifecycle；每个 Code Agent 房间绑定一个 E2B execution plane，通过可复用 JSONL daemon 运行 Coco（自研 CLI coding agent）或 Codex app-server。普通聊天仍支持多 Provider AI streaming、私有媒体、Redis/PostgreSQL 组合存储和移动端恢复。
 </blockquote>
 <blockquote data-lang="en">
-RoomTalk is a realtime AI collaboration platform centered on shared rooms and sandboxed code-agent workspaces. A Fly.io control plane owns identity, permissions, durable turns, usage/cost, object storage, and sandbox lifecycle; each code-agent room gets an isolated E2B execution plane whose reusable JSONL daemon can run Coco, our self-built CLI coding agent, or Codex through a user's connected Codex subscription via CLI/app-server adapters. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. Regular chat still includes multi-provider AI streaming, private media, Redis/PostgreSQL composite storage, and mobile recovery.
+RoomTalk is a realtime AI collaboration platform where people and AI share rooms, and Coco or Codex can modify code, run tests, and start applications inside a sandboxed workspace bound to the room. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. Architecturally, the RoomTalk control plane on Fly.io owns identity, permissions, durable turns, event ordering, usage/cost, object storage, and sandbox lifecycle; each code-agent room binds to an E2B execution plane whose reusable JSONL daemon runs Coco, our self-built CLI coding agent, or Codex app-server. Regular chat still includes multi-provider AI streaming, private media, Redis/PostgreSQL composite storage, and mobile recovery.
 </blockquote>
 
 <p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
@@ -502,8 +502,8 @@ Files never pass through our server. The client requests a temporary upload URL 
 
 <h3 id="arch-agent"><span data-lang="zh">5. Code Agent — Control Plane / Execution Plane</span><span data-lang="en">5. Code Agent — Control Plane / Execution Plane</span></h3>
 
-<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。RoomTalk 只做 control plane；不可信代码、文件和进程全部留在 E2B execution plane：</p>
-<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” RoomTalk is strictly the control plane; untrusted code, files, and processes stay in the E2B execution plane:</p>
+<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。可以先记住三个 ownership：<strong>RoomTalk 决定谁能做什么并记录发生了什么；E2B 真正运行不可信代码；Coco/Codex 决定下一步调用哪个工具。</strong>完整边界如下：</p>
+<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” Start with three ownership rules: <strong>RoomTalk decides who may act and records what happened; E2B executes untrusted code; Coco or Codex chooses the next tool action.</strong> The full boundary is:</p>
 
 <table data-lang="zh">
   <thead><tr><th>层</th><th>负责</th><th>不负责</th></tr></thead>
@@ -550,17 +550,25 @@ I designed it as a shared cloud code-agent room, not a remote-shell widget. Room
 
 <div class="card warn" data-lang="zh">
   <h4>追问：为什么不用一个万能 token？</h4>
-  <p>因为 context read、model spend 和 public publish 的风险完全不同。拆成独立、短期、绑定 turn 的 capability 后，泄露时 blast radius 有边界，服务端也能分别校验 mode、room ownership、provider/model 和预算。</p>
+  <p>因为 context read、model spend 和 public publish 是三种不同权限：历史 token 只读当前房间的安全 projection，model token 只允许本轮选定的 provider/model 和预算，publish token 只允许当前房间发布 artifact。拆成独立、短期、绑定 turn 的 capability 后，其中一个泄露也不能替代另外两个，服务端还能分别校验 mode、room ownership、provider/model 和 budget。</p>
 </div>
 <div class="card warn" data-lang="en">
   <h4>Follow-up: Why not issue one universal token?</h4>
-  <p>Context reads, model spending, and public publishing have different risk profiles. Separate short-lived, turn-bound capabilities bound the blast radius and let the server independently enforce mode, room ownership, provider/model selection, and budget.</p>
+  <p>Context reads, model spending, and public publishing are different permissions. A context token can only read a safe projection of the current room; a model token is restricted to the selected provider/model and turn budget; a publish token can only publish artifacts owned by the room. Separate short-lived, turn-bound capabilities are non-interchangeable and let the server independently enforce mode, room ownership, provider/model selection, and budget.</p>
 </div>
 
 <h3 id="arch-workspace"><span data-lang="zh">7. 浏览器 Workspace 与持久 Artifact</span><span data-lang="en">7. Browser Workspace and Durable Artifacts</span></h3>
 
 <p data-lang="zh">同一个房间里，聊天 transcript 和 workspace 不是两个割裂产品。用户可以从 Agent 的工具事件直接进入对应文件、diff、terminal 或 artifact：</p>
 <p data-lang="en">The room transcript and workspace are not separate products. Users can move directly from an agent tool event into the related file, diff, terminal, preview, or artifact:</p>
+
+<div class="diagram">Agent edits src/app.ts
+        │
+        ▼
+User opens Git diff ── comments on line 42 ──▶ structured review context
+                                                      │
+                                                      ▼
+                                            next Agent turn</div>
 
 <ul data-lang="zh">
   <li>文件树/search/create/rename/delete、源码编辑、Markdown/图片/音视频 preview；</li>
@@ -593,16 +601,11 @@ I designed it as a shared cloud code-agent room, not a remote-shell widget. Room
 <p data-lang="zh"><strong>方案</strong>：拆成 control plane 与 execution plane。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给沙盒 daemon。daemon 可以路由到自研 Coco CLI agent，也可以使用当前成员通过 device authorization 连接的 Codex 订阅启动 Codex CLI 或 app-server。</p>
 <p data-lang="en"><strong>Solution</strong>: Split control and execution planes. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon. The daemon can dispatch to the self-built Coco CLI agent or launch Codex CLI/app-server with the current member's subscription connected through device authorization.</p>
 
-<div class="diagram">Browser ──authenticated socket──▶ RoomTalk control plane
-                                      │
-                                      │ room + turn + scoped env
-                                      ▼
-                                E2B JSONL daemon
-                                ├─ Coco: self-built CLI agent
-                                └─ Codex: user's subscription via CLI/app-server
-                                      │
-                                      ▼
-                              /workspace + Git + PTY</div>
+<div class="diagram">1. Browser ──authenticated Socket.IO prompt──▶ RoomTalk control plane
+2. RoomTalk ──check room access/mode──▶ create durable turn
+3. RoomTalk ──resume E2B + issue turn-scoped capabilities──▶ JSONL daemon
+4. Daemon ──route──▶ Coco (self-built CLI) | Codex app-server
+5. /workspace tools ──ordered text/tool events──▶ persist + broadcast</div>
 
 <blockquote data-lang="zh">最重要的不是“用了 E2B”，而是把 ownership 划清楚：RoomTalk 永远不执行不可信命令，E2B 永远不决定房间权限，Agent 永远不拿数据库或 provider secret。</blockquote>
 <blockquote data-lang="en">The important part is not merely “using E2B.” It is the ownership boundary: RoomTalk never executes untrusted commands, E2B never decides room permissions, and the agent never receives database or provider secrets.</blockquote>
@@ -620,8 +623,8 @@ I designed it as a shared cloud code-agent room, not a remote-shell widget. Room
    ▼              ▼                    ▼              ▼
 AI segment A   message N+1         message N+2    AI segment B</div>
 
-<div class="card warn" data-lang="zh"><h4>追问：为什么不能前端按 timestamp 重排？</h4><p>因为文本 chunk 的工具边界已经丢失，前端无法知道整段 AI 文本中哪句话属于哪个 tool result 之后。修复必须发生在最先知道真实执行顺序的 Engine/runner 层，并由服务端 position 持久化。</p></div>
-<div class="card warn" data-lang="en"><h4>Follow-up: Why not sort by timestamp in the client?</h4><p>Because the tool boundary inside the accumulated text has already been lost. The client cannot know which sentence belongs after which tool result. The fix must start where execution order is known — engine/runner — and be persisted by server positions.</p></div>
+<div class="card warn" data-lang="zh"><h4>追问：为什么不能前端按 timestamp 重排？</h4><p>真实顺序可能是“AI A：我先检查目录” → Glob → result 为空 → “AI B：目录是空的”。旧 runner 已经把 A 和 B 合并成一条 AI 消息，前端只能把整条消息放到工具前或工具后，无法把 Glob 插回 A/B 中间，因为文本边界已经丢失。修复必须发生在最先知道真实执行顺序的 Engine/runner 层，并由服务端 <code>position</code> 持久化。</p></div>
+<div class="card warn" data-lang="en"><h4>Follow-up: Why not sort by timestamp in the client?</h4><p>The real order may be “AI A: I will inspect the directory” → Glob → empty result → “AI B: the directory is empty.” The old runner had already merged A and B into one assistant message. The client could move that whole message before or after the tool, but it could not insert Glob back between A and B because the text boundary was gone. The fix must start where execution order is known — engine/runner — and be persisted by server <code>position</code>.</p></div>
 
 <h3 id="ch-agent-context"><span data-lang="zh">难点 3：共享房间上下文与最小权限同时成立</span><span data-lang="en">Challenge 3: Shared Room Context with Least Privilege</span></h3>
 
@@ -630,6 +633,14 @@ AI segment A   message N+1         message N+2    AI segment B</div>
 
 <p data-lang="zh"><strong>方案</strong>：每轮创建本地 Unix socket broker。Agent 只看到 <code>roomtalk</code> CLI，可以按需 history/delta/search/message；真实 upstream URL/token 由 runner 保管。服务端再次校验 room/client/turn，并只投影安全字段。Model 与 publish 另用独立 token。</p>
 <p data-lang="en"><strong>Solution</strong>: Start a local Unix-socket broker per turn. The agent only sees the <code>roomtalk</code> CLI and fetches history/delta/search/message on demand; the runner keeps the upstream URL/token. The server revalidates room/client/turn and projects safe fields only. Model and publish capabilities use separate tokens.</p>
+
+<div class="diagram">Agent ── roomtalk CLI: history/search/delta/message ──▶ per-turn Unix socket
+                                                              │
+                                                              ▼
+                                                       trusted runner
+                                                              │ scoped request
+                                                              ▼
+RoomTalk ── recheck room/client/turn ── filter safe fields ──▶ bounded context</div>
 
 <pre><code class="language-bash">roomtalk room history --limit 20 --json
 roomtalk room search "deployment failure" --json
