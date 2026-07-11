@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "roomtalk-code-agent-runner"
-version = "0.1.23"
+version = "0.1.25"
 description = "RoomTalk JSONL adapter for code-agent backends"
 requires-python = ">=3.10"
 dependencies = []

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from roomtalk_code_agent_runner import codex_sdk_app_server
+from roomtalk_code_agent_runner import codex_app_server, codex_sdk_app_server
 from roomtalk_code_agent_runner.runner import EventEmitter, parse_request
 from test_runner import event_lines, request
 
@@ -179,6 +179,11 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
         raise AssertionError("Codex SDK app-server turns must not create a watchdog timer")
 
     monkeypatch.setattr(codex_sdk_app_server.threading, "Timer", fail_turn_watchdog)
+    monkeypatch.setattr(
+        codex_app_server,
+        "_materialize_codex_image_url",
+        lambda _url, *, turn_id: f"data:image/png;base64,{turn_id}",
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -196,7 +201,12 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
     ])
 
     codex_sdk_app_server.run_request(
-        codex_sdk_request(workspace, codexModel="gpt-5.3-codex-spark", codexReasoningEffort="high"),
+        codex_sdk_request(
+            workspace,
+            codexModel="gpt-5.3-codex-spark",
+            codexReasoningEffort="high",
+            images=[{"url": "https://media.example/signed/input.png?token=secret"}],
+        ),
         emitter=EventEmitter(stdout),
         config=codex_sdk_app_server.CodexCliRunConfig(
             cli_bin="/usr/local/bin/codex",
@@ -228,6 +238,10 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
     assert turn_start["params"]["effort"] == "high"
     assert turn_start["params"]["serviceTier"] == "default"
     assert turn_start["params"]["sandboxPolicy"]["type"] == "readOnly"
+    assert turn_start["input"][1] == {
+        "type": "image",
+        "url": "data:image/png;base64,turn-sdk",
+    }
 
     events = event_lines(stdout)
     assert [event["type"] for event in events] == [

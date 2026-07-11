@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-11-static-publish-direct-100mb-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-11-image-url-input-v2",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -11,12 +11,12 @@
   "codeAgentEngine": {
     "packageName": "coco",
     "packageVersion": "0.1.3a0",
-    "sourceRepo": "https://github.com/Skymore/roomtalk.git",
-    "sourceRef": "d7048779e43aaade9fa0abccf42fcca9c6857e1a"
+    "sourceRepo": "https://github.com/Venti0325/Coco.git",
+    "sourceRef": "d2335368c88329daf24bcf84970cd1d710b950fe"
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.23",
+    "packageVersion": "0.1.25",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -25,15 +25,15 @@
       },
       "codex_cli": {
         "command": "python -m roomtalk_code_agent_runner.codex_cli",
-        "codexCliVersion": "0.144.0"
+        "codexCliVersion": "0.144.1"
       },
       "codex_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_app_server",
-        "codexCliVersion": "0.144.0"
+        "codexCliVersion": "0.144.1"
       },
       "codex_sdk_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_sdk_app_server",
-        "codexCliVersion": "0.144.0",
+        "codexCliVersion": "0.144.1",
         "pythonSdkVersion": "0.1.0b3"
       },
       "daemon": {

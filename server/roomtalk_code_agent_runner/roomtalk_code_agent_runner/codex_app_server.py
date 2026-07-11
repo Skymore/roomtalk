@@ -12,6 +12,9 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, TextIO
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import urlsplit
 
 from .codex_cli import (
     CodexCliRunConfig,
@@ -35,6 +38,14 @@ from .room_context_broker import start_room_context_broker
 
 SCHEMA_VERSION = 1
 MAX_STDERR_TAIL_CHARS = 4_000
+MAX_CODEX_IMAGE_BYTES = 5 * 1024 * 1024
+CODEX_IMAGE_FETCH_TIMEOUT_SECONDS = 30
+CODEX_IMAGE_MIME_TYPES = frozenset({
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
 APP_SERVER_CLIENT_INFO = {
     "name": "roomtalk",
     "title": "RoomTalk",
@@ -870,7 +881,10 @@ def _thread_resume_params(request: RunnerRequest, env: dict[str, str], workspace
 def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: Path, thread_id: str) -> dict[str, Any]:
     permission = _codex_app_server_permissions(request)
     turn_input = [{"type": "text", "text": _prompt_with_app_server_tools(request, env)}]
-    turn_input.extend({"type": "image", "url": image.url} for image in request.images)
+    turn_input.extend({
+        "type": "image",
+        "url": _materialize_codex_image_url(image.url, turn_id=request.turn_id),
+    } for image in request.images)
     params = {
         "threadId": thread_id,
         "input": turn_input,
@@ -886,6 +900,78 @@ def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: P
     else:
         params["sandboxPolicy"] = _sandbox_policy_for_permission(permission.sandbox, workspace)
     return params
+
+
+def _materialize_codex_image_url(image_url: str, *, turn_id: str) -> str:
+    request = urllib_request.Request(
+        image_url,
+        headers={
+            "Accept": ", ".join(sorted(CODEX_IMAGE_MIME_TYPES)),
+            "User-Agent": "RoomTalk-Code-Agent/1.0",
+        },
+        method="GET",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=CODEX_IMAGE_FETCH_TIMEOUT_SECONDS) as response:
+            final_url = str(response.geturl() or "")
+            if urlsplit(final_url).scheme.lower() != "https":
+                raise RunnerError(
+                    "Codex image download redirected outside HTTPS",
+                    code="codex_image_insecure_redirect",
+                    turn_id=turn_id,
+                )
+            mime_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if mime_type not in CODEX_IMAGE_MIME_TYPES:
+                raise RunnerError(
+                    "Codex image download returned an unsupported content type",
+                    code="codex_image_invalid_content_type",
+                    turn_id=turn_id,
+                )
+            content_length = _parse_content_length(response.headers.get("Content-Length"))
+            if content_length is not None and content_length > MAX_CODEX_IMAGE_BYTES:
+                raise RunnerError(
+                    "Codex image exceeds the 5 MB input limit",
+                    code="codex_image_too_large",
+                    turn_id=turn_id,
+                )
+            body = response.read(MAX_CODEX_IMAGE_BYTES + 1)
+    except RunnerError:
+        raise
+    except urllib_error.HTTPError as exc:
+        raise RunnerError(
+            f"Codex image download failed with HTTP {exc.code}",
+            code="codex_image_download_failed",
+            turn_id=turn_id,
+        ) from exc
+    except (urllib_error.URLError, TimeoutError, OSError) as exc:
+        raise RunnerError(
+            "Codex image download failed",
+            code="codex_image_download_failed",
+            turn_id=turn_id,
+        ) from exc
+
+    if not body:
+        raise RunnerError(
+            "Codex image download returned an empty body",
+            code="codex_image_empty",
+            turn_id=turn_id,
+        )
+    if len(body) > MAX_CODEX_IMAGE_BYTES:
+        raise RunnerError(
+            "Codex image exceeds the 5 MB input limit",
+            code="codex_image_too_large",
+            turn_id=turn_id,
+        )
+    encoded = base64.b64encode(body).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _parse_content_length(value: Any) -> int | None:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _thread_permission_params(request: RunnerRequest, env: dict[str, str], sandbox: str) -> dict[str, str]:

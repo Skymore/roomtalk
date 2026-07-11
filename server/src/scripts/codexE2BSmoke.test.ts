@@ -54,7 +54,11 @@ describe('buildCodexE2BSmokePlan', () => {
   });
 
   it('builds a Codex app-server smoke plan without forwarding E2B credentials to the runner', () => {
-    const plan = assertRunnable(baseEnv);
+    const imageUrl = 'https://media.example/signed/input.png?token=secret';
+    const plan = assertRunnable({
+      ...baseEnv,
+      CODEX_E2B_SMOKE_IMAGE_URL: imageUrl,
+    });
 
     assert.equal(plan.config.backend, 'codex-app-server');
     assert.equal(plan.config.runnerCommand, DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
@@ -67,6 +71,7 @@ describe('buildCodexE2BSmokePlan', () => {
     assert.equal(plan.runnerEnv.E2B_API_KEY, undefined);
     assert.equal(plan.runnerEnv.E2B_ACCESS_TOKEN, undefined);
     assert.equal(plan.e2bConnection.apiKey, 'e2b-test-key');
+    assert.equal(plan.imageUrl, imageUrl);
   });
 
   it('can explicitly smoke the legacy Codex CLI backend', () => {
@@ -84,6 +89,18 @@ describe('buildCodexE2BSmokePlan', () => {
       ...baseEnv,
       CODEX_E2B_SMOKE_BACKEND: 'other',
     }), /Unsupported CODEX_E2B_SMOKE_BACKEND/);
+  });
+
+  it('rejects invalid image URLs and image smoke on the deprecated CLI backend', () => {
+    assert.throws(() => buildCodexE2BSmokePlan({
+      ...baseEnv,
+      CODEX_E2B_SMOKE_IMAGE_URL: 'http://media.example/input.png',
+    }), /absolute HTTPS URL/);
+    assert.throws(() => buildCodexE2BSmokePlan({
+      ...baseEnv,
+      CODEX_E2B_SMOKE_BACKEND: 'codex',
+      CODEX_E2B_SMOKE_IMAGE_URL: 'https://media.example/input.png',
+    }), /requires the codex-app-server backend/);
   });
 
   it('fails fast when production E2B artifact metadata is missing', () => {

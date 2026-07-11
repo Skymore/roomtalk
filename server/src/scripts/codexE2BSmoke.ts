@@ -28,6 +28,7 @@ type CodexE2BSmokePlan =
     roomId: string;
     turnId: string;
     prompt: string;
+    imageUrl?: string;
     expectedText?: string;
     sandboxTtlMs: number;
     e2bConnection: {
@@ -56,6 +57,10 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
     return { run: false, reason: 'CODEX_E2B_SMOKE_AUTH_JSON_PATH is not set and ~/.codex/auth.json is unavailable' };
   }
   const smokeBackend = resolveSmokeBackend(env.CODEX_E2B_SMOKE_BACKEND);
+  const imageUrl = resolveSmokeImageUrl(env.CODEX_E2B_SMOKE_IMAGE_URL);
+  if (imageUrl && smokeBackend === 'codex') {
+    throw new Error('CODEX_E2B_SMOKE_IMAGE_URL requires the codex-app-server backend');
+  }
 
   const smokeEnv = {
     ...env,
@@ -89,6 +94,7 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
     roomId: env.CODEX_E2B_SMOKE_ROOM_ID || `codex-e2b-smoke-${suffix}`,
     turnId,
     prompt: env.CODEX_E2B_SMOKE_PROMPT || DEFAULT_SMOKE_PROMPT,
+    imageUrl,
     expectedText: env.CODEX_E2B_SMOKE_EXPECTED || 'codex e2b smoke ok',
     sandboxTtlMs: parsePositiveMs(env.CODE_AGENT_SANDBOX_TTL_MS, DEFAULT_SANDBOX_TTL_MS),
     e2bConnection: {
@@ -108,6 +114,23 @@ const resolveSmokeBackend = (value: string | undefined): 'codex' | 'codex-app-se
     return normalized;
   }
   throw new Error(`Unsupported CODEX_E2B_SMOKE_BACKEND: ${value}`);
+};
+
+const resolveSmokeImageUrl = (value: string | undefined): string | undefined => {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error('CODEX_E2B_SMOKE_IMAGE_URL must be an absolute HTTPS URL');
+  }
+  if (parsed.protocol !== 'https:' || !parsed.hostname) {
+    throw new Error('CODEX_E2B_SMOKE_IMAGE_URL must be an absolute HTTPS URL');
+  }
+  return normalized;
 };
 
 export const runCodexE2BSmoke = async (
@@ -169,6 +192,7 @@ export const runCodexE2BSmoke = async (
       apiModel: plan.selectedModel.apiModel,
       workspace: handle.workspace,
       allowedPaths: plan.config.allowedPaths,
+      images: plan.imageUrl ? [{ url: plan.imageUrl }] : undefined,
     }, {
       onEvent: async event => {
         logger.info('Codex smoke runner event', { type: event.type });

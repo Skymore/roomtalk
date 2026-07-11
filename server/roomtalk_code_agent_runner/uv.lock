@@ -79,7 +79,7 @@ wheels = [
 
 [[package]]
 name = "roomtalk-code-agent-runner"
-version = "0.1.23"
+version = "0.1.25"
 source = { editable = "." }
 
 [package.optional-dependencies]

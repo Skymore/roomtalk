@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from roomtalk_code_agent_runner import codex_app_server
 from roomtalk_code_agent_runner.runner import EventEmitter, parse_request
 from test_runner import event_lines, request
@@ -33,6 +35,37 @@ class RecordingStdin:
 
     def close(self):
         self.closed = True
+
+
+class FakeImageResponse:
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        content_type: str = "image/png",
+        content_length: str | None = None,
+        final_url: str = "https://media.example/final.png",
+    ):
+        self.body = body
+        self.headers = {
+            "Content-Type": content_type,
+            "Content-Length": content_length if content_length is not None else str(len(body)),
+        }
+        self.final_url = final_url
+        self.read_limits: list[int] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def geturl(self):
+        return self.final_url
+
+    def read(self, limit: int):
+        self.read_limits.append(limit)
+        return self.body[:limit]
 
 
 class FakeAppServerProcess:
@@ -91,11 +124,73 @@ def jsonrpc_lines(process: FakeAppServerProcess) -> list[dict[str, Any]]:
     return [json.loads(line) for line in process.stdin.lines]
 
 
+def test_codex_image_url_is_materialized_in_memory(monkeypatch: pytest.MonkeyPatch):
+    image_url = "https://media.example/signed/input.png?token=secret"
+    response = FakeImageResponse(b"png-bytes", content_type="image/png; charset=binary")
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr(codex_app_server.urllib_request, "urlopen", fake_urlopen)
+
+    result = codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
+
+    assert result == "data:image/png;base64,cG5nLWJ5dGVz"
+    assert captured["request"].full_url == image_url
+    assert captured["timeout"] == codex_app_server.CODEX_IMAGE_FETCH_TIMEOUT_SECONDS
+    assert response.read_limits == [codex_app_server.MAX_CODEX_IMAGE_BYTES + 1]
+
+
+def test_codex_image_materialization_enforces_transport_boundaries(monkeypatch: pytest.MonkeyPatch):
+    image_url = "https://media.example/signed/input.png?token=secret"
+
+    monkeypatch.setattr(
+        codex_app_server.urllib_request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeImageResponse(b"text", content_type="text/plain"),
+    )
+    with pytest.raises(codex_app_server.RunnerError) as invalid_type:
+        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
+    assert invalid_type.value.code == "codex_image_invalid_content_type"
+    assert "token=secret" not in str(invalid_type.value)
+
+    monkeypatch.setattr(
+        codex_app_server.urllib_request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeImageResponse(
+            b"image",
+            content_length=str(codex_app_server.MAX_CODEX_IMAGE_BYTES + 1),
+        ),
+    )
+    with pytest.raises(codex_app_server.RunnerError) as too_large:
+        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
+    assert too_large.value.code == "codex_image_too_large"
+
+    monkeypatch.setattr(
+        codex_app_server.urllib_request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeImageResponse(b"image", final_url="http://media.example/input.png"),
+    )
+    with pytest.raises(codex_app_server.RunnerError) as insecure_redirect:
+        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
+    assert insecure_redirect.value.code == "codex_image_insecure_redirect"
+
+
 def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def fail_turn_watchdog(*_args, **_kwargs):
         raise AssertionError("Codex app-server turns must not create a watchdog timer")
 
     monkeypatch.setattr(codex_app_server.threading, "Timer", fail_turn_watchdog)
+    materialized_urls: list[str] = []
+
+    def fake_materialize(image_url: str, *, turn_id: str):
+        materialized_urls.append(f"{turn_id}:{image_url}")
+        return "data:image/png;base64,cG5n"
+
+    monkeypatch.setattr(codex_app_server, "_materialize_codex_image_url", fake_materialize)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -197,8 +292,11 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
     assert "roomtalk publish-static-site" not in sent[3]["params"]["input"][0]["text"]
     assert sent[3]["params"]["input"][1] == {
         "type": "image",
-        "url": "https://media.example/signed/input.png?token=secret",
+        "url": "data:image/png;base64,cG5n",
     }
+    assert materialized_urls == [
+        "turn-app-server:https://media.example/signed/input.png?token=secret",
+    ]
     assert not (Path(call["env"]["CODEX_HOME"]) / "auth.json").exists()
     assert not (Path(call["env"]["CODEX_HOME"]) / "config.toml").exists()
 
