@@ -1,95 +1,112 @@
 # RoomTalk
 
-[English Version](./README.md)
+[在线应用](https://room.ruit.me/) · [English](./README.md)
 
-RoomTalk 是一个实时房间聊天系统，包含 AI 助手、私有媒体、贴纸、房间管理、已保存房间、移动端恢复，以及可选 PostgreSQL 持久化。仓库由 React/Vite 客户端和 Node/Express/Socket.IO 服务端组成。
+RoomTalk 是一个以共享房间和可持续工作的沙盒化 Code Agent 工作区为核心的实时 AI 协作平台。人类和多种 Agent backend 可以在同一个房间中协作；RoomTalk 统一负责身份、权限、持久化 transcript、工作区访问、产物和故障恢复。
 
-## 当前能力
+仓库包含 React/Vite 客户端、Node/Express/Socket.IO control plane，以及打包进固定 E2B sandbox artifact 的 Python JSONL runner。
 
-- 创建房间、按 ID/链接加入、保存房间、重命名/删除房间、成员角色、管理员、所有权转移、密码房和发言时间段。
-- 文本、AI、媒体、贴纸、引用回复、编辑、删除和清空历史消息。
-- AI 流式回复，按模型提供方接入 DeepSeek、Anthropic、OpenAI 和 OpenRouter 路由模型。
-- AI 角色预设、模型选择、高价模型二次确认、usage/cost 元数据、重试、编辑后追问，以及 A2UI 流式界面。
-- 通过 S3 兼容存储私有上传/下载媒体；开发环境支持本地媒体兜底；支持媒体历史、图片/视频/音频和移动端媒体查看手势。
-- 配置 AssemblyAI 后支持语音转写。
-- Google 登录关联、client 密码保护、token 化 socket 注册，以及可选 Web Push 通知。
-- English、中文、हिन्दी、日本語、한국어 多语言。
-- 移动端可靠性：当前房间恢复、重连处理、成员数恢复、键盘视口修复和移动端 E2E。
+## 核心能力
 
-## 仓库结构
+### 共享 AI 协作
 
-```text
-client-heroui/     React + TypeScript + Vite 前端
-server/            Express + Socket.IO TypeScript 后端
-docs/              Runbook、设计记录、迁移记录、可靠性复盘
-Dockerfile         Fly.io 使用的生产镜像构建
-fly.toml           Fly.io 应用配置
-start.sh           本地启动脚本：服务端 3012，客户端 3011
-CLAUDE.md          Agent/开发指南；AGENTS.md 是它的符号链接
-```
+- 实时房间、邀请链接、密码、成员角色、管理员、所有权转移、发言时间段、收藏房间和多客户端在线状态。
+- 跨 Anthropic、OpenAI、DeepSeek 和 OpenRouter 兼容模型的 provider-neutral AI 流式运行时，支持角色/上下文控制、usage/cost 计费、中断流恢复和 A2UI 界面。
+- 文本、私有媒体、贴纸、回复、编辑、reaction、语音转写、Web Push、Google 登录，以及中英印日韩五种 UI 语言。
+- 针对移动端重连、BFCache 恢复、键盘 viewport、room-version 顺序和 read-your-write 房间更新的可靠性保护。
+
+### 沙盒化 Code Agent 房间
+
+- 每个 Code Agent 房间拥有一个共享 E2B 工作区；Coco、Codex CLI 和 Codex app-server 统一接入 RoomTalk turn 协议。
+- 沙盒内可复用的 JSONL daemon 顺序执行 turn、流式输出文本/工具/model-step 事件、接收 interrupt/steer 控制，并在沙盒或服务退出时回收。
+- Plan、Edit、Approve for me、Full access 四种权限模式。Plan 使用操作系统强制的只读 Shell；可写模式可以修改 workspace 和运行后台任务。
+- 每个 turn 独立签发 model gateway、room context 和 static publish 凭据。Provider key 与 RoomTalk 服务端 secret 不进入浏览器和 Agent prompt。
+- Agent 可通过沙盒内 `roomtalk` CLI 按需读取有界历史、增量、单条消息、搜索结果和已发布站点。
+- AI/工具消息按真实执行顺序持久化并按 turn 分组，同时支持图片输入、model-step usage、排队 prompt、运行中 steer、interrupt、retry 和审批事件。
+
+### 浏览器工作区
+
+- 文件树与搜索、源码编辑、图片/Markdown/媒体预览、workspace asset 读取和 panel 状态保存。
+- Git changed-files tree、branch/base-ref 选择、unified/split diff、viewed 状态，以及可附加到下一轮 Agent prompt 的行级 review comment。
+- 基于认证 Socket.IO session 的交互式 PTY terminal，包含 resize、输入缓冲、本地 echo 和有界输出 snapshot。
+- Workspace 文件和已探测 dev server 的内嵌浏览器预览、响应式 viewport、截图、录屏和 preview server 状态。
+- 将静态站点持久发布到 RoomTalk 对象存储。E2B 暂停或替换后 URL 仍可访问，并显示在 workspace 的 Artifacts 视图中。
+- Idle/active sandbox TTL、重连与 stale state 恢复、全局/用户级配额、Git baseline 初始化，以及固定 artifact 升级时的 archive workspace migration。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-  Client["React client"] <--> Socket["Socket.IO server"]
-  Client --> HTTP["Express API"]
-  Socket --> Store["CompositeRoomStore"]
-  HTTP --> Store
-  Store --> Durable["Redis or PostgreSQL durable store"]
-  Store --> Redis["Redis realtime state + Socket.IO adapter + cache"]
-  Socket --> AI["AI providers"]
-  HTTP --> Media["S3/Tigris or local media storage"]
+  Browser["React client"] <-->|"Socket.IO + HTTP"| Control["RoomTalk control plane\nNode 24 + Express"]
+
+  Control --> Store["CompositeRoomStore"]
+  Store --> Durable["PostgreSQL or Redis\ndurable state"]
+  Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
+
+  Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
+  Control --> Media["S3/Tigris\nprivate media + published artifacts"]
+
+  Control --> Lifecycle["Sandbox lifecycle + access control"]
+  Lifecycle --> E2B["Per-room E2B sandbox"]
+  E2B --> Daemon["RoomTalk JSONL daemon"]
+  Daemon --> Backends["Coco | Codex CLI | Codex app-server"]
+  Daemon --> Workspace["/workspace\nfiles, Git, PTY, previews, processes"]
+
+  Backends --> Broker["Turn-scoped RoomTalk broker\ncontext, model gateway, site publishing"]
+  Broker --> Control
 ```
 
-服务端使用 `CompositeRoomStore`：
+系统边界是刻意设计的：
 
-- Durable store：默认 Redis，也可用 `PERSISTENCE_STORE=postgres` 切到 PostgreSQL。
-- Realtime store：Redis 保存 socket session、在线成员和 Socket.IO adapter 状态。
-- Message cache：PostgreSQL 模式下用 Redis 短 TTL 缓存消息读取。
+- **RoomTalk control plane**：拥有房间、成员、权限、消息/turn 持久化、scoped credential、sandbox lifecycle、对象存储和浏览器 API。
+- **E2B execution plane**：在 `/workspace` 中承载不可信文件、进程、terminal、dev server 和 Agent 执行。
+- **Agent backend**：拥有推理和原生工具循环，通过窄 JSONL/CLI 合约使用 RoomTalk 能力，不接触数据库或基础设施凭据。
 
-客户端以 `MessagePage` 为状态编排中心，`src/components` 放 UI，`src/utils` 放 socket/API/i18n/localStorage/domain helper，`src/hooks` 放房间与消息同步逻辑。
+完整 turn 流程、安全模型、workspace surface、持久化边界和发布流程见 [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)。
+
+## 仓库结构
+
+```text
+client-heroui/                    React + TypeScript + Vite 客户端
+server/src/                       Express/Socket.IO control plane
+server/roomtalk_code_agent_runner Python runner、daemon、backend 和 RoomTalk CLI
+ops/code-agent-sandbox/           固定 E2B artifact 定义与 lock
+scripts/code-agent/               artifact context 准备脚本
+docs/                             架构、runbook、方案和复盘
+output/resume-overleaf/           简历源文件与 PDF
+```
 
 ## 快速开始
 
 环境要求：
 
-- 推荐 Node.js 24.18.0 LTS。
+- Node.js 24.18.0 或更高版本。
 - 本地 Redis 运行在 `localhost:6379`。
-- 可选：用于 PostgreSQL smoke/E2E 的测试数据库。
+- 可选 PostgreSQL 测试库，用于 PostgreSQL 模式 smoke/E2E。
+- 真实 Code Agent 房间还需要 E2B 凭据和固定 template 配置。
 
-安装依赖：
+安装依赖并创建本地配置：
 
 ```bash
 cd server && npm install
 cd ../client-heroui && npm install
+cp ../server/.env.example ../server/.env
 ```
 
-创建本地服务端配置：
-
-```bash
-cp server/.env.example server/.env
-```
-
-默认 AI 模型需要 `DEEPSEEK_API_KEY`。OpenRouter 路由模型和 AI 角色草稿生成需要 `OPENROUTER_API_KEY`。
-
-一键启动：
+启动前后端：
 
 ```bash
 ./start.sh
 ```
 
-手动开发模式：
+客户端地址为 [http://localhost:3011](http://localhost:3011)，服务端地址为 `http://localhost:3012`。
+
+手动开发：
 
 ```bash
-cd server
-npm run dev
-
-cd ../client-heroui
-npm run dev
+cd server && npm run dev
+cd client-heroui && npm run dev
 ```
-
-访问 [http://localhost:3011](http://localhost:3011)。
 
 ## 常用命令
 
@@ -97,127 +114,88 @@ npm run dev
 
 ```bash
 cd server
-npm run dev                         # ts-node-dev 开发服务
-npm run build                       # TypeScript 构建
-npm start                           # 运行 dist/src/server.js
-npm test                            # Node test runner 跑 src/**/*.test.ts
-npm run migrate:redis-to-postgres   # Redis -> PostgreSQL 持久化迁移
-npm run smoke:persistence           # 安全的本地持久化 smoke
+npm run build
+npm test
+npm run smoke:persistence
+npm run smoke:code-agent:e2b
+npm run smoke:codex:e2b
+npm run migrate:redis-to-postgres
+npm run migrate:media-to-object-storage
 ```
 
 客户端：
 
 ```bash
 cd client-heroui
-npm run dev                 # Vite 开发服务
-npm test                    # Vitest 单元/组件测试
-npm run lint                # ESLint
-npm run check:i18n          # 检查翻译 key
-npm run build               # i18n + TypeScript + Vite build
-npm run test:e2e            # Redis 模式 Playwright E2E
-npm run test:e2e:postgres   # PostgreSQL 模式 Playwright E2E
+npm run lint
+npm run check:i18n
+npm test
+npm run build
+npm run test:e2e
+npm run test:e2e:postgres
 ```
 
 ## 配置
 
-后端配置以 `server/.env.example` 为准。重要分组：
+通用后端配置以 `server/.env.example` 为起点。主要分组如下：
 
-| 范围 | 变量 |
+| 范围 | 示例 |
 | --- | --- |
-| HTTP/CORS | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
-| Redis | `REDIS_URL` |
-| PostgreSQL 模式 | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
-| AI | `AI_MODEL`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
-| 媒体存储 | `MEDIA_BUCKET_NAME`, `MEDIA_STORAGE_REGION`, `MEDIA_STORAGE_ENDPOINT`, `MEDIA_STORAGE_FORCE_PATH_STYLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| 可选服务 | `ASSEMBLYAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_SUBJECT` |
+| HTTP 与 origin | `PORT`、`CLIENT_URL`、`CLIENT_URLS`、`NODE_ENV` |
+| 持久/实时存储 | `PERSISTENCE_STORE`、`DATABASE_URL`、`REDIS_URL`、PostgreSQL TLS、message cache TTL |
+| 普通 Chat AI | Provider API key、默认模型、OpenRouter 路由 metadata |
+| 媒体与 artifact | S3/Tigris bucket、endpoint、region 和 AWS 兼容凭据 |
+| 可选服务 | Google OAuth、AssemblyAI、Web Push VAPID |
+| Code Agent control plane | Backend allowlist、E2B template/artifact pin、TTL/配额、model gateway 与 publish token secret |
 
-前端配置：
+只有浏览器可公开的值才能放入 `VITE_*`。Code Agent provider key、model-gateway token、room-context token 和 static-publish token 都不能暴露给客户端。
 
-- `client-heroui/.env.development`：本地 `VITE_SOCKET_URL` 和公开 Google Client ID。
-- `client-heroui/.env.production`：Fly 同域部署使用 `VITE_SOCKET_URL=/`。
+生产 Code Agent 房间使用固定 E2B artifact。Runner、工具、prompt、Dockerfile 或 Code Agent engine 发生变化时，必须 bump artifact version、构建新 E2B template、同步生产 pin，并执行 E2B smoke。详见 [Code Agent sandbox artifact](docs/code-agent-sandbox-artifact.md)。
 
-`CLIENT_URL` 用作主要公开客户端地址。生产环境需要多个域名同时可用时，用 `CLIENT_URLS` 配置逗号分隔的 origin 白名单，例如 `https://room.ruit.me,https://room.ruit.me`。
+## 持久化与对象存储
 
-只有浏览器可公开的值才应放入 `VITE_*`。
+`CompositeRoomStore` 分离持久与实时职责：
 
-## 持久化与迁移
+- PostgreSQL 或 Redis 保存房间、消息、成员、认证、媒体 metadata、AI run、Code Agent turn 和 sandbox metadata。
+- Redis 始终负责 presence、socket session、pub/sub，以及可选的 PostgreSQL 消息短 TTL 缓存。
+- S3/Tigris 兼容存储保存私有媒体和版本化静态站点 artifact；开发环境可使用本地对象存储实现。
 
-Redis 是默认本地 durable store。PostgreSQL 模式下，PostgreSQL 是持久事实来源，Redis 继续负责实时状态、Socket.IO 扩展和短 TTL 消息缓存。
+迁移和上线参考：
 
-Redis 到 PostgreSQL 切换：
+- [PostgreSQL 上线 runbook](docs/postgres-rollout-runbook.md)
+- [PostgreSQL 迁移总结](docs/postgres-migration-development-summary.zh.md)
+- [媒体对象存储迁移](docs/image-object-storage-migration-runbook.md)
+- [静态发布实现](docs/code-agent-static-publish-implementation.md)
 
-```bash
-cd server
-REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
-REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
-```
+## 测试
 
-最终迁移应在写入冻结或维护窗口内执行，然后设置：
+仓库采用分层验证：
 
-```bash
-fly secrets set PERSISTENCE_STORE="postgres"
-fly secrets set DATABASE_URL="postgres://..."
-fly secrets set POSTGRES_SSL="true"
-```
+- Node test runner 覆盖 service、protocol、store、socket handler、E2B adapter、lifecycle、model gateway 和 static publishing。
+- Vitest + Testing Library 覆盖客户端状态、消息、workspace 文件/diff/review、terminal、browser preview、queue control 和响应式 view。
+- Playwright 覆盖桌面/移动端房间流程、恢复、多客户端实时行为、媒体、AI 和 PostgreSQL parity。
+- 真实 E2B smoke 覆盖固定 artifact metadata、daemon health、Coco/Codex 执行、权限、context access、发布和 workspace 行为。
 
-只要保留 Redis durable 数据，回滚就是配置切换：
-
-```bash
-fly secrets set PERSISTENCE_STORE="redis"
-```
-
-完整清单见 [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)。
-
-持久化 smoke 有安全保护：
-
-```bash
-cd server
-npm run smoke:persistence
-TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
-```
-
-PostgreSQL smoke 数据库名必须包含独立的 `test` 或 `e2e` token。
-
-## 媒体存储
-
-新媒体上传通过 `MEDIA_*` 和 AWS 凭据变量写入私有 S3 兼容对象存储。未配置对象存储时，开发环境可以使用本地对象路由兜底。
-
-Legacy Base64 图片清理可通过 `cd server && npm run migrate:media-to-object-storage` 执行。默认是 dry-run，会在内存中把候选图片转为 lossless WebP；只有显式 `--execute` 并提供已验证备份文件后，才会上传对象并更新 PostgreSQL。详见 [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md)。
+修改后先运行同目录 focused test，发布前再跑两端 production build。
 
 ## 部署
 
-生产部署以 CI 为主：
+`master` 是 release branch。`.github/workflows/fly-deploy.yml` 按计划运行或手动 dispatch，检查 `master` 是否比最近成功版本有新提交，随后构建两端、校验翻译与 secret，并部署到 Fly.io。不要手动执行 `fly deploy`。
 
-- 推送到 `master` 会触发 `.github/workflows/fly-deploy.yml`。
-- CI 安装依赖、构建服务端/客户端、检查翻译、校验 Fly secrets，然后执行 `flyctl deploy --remote-only`。
-- Fly 应用名为 `message-system`，区域 `dfw`，Node 24.18.0 Alpine Docker 镜像，512 MB VM。
-
-生产通常需要 Redis、PostgreSQL、S3/Tigris 兼容媒体存储、AI provider key 和 Google OAuth。AssemblyAI 与 Web Push VAPID key 是可选服务。
-
-英文部署指南：[DeploymentGuide.md](DeploymentGuide.md)。中文部署指南：[部署指南.md](部署指南.md)。
-
-## 测试覆盖
-
-测试体系包括：
-
-- 服务端 Node test runner：单元、socket、repository、API 测试。
-- 客户端 Vitest + Testing Library：组件和工具函数测试。
-- Playwright E2E：房间、消息、AI/媒体/分享、移动端核心链路、房间恢复、多客户端实时同步和 PostgreSQL 持久化。
-- 客户端 build 中的 i18n key 检查。
-
-窄改动优先在改动代码旁边加 focused test。用户可见行为用 Playwright，持久化模式回归用 PostgreSQL E2E。
+生产使用 Fly.io 承载 Node control plane、Supabase PostgreSQL、Upstash Redis、Tigris 对象存储，以及 E2B 的每房间 execution sandbox。
 
 ## 文档地图
 
-- [CLAUDE.md](CLAUDE.md)：精简的 contributor/agent 操作指南。
-- [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)：生产 PostgreSQL 切换清单。
-- [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md)：PostgreSQL 迁移历史复盘。
-- [docs/migration-completion-audit.md](docs/migration-completion-audit.md)：当前迁移完成证据和剩余外部 gate。
-- [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md)：房间恢复和房间更新可靠性系列入口。
-- [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md)：当前媒体查看器手势需求。
-- [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md)：iOS 键盘视口修复记录。
+- [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)：当前端到端设计与职责边界。
+- [Code Agent sandbox artifact](docs/code-agent-sandbox-artifact.md)：固定 artifact 的构建与上线合约。
+- [Room context CLI 设计](docs/codex-room-context-cli-design.zh.md)：broker 历史/搜索访问与 Plan 模式隔离。
+- [静态发布实现](docs/code-agent-static-publish-implementation.md)：持久 artifact pipeline 与 RoomTalk CLI。
+- [Sandbox daemon 方案](docs/sandbox-daemon-plan.md)：daemon 协议和迁移动机。
+- [PostgreSQL 上线 runbook](docs/postgres-rollout-runbook.md)：durable store 生产切换。
+- [房间可靠性](docs/room-reliability/README.zh.md)：恢复、顺序和多客户端一致性。
+- [CLAUDE.md](CLAUDE.md)：贡献与 release 规范。
 
-`docs/` 中部分文件是历史计划或复盘。日常操作以 runbook 和本 README 为入口。
+`docs/` 中部分文件是历史方案或复盘。当前操作应以架构文档、runbook、本 README 和源码为准。
 
 ## 许可证
 

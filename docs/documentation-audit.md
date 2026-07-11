@@ -1,6 +1,6 @@
 # Documentation Audit
 
-Audit date: 2026-06-18.
+Audit date: 2026-07-11.
 
 This file records the repository-wide documentation quality-control pass. It
 classifies active docs, historical records, archival plans, and known follow-up
@@ -14,6 +14,8 @@ excluded.
 | `README.md` | Rewritten | Current product, architecture, commands, config, persistence, media, deployment, testing, and doc map. |
 | `README.zh.md` | Rewritten | Chinese mirror of the current README. |
 | `CLAUDE.md` | Active | Agent/developer guide. `AGENTS.md` is a symlink to this file. |
+| `docs/code-agent-runtime-architecture.md` | Active architecture | Current code-agent control/execution plane, turn flow, permissions, workspace surfaces, recovery, and release contract. |
+| `docs/interview-preparation.html` | Active interview guide | Bilingual project pitch, architecture, technical challenges, STAR stories, and follow-up answers. Restored from the historical docs branch and refreshed against current code. |
 | `DeploymentGuide.md` | Active runbook | Updated to CI-first deployment, existing Dockerfile, current secrets, and non-static pricing guidance. |
 | `部署指南.md` | Active runbook | Chinese deployment guide with the same current constraints. |
 | `docs/postgres-rollout-runbook.md` | Active runbook | Updated with final-sync/write-freeze requirements and PostgreSQL CA options. |
@@ -29,7 +31,7 @@ excluded.
 | `docs/postgres-persistence-plan.md` | Completed plan | Marked as historical; current schema has expanded beyond the original plan. |
 | `docs/postgres-test-coverage-plan.zh.md` | Completed plan | Early “gaps” are pre-implementation state; execution status is later in the doc. |
 | `docs/postgres-migration-development-summary.zh.md` | Historical summary | Still useful as migration/postmortem context. |
-| `docs/code-agent-sandbox.md` | Completed historical plan | Code Agent sandbox/runner phases are implemented; current validation status is recorded in the document. |
+| `docs/code-agent-sandbox.md` | Completed historical plan | Original sandbox/runner plan; its status banner now points to the current runtime architecture. |
 | `docs/image-object-storage-migration-runbook.md` | Active runbook | Legacy base64 media migration script is restored; runbook documents dry-run, execute-mode safety checks, verification, rollback, and tests. |
 | `docs/a2ui-streaming-implementation.zh.md` | Implementation record | Appears current against A2UI v0.9 integration; no action taken. |
 | `docs/mobile-keyboard-viewport-fix.zh.md` | Fix record | Added current viewport/keyboard behavior notes. |

@@ -1,0 +1,2047 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoomTalk 面试准备资料</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  /* ---- layout ---- */
+  .wrapper {
+    display: flex;
+    min-height: 100vh;
+  }
+  nav.sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 280px;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 16px;
+    z-index: 100;
+  }
+  nav.sidebar h2 {
+    font-size: 14px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 12px;
+  }
+  nav.sidebar a {
+    display: block;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: .15s;
+  }
+  nav.sidebar a:hover, nav.sidebar a.active {
+    color: var(--accent);
+    background: rgba(88,166,255,.08);
+  }
+  nav.sidebar a.sub {
+    padding-left: 22px;
+    font-size: 12.5px;
+  }
+  main {
+    margin-left: 280px;
+    max-width: 900px;
+    padding: 48px 48px 120px;
+  }
+  /* ---- typography ---- */
+  h1 { font-size: 32px; margin-bottom: 8px; color: var(--text); }
+  h1 + .subtitle { color: var(--text-muted); font-size: 15px; margin-bottom: 40px; }
+  h2 {
+    font-size: 22px;
+    margin-top: 56px;
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  h3 { font-size: 17px; margin-top: 32px; margin-bottom: 12px; color: var(--accent); }
+  h4 { font-size: 15px; margin-top: 20px; margin-bottom: 8px; color: var(--purple); }
+  p { margin-bottom: 14px; }
+  strong { color: var(--text); }
+  ul, ol { margin: 10px 0 14px 24px; }
+  li { margin-bottom: 6px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 48px 0; }
+  /* ---- blockquote = 话术 ---- */
+  blockquote {
+    background: rgba(88,166,255,.06);
+    border-left: 3px solid var(--accent-dim);
+    padding: 14px 18px;
+    margin: 12px 0 18px;
+    border-radius: 0 8px 8px 0;
+    color: var(--text);
+    font-size: 14px;
+  }
+  blockquote::before {
+    content: '💬 话术参考';
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
+  /* ---- code ---- */
+  code {
+    background: rgba(110,118,129,.25);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--surface) !important;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px !important;
+    overflow-x: auto;
+    margin: 14px 0 18px !important;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none !important; padding: 0; font-size: 13px; }
+  /* prism overrides */
+  code[class*="language-"], pre[class*="language-"] {
+    text-shadow: none !important;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace !important;
+  }
+  .token.comment { color: var(--text-muted) !important; }
+  .token.keyword { color: #ff7b72 !important; }
+  .token.string, .token.template-string { color: #a5d6ff !important; }
+  .token.function { color: #d2a8ff !important; }
+  .token.number { color: #79c0ff !important; }
+  .token.operator { color: #ff7b72 !important; }
+  .token.punctuation { color: #8b949e !important; }
+  .token.class-name, .token.constant { color: #ffa657 !important; }
+  .token.property { color: #79c0ff !important; }
+  .token.boolean { color: #79c0ff !important; }
+  /* ---- tables ---- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0 20px;
+    font-size: 13.5px;
+  }
+  th {
+    background: var(--surface);
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(88,166,255,.03); }
+  /* ---- cards ---- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .card h4 { margin-top: 0; color: var(--green); }
+  .card.warn h4 { color: var(--orange); }
+  .card.danger h4 { color: var(--red); }
+  /* ---- tags ---- */
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    margin-right: 4px;
+  }
+  .tag.green { background: rgba(63,185,80,.15); color: var(--green); }
+  .tag.blue { background: rgba(88,166,255,.15); color: var(--accent); }
+  .tag.purple { background: rgba(188,140,255,.15); color: var(--purple); }
+  .tag.orange { background: rgba(210,153,34,.15); color: var(--orange); }
+  /* ---- STAR ---- */
+  .star-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0; }
+  .star-label {
+    font-weight: 700;
+    font-size: 12px;
+    padding: 3px 0;
+    text-align: right;
+  }
+  .star-label.s { color: var(--cyan); }
+  .star-label.t { color: var(--orange); }
+  .star-label.a { color: var(--accent); }
+  .star-label.r { color: var(--green); }
+  .star-val { padding: 3px 0; }
+  /* ---- QA ---- */
+  details {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    background: var(--surface);
+    font-weight: 600;
+    font-size: 14px;
+    list-style: none;
+  }
+  summary::before { content: 'Q: '; color: var(--orange); }
+  summary::-webkit-details-marker { display: none; }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .answer { padding: 14px 16px; font-size: 14px; }
+  details .answer::before { content: 'A: '; font-weight: 700; color: var(--green); }
+  /* ---- diagram ---- */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 16px 0;
+    overflow-x: auto;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12.5px;
+    line-height: 1.4;
+    white-space: pre;
+    color: var(--text-muted);
+  }
+  /* ---- pill stats ---- */
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 16px 0;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 140px;
+    flex: 1;
+  }
+  .stat .num { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .stat .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  /* ---- i18n toggle ---- */
+  .lang-toggle {
+    position: fixed;
+    top: 16px;
+    right: 20px;
+    z-index: 200;
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .lang-toggle button {
+    background: var(--surface);
+    color: var(--text-muted);
+    border: none;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: .15s;
+  }
+  .lang-toggle button:first-child { border-right: 1px solid var(--border); }
+  .lang-toggle button.active {
+    background: var(--accent-dim);
+    color: #fff;
+  }
+  /* show/hide by lang */
+  [data-lang="en"] { display: none; }
+  body.lang-en [data-lang="zh"] { display: none; }
+  body.lang-en [data-lang="en"] { display: revert; }
+  body.lang-en blockquote::before { content: '💬 Sample Script'; }
+  /* ---- responsive ---- */
+  @media (max-width: 960px) {
+    nav.sidebar { display: none; }
+    main { margin-left: 0; min-width: 0; width: 100%; padding: 64px 20px 80px; }
+    .lang-toggle { top: 10px; right: 10px; }
+    .diagram, pre { max-width: 100%; }
+    table { display: block; max-width: 100%; overflow-x: auto; }
+    body.lang-en table[data-lang="en"] { display: block; }
+  }
+  @media (max-width: 480px) {
+    h1 { font-size: 28px; }
+    h2 { font-size: 20px; }
+    .card { padding: 16px; }
+    blockquote { padding: 12px 14px; }
+    .stat { min-width: 120px; padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="lang-toggle">
+  <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
+  <button id="btn-en" onclick="setLang('en')">EN</button>
+</div>
+
+<div class="wrapper">
+
+<!-- ======== SIDEBAR ======== -->
+<nav class="sidebar">
+  <h2 data-lang="zh">目录</h2>
+  <h2 data-lang="en">Contents</h2>
+  <a href="#intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></a>
+  <a href="#arch"><span data-lang="zh">二、系统架构</span><span data-lang="en">2. System Architecture</span></a>
+  <a href="#arch-composite" class="sub">CompositeRoomStore</a>
+  <a href="#arch-socketio" class="sub"><span data-lang="zh">Socket.IO 多实例</span><span data-lang="en">Socket.IO Multi-Instance</span></a>
+  <a href="#arch-ai" class="sub"><span data-lang="zh">AI 流式响应</span><span data-lang="en">AI Streaming</span></a>
+  <a href="#arch-media" class="sub"><span data-lang="zh">Presigned URL 上传</span><span data-lang="en">Presigned URL Upload</span></a>
+  <a href="#arch-agent" class="sub"><span data-lang="zh">Code Agent Control Plane</span><span data-lang="en">Code-Agent Control Plane</span></a>
+  <a href="#arch-security" class="sub"><span data-lang="zh">权限与 Scoped Token</span><span data-lang="en">Permissions &amp; Scoped Tokens</span></a>
+  <a href="#arch-workspace" class="sub"><span data-lang="zh">浏览器 Workspace</span><span data-lang="en">Browser Workspace</span></a>
+  <a href="#challenges"><span data-lang="zh">三、技术难点</span><span data-lang="en">3. Technical Challenges</span></a>
+  <a href="#ch-agent-control" style="color:var(--cyan);font-size:11px;padding:8px 10px 2px" class="sub"><span data-lang="zh">── Code Agent 篇 ──</span><span data-lang="en">── Code Agent ──</span></a>
+  <a href="#ch-agent-control" class="sub"><span data-lang="zh">Control / Execution Plane</span><span data-lang="en">Control / Execution Plane</span></a>
+  <a href="#ch-agent-order" class="sub"><span data-lang="zh">AI / 工具事件顺序</span><span data-lang="en">AI / Tool Event Ordering</span></a>
+  <a href="#ch-agent-context" class="sub"><span data-lang="zh">Context 与权限隔离</span><span data-lang="en">Context &amp; Permission Isolation</span></a>
+  <a href="#ch-agent-workspace" class="sub"><span data-lang="zh">Workspace 与 Review</span><span data-lang="en">Workspace &amp; Review</span></a>
+  <a href="#ch-agent-lifecycle" class="sub"><span data-lang="zh">Daemon 与 Sandbox 生命周期</span><span data-lang="en">Daemon &amp; Sandbox Lifecycle</span></a>
+  <a href="#" style="color:var(--cyan);pointer-events:none;font-size:11px;padding:8px 10px 2px" class="sub"><span data-lang="zh">── 前端篇 ──</span><span data-lang="en">── Frontend ──</span></a>
+  <a href="#ch-gesture" class="sub"><span data-lang="zh">媒体查看器手势引擎</span><span data-lang="en">Media Viewer Gesture Engine</span></a>
+  <a href="#ch-cache" class="sub"><span data-lang="zh">三层媒体缓存</span><span data-lang="en">Three-Tier Media Cache</span></a>
+  <a href="#ch-viewport" class="sub"><span data-lang="zh">移动端视窗适配</span><span data-lang="en">Mobile Viewport Adaptation</span></a>
+  <a href="#ch-sticker" class="sub"><span data-lang="zh">贴纸虚拟分页</span><span data-lang="en">Sticker Virtual Pagination</span></a>
+  <a href="#ch-msglist" class="sub"><span data-lang="zh">消息列表体验优化</span><span data-lang="en">Message List UX Optimization</span></a>
+  <a href="#" style="color:var(--cyan);pointer-events:none;font-size:11px;padding:8px 10px 2px" class="sub"><span data-lang="zh">── 后端篇 ──</span><span data-lang="en">── Backend ──</span></a>
+  <a href="#ch-mobile" class="sub"><span data-lang="zh">WebSocket 断连恢复</span><span data-lang="en">WebSocket Reconnection</span></a>
+  <a href="#ch-migration" class="sub">Redis → PostgreSQL</a>
+  <a href="#ch-sync" class="sub"><span data-lang="zh">房间状态同步</span><span data-lang="en">Room State Sync</span></a>
+  <a href="#ch-ai" class="sub"><span data-lang="zh">AI 多 Provider</span><span data-lang="en">AI Multi-Provider</span></a>
+  <a href="#ch-lua" class="sub"><span data-lang="zh">Redis Lua 原子操作</span><span data-lang="en">Redis Lua Atomics</span></a>
+  <a href="#ch-contract" class="sub"><span data-lang="zh">双实现一致性测试</span><span data-lang="en">Dual-Impl Contract Tests</span></a>
+  <a href="#ch-msgcache" class="sub"><span data-lang="zh">消息缓存版本一致性</span><span data-lang="en">Msg Cache Versioning</span></a>
+  <a href="#ch-token" class="sub"><span data-lang="zh">AI Token 预算管理</span><span data-lang="en">AI Token Budget</span></a>
+  <a href="#scale"><span data-lang="zh">四、扩展性讨论</span><span data-lang="en">4. Scalability</span></a>
+  <a href="#security"><span data-lang="zh">五、安全设计</span><span data-lang="en">5. Security Design</span></a>
+  <a href="#testing"><span data-lang="zh">六、测试策略</span><span data-lang="en">6. Testing Strategy</span></a>
+  <a href="#star"><span data-lang="zh">七、STAR 故事</span><span data-lang="en">7. STAR Stories</span></a>
+  <a href="#qa"><span data-lang="zh">八、常见追问</span><span data-lang="en">8. Follow-Up Q&amp;A</span></a>
+  <a href="#compare"><span data-lang="zh">九、技术选型对比</span><span data-lang="en">9. Tech Comparisons</span></a>
+  <a href="#numbers"><span data-lang="zh">十、项目数据</span><span data-lang="en">10. Project Metrics</span></a>
+  <a href="#bonus"><span data-lang="zh">十一、加分项</span><span data-lang="en">11. Bonus Points</span></a>
+</nav>
+
+<!-- ======== MAIN ======== -->
+<main>
+
+<h1><span data-lang="zh">RoomTalk 面试准备资料</span><span data-lang="en">RoomTalk Interview Preparation</span></h1>
+<p class="subtitle" data-lang="zh">重点覆盖共享 sandbox Code Agent runtime、实时协作、持久化、安全边界、故障恢复和常见追问</p>
+<p class="subtitle" data-lang="en">Focused on the shared sandboxed code-agent runtime, realtime collaboration, persistence, security boundaries, recovery, and interview follow-ups</p>
+
+<!-- ==================== 一、30秒 ==================== -->
+<hr>
+<h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
+
+<blockquote data-lang="zh">
+RoomTalk 是一个实时 AI 协作平台，核心是共享房间和沙盒化 Code Agent workspace。RoomTalk 在 Fly.io 上作为 control plane，负责身份、权限、持久化 turn、usage/cost、对象存储和 sandbox lifecycle；每个 Code Agent 房间在 E2B 中拥有隔离的 execution plane，通过可复用 JSONL daemon 运行 Coco、Codex CLI 或 Codex app-server。浏览器里可以直接查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。普通聊天仍支持多 Provider AI streaming、私有媒体、Redis/PostgreSQL 组合存储和移动端恢复。
+</blockquote>
+<blockquote data-lang="en">
+RoomTalk is a realtime AI collaboration platform centered on shared rooms and sandboxed code-agent workspaces. A Fly.io control plane owns identity, permissions, durable turns, usage/cost, object storage, and sandbox lifecycle; each code-agent room gets an isolated E2B execution plane whose reusable JSONL daemon can run Coco, Codex CLI, or Codex app-server. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. Regular chat still includes multi-provider AI streaming, private media, Redis/PostgreSQL composite storage, and mobile recovery.
+</blockquote>
+
+<p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
+<p data-lang="en">The interviewer will follow up based on what interests them — control the pace and steer toward the areas you know best.</p>
+
+<!-- ==================== 二、架构 ==================== -->
+<hr>
+<h2 id="arch"><span data-lang="zh">二、系统架构</span><span data-lang="en">2. System Architecture</span></h2>
+
+<h3 data-lang="zh">画架构图时这样画</h3>
+<h3 data-lang="en">How to draw the architecture diagram</h3>
+
+<div class="diagram">┌──────────────────── Browser / React + Vite ────────────────────┐
+│ room transcript │ files │ diff/review │ PTY │ browser │ artifacts │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │ authenticated HTTPS / Socket.IO
+┌──────────────────────────▼──────────────────────────────────────────┐
+│ RoomTalk control plane / Node 24 + Express                         │
+│ identity · room access · turn state · ordering · usage/cost        │
+│ sandbox lifecycle · scoped tokens · static publish                 │
+├──────────────────────┬──────────────────────┬───────────────────────┤
+│ CompositeRoomStore   │ Chat AI runtime      │ S3 / Tigris          │
+│ PostgreSQL + Redis   │ provider clients     │ media + artifacts    │
+└──────────────────────┴───────────┬──────────┴───────────────────────┘
+                                   │ lifecycle + JSONL protocol
+┌──────────────────────────────────▼──────────────────────────────────┐
+│ Per-room E2B execution plane                                       │
+│ reusable daemon → Coco | Codex CLI | Codex app-server              │
+│ /workspace → Git · files · PTY · processes · dev-server previews   │
+│ roomtalk CLI → context broker · model gateway · site publishing    │
+└─────────────────────────────────────────────────────────────────────┘</div>
+
+<h3 id="arch-composite"><span data-lang="zh">1. CompositeRoomStore — 双存储分层</span><span data-lang="en">1. CompositeRoomStore — Dual-Store Layering</span></h3>
+
+<p data-lang="zh">这是整个后端最核心的抽象。一个 <code>CompositeRoomStore</code> 组合了三个子存储：</p>
+<p data-lang="en">This is the most important abstraction in the backend. A single <code>CompositeRoomStore</code> composes three sub-stores:</p>
+<ul data-lang="zh">
+  <li><code>DurableRoomStore</code>：持久数据（房间、消息、成员、媒体资产、认证）。可以是 Redis 或 PostgreSQL，运行时通过环境变量切换。</li>
+  <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员、临时状态。服务重启后自动重建。</li>
+  <li><code>RoomMessageCacheStore</code>：可选的 Redis TTL 缓存，在 PostgreSQL 模式下减少数据库读压力。</li>
+</ul>
+<ul data-lang="en">
+  <li><code>DurableRoomStore</code>: Persistent data (rooms, messages, members, media assets, auth). Can be Redis or PostgreSQL, switched at runtime via environment variable.</li>
+  <li><code>RealtimeRoomStore</code>: Always Redis. Manages socket sessions, online members, ephemeral state. Rebuilt automatically on restart.</li>
+  <li><code>RoomMessageCacheStore</code>: Optional Redis TTL cache that reduces database read pressure in PostgreSQL mode.</li>
+</ul>
+
+<blockquote data-lang="zh">
+我们把存储拆成"持久"和"实时"两层。持久层可以在 Redis 和 PostgreSQL 之间切换——开发用 Redis 快速迭代，生产切到 PostgreSQL 保证数据安全。实时层始终用 Redis，负责 session、presence 和 pub/sub。中间的短 TTL message cache 让最近历史优先从 Redis 读取，miss 才查询 PostgreSQL；写入时按 room/version 主动失效，不能把 TTL 当一致性机制。
+</blockquote>
+<blockquote data-lang="en">
+We split storage into durable and realtime layers. The durable layer can switch between Redis and PostgreSQL — Redis for fast iteration in development, PostgreSQL for production durability. Redis always owns sessions, presence, and pub/sub. A short-TTL message cache serves recent history first and queries PostgreSQL on miss; writes invalidate by room/version, so TTL is never treated as the consistency mechanism.
+</blockquote>
+
+<h3 id="arch-socketio"><span data-lang="zh">2. Socket.IO 多实例扩展</span><span data-lang="en">2. Socket.IO Multi-Instance Scaling</span></h3>
+
+<div class="diagram">Client A ──WSS──▶ Instance 1 ──Redis pub/sub──▶ Instance 2 ──push──▶ Client B</div>
+
+<p data-lang="zh">用 <code>@socket.io/redis-adapter</code>，所有 Socket.IO 事件通过 Redis pub/sub 同步到所有实例。客户端不感知自己连的是哪个实例。</p>
+<p data-lang="en">Using <code>@socket.io/redis-adapter</code>, all Socket.IO events are synced across instances via Redis pub/sub. Clients are unaware of which instance they're connected to.</p>
+
+<div class="card warn" data-lang="zh">
+  <h4>追问：sticky session 为什么必须？</h4>
+  <p>如果允许 polling fallback，Socket.IO 握手会先做 HTTP polling 再升级 WebSocket；这些请求落到不同实例会破坏 session，因此负载均衡需要 connection affinity。也可以强制 websocket-only 来减少这个要求，但会放弃 polling fallback。跨实例房间广播仍由 Redis adapter 处理。</p>
+</div>
+<div class="card warn" data-lang="en">
+  <h4>Follow-up: Why are sticky sessions required?</h4>
+  <p>With polling fallback enabled, Socket.IO starts with HTTP polling and upgrades to WebSocket. If those requests land on different instances, the session breaks, so the load balancer needs connection affinity. WebSocket-only transport can reduce this requirement at the cost of losing fallback. Redis adapter still handles cross-instance room broadcasts.</p>
+</div>
+
+<h3 id="arch-ai"><span data-lang="zh">3. AI 流式响应</span><span data-lang="en">3. AI Streaming Response</span></h3>
+
+<div class="diagram">Client → ask_ai event → Server → AI Provider (streaming) → ai_chunk events → Client</div>
+
+<ul data-lang="zh">
+  <li>服务端用 OpenAI SDK 的 stream API，逐 chunk 读取，通过 Socket.IO 实时推给客户端。</li>
+  <li>消息创建时 <code>status: 'streaming'</code>，完成后改为 <code>'complete'</code>，出错改为 <code>'error'</code>。</li>
+  <li>服务器重启时，<code>aiStreamRecovery</code> 扫描所有 <code>status = 'streaming'</code> 的消息，标记为 <code>'error'</code>，避免僵尸流。</li>
+</ul>
+<ul data-lang="en">
+  <li>The server uses the OpenAI SDK's streaming API, reads chunks incrementally, and pushes them to the client via Socket.IO in real time.</li>
+  <li>Messages are created with <code>status: 'streaming'</code>, changed to <code>'complete'</code> on success, or <code>'error'</code> on failure.</li>
+  <li>On server restart, <code>aiStreamRecovery</code> scans all messages with <code>status = 'streaming'</code> and marks them as <code>'error'</code> to prevent zombie streams.</li>
+</ul>
+
+<div class="card" data-lang="zh">
+  <h4>追问：为什么不用 SSE？</h4>
+  <p>已经有 Socket.IO 长连接了，再开 SSE 是多余的连接。Socket.IO 事件模型可以区分不同房间、不同用户的 AI 流，比 SSE 灵活。而且 AI 流需要和消息历史、状态同步走同一个通道，不适合单独开一个 HTTP 流。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Follow-up: Why not use SSE?</h4>
+  <p>We already have a Socket.IO persistent connection — opening another SSE connection would be redundant. Socket.IO's event model can distinguish AI streams by room and user, which is more flexible than SSE. Plus, AI streams need to share the same channel as message history and state updates — a separate HTTP stream doesn't fit.</p>
+</div>
+
+<h3 id="arch-media"><span data-lang="zh">4. 媒体上传流程 — Presigned URL</span><span data-lang="en">4. Media Upload Flow — Presigned URL</span></h3>
+
+<div class="diagram">Client                    Server                     S3
+  │                         │                         │
+  │── request upload URL ──▶│                         │
+  │                         │── generate presigned ──▶│
+  │◀── presigned PUT URL ──│                         │
+  │                         │                         │
+  │──── PUT file directly ─────────────────────────▶ │
+  │                         │                         │
+  │── confirm upload ──────▶│                         │
+  │                         │── create MediaAsset ──▶ │
+  │◀── message with asset ─│                         │</div>
+
+<blockquote data-lang="zh">
+文件不经过我们的服务器。客户端先向服务器请求一个临时上传 URL（presigned URL，有效期 15 分钟），然后直接上传到 S3。上传完成后通知服务器，服务器创建 metadata 记录。下载也是类似的，服务器生成临时读取 URL 返回给客户端。这样服务器不处理大文件流量，带宽和 CPU 都省了。
+</blockquote>
+<blockquote data-lang="en">
+Files never pass through our server. The client requests a temporary upload URL (presigned URL, valid for 15 minutes) from the server, then uploads directly to S3. After upload, it notifies the server, which creates a metadata record. Downloads work similarly — the server generates a temporary read URL. This way the server handles zero file traffic, saving both bandwidth and CPU.
+</blockquote>
+
+<div class="card" data-lang="zh">
+  <h4>追问：presigned URL 安全吗？</h4>
+  <p>URL 本身包含签名，只对特定 bucket/key 有效，有过期时间。泄露了也只能上传到这一个位置，不能读其他文件。而且我们的 bucket 设置了 block all public access，没有 presigned URL 什么都看不到。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Follow-up: Are presigned URLs secure?</h4>
+  <p>The URL itself contains a cryptographic signature, valid only for a specific bucket/key and with an expiration time. Even if leaked, it can only upload to that one location — it can't read other files. Our bucket has "block all public access" enabled, so nothing is visible without a presigned URL.</p>
+</div>
+
+<h3 id="arch-agent"><span data-lang="zh">5. Code Agent — Control Plane / Execution Plane</span><span data-lang="en">5. Code Agent — Control Plane / Execution Plane</span></h3>
+
+<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。RoomTalk 只做 control plane；不可信代码、文件和进程全部留在 E2B execution plane：</p>
+<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” RoomTalk is strictly the control plane; untrusted code, files, and processes stay in the E2B execution plane:</p>
+
+<table data-lang="zh">
+  <thead><tr><th>层</th><th>负责</th><th>不负责</th></tr></thead>
+  <tbody>
+    <tr><td>Browser</td><td>聊天、workspace UI、流式渲染、review draft</td><td>E2B/provider secret、持久化顺序</td></tr>
+    <tr><td>RoomTalk</td><td>身份、房间权限、turn 编排、message position、usage/cost、scoped token、lifecycle</td><td>在 Fly 进程执行用户命令</td></tr>
+    <tr><td>E2B</td><td><code>/workspace</code>、Git、PTY、进程、dev server、Agent daemon</td><td>成员权限、持久消息、公开 URL 所有权</td></tr>
+    <tr><td>Coco / Codex</td><td>推理、原生工具循环、session/thread</td><td>RoomTalk 数据库和基础设施凭据</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead><tr><th>Layer</th><th>Owns</th><th>Does Not Own</th></tr></thead>
+  <tbody>
+    <tr><td>Browser</td><td>Chat, workspace UI, streamed rendering, review drafts</td><td>E2B/provider secrets, persistence ordering</td></tr>
+    <tr><td>RoomTalk</td><td>Identity, room access, turn orchestration, message positions, usage/cost, scoped tokens, lifecycle</td><td>Executing user commands inside the Fly process</td></tr>
+    <tr><td>E2B</td><td><code>/workspace</code>, Git, PTY, processes, dev servers, agent daemon</td><td>Membership, durable messages, public URL ownership</td></tr>
+    <tr><td>Coco / Codex</td><td>Reasoning, native tool loop, session/thread state</td><td>RoomTalk database and infrastructure credentials</td></tr>
+  </tbody>
+</table>
+
+<blockquote data-lang="zh">
+我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。RoomTalk 控制身份、权限、持久 turn 和 sandbox；E2B 执行不可信代码；Coco 和 Codex 只负责推理与工具循环。三个层之间通过版本化 JSONL 协议和 scoped capability 连接，所以每层可以独立替换和测试。
+</blockquote>
+<blockquote data-lang="en">
+I designed it as a shared cloud code-agent room, not a remote-shell widget. RoomTalk controls identity, permissions, durable turns, and sandbox lifecycle; E2B executes untrusted code; Coco and Codex own reasoning and tool loops. The layers communicate through a versioned JSONL protocol and scoped capabilities, so each layer can be replaced and tested independently.
+</blockquote>
+
+<h3 id="arch-security"><span data-lang="zh">6. 权限、Context 与 Scoped Token</span><span data-lang="en">6. Permissions, Context, and Scoped Tokens</span></h3>
+
+<ul data-lang="zh">
+  <li><strong>四种模式</strong>：Plan、Edit、Approve for me、Full access。Plan 的 Shell 由 OS mount namespace 强制只读，不依赖字符串命令白名单。</li>
+  <li><strong>Model gateway</strong>：每个 turn 签发绑定 room/client/turn/provider/model/budget 的短期 token；provider key 不进入浏览器，也不作为 prompt 内容。</li>
+  <li><strong>Room context broker</strong>：不把整个房间历史塞进 system prompt；Agent 通过 Unix socket 上的 <code>roomtalk room history/search/delta/message</code> 按需读取有界 projection。</li>
+  <li><strong>Static publish</strong>：可写模式拿到独立 publish token；文件从 E2B 通过 presigned PUT 直传 Tigris，Fly 只验证 metadata 并原子切换 manifest。</li>
+</ul>
+<ul data-lang="en">
+  <li><strong>Four modes</strong>: Plan, Edit, Approve for me, and Full access. Plan shell writes are blocked by the OS mount namespace, not a string command allowlist.</li>
+  <li><strong>Model gateway</strong>: each turn receives a short-lived token bound to room/client/turn/provider/model/budget; provider keys never enter the browser or prompt.</li>
+  <li><strong>Room-context broker</strong>: full room history is not injected into every system prompt. The agent reads bounded projections on demand through <code>roomtalk room history/search/delta/message</code> over a Unix socket.</li>
+  <li><strong>Static publishing</strong>: writable modes receive a separate publish token. E2B uploads bytes directly to Tigris through presigned PUTs; Fly verifies metadata and atomically swaps the manifest.</li>
+</ul>
+
+<div class="card warn" data-lang="zh">
+  <h4>追问：为什么不用一个万能 token？</h4>
+  <p>因为 context read、model spend 和 public publish 的风险完全不同。拆成独立、短期、绑定 turn 的 capability 后，泄露时 blast radius 有边界，服务端也能分别校验 mode、room ownership、provider/model 和预算。</p>
+</div>
+<div class="card warn" data-lang="en">
+  <h4>Follow-up: Why not issue one universal token?</h4>
+  <p>Context reads, model spending, and public publishing have different risk profiles. Separate short-lived, turn-bound capabilities bound the blast radius and let the server independently enforce mode, room ownership, provider/model selection, and budget.</p>
+</div>
+
+<h3 id="arch-workspace"><span data-lang="zh">7. 浏览器 Workspace 与持久 Artifact</span><span data-lang="en">7. Browser Workspace and Durable Artifacts</span></h3>
+
+<p data-lang="zh">同一个房间里，聊天 transcript 和 workspace 不是两个割裂产品。用户可以从 Agent 的工具事件直接进入对应文件、diff、terminal 或 artifact：</p>
+<p data-lang="en">The room transcript and workspace are not separate products. Users can move directly from an agent tool event into the related file, diff, terminal, preview, or artifact:</p>
+
+<ul data-lang="zh">
+  <li>文件树/search/create/rename/delete、源码编辑、Markdown/图片/音视频 preview；</li>
+  <li>Git branch/base-ref、changed-file tree、branch/unstaged diff、split/unified rendering 和 viewed 状态；</li>
+  <li>在 file/diff 行上写 review comment，并作为结构化上下文附加到下一轮 prompt；</li>
+  <li>真实 PTY terminal，经认证 Socket.IO session 流式传输，带 input batching、local echo、resize 和有界 snapshot；</li>
+  <li>dev-server discovery、内嵌 browser、viewport presets、截图、录屏和外部 E2B preview URL；</li>
+  <li>发布到 <code>/p/:slug/</code> 的静态 artifact 与 sandbox 生命周期解耦，并显示在 Artifacts tab。</li>
+</ul>
+<ul data-lang="en">
+  <li>File tree/search/create/rename/delete, source editing, and Markdown/image/audio/video previews;</li>
+  <li>Git branch/base-ref selection, changed-file tree, branch/unstaged diffs, split/unified rendering, and viewed state;</li>
+  <li>Line-scoped file/diff review comments attached as structured context to the next prompt;</li>
+  <li>A real PTY terminal over authenticated Socket.IO with input batching, local echo, resize, and bounded snapshots;</li>
+  <li>Dev-server discovery, embedded browser, viewport presets, screenshots, recordings, and external E2B preview URLs;</li>
+  <li>Static artifacts at <code>/p/:slug/</code> decoupled from sandbox lifetime and surfaced in the Artifacts tab.</li>
+</ul>
+
+<!-- ==================== 三、技术难点 ==================== -->
+<hr>
+<h2 id="challenges"><span data-lang="zh">三、技术难点与解决方案</span><span data-lang="en">3. Technical Challenges &amp; Solutions</span></h2>
+
+<h3 id="ch-agent-control" style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px"><span data-lang="zh">Code Agent 篇</span><span data-lang="en">Code Agent</span></h3>
+
+<h3><span data-lang="zh">难点 1：把聊天房间升级为共享执行环境</span><span data-lang="en">Challenge 1: Turning a Chat Room into a Shared Execution Environment</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：Agent 要读写文件、安装依赖、运行测试和启动服务，但这些命令不能进入 Fly 应用进程；同时房间成员、消息、权限、计费和恢复又必须由 RoomTalk 统一管理。</p>
+<p data-lang="en"><strong>Problem</strong>: The agent must edit files, install dependencies, run tests, and start services, but none of that can execute in the Fly application process. Room membership, messages, permissions, billing, and recovery still need one RoomTalk source of truth.</p>
+
+<p data-lang="zh"><strong>方案</strong>：拆成 control plane 与 execution plane。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给沙盒 daemon。daemon 根据 backend 路由到 Coco、Codex CLI 或 Codex app-server。</p>
+<p data-lang="en"><strong>Solution</strong>: Split control and execution planes. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon, which dispatches to Coco, Codex CLI, or Codex app-server.</p>
+
+<div class="diagram">Browser ──authenticated socket──▶ RoomTalk control plane
+                                      │
+                                      │ room + turn + scoped env
+                                      ▼
+                                E2B JSONL daemon
+                                ├─ Coco engine
+                                ├─ Codex CLI
+                                └─ Codex app-server
+                                      │
+                                      ▼
+                              /workspace + Git + PTY</div>
+
+<blockquote data-lang="zh">最重要的不是“用了 E2B”，而是把 ownership 划清楚：RoomTalk 永远不执行不可信命令，E2B 永远不决定房间权限，Agent 永远不拿数据库或 provider secret。</blockquote>
+<blockquote data-lang="en">The important part is not merely “using E2B.” It is the ownership boundary: RoomTalk never executes untrusted commands, E2B never decides room permissions, and the agent never receives database or provider secrets.</blockquote>
+
+<h3 id="ch-agent-order"><span data-lang="zh">难点 2：AI 文本与工具事件的真实顺序持久化</span><span data-lang="en">Challenge 2: Persisting the True Order of AI Text and Tool Events</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：早期 runner 实时发送 text delta，却在整轮结束后从 transcript replay 工具事件。结果数据库先保存整段 AI 文本，再保存 tool call/result；刷新后“当前目录为空”会出现在真正执行 Glob 之前。</p>
+<p data-lang="en"><strong>Problem</strong>: The early runner streamed text deltas but replayed tool events only after the entire run. The database therefore stored a full assistant message before tool call/result records, so after refresh “the directory is empty” appeared before the Glob command that established it.</p>
+
+<p data-lang="zh"><strong>方案</strong>：Engine 在工具执行前后发 ordered <code>tool_call</code>/<code>tool_result</code> callback；runner 原样转成 JSONL；Node 收到工具边界就结束当前 AI segment，工具之后的文本创建新 segment。数据库 <code>position</code> 成为唯一顺序事实，前端只负责展示。</p>
+<p data-lang="en"><strong>Solution</strong>: The engine emits ordered <code>tool_call</code>/<code>tool_result</code> callbacks around execution. The runner forwards them as JSONL. Node closes the current assistant segment at a tool boundary and starts a new segment for later text. Database <code>position</code> is the ordering authority; the client only renders it.</p>
+
+<div class="diagram">text(A) → tool_call(Glob) → tool_result(empty) → text(B) → final
+   │              │                    │              │
+   ▼              ▼                    ▼              ▼
+AI segment A   message N+1         message N+2    AI segment B</div>
+
+<div class="card warn" data-lang="zh"><h4>追问：为什么不能前端按 timestamp 重排？</h4><p>因为文本 chunk 的工具边界已经丢失，前端无法知道整段 AI 文本中哪句话属于哪个 tool result 之后。修复必须发生在最先知道真实执行顺序的 Engine/runner 层，并由服务端 position 持久化。</p></div>
+<div class="card warn" data-lang="en"><h4>Follow-up: Why not sort by timestamp in the client?</h4><p>Because the tool boundary inside the accumulated text has already been lost. The client cannot know which sentence belongs after which tool result. The fix must start where execution order is known — engine/runner — and be persisted by server positions.</p></div>
+
+<h3 id="ch-agent-context"><span data-lang="zh">难点 3：共享房间上下文与最小权限同时成立</span><span data-lang="en">Challenge 3: Shared Room Context with Least Privilege</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：Agent 需要知道前几轮讨论和其他成员的消息，但把完整 transcript 与长期 token 注入 prompt 会增加 context 成本、泄露内部字段，也让 Plan 模式变相获得网络能力。</p>
+<p data-lang="en"><strong>Problem</strong>: The agent needs prior discussion and other members' messages, but injecting a full transcript and long-lived token into every prompt increases context cost, leaks internal fields, and can accidentally grant network capability in Plan mode.</p>
+
+<p data-lang="zh"><strong>方案</strong>：每轮创建本地 Unix socket broker。Agent 只看到 <code>roomtalk</code> CLI，可以按需 history/delta/search/message；真实 upstream URL/token 由 runner 保管。服务端再次校验 room/client/turn，并只投影安全字段。Model 与 publish 另用独立 token。</p>
+<p data-lang="en"><strong>Solution</strong>: Start a local Unix-socket broker per turn. The agent only sees the <code>roomtalk</code> CLI and fetches history/delta/search/message on demand; the runner keeps the upstream URL/token. The server revalidates room/client/turn and projects safe fields only. Model and publish capabilities use separate tokens.</p>
+
+<pre><code class="language-bash">roomtalk room history --limit 20 --json
+roomtalk room search "deployment failure" --json
+roomtalk site list --json</code></pre>
+
+<p data-lang="zh">Plan Shell 使用 bubblewrap 只读 mount namespace，并关闭直接 IP 网络，只放行本轮 broker socket。这样任意 <code>python</code>、重定向或恶意 shell 组合都无法写 workspace，而不是依赖维护不完整的“安全命令列表”。</p>
+<p data-lang="en">Plan shell uses a bubblewrap read-only mount namespace, blocks direct IP networking, and permits only the turn broker socket. Arbitrary Python, redirection, or shell composition cannot write the workspace; security does not depend on maintaining an incomplete “safe command” list.</p>
+
+<h3 id="ch-agent-workspace"><span data-lang="zh">难点 4：让 Workspace 可检查、可审阅，而不绕过 Agent</span><span data-lang="en">Challenge 4: Making the Workspace Inspectable and Reviewable Without Bypassing the Agent</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：只显示 tool timeline 不足以审查真实结果；但如果浏览器直接连 E2B，又会绕过 RoomTalk 的身份与路径权限。文件、diff、terminal 和 preview 还各有不同的传输与状态模型。</p>
+<p data-lang="en"><strong>Problem</strong>: A tool timeline is not enough to review the actual result. Letting the browser connect directly to E2B would bypass RoomTalk identity and path authorization. Files, diffs, terminals, and previews also require different transport and state models.</p>
+
+<p data-lang="zh"><strong>方案</strong>：所有 workspace 操作走已注册 socket 的 server broker。普通文件和 diff 用 request/ack snapshot；PTY 与 preview automation 用 session + delta event；大文件、图片和视频走受控 asset route。Git baseline 和 refs 提供可重复 diff，review comment 作为结构化 context 回到下一轮 Agent。</p>
+<p data-lang="en"><strong>Solution</strong>: Broker every workspace operation through authenticated server sockets. Files and diffs use request/ack snapshots; PTY and preview automation use sessions plus delta events; large files and media use controlled asset routes. Git baselines and refs make diffs reproducible, while review comments return to the next agent turn as structured context.</p>
+
+<table data-lang="zh"><thead><tr><th>Surface</th><th>传输模型</th><th>关键保护</th></tr></thead><tbody>
+  <tr><td>Files / Diff</td><td>Socket request + bounded snapshot</td><td>room access、workspace path、size/truncation</td></tr>
+  <tr><td>PTY Terminal</td><td>长期 session + byte delta</td><td>session ownership、input batching、bounded tail</td></tr>
+  <tr><td>Browser Preview</td><td>server-managed preview session</td><td>目标解析、viewport、生命周期、截图/录屏</td></tr>
+  <tr><td>Artifacts</td><td>对象存储 manifest</td><td>room ownership、slug、MIME、版本化</td></tr>
+</tbody></table>
+<table data-lang="en"><thead><tr><th>Surface</th><th>Transport</th><th>Key Protection</th></tr></thead><tbody>
+  <tr><td>Files / Diff</td><td>Socket request + bounded snapshot</td><td>Room access, workspace path, size/truncation</td></tr>
+  <tr><td>PTY Terminal</td><td>Long-lived session + byte deltas</td><td>Session ownership, input batching, bounded tail</td></tr>
+  <tr><td>Browser Preview</td><td>Server-managed preview session</td><td>Target resolution, viewport, lifecycle, capture</td></tr>
+  <tr><td>Artifacts</td><td>Object-storage manifest</td><td>Room ownership, slug, MIME, versioning</td></tr>
+</tbody></table>
+
+<h3 id="ch-agent-lifecycle"><span data-lang="zh">难点 5：长任务、Daemon 与 Sandbox 生命周期</span><span data-lang="en">Challenge 5: Long Tasks, Daemon, and Sandbox Lifecycle</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：每轮启动 runner 会重复冷启动；后台服务和 terminal 需要跨工具调用存活；E2B idle timeout、Fly 重启和丢失的 <code>turn_released</code> 事件又可能留下旧 daemon 或让房间卡在 running。</p>
+<p data-lang="en"><strong>Problem</strong>: Starting a runner per turn repeats cold-start cost. Background services and terminals must survive across tool calls. E2B idle timeout, Fly restarts, and a lost <code>turn_released</code> event can leave stale daemons or a room stuck in `running`.</p>
+
+<p data-lang="zh"><strong>方案</strong>：</p>
+<p data-lang="en"><strong>Solution</strong>:</p>
+<ul data-lang="zh">
+  <li>每个 sandbox 一个可复用 daemon，串行执行多个 turn；</li>
+  <li>启动按 sandbox 加锁，并在新 daemon 前清理 stale runner/Codex child；</li>
+  <li>active turn 延长 TTL，完成后缩短为 idle；默认 5 分钟 pause + keep memory + autoResume；</li>
+  <li>SIGTERM/SIGINT 调用 <code>shutdownAll()</code>，回收当前 Fly 进程拥有的 daemon；</li>
+  <li>等待 <code>turn_released</code> 有上限，信号丢失也能结束 room running 状态；</li>
+  <li>固定 artifact 升级时 export archive → 新 sandbox → import → Git init → 原子换 sandbox ID。</li>
+</ul>
+<ul data-lang="en">
+  <li>One reusable daemon per sandbox executes multiple turns serially;</li>
+  <li>Startup is locked by sandbox and removes stale runner/Codex children before replacement;</li>
+  <li>Active turns extend TTL; completion returns to idle. Default lifecycle is five-minute pause + keep memory + autoResume;</li>
+  <li>SIGTERM/SIGINT invokes <code>shutdownAll()</code> to reclaim daemons owned by the Fly process;</li>
+  <li><code>turn_released</code> waits are bounded so a lost signal cannot leave the room running forever;</li>
+  <li>Pinned artifact upgrades export an archive, create/import/init a new sandbox, and atomically swap sandbox IDs.</li>
+</ul>
+
+<div class="card warn" data-lang="zh"><h4>追问：为什么 daemon registry 只放内存？</h4><p>Registry 保存的是当前 Node 进程持有的 stdin/stdout handle，不能直接持久化。RoomTalk 通过启动清理、健康检查和进程退出回收解决 ownership；房间和 sandbox identity 仍在 durable store。以后若 E2B 提供稳定 command reconnect handle，再持久化可重连 metadata。</p></div>
+<div class="card warn" data-lang="en"><h4>Follow-up: Why keep the daemon registry in memory?</h4><p>The registry contains live stdin/stdout handles owned by the current Node process, which cannot simply be serialized. Startup cleanup, health checks, and process-exit reclamation manage ownership, while room and sandbox identity remain durable. Persist reconnectable metadata later if E2B exposes stable command handles.</p></div>
+
+<h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="zh">前端篇</h3>
+<h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="en">Frontend</h3>
+
+<!-- ===== 难点1：手势引擎 ===== -->
+<h3 id="ch-gesture"><span data-lang="zh">难点 6：媒体查看器手势引擎</span><span data-lang="en">Challenge 6: Media Viewer Gesture Engine</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：需要在一个组件里同时支持 6 种手势——单击关闭、双击缩放、双指缩放、拖拽平移、水平滑动翻页、下滑关闭——它们在触控层面高度重叠，一根手指的移动可能是任何一种操作。</p>
+<p data-lang="en"><strong>Problem</strong>: A single component needs to support 6 gesture types — tap to close, double-tap zoom, pinch-to-zoom, drag to pan, horizontal swipe to page, swipe down to dismiss — all of which overlap at the touch event level. A single finger movement could be any of these.</p>
+
+<p data-lang="zh"><strong>核心设计</strong> — 手势模式状态机：所有触控事件先进入 <code>tap</code> 模式，移动超过阈值后根据方向锁定到具体模式，一旦锁定不再切换：</p>
+<p data-lang="en"><strong>Core Design</strong> — Gesture Mode State Machine: All touch events start in <code>tap</code> mode. Once movement exceeds a threshold, the mode locks based on direction and never switches again:</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 手势模式转换
+if (state.mode === "tap" && (absX > TAP_THRESHOLD || absY > TAP_THRESHOLD)) {
+  clearTapTimer();
+  if (deltaY > 0 && absY > absX * 1.15) {
+    state.mode = "vertical";     // 下滑关闭
+  } else if (isZoomedImage) {
+    state.mode = "pan";          // 缩放态下拖拽
+  } else if (absX > absY * 1.1) {
+    state.mode = "horizontal";   // 左右翻页
+  } else {
+    state.mode = "ignored";      // 方向不明确，忽略
+  }
+}</code></pre>
+
+<p data-lang="zh">方向判定用 <strong>1.1x/1.15x 不对称阈值</strong>——下滑关闭需要更强的纵向意图（1.15x），避免翻页时误触关闭。</p>
+<p data-lang="en">Direction detection uses <strong>asymmetric 1.1x/1.15x thresholds</strong> — swipe-to-dismiss requires stronger vertical intent (1.15x) to prevent accidental dismissal while paging.</p>
+
+<p data-lang="zh"><strong>双指缩放 — 中心点保持</strong>：缩放时两指中心点必须"钉在屏幕上"，不能漂移：</p>
+<p data-lang="en"><strong>Pinch-to-Zoom — Center Point Preservation</strong>: The midpoint between two fingers must stay "pinned" on screen during zoom, with no drift:</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — pinch-to-zoom 中心点保持
+const distance = Math.max(1, getDistance(points[0], points[1]));
+const nextZoom = clampZoom(state.startZoom * (distance / state.pinchDistance));
+const ratio = nextZoom / Math.max(MIN_IMAGE_ZOOM, state.startZoom);
+const nextPan = nextZoom <= MIN_IMAGE_ZOOM
+  ? ZERO_IMAGE_PAN
+  : clampImagePan({
+    x: stageCenter.x - ((state.pinchCenter.x - state.startPan.x) * ratio),
+    y: stageCenter.y - ((state.pinchCenter.y - state.startPan.y) * ratio),
+  }, nextZoom, state.metrics);</code></pre>
+
+<p data-lang="zh"><strong>双击缩放 — 时空双重判定</strong>（220ms 内、34px 内的两次点击）：</p>
+<p data-lang="en"><strong>Double-Tap Zoom — Dual Time+Space Detection</strong> (two taps within 220ms and 34px):</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 双击检测
+const isImageDoubleTap = activeStageMedia.kind === "image"
+  && lastTap
+  && currentTime - lastTap.time <= DOUBLE_TAP_DELAY_MS      // 时间窗口
+  && Math.hypot(clientX - lastTap.x, clientY - lastTap.y)
+       <= DOUBLE_TAP_DISTANCE;                                // 空间窗口
+
+if (isImageDoubleTap) {
+  clearTapTimer();           // 取消单击关闭
+  handleDoubleTap(clientX, clientY);
+  return;
+}
+// 不是双击 → 延迟执行单击关闭
+tapTimerRef.current = setTimeout(() => onDismiss(), DOUBLE_TAP_DELAY_MS);</code></pre>
+
+<p data-lang="zh"><strong>下滑关闭 — 速度 + 距离双路径</strong>：</p>
+<p data-lang="en"><strong>Swipe-to-Dismiss — Dual Velocity + Distance Paths</strong>:</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 快甩 or 拖远都能关闭
+const shouldDismiss = deltaY > SWIPE_DOWN_THRESHOLD          // 距离够远
+  || (velocityY > VERTICAL_VELOCITY_THRESHOLD                // 或者速度够快
+      && deltaY > TAP_THRESHOLD * 2                          // 但要确认拖了一段
+      && absY > absX * 1.1);                                 // 且是纵向</code></pre>
+
+<p data-lang="zh"><strong>边界弹性阻力</strong>（iOS 式翻到边缘的弹性效果）：</p>
+<p data-lang="en"><strong>Boundary Elastic Resistance</strong> (iOS-style rubber-band effect at edges):</p>
+
+<pre><code class="language-typescript">// useSwipePager.ts — 非线性阻尼弹簧
+const resisted = safeWidth * (1 - (1 / ((distance / safeWidth) * 0.55 + 1)));
+return Math.sign(offset) * Math.min(resisted, safeWidth * 0.45);
+// 公式: f(d) = w × (1 - 1/(0.55·d/w + 1))，最大拉到 45% 宽度</code></pre>
+
+<p data-lang="zh"><strong>RAF 批量渲染 — 三通道合并刷新</strong>：</p>
+<p data-lang="en"><strong>RAF Batched Rendering — Three-Channel Merged Flush</strong>:</p>
+
+<p data-lang="zh">之前的实现是每次手势事件直接 <code>element.style.transform = ...</code>，在低端手机上掉帧到 30fps 以下。优化后改成三个独立通道的 pending 队列，一个 RAF 批量刷新：</p>
+<p data-lang="en">The previous implementation set <code>element.style.transform = ...</code> directly on every gesture event, dropping to under 30fps on low-end phones. After optimization, we use three independent pending channels flushed by a single RAF callback:</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 三通道 pending 队列
+type PendingDomTransforms = {
+  track?: { translateX: number; transition: boolean; durationMs: number };  // 水平翻页
+  stage?: { offset: number; height: number; transition: boolean; ... };     // 下滑
+  image?: { zoom: number; pan: ImagePan; transition: boolean };             // 缩放平移
+};
+
+// 手势事件只写数据，不操作 DOM
+const applyActiveImageTransform = (zoom, pan, transition) => {
+  pendingDomTransformsRef.current.image = { zoom, pan, transition };
+  scheduleDomTransformFlush();  // 排一帧
+};
+const applyTrackOffset = (offset, transition, metrics, durationMs) => {
+  pendingDomTransformsRef.current.track = { translateX: ..., transition, durationMs };
+  scheduleDomTransformFlush();  // 同一帧内不重复排
+};
+
+// RAF 去重
+const scheduleDomTransformFlush = () => {
+  if (transformFrameRef.current !== null) return;  // 已有排队的帧
+  transformFrameRef.current = requestAnimationFrame(flushDomTransforms);
+};</code></pre>
+
+<p data-lang="zh"><code>flushDomTransforms</code> 一次性处理三个通道。下滑关闭有<strong>三层视觉联动</strong>：</p>
+<p data-lang="en"><code>flushDomTransforms</code> processes all three channels in one pass. The swipe-to-dismiss has <strong>three visual feedback layers</strong>:</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 批量 DOM 写入（下滑通道）
+if (pending.stage) {
+  const rawProgress = Math.min(1, offset / (height * 0.55));
+  const easedProgress = 1 - Math.pow(1 - rawProgress, 1.45);     // ease-out 缓动
+  const scale = Math.max(0.78, 1 - easedProgress * 0.22);        // 最小缩到 78%
+  const backdropOpacity = Math.max(0.28, 1 - easedProgress * 0.72);  // 背景渐透
+  const chromeOpacity = Math.max(0, 1 - rawProgress * 2.25);     // 按钮先消失
+
+  stageElement.style.transform = `translate3d(0, ${offset}px, 0) scale(${scale})`;
+  rootElement.style.backgroundColor = `rgba(8, 8, 7, ${backdropOpacity})`;
+  rootElement.style.setProperty("--media-viewer-chrome-opacity", String(chromeOpacity));
+}
+
+// 图片通道
+if (pending.image) {
+  imageElement.style.transform =
+    `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`;
+}</code></pre>
+
+<div class="card" data-lang="zh">
+  <h4>三层联动的视觉层次</h4>
+  <p>同一个 <code>rawProgress</code> 驱动三层效果，但各自映射曲线不同：</p>
+  <ul>
+    <li><strong>按钮最先消失</strong>：系数 2.25x，拖到 44% 就完全透明</li>
+    <li><strong>背景渐透</strong>：缓动曲线，最低透明度 0.28</li>
+    <li><strong>图片缩小</strong>：ease-out 缓动，最小缩到 78%</li>
+  </ul>
+</div>
+<div class="card" data-lang="en">
+  <h4>Three-Layer Visual Hierarchy</h4>
+  <p>A single <code>rawProgress</code> drives three effects, each with its own mapping curve:</p>
+  <ul>
+    <li><strong>Chrome fades first</strong>: 2.25x multiplier — fully transparent at 44% drag</li>
+    <li><strong>Backdrop dims</strong>: eased curve, minimum opacity 0.28</li>
+    <li><strong>Image shrinks</strong>: ease-out curve, minimum scale 78%</li>
+  </ul>
+</div>
+
+<p data-lang="zh"><strong>速度驱动动画时长</strong>：</p>
+<p data-lang="en"><strong>Velocity-Driven Animation Duration</strong>:</p>
+
+<pre><code class="language-typescript">// useSwipePager.ts — 速度影响过渡时长
+const getHorizontalTrackTransitionMs = (remainingDistance, velocity, width) => {
+  const distanceRatio = clamp(remainingDistance / width, 0.12, 1);
+  const velocityRatio = clamp(Math.abs(velocity) / 1.2, 0, 1);
+  const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
+  // 基础 520ms + 距离远加时间(最多+420ms) - 速度快减时间(最多-120ms)
+  return clamp(duration, MIN_TRANSITION_MS, MAX_TRANSITION_MS);
+};</code></pre>
+
+<blockquote data-lang="zh">
+媒体查看器是我写过最复杂的前端组件，1800 多行。核心是一个手势模式状态机——所有触控先进入 tap 状态，移动超过阈值后根据方向比锁定为水平翻页、下滑关闭、缩放拖拽之一。缩放用了中心点保持的几何变换，边缘翻页有非线性弹性阻力，关闭支持速度判定。性能上，之前每次手势事件直接写 DOM，低端手机掉帧严重。优化后改成三通道 pending 队列——水平位移、下滑缩放、图片缩放各自独立写数据，一个 RAF 回调批量刷新。下滑关闭有三层视觉联动：按钮先消失、背景渐透、图片缩小，用同一个 progress 驱动但不同的映射曲线。优化后 pinch 操作稳定 60fps。
+</blockquote>
+<blockquote data-lang="en">
+The media viewer is the most complex frontend component I've built — over 1,800 lines. The core is a gesture mode state machine: all touch events start in a "tap" state and lock into horizontal-swipe, vertical-dismiss, or pinch-zoom once movement exceeds a threshold, based on direction ratio. Zoom uses center-preserving geometric transforms, edge paging has non-linear elastic resistance, and dismiss supports velocity-based detection. Previously, every gesture event directly wrote to the DOM, causing severe frame drops on low-end phones. After optimization, we use three-channel pending queues — horizontal offset, dismiss-scale, and image-zoom each write data independently, flushed by a single RAF callback. The swipe-to-dismiss has three visual layers: chrome fades first, backdrop dims, image shrinks — all driven by one progress value but with different mapping curves. After optimization, pinch operations hold steady at 60fps.
+</blockquote>
+
+<!-- ===== 难点2：三层缓存 ===== -->
+<h3 id="ch-cache"><span data-lang="zh">难点 7：三层媒体缓存系统</span><span data-lang="en">Challenge 7: Three-Tier Media Cache</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：聊天里图片/视频反复查看，每次都发网络请求浪费带宽和时间。但浏览器默认 cache 对 presigned URL（每次 URL 不同）无效。</p>
+<p data-lang="en"><strong>Problem</strong>: Images and videos in chat are viewed repeatedly, wasting bandwidth on every request. But the browser's default cache doesn't work with presigned URLs (different URL each time).</p>
+
+<p data-lang="zh"><strong>解决方案</strong> — Object URL → Cache API → Network：</p>
+<p data-lang="en"><strong>Solution</strong> — Object URL → Cache API → Network:</p>
+
+<pre><code class="language-typescript">// mediaCache.ts — 三层缓存 + 并发去重
+const getCachedMediaObjectUrl = async ({ assetId, url, kind, byteSize }) => {
+  const key = bodyCacheKey(assetId);   // 用 assetId 做 key，不用变化的 URL
+
+  // 第 0 层：并发请求去重（同一资源复用 Promise）
+  const existing = inFlightBodyUrls.get(key);
+  if (existing) return existing;
+
+  const request = (async () => {
+    try {
+      // 第 1 层：内存中的 Object URL（最快，无 IO）
+      const cachedUrl = await getBlobObjectUrlFromCache(MEDIA_BODY_CACHE_NAME, key);
+      if (cachedUrl) return cachedUrl;
+
+      // 第 2 层：Cache API blob → 生成 Object URL
+      const response = await fetch(url, { cache: "force-cache" });
+      const blob = await response.blob();
+      await putBlobInCache(MEDIA_BODY_CACHE_NAME, key, blob, mimeType, MAX_BODY_CACHE_BYTES);
+      return rememberObjectUrl(key, URL.createObjectURL(blob));
+    } finally {
+      inFlightBodyUrls.delete(key);    // 无论成功失败都清除
+    }
+  })();
+
+  inFlightBodyUrls.set(key, request);  // 注册 in-flight
+  return request;
+};</code></pre>
+
+<p data-lang="zh"><strong>LRU 驱逐（300MB 上限）</strong>：</p>
+<p data-lang="en"><strong>LRU Eviction (300MB cap)</strong>:</p>
+
+<pre><code class="language-typescript">// mediaCache.ts — 按时间戳驱逐最旧的
+let totalBytes = entries.reduce((t, e) => t + e.byteSize, 0);
+for (const entry of entries.sort((a, b) => a.cachedAt - b.cachedAt)) {
+  await cache.delete(entry.request);         // 删 Cache API 条目
+  deleteRememberedObjectUrl(entry.key);       // 同步释放 Object URL
+  totalBytes -= entry.byteSize;
+  if (totalBytes <= maxBytes) return;
+}
+// 每个条目用自定义 header X-RoomTalk-Byte-Size / X-RoomTalk-Cached-At 打标</code></pre>
+
+<p data-lang="zh"><strong>视频封面帧生成</strong>：</p>
+<p data-lang="en"><strong>Video Poster Frame Generation</strong>:</p>
+
+<pre><code class="language-typescript">// mediaCache.ts — canvas 提取视频帧
+video.currentTime = Math.min(0.1, video.duration / 100);  // seek 到 1% 处
+await waitForVideoEvent(video, "seeked");
+
+const scale = Math.min(1, POSTER_MAX_WIDTH / video.videoWidth,
+                           POSTER_MAX_HEIGHT / video.videoHeight);
+canvas.width = Math.round(video.videoWidth * scale);
+context.drawImage(video, 0, 0, canvas.width, canvas.height);
+canvas.toBlob(resolve, "image/jpeg", 0.82);  // 82% quality JPEG</code></pre>
+
+<blockquote data-lang="zh">
+因为我们用 presigned URL，每次 URL 都不一样，浏览器默认缓存失效。所以我们自己做了三层缓存：内存里的 Object URL 最快，Cache API 存 blob 持久化，最后才走网络。用 assetId 而不是 URL 做缓存 key。并发请求同一个资源会复用 Promise，避免 thundering herd。LRU 驱逐按时间戳排序删最旧的，上限 300MB。视频还会自动通过 canvas 生成封面帧缓存起来。
+</blockquote>
+<blockquote data-lang="en">
+Since we use presigned URLs — a different URL every time — the browser's default cache is useless. So we built our own three-tier cache: in-memory Object URLs are fastest, Cache API stores blobs persistently, and network is the last resort. We key by assetId, not the URL. Concurrent requests for the same resource share a single Promise to avoid thundering herd. LRU eviction sorts by timestamp and deletes the oldest entries, capped at 300MB. Videos also automatically generate poster frames via canvas.
+</blockquote>
+
+<!-- ===== 难点3：视窗适配 ===== -->
+<h3 id="ch-viewport"><span data-lang="zh">难点 8：移动端视窗与输入适配</span><span data-lang="en">Challenge 8: Mobile Viewport &amp; Input Adaptation</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：iOS Safari 和 Android Chrome 的键盘弹出行为完全不同——Safari 用 Visual Viewport 收缩可视区，Chrome 推挤页面。CSS <code>100vh</code> 在两者上都不对。中文/日文输入法（IME）的 composing 状态下按回车会误发消息。</p>
+<p data-lang="en"><strong>Problem</strong>: iOS Safari and Android Chrome handle keyboard appearance completely differently — Safari shrinks the Visual Viewport, Chrome pushes the page. CSS <code>100vh</code> is wrong on both. Chinese/Japanese IME composition state causes accidental message sends when pressing Enter.</p>
+
+<p data-lang="zh"><strong>键盘检测 — Visual Viewport API + 棘轮模式</strong>：</p>
+<p data-lang="en"><strong>Keyboard Detection — Visual Viewport API + Ratchet Pattern</strong>:</p>
+
+<pre><code class="language-typescript">// appViewport.ts — 键盘高度检测
+const viewportHeight = getViewportHeight(win);  // visualViewport.height
+const isEditableFocused = isEditableElement(win.document.activeElement);
+
+// "棘轮"：只在非聚焦或视窗变大时更新基准高度
+if (!isEditableFocused || viewportHeight > expandedViewportHeight) {
+  expandedViewportHeight = Math.max(win.innerHeight, viewportHeight);
+}
+
+// 基准高度 - 当前高度 > 120px → 键盘打开
+const isKeyboardOpen = isEditableFocused
+  && expandedViewportHeight - viewportHeight > KEYBOARD_HEIGHT_THRESHOLD_PX;
+root.classList.toggle('keyboard-open', isKeyboardOpen);</code></pre>
+
+<p data-lang="zh"><code>expandedViewportHeight</code> 记录"没有键盘时的最大高度"。差值超过 120px 判断键盘打开。120px 阈值防止 toolbar 收缩的误判。</p>
+<p data-lang="en"><code>expandedViewportHeight</code> records "the maximum height when there's no keyboard." A difference above 120px signals keyboard open. The 120px threshold prevents false positives from toolbar collapse.</p>
+
+<p data-lang="zh"><strong>IME 输入防误发 — 四重检查 + 80ms 宽限期</strong>：</p>
+<p data-lang="en"><strong>IME Input Guard — Quadruple Check + 80ms Grace Period</strong>:</p>
+
+<pre><code class="language-typescript">// keyboardComposition.ts — 中文输入法防误发
+export const isConfirmingIMEComposition = ({
+  isComposing,          // React 状态
+  nativeIsComposing,    // 原生事件属性
+  keyCode,              // 229 = IME 正在处理
+  lastCompositionEndAt, // composition 结束时间戳
+  now,
+  graceMs = 80,         // 80ms 宽限期
+}) => {
+  return (
+    isComposing ||
+    !!nativeIsComposing ||
+    keyCode === 229 ||
+    now - lastCompositionEndAt < graceMs   // 刚结束 composition
+  );
+};</code></pre>
+
+<blockquote data-lang="zh">
+移动端键盘检测不能用 <code>window.innerHeight</code>，因为 iOS Safari 有 Visual Viewport 的概念。我们记录"无键盘时的最大视窗高度"作为基准，当前高度比基准小 120px 以上就判断键盘打开，然后通过 CSS class 调整布局。中文输入法防误发用了四重检查加 80ms 宽限期，因为 compositionend 和 keydown 的时序在 Safari、Chrome、微信浏览器里都不一样。
+</blockquote>
+<blockquote data-lang="en">
+Mobile keyboard detection can't use <code>window.innerHeight</code> because iOS Safari has the Visual Viewport concept. We record "maximum viewport height without keyboard" as a baseline — when the current height drops more than 120px below this baseline, we flag the keyboard as open and adjust layout via CSS class. The IME guard uses a quadruple check plus 80ms grace period because the timing between compositionend and keydown varies across Safari, Chrome, and WeChat's in-app browser.
+</blockquote>
+
+<!-- ===== 难点4：贴纸系统 ===== -->
+<h3 id="ch-sticker"><span data-lang="zh">难点 9：贴纸系统（虚拟分页 + 预加载 + 长按预览）</span><span data-lang="en">Challenge 9: Sticker System (Virtual Pagination + Preloading + Long-Press Preview)</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：2275 张贴纸，每张都是一个图片请求。如果一次全渲染，DOM 节点数爆炸，首屏加载巨慢。</p>
+<p data-lang="en"><strong>Problem</strong>: 2,275 stickers, each requiring an image request. Rendering all at once explodes the DOM node count and makes first paint extremely slow.</p>
+
+<p data-lang="zh"><strong>虚拟分页 — 只渲染 ±1 页</strong>：</p>
+<p data-lang="en"><strong>Virtual Pagination — Render Only ±1 Page</strong>:</p>
+
+<pre><code class="language-typescript">// StickerPicker.tsx — 按距离决定是否渲染
+const shouldRender = Math.abs(index - groupIndex) <= RENDER_RADIUS;  // ±1 页
+
+{groups.map((group, index) => (
+  &lt;div key={group.title} aria-hidden={index !== groupIndex}&gt;
+    {shouldRender && (
+      &lt;StickerGrid
+        stickers={resolve(group.stickerIds)}
+        imageLoading={isNearActive(index) ? 'eager' : 'lazy'}
+      /&gt;
+    )}
+  &lt;/div&gt;
+))}
+// 当前页 + 前后各 1 页 = 最多 3 页 DOM，其余页 div 为空</code></pre>
+
+<p data-lang="zh"><strong>相邻页图片预加载</strong>：</p>
+<p data-lang="en"><strong>Adjacent Page Preloading</strong>:</p>
+
+<pre><code class="language-typescript">// StickerPicker.tsx — 微任务异步预加载
+useEffect(() => {
+  const timer = window.setTimeout(() => {
+    for (const url of preloadUrls) {
+      const image = new Image();
+      image.decoding = 'async';   // 异步解码，不阻塞主线程
+      image.src = url;
+    }
+  }, 0);  // setTimeout(0) 推到微任务
+  return () => window.clearTimeout(timer);
+}, [preloadUrls]);</code></pre>
+
+<p data-lang="zh"><strong>长按预览 — 350ms 定时器 + 点击抑制</strong>：</p>
+<p data-lang="en"><strong>Long-Press Preview — 350ms Timer + Click Suppression</strong>:</p>
+
+<pre><code class="language-typescript">// StickerPicker.tsx — 长按状态机
+const startPress = () => {
+  longPressed.current = false;
+  timer.current = window.setTimeout(() => {
+    longPressed.current = true;
+    onPreview(sticker.id);      // 350ms 后显示大图预览
+  }, 350);
+};
+const handleClick = () => {
+  if (longPressed.current) {     // 长按过了就不算点击
+    longPressed.current = false;
+    return;
+  }
+  onSelect(sticker.id);          // 短按才选中发送
+};</code></pre>
+
+<blockquote data-lang="zh">
+2275 张贴纸如果全渲染 DOM 节点数会爆。我们用虚拟分页只渲染当前 ±1 页，其余页 div 为空。相邻页的图片用 <code>new Image()</code> 异步预加载，<code>decoding='async'</code> 不阻塞渲染线程。交互上实现了长按 350ms 预览大图、松开关闭、短按发送的状态机。
+</blockquote>
+<blockquote data-lang="en">
+Rendering all 2,275 stickers would blow up the DOM. We use virtual pagination — only the current page ±1 are rendered, the rest are empty divs. Adjacent page images are preloaded asynchronously with <code>new Image()</code> and <code>decoding='async'</code> to avoid blocking the render thread. The interaction implements a state machine: long-press (350ms) shows a preview, release closes it, short-tap sends the sticker.
+</blockquote>
+
+<!-- ===== 难点5：消息列表 ===== -->
+<h3 id="ch-msglist"><span data-lang="zh">难点 10：消息列表体验优化（乐观发送 + 滚动保位）</span><span data-lang="en">Challenge 10: Message List UX (Optimistic Send + Scroll Preservation)</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：消息发送如果等服务端确认再显示，体感延迟明显。加载更早的消息历史时，新消息插入到列表顶部会导致当前阅读位置跳动。</p>
+<p data-lang="en"><strong>Problem</strong>: Waiting for server acknowledgment before displaying a sent message creates noticeable perceived latency. When loading older message history, inserting messages at the top of the list causes the current reading position to jump.</p>
+
+<p data-lang="zh"><strong>乐观发送 — 三阶段状态机</strong>：</p>
+<p data-lang="en"><strong>Optimistic Send — Three-Phase State Machine</strong>:</p>
+
+<pre><code class="language-typescript">// messageState.ts — 乐观插入 → ack 替换 → 失败回滚
+export const addOptimisticMessage = (messages, optimisticMessage) => {
+  // clientMessageId 去重，防止重复插入
+  if (optimisticMessage.clientMessageId &&
+      messages.some(m => m.clientMessageId === optimisticMessage.clientMessageId)) {
+    return messages;
+  }
+  return sortMessages([...messages, optimisticMessage]);
+};
+
+// 服务端 ack → 替换为真实消息（保留 clientMessageId 用于匹配）
+export const replaceOptimisticMessage = (messages, clientMessageId, savedMessage) => {
+  return upsertMessage(messages, { ...savedMessage, clientMessageId });
+};
+
+// 发送失败 → 标记错误，UI 显示重试按钮
+export const markOptimisticMessageFailed = (messages, clientMessageId, error) => {
+  return messages.map(m =>
+    m.clientMessageId === clientMessageId
+      ? { ...m, deliveryStatus: "failed", deliveryError: error } : m
+  );
+};</code></pre>
+
+<p data-lang="zh"><strong>加载历史消息 — delta height 保位</strong>：</p>
+<p data-lang="en"><strong>Loading History — Delta Height Scroll Preservation</strong>:</p>
+
+<pre><code class="language-typescript">// MessageList.tsx — 加载前快照，加载后恢复
+const handleLoadMore = () => {
+  preserveScrollRef.current = {
+    scrollHeight: container.scrollHeight,
+    scrollTop: container.scrollTop,
+  };
+  socket.emit('get_room_messages', { roomId, beforeMessageId, limit: 80 });
+};
+
+// layoutEffect 在 DOM 更新后立即修正 scrollTop
+React.useLayoutEffect(() => {
+  const prev = preserveScrollRef.current;
+  if (!prev || !container) return;
+  preserveScrollRef.current = null;
+  // 新 scrollTop = 旧 scrollTop + 新增内容的高度差
+  container.scrollTop = prev.scrollTop + (container.scrollHeight - prev.scrollHeight);
+}, [messages.length]);</code></pre>
+
+<p data-lang="zh"><strong>ResizeObserver 自动 stick-to-bottom</strong>：</p>
+<p data-lang="en"><strong>ResizeObserver Auto Stick-to-Bottom</strong>:</p>
+
+<pre><code class="language-typescript">// MessageList.tsx — 内容变化时自动跟底
+const observer = new ResizeObserver(() => {
+  if (preserveScrollRef.current) return;  // 正在加载历史，不自动滚
+  if (isNearBottomRef.current) {          // 用户在底部 150px 内
+    scheduleScrollToBottom('auto');
+  }
+});
+observer.observe(contentRef.current);
+
+// 150px 阈值判断"在底部附近"
+const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;</code></pre>
+
+<blockquote data-lang="zh">
+消息发送用了乐观更新：先用 clientMessageId 插入本地列表，服务端确认后替换为真实消息，失败则标记错误。用户感知是"发出即显示"。加载历史消息时，用 layoutEffect 在 DOM 更新后立即修正 scrollTop：新位置 = 旧位置 + 新增高度差。再加上 ResizeObserver 监听内容尺寸变化，用户在底部时自动跟随新消息。
+</blockquote>
+<blockquote data-lang="en">
+Message sending uses optimistic updates: insert into the local list with a clientMessageId first, replace with the real message after server ack, or mark as failed. Users perceive "send = instant display." When loading history, layoutEffect corrects scrollTop immediately after DOM update: new position = old position + height delta. Combined with a ResizeObserver watching content size changes, the list auto-scrolls to new messages when the user is near the bottom.
+</blockquote>
+
+<!-- ===== 后端篇分隔线 ===== -->
+<h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="zh">后端篇</h3>
+<h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="en">Backend</h3>
+
+<!-- ===== 难点6：断连恢复 ===== -->
+<h3 id="ch-mobile"><span data-lang="zh">难点 11：移动浏览器 WebSocket 断连恢复</span><span data-lang="en">Challenge 11: Mobile Browser WebSocket Reconnection Recovery</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：手机切后台、锁屏、切网络后，WebSocket 连接可能被浏览器挂起甚至断开。用户切回来后：</p>
+<p data-lang="en"><strong>Problem</strong>: After backgrounding, locking the screen, or switching networks, the browser may suspend or drop the WebSocket connection. When the user returns:</p>
+<ul data-lang="zh">
+  <li>消息停止接收（连接已死但没有触发 disconnect 事件）</li>
+  <li>在线成员数不准确</li>
+  <li>房间状态过时</li>
+</ul>
+<ul data-lang="en">
+  <li>Messages stop arriving (connection is dead but no disconnect event fired)</li>
+  <li>Online member count is inaccurate</li>
+  <li>Room state is stale</li>
+</ul>
+
+<p data-lang="zh"><strong>解决方案</strong> — 多层恢复机制：</p>
+<p data-lang="en"><strong>Solution</strong> — Multi-layer recovery mechanism:</p>
+<ol data-lang="zh">
+  <li><span class="tag green">Page Visibility API</span> 监听 <code>visibilitychange</code>，页面恢复前台时检查连接健康度。</li>
+  <li><span class="tag blue">幂等 rejoin</span> 不是无脑重连。用 <code>ensureRoomJoined</code> 先检查当前房间是否仍然 joined，避免重复 join 导致成员数翻倍。</li>
+  <li><span class="tag purple">in-flight 去重</span> 短时间内多次恢复（快速切换前后台）复用同一个恢复请求，不重复发。</li>
+  <li><span class="tag orange">延迟指示器</span> 健康连接下的 rejoin 是毫秒级的，只有超过 400ms 未完成才显示"重连中"，避免每次切前台闪一下转圈。</li>
+  <li><span class="tag green">密码房复用</span> 会话内记住已验证的密码，恢复时自动带上，不让用户重新输入。</li>
+</ol>
+<ol data-lang="en">
+  <li><span class="tag green">Page Visibility API</span> listens for <code>visibilitychange</code> and checks connection health when the page returns to foreground.</li>
+  <li><span class="tag blue">Idempotent rejoin</span> — not a blind reconnect. Uses <code>ensureRoomJoined</code> to check if the room is still joined, preventing duplicate joins that double the member count.</li>
+  <li><span class="tag purple">In-flight dedup</span> — rapid foreground/background switches reuse the same recovery request instead of sending duplicates.</li>
+  <li><span class="tag orange">Delayed indicator</span> — healthy reconnects take milliseconds, so the "reconnecting" spinner only appears after 400ms, avoiding a flash on every foreground switch.</li>
+  <li><span class="tag green">Password room reuse</span> — verified passwords are remembered for the session, so users don't have to re-enter them on recovery.</li>
+</ol>
+
+<blockquote data-lang="zh">
+移动端 WebSocket 恢复是我们踩坑最多的地方。核心思路是"不信任连接状态"——页面回到前台就检查，但不无脑重连。我们有一个 <code>ensureRoomJoined</code> 做幂等 rejoin，加上 in-flight 去重和延迟转圈，用户基本感知不到断连过程。
+</blockquote>
+<blockquote data-lang="en">
+Mobile WebSocket recovery was where we hit the most bugs. The core approach is "never trust the connection state" — always check when the page comes to foreground, but don't blindly reconnect. We have an <code>ensureRoomJoined</code> for idempotent rejoin, plus in-flight dedup and a delayed spinner, so users barely notice the disconnection.
+</blockquote>
+
+<!-- ===== 难点7：PG 迁移 ===== -->
+<h3 id="ch-migration"><span data-lang="zh">难点 12：Redis → PostgreSQL 持久化迁移</span><span data-lang="en">Challenge 12: Redis → PostgreSQL Persistence Migration</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：系统最初用 Redis 做全量持久化。Redis 虽然快，但：</p>
+<p data-lang="en"><strong>Problem</strong>: The system originally used Redis for all persistence. While fast, Redis has drawbacks:</p>
+<ul data-lang="zh">
+  <li>数据全在内存，成本随数据量线性增长</li>
+  <li>没有关系约束，数据一致性靠应用层保证</li>
+  <li>备份和恢复不如关系型数据库成熟</li>
+</ul>
+<ul data-lang="en">
+  <li>All data lives in memory — cost grows linearly with data volume</li>
+  <li>No relational constraints — data consistency relies on application-level enforcement</li>
+  <li>Backup and recovery less mature than relational databases</li>
+</ul>
+
+<p data-lang="zh"><strong>解决方案</strong> — 渐进式迁移，不停服：</p>
+<p data-lang="en"><strong>Solution</strong> — Incremental migration, zero downtime:</p>
+<ol data-lang="zh">
+  <li>抽象出 <code>DurableRoomStore</code> 接口，<code>RedisStore</code> 和 <code>PostgresStore</code> 各自实现。</li>
+  <li><code>CompositeRoomStore</code> 组合 durable + realtime，切换 durable 实现只需要改环境变量。</li>
+  <li>写了幂等迁移脚本 <code>migrate:redis-to-postgres</code>，支持 dry-run。</li>
+  <li>加了 <code>smoke:persistence</code> 安全测试，保护不会误连生产 Redis。</li>
+  <li>回滚是纯配置切换：<code>PERSISTENCE_STORE=redis</code>，因为迁移期间不删 Redis 数据。</li>
+</ol>
+<ol data-lang="en">
+  <li>Extracted a <code>DurableRoomStore</code> interface with separate <code>RedisStore</code> and <code>PostgresStore</code> implementations.</li>
+  <li><code>CompositeRoomStore</code> combines durable + realtime — switching the durable implementation only requires changing an environment variable.</li>
+  <li>Wrote an idempotent migration script <code>migrate:redis-to-postgres</code> with dry-run support.</li>
+  <li>Added <code>smoke:persistence</code> safety tests to prevent accidental connection to production Redis.</li>
+  <li>Rollback is pure config: <code>PERSISTENCE_STORE=redis</code>, since Redis data is preserved during migration.</li>
+</ol>
+
+<blockquote data-lang="zh">
+我们做了一个 Store 接口抽象层，Redis 和 PostgreSQL 各自实现相同接口。上层代码完全不知道底下是哪个数据库。切换只需要改一个环境变量，回滚也是。迁移脚本是幂等的，可以反复跑。这样我们在生产环境做了零停机迁移。
+</blockquote>
+<blockquote data-lang="en">
+We built a Store interface abstraction layer — Redis and PostgreSQL each implement the same interface. Upper-level code has no idea which database is underneath. Switching requires changing a single environment variable; so does rollback. The migration script is idempotent and can be run repeatedly. This enabled zero-downtime migration in production.
+</blockquote>
+
+<!-- ===== 难点8：房间同步 ===== -->
+<h3 id="ch-sync"><span data-lang="zh">难点 13：房间状态同步与一致性</span><span data-lang="en">Challenge 13: Room State Synchronization &amp; Consistency</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：多个客户端同时操作房间设置（改名、设密码、改发言时间段），客户端的房间对象可能过时。</p>
+<p data-lang="en"><strong>Problem</strong>: Multiple clients simultaneously editing room settings (rename, set password, change speaking hours) — the client's room object can become stale.</p>
+
+<p data-lang="zh"><strong>解决方案</strong>：</p>
+<p data-lang="en"><strong>Solution</strong>:</p>
+<ol data-lang="zh">
+  <li><strong>整体替换而非合并</strong>：服务端返回完整的 room 对象，客户端收到后整体替换本地状态，不做字段级 merge。</li>
+  <li><strong><code>room_version</code> 单调版本号</strong>：PostgreSQL 行级自增，客户端按 version 比较新旧，不依赖时间戳（时钟漂移不可靠）。</li>
+  <li><strong>ack read-your-write</strong>：客户端修改设置后，ack 返回最新的 room 对象，立即更新本地，不等广播。</li>
+</ol>
+<ol data-lang="en">
+  <li><strong>Full replacement, not merge</strong>: The server returns the complete room object; the client replaces its local state entirely — no field-level merge.</li>
+  <li><strong><code>room_version</code> monotonic version number</strong>: Row-level auto-increment in PostgreSQL. Clients compare by version, not timestamps (clock drift is unreliable).</li>
+  <li><strong>Ack read-your-write</strong>: After modifying settings, the ack returns the latest room object for immediate local update, without waiting for the broadcast.</li>
+</ol>
+
+<div class="card" data-lang="zh">
+  <h4>追问：为什么不用 CRDT？</h4>
+  <p>房间设置是低频操作，last-write-wins 够用。CRDT 适合高频并发编辑（协同文档），引入复杂度不值得。我们的 version 号保证了排序，整体替换保证了最终一致。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Follow-up: Why not use CRDTs?</h4>
+  <p>Room settings are low-frequency operations — last-write-wins is sufficient. CRDTs are for high-frequency concurrent editing (collaborative documents); the added complexity isn't justified. Our version number guarantees ordering, and full replacement guarantees eventual consistency.</p>
+</div>
+
+<!-- ===== 难点9：AI Provider ===== -->
+<h3 id="ch-ai"><span data-lang="zh">难点 14：AI 多 Provider 抽象</span><span data-lang="en">Challenge 14: AI Multi-Provider Abstraction</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：接入了 DeepSeek、Anthropic、OpenAI、OpenRouter 四个 AI 提供方，每个的 SDK、定价、限流策略不同。</p>
+<p data-lang="en"><strong>Problem</strong>: Integrated four AI providers — DeepSeek, Anthropic, OpenAI, OpenRouter — each with different SDKs, pricing, and rate-limiting strategies.</p>
+
+<pre><code class="language-javascript">aiModels.ts   — model registry: model ID → { provider, apiModel, pricing, ... }
+aiClients.ts  — client factory: provider → SDK client instance
+aiHandlers.ts — streaming logic: provider-agnostic chunk forwarding</code></pre>
+
+<ul data-lang="zh">
+  <li><code>aiModels.ts</code> 维护一个 model registry，把用户可见的 model ID 映射到具体的 provider 和 API model name。</li>
+  <li><code>aiClients.ts</code> 按 provider 类型创建对应的 SDK 客户端（OpenAI SDK 兼容 DeepSeek 和 OpenRouter，Anthropic 用官方 SDK）。</li>
+  <li>流式处理层统一把不同 SDK 的 chunk 格式转成统一的 <code>ai_chunk</code> 事件推给客户端。</li>
+</ul>
+<ul data-lang="en">
+  <li><code>aiModels.ts</code> maintains a model registry mapping user-visible model IDs to specific providers and API model names.</li>
+  <li><code>aiClients.ts</code> creates SDK clients by provider type (OpenAI SDK is compatible with DeepSeek and OpenRouter; Anthropic uses its official SDK).</li>
+  <li>The streaming layer normalizes different SDK chunk formats into a unified <code>ai_chunk</code> event for the client.</li>
+</ul>
+
+<blockquote data-lang="zh">
+我们用了一个 model registry + client factory 模式。添加新的 AI 提供方只需要在 registry 注册模型、在 factory 加一个 case。流式处理是 provider-agnostic 的，不同 SDK 的 chunk 格式在服务端统一转换。客户端完全不知道后端用的是哪个 provider。
+</blockquote>
+<blockquote data-lang="en">
+We use a model registry + client factory pattern. Adding a new AI provider only requires registering models in the registry and adding a case in the factory. The streaming layer is provider-agnostic — different SDK chunk formats are normalized server-side. The client has no idea which provider the backend is using.
+</blockquote>
+
+<!-- ===== 难点10：Lua 原子操作 ===== -->
+<h3 id="ch-lua"><span data-lang="zh">难点 15：Redis Lua 原子操作（解决 8 个并发 bug）</span><span data-lang="en">Challenge 15: Redis Lua Atomic Operations (Fixed 8 Concurrency Bugs)</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：多个客户端同时操作同一个房间——发消息、进出房间、删消息——Redis 普通命令不是原子的，存在竞态条件。</p>
+<p data-lang="en"><strong>Problem</strong>: Multiple clients simultaneously operating on the same room — sending messages, joining/leaving, deleting messages — Redis commands aren't atomic, creating race conditions.</p>
+
+<p data-lang="zh"><strong>脚本 1：Room 版本号原子递增</strong>：</p>
+<p data-lang="en"><strong>Script 1: Atomic Room Version Increment</strong>:</p>
+
+<pre><code class="language-typescript">-- redisStore.ts — WRITE_ROOM_RECORD_SCRIPT (Lua)
+local storedJson = redis.call('HGET', KEYS[1], ARGV[1])
+local storedVersion = 0
+if storedJson then
+  local ok, stored = pcall(cjson.decode, storedJson)
+  if ok and stored['roomVersion'] then
+    storedVersion = tonumber(stored['roomVersion']) or 0
+  end
+end
+room['roomVersion'] = storedVersion + 1  -- Redis 内部原子递增
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))</code></pre>
+
+<p data-lang="zh"><strong>脚本 2：成员计数 — 按 clientId 去重 socket</strong>（修复"成员数翻倍"bug）：</p>
+<p data-lang="en"><strong>Script 2: Member Count — Dedup Sockets by clientId</strong> (fixed the "member count doubling" bug):</p>
+
+<pre><code class="language-typescript">-- redisStore.ts — UPDATE_ROOM_MEMBER_COUNT_SCRIPT (Lua)
+if isJoining == '1' then
+  redis.call('SADD', KEYS[2], socketId)     -- socket 集合
+  redis.call('SADD', KEYS[1], clientId)     -- 成员集合
+else
+  redis.call('SREM', KEYS[2], socketId)     -- 移除这个 socket
+  local remaining = redis.call('SCARD', KEYS[2])
+  if remaining == 0 then
+    redis.call('SREM', KEYS[1], clientId)   -- 全没了才移除成员
+  end
+end
+return redis.call('SCARD', KEYS[1])</code></pre>
+
+<p data-lang="zh">一个用户可能有多个 socket（多标签页、断线重连），<strong>两层集合做引用计数</strong>，只有所有 socket 都离开才真正移除成员。</p>
+<p data-lang="en">A single user may have multiple sockets (multiple tabs, reconnections). <strong>Two-layer sets act as reference counters</strong> — a member is only removed when all their sockets have left.</p>
+
+<p data-lang="zh"><strong>脚本 3：删消息 + 重算 lastActivityAt</strong>：</p>
+<p data-lang="en"><strong>Script 3: Delete Message + Recompute lastActivityAt</strong>:</p>
+
+<pre><code class="language-typescript">-- redisStore.ts — DELETE_MESSAGE_BY_ID_SCRIPT (Lua)
+for i = 1, #existing do
+  local decoded = cjson.decode(existing[i])
+  if decoded['id'] == targetId then
+    found = 1
+  else
+    table.insert(remaining, existing[i])
+    if decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']
+    end
+  end
+end
+-- 删除最新消息后，lastActivityAt 回退到上一条的时间
+room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+room['roomVersion'] = storedVersion + 1</code></pre>
+
+<blockquote data-lang="zh">
+Redis 不支持事务级隔离，所以我们用 Lua 脚本实现原子操作。一共写了 9 个脚本，每个解决一个具体的并发 bug。最典型的是成员计数——一个用户可能有多个 socket 连接，Lua 脚本用两层集合做引用计数，只有所有 socket 都断开才移除成员。这和 PostgreSQL 的 <code>SELECT ... FOR UPDATE</code> 行锁是等价的——Store Contract 测试保证两种实现行为一致。
+</blockquote>
+<blockquote data-lang="en">
+Redis doesn't support transaction-level isolation, so we use Lua scripts for atomicity. We wrote 9 scripts total, each fixing a specific concurrency bug. The most notable is member counting — a user may have multiple socket connections. The Lua script uses two-layer sets for reference counting, only removing a member when all their sockets disconnect. This is equivalent to PostgreSQL's <code>SELECT ... FOR UPDATE</code> row locking — the Store Contract tests guarantee identical behavior across both implementations.
+</blockquote>
+
+<!-- ===== 难点11：双实现测试 ===== -->
+<h3 id="ch-contract"><span data-lang="zh">难点 16：Store Contract 双实现一致性测试</span><span data-lang="en">Challenge 16: Store Contract Dual-Implementation Tests</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：Redis 和 PostgreSQL 是完全不同的数据模型，同一个接口的两种实现可能在边界情况下行为不同。</p>
+<p data-lang="en"><strong>Problem</strong>: Redis and PostgreSQL have fundamentally different data models — two implementations of the same interface may behave differently in edge cases.</p>
+
+<pre><code class="language-typescript">// storeContract.test.ts — 同一套测试跑两个实现
+const storeFactories = [
+  ['RedisStore', () => ({ store: new RedisStore(new MemoryRedis(), logger) })],
+  ['PostgresStore', () => ({ store: new PostgresStore(new StatefulPostgresPool(), logger) })],
+];
+
+for (const [storeName, createFixture] of storeFactories) {
+  describe(`${storeName} durable contract`, () => {
+    // 所有测试用例对两个实现各跑一遍
+  });
+}</code></pre>
+
+<p data-lang="zh">两个 mock 的关键深度：</p>
+<p data-lang="en">The two mocks have significant depth:</p>
+<ul data-lang="zh">
+  <li><strong>MemoryRedis</strong>：完整实现了 Lua 脚本求值器，用 <code>script.includes()</code> 匹配到对应脚本后在内存里模拟 Redis 操作</li>
+  <li><strong>StatefulPostgresPool</strong>：用正则匹配 SQL 语句，在内存数据结构上执行等效操作</li>
+</ul>
+<ul data-lang="en">
+  <li><strong>MemoryRedis</strong>: Includes a full Lua script evaluator — uses <code>script.includes()</code> to match scripts and simulates Redis operations in memory</li>
+  <li><strong>StatefulPostgresPool</strong>: Uses regex matching on SQL statements and executes equivalent operations on in-memory data structures</li>
+</ul>
+
+<pre><code class="language-typescript">// 最核心的一致性断言：两种实现必须产生相同的版本号序列
+it('increments roomVersion monotonically across mixed writes', async () => {
+  const saved = await store.saveRoom(room);
+  assert.equal(saved?.roomVersion, 1);        // 创建房间
+
+  const renamed = await store.updateRoomName(room.id, creatorId, 'New');
+  assert.equal(renamed?.roomVersion, 2);      // 改名
+
+  const afterMsg = await store.appendMessage(msg);
+  assert.equal(afterMsg?.roomVersion, 3);     // 发消息
+  // Redis 用 Lua 递增，PG 用 SQL +1，结果必须一致
+});</code></pre>
+
+<blockquote data-lang="zh">
+我们的测试不是分别为 Redis 和 PostgreSQL 维护两套断言，而是让同一套 contract suite 跑两个实现。每个用例验证接口行为而不是内部结构。为了让测试可重复，我们还实现了 MemoryRedis mock，包括 Lua 脚本的内存求值。这样迁移或新增 store method 时，行为差异会在同一个 contract 上暴露。
+</blockquote>
+<blockquote data-lang="en">
+We do not maintain separate assertion sets for Redis and PostgreSQL — the same contract suite runs against both implementations. Each test verifies interface behavior rather than internal structure. We also built a MemoryRedis mock, including an in-memory Lua evaluator, so migrations or new store methods expose behavioral differences against one contract.
+</blockquote>
+
+<!-- ===== 难点12：消息缓存 ===== -->
+<h3 id="ch-msgcache"><span data-lang="zh">难点 17：消息缓存版本一致性</span><span data-lang="en">Challenge 17: Message Cache Version Consistency</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：频繁的消息加载造成数据库压力，但加缓存面临一致性问题——消息编辑、删除、AI 流追加后，缓存必须同步失效。</p>
+<p data-lang="en"><strong>Problem</strong>: Frequent message loading creates database pressure, but adding a cache introduces consistency issues — the cache must be invalidated after message edits, deletes, and AI stream appends.</p>
+
+<p data-lang="zh"><strong>版本号感知的 read-through 缓存</strong>：</p>
+<p data-lang="en"><strong>Version-Aware Read-Through Cache</strong>:</p>
+
+<pre><code class="language-typescript">// CompositeRoomStore — 读取时版本校验
+async readMessagesByRoom(roomId) {
+  // 1. 拿 room 的 messageVersion（每次消息变更递增）
+  const room = await this.durableStore.getRoomById(roomId);
+  const cacheVersion = room?.messageVersion;
+
+  // 2. 用 version 做缓存 key 查缓存
+  const cached = await this.messageCacheStore
+    .readCachedRoomMessages(roomId, cacheVersion);
+  if (cached) return cached;  // 命中
+
+  // 3. 未命中 → 查 PostgreSQL
+  const messages = await this.durableStore.readMessagesByRoom(roomId);
+
+  // 4. 写回前 double-check 版本（防止读取期间有写入）
+  const current = await this.durableStore.getRoomById(roomId);
+  if (current?.messageVersion === cacheVersion) {
+    await this.messageCacheStore.writeRoomMessagesCache(
+      roomId, messages, cacheVersion
+    );
+  }
+  // 版本变了 → 不写缓存，下次拿新版本
+  return messages;
+}</code></pre>
+
+<p data-lang="zh"><strong>写操作后条件性失效</strong>：</p>
+<p data-lang="en"><strong>Conditional Invalidation After Writes</strong>:</p>
+
+<pre><code class="language-typescript">// 成功才失效，删除失败不清缓存
+async deleteMessageById(roomId, messageId) {
+  const result = await this.durableStore.deleteMessageById(roomId, messageId);
+  if (result?.deleted) await this.invalidateRoomMessagesCache(roomId);
+  return result;
+}
+
+// 缓存挂了不影响主流程
+private async invalidateRoomMessagesCache(roomId) {
+  try { await this.messageCacheStore?.invalidateRoomMessagesCache(roomId); }
+  catch { /* 降级为直接读 PG */ }
+}</code></pre>
+
+<blockquote data-lang="zh">
+我们用 <code>messageVersion</code> 做缓存版本号，写回缓存前 double-check 版本号防止并发写入的 ABA 问题。所有写操作后条件性失效——只在真正修改了数据时才清缓存。缓存层的任何异常不影响主流程，降级为直接读 PostgreSQL。
+</blockquote>
+<blockquote data-lang="en">
+We use <code>messageVersion</code> as the cache version key, with a double-check before write-back to prevent ABA issues from concurrent writes. All write operations use conditional invalidation — cache is only cleared when data was actually modified. Any cache layer exception degrades gracefully to direct PostgreSQL reads.
+</blockquote>
+
+<!-- ===== 难点13：AI Token 预算 ===== -->
+<h3 id="ch-token"><span data-lang="zh">难点 18：AI 上下文预算管理（CJK 感知）</span><span data-lang="en">Challenge 18: AI Context Budget Management (CJK-Aware)</span></h3>
+
+<p data-lang="zh"><strong>问题</strong>：AI 请求附带聊天历史上下文，太长会超模型 token 限制。难点在于准确估算——中文 1 字 ≈ 1 token，英文 1 词 ≈ 1 token，混合内容需分别计算。</p>
+<p data-lang="en"><strong>Problem</strong>: AI requests include chat history as context, but exceeding the model's token limit causes errors. The challenge is accurate estimation — Chinese uses ~1 token per character, English ~1 token per word, and mixed content needs separate calculation.</p>
+
+<pre><code class="language-typescript">// aiHistory.ts — CJK 感知的 token 估算
+const estimateTextTokens = (text: string): number => {
+  const cjkCount = text.match(CJK_CHARACTER_PATTERN)?.length ?? 0;
+  const nonCjkText = text.replace(CJK_CHARACTER_PATTERN, '');
+  return Math.max(1, cjkCount + Math.ceil(nonCjkText.length / 4));
+  // CJK: 1 字符 ≈ 1 token；拉丁: 4 字符 ≈ 1 token
+};</code></pre>
+
+<p data-lang="zh"><strong>三层筛选（从粗到细）</strong>：</p>
+<p data-lang="en"><strong>Three-Layer Selection (coarse to fine)</strong>:</p>
+
+<pre><code class="language-typescript">// aiHistory.ts — selectAIHistory
+export function selectAIHistory(fullHistory, options) {
+  let history = fullHistory;
+
+  // 第 1 层：语义截断（重试/编辑时截到该消息之前）
+  if (retryForMessageId) {
+    const idx = history.findIndex(m => m.id === retryForMessageId);
+    if (idx !== -1) history = history.slice(0, idx);
+  }
+
+  // 第 2 层：消息条数限制（最近 N 条）
+  if (history.length > maxContextMessages)
+    history = history.slice(-maxContextMessages);
+
+  // 第 3 层：token 预算（从最新往前贪心累加）
+  const selected = [];
+  let tokenCount = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgTokens = estimateMessageTokens(history[i]);
+    if (selected.length > 0 && tokenCount + msgTokens > maxContextTokens)
+      break;
+    selected.push(history[i]);
+    tokenCount += msgTokens;
+  }
+  return { contextMessages: selected.reverse(), contextTokenEstimate: tokenCount };
+}</code></pre>
+
+<blockquote data-lang="zh">
+AI 上下文管理分三层筛选。第一层是语义截断——用户重试或编辑消息时，只取该消息之前的历史。第二层是条数限制。第三层是 token 预算，从最新消息往前贪心累加。token 估算对 CJK 和拉丁字符分别计算：中文 1 字约 1 token，英文约 4 字符 1 token。这个估算偏保守，宁可少发一条也不超限。
+</blockquote>
+<blockquote data-lang="en">
+AI context management uses three-layer selection. Layer 1 is semantic truncation — when retrying or editing, only history before that message is included. Layer 2 is a message count limit. Layer 3 is token budget — greedy backward accumulation from the newest message. Token estimation calculates CJK and Latin characters separately: ~1 token per CJK character, ~4 Latin characters per token. The estimate is intentionally conservative — better to include one fewer message than to exceed the limit.
+</blockquote>
+
+<!-- ==================== 四、扩展性 ==================== -->
+<hr>
+<h2 id="scale"><span data-lang="zh">四、扩展性讨论</span><span data-lang="en">4. Scalability Discussion</span></h2>
+
+<p data-lang="zh">面试官喜欢追问"如果用户量增长 100 倍怎么办"，按这个思路答：</p>
+<p data-lang="en">Interviewers love to ask "what if your user base grows 100x?" — answer along these lines:</p>
+
+<h3 data-lang="zh">当前瓶颈在哪</h3>
+<h3 data-lang="en">Current Bottlenecks</h3>
+<table data-lang="zh">
+  <thead>
+    <tr><th>组件</th><th>瓶颈</th><th>扩展方案</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Node control plane</td><td>CPU、socket 连接和 in-memory turn/daemon ownership</td><td>水平扩实例 + Redis adapter；active room 用 lease/affinity 保证单 owner</td></tr>
+    <tr><td>E2B sandbox</td><td>并发数、冷启动和成本</td><td>全局/用户配额、durable queue、pause/autoResume、template 预构建</td></tr>
+    <tr><td>Model gateway</td><td>Provider rate limit 与 turn 成本</td><td>per-turn budget、provider backoff、模型路由和 usage admission control</td></tr>
+    <tr><td>PostgreSQL 读</td><td>消息历史查询</td><td>读副本 + Redis 缓存（已有 <code>RoomMessageCacheStore</code>）</td></tr>
+    <tr><td>PostgreSQL 写</td><td>高频消息写入</td><td>写入批量化 / 异步队列 / 分表</td></tr>
+    <tr><td>Redis</td><td>内存上限</td><td>ElastiCache 升级 / cluster mode</td></tr>
+    <tr><td>S3</td><td>基本无瓶颈</td><td>S3 自动扩展，无需操心</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th>Component</th><th>Bottleneck</th><th>Scaling Strategy</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Node control plane</td><td>CPU, sockets, and in-memory turn/daemon ownership</td><td>Horizontal instances + Redis adapter; lease/affinity for one active room owner</td></tr>
+    <tr><td>E2B sandboxes</td><td>Concurrency, cold starts, and cost</td><td>Global/user quotas, durable queue, pause/autoResume, prebuilt templates</td></tr>
+    <tr><td>Model gateway</td><td>Provider rate limits and per-turn cost</td><td>Turn budgets, provider backoff, model routing, usage admission control</td></tr>
+    <tr><td>PostgreSQL reads</td><td>Message history queries</td><td>Read replicas + Redis cache (already have <code>RoomMessageCacheStore</code>)</td></tr>
+    <tr><td>PostgreSQL writes</td><td>High-frequency message inserts</td><td>Write batching / async queue / table partitioning</td></tr>
+    <tr><td>Redis</td><td>Memory ceiling</td><td>ElastiCache upgrade / cluster mode</td></tr>
+    <tr><td>S3</td><td>Virtually none</td><td>S3 auto-scales, no concern</td></tr>
+  </tbody>
+</table>
+
+<h3 data-lang="zh">水平扩展方案</h3>
+<h3 data-lang="en">Horizontal Scaling Plan</h3>
+<div class="diagram" data-lang="zh">现在:  1 个 Fly Node control-plane 实例 + 按需 E2B sandbox
+10x:   多 Node 实例, Redis adapter 广播, sticky socket
+       durable sandbox queue + per-user/global admission control
+100x:  active code-agent room 使用 distributed lease / room affinity
+       PostgreSQL 读副本 + 消息分表
+       独立 AI/chat worker；E2B 仍作为弹性 execution plane</div>
+<div class="diagram" data-lang="en">Now:   1 Fly Node control-plane instance + on-demand E2B sandboxes
+10x:   Multiple Node instances, Redis adapter broadcast, sticky sockets
+       Durable sandbox queue + per-user/global admission control
+100x:  Distributed lease / room affinity for active code-agent rooms
+       PostgreSQL read replicas + message table partitioning
+       Separate AI/chat workers; E2B remains the elastic execution plane</div>
+
+<h3 data-lang="zh">如果要支持 10 万并发连接</h3>
+<h3 data-lang="en">Supporting 100K Concurrent Connections</h3>
+<ol data-lang="zh">
+  <li>先用压测得到单实例在真实 payload、TLS 和 heartbeat 下的连接/CPU/内存上限，不用固定经验数字估算</li>
+  <li>Socket 层水平扩展，sticky connection + Redis adapter 维持跨实例房间广播</li>
+  <li>active Code Agent room 需要 distributed lease，避免两个 control-plane 实例同时控制同一个 sandbox</li>
+  <li>聊天消息继续 durable outbox/批处理；sandbox queue 与 chat throughput 分开扩展</li>
+</ol>
+<ol data-lang="en">
+  <li>Load-test the real payload, TLS, and heartbeat profile to establish per-instance connection/CPU/memory limits instead of relying on a fixed rule of thumb</li>
+  <li>Scale socket instances horizontally; sticky connections + Redis adapter preserve cross-instance room broadcast</li>
+  <li>Use a distributed lease for active code-agent rooms so two control-plane instances cannot control one sandbox</li>
+  <li>Keep durable chat outbox/batching separate from sandbox queue throughput so the two workloads scale independently</li>
+</ol>
+
+<div class="card warn" data-lang="zh">
+  <h4>策略提醒</h4>
+  <p>面试时<strong>不要主动讲到 Kafka 级别</strong>，除非面试官追问。先讲简单方案，被追才讲复杂方案，展示你知道什么时候该用什么。</p>
+</div>
+<div class="card warn" data-lang="en">
+  <h4>Strategy Note</h4>
+  <p><strong>Don't bring up Kafka-level solutions proactively</strong> unless the interviewer pushes. Start with simple approaches; only escalate when asked. This shows you know when to apply which tool.</p>
+</div>
+
+<!-- ==================== 五、安全 ==================== -->
+<hr>
+<h2 id="security"><span data-lang="zh">五、安全设计</span><span data-lang="en">5. Security Design</span></h2>
+
+<table data-lang="zh">
+  <thead>
+    <tr><th>安全点</th><th>实现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>传输加密</td><td>HTTPS/WSS，PostgreSQL TLS，Redis TLS</td></tr>
+    <tr><td>认证</td><td>UUID clientId + token hash，可选 Google OAuth</td></tr>
+    <tr><td>授权</td><td>房间成员角色（owner/admin/member），<code>hasRoomAccess</code> 检查</td></tr>
+    <tr><td>密码房</td><td>bcrypt 哈希存储，验证后 ack 返回 token</td></tr>
+    <tr><td>媒体隔离</td><td>S3 bucket block all public access，presigned URL 有过期时间</td></tr>
+    <tr><td>执行隔离</td><td>不可信文件/命令只在 per-room E2B sandbox；Fly control plane 不执行用户代码</td></tr>
+    <tr><td>Agent 最小权限</td><td>四种 mode；Plan 使用 OS 强制只读 mount + broker-only Unix socket</td></tr>
+    <tr><td>Scoped capability</td><td>context/model/publish token 分离，并绑定 room/client/turn/mode/provider/budget</td></tr>
+    <tr><td>API 限流</td><td>AI 角色草稿按 IP 限速 10 分钟窗口</td></tr>
+    <tr><td>Socket 注册</td><td>客户端必须先 <code>register</code> 发送 clientId + auth token 才能操作</td></tr>
+    <tr><td>Secret 管理</td><td>Fly secrets / GitHub Actions secrets；只把最小 turn-scoped env 注入 sandbox</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th>Security Area</th><th>Implementation</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Transport encryption</td><td>HTTPS/WSS, PostgreSQL TLS, Redis TLS</td></tr>
+    <tr><td>Authentication</td><td>UUID clientId + token hash, optional Google OAuth</td></tr>
+    <tr><td>Authorization</td><td>Room member roles (owner/admin/member), <code>hasRoomAccess</code> check</td></tr>
+    <tr><td>Password rooms</td><td>bcrypt hashed storage, ack returns token after verification</td></tr>
+    <tr><td>Media isolation</td><td>S3 bucket block all public access, presigned URLs with expiry</td></tr>
+    <tr><td>Execution isolation</td><td>Untrusted files/commands run only in per-room E2B; the Fly control plane never executes user code</td></tr>
+    <tr><td>Agent least privilege</td><td>Four modes; Plan uses OS-enforced read-only mounts plus a broker-only Unix socket</td></tr>
+    <tr><td>Scoped capabilities</td><td>Separate context/model/publish tokens bound to room/client/turn/mode/provider/budget</td></tr>
+    <tr><td>Rate limiting</td><td>AI role drafts rate-limited by IP with 10-minute window</td></tr>
+    <tr><td>Socket registration</td><td>Client must <code>register</code> with clientId + auth token before any operations</td></tr>
+    <tr><td>Secrets management</td><td>Fly/GitHub Actions secrets; only minimal turn-scoped environment reaches the sandbox</td></tr>
+  </tbody>
+</table>
+
+<div class="card" data-lang="zh">
+  <h4>追问：clientId 是 UUID，不是登录系统，怎么防冒充？</h4>
+  <p>clientId 绑定了 auth token（SHA-256 hash 存储）。注册 socket 时必须同时提供 clientId 和 token，token 不匹配就拒绝。可选地可以绑定 Google 账号做强身份认证。纯 UUID 模式下安全等级类似于 session token——只要不泄露就安全。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Follow-up: clientId is a UUID, not a login system — how do you prevent impersonation?</h4>
+  <p>The clientId is bound to an auth token (stored as SHA-256 hash). Socket registration requires both clientId and token — mismatched tokens are rejected. Optionally, users can bind a Google account for strong authentication. In pure UUID mode, the security level is similar to a session token — safe as long as it's not leaked.</p>
+</div>
+
+<!-- ==================== 六、测试 ==================== -->
+<hr>
+<h2 id="testing"><span data-lang="zh">六、测试策略</span><span data-lang="en">6. Testing Strategy</span></h2>
+
+<table data-lang="zh">
+  <thead>
+    <tr><th>层级</th><th>工具</th><th>覆盖内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>服务端 contract</td><td>Node test runner</td><td>store/socket、turn protocol、ordering、lifecycle、daemon registry、model gateway、publish</td></tr>
+    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex mapping、mode、broker/CLI、control、image input、顺序事件</td></tr>
+    <tr><td>客户端 component</td><td>Vitest + RTL</td><td>消息/turn、queue、files/diff/review、terminal、browser、responsive UI</td></tr>
+    <tr><td>E2E (Redis mode)</td><td>Playwright</td><td>room flows, message flows, AI/media/sharing, mobile core, multi-client</td></tr>
+    <tr><td>E2E (Postgres mode)</td><td>Playwright</td><td>persistence-mode regression</td></tr>
+    <tr><td>真实 sandbox smoke</td><td>E2B</td><td>固定 artifact、daemon/backend、permission、context、toolchain、publish</td></tr>
+    <tr><td>i18n 完整性</td><td>check:i18n</td><td>build 时校验所有翻译 key</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th>Layer</th><th>Tool</th><th>Coverage</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Server contracts</td><td>Node test runner</td><td>Store/socket, turn protocol, ordering, lifecycle, daemon registry, model gateway, publishing</td></tr>
+    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex mapping, modes, broker/CLI, controls, image input, ordered events</td></tr>
+    <tr><td>Client components</td><td>Vitest + RTL</td><td>Messages/turns, queue, files/diffs/reviews, terminal, browser, responsive UI</td></tr>
+    <tr><td>E2E (Redis mode)</td><td>Playwright</td><td>room flows, message flows, AI/media/sharing, mobile core, multi-client</td></tr>
+    <tr><td>E2E (Postgres mode)</td><td>Playwright</td><td>persistence-mode regression</td></tr>
+    <tr><td>Real sandbox smoke</td><td>E2B</td><td>Pinned artifact, daemon/backend, permissions, context, toolchain, publishing</td></tr>
+    <tr><td>i18n completeness</td><td>check:i18n</td><td>build-time validation of all translation keys</td></tr>
+  </tbody>
+</table>
+
+<blockquote data-lang="zh">
+测试按失败边界分层：Python 测 runner/daemon 协议，Node 测 control plane 与 E2B adapter，Vitest 测浏览器 workspace 状态，Playwright 测真实用户流程，E2B smoke 最后验证“源码 + pinned template + provider/runtime”组合。这样不会出现本地 mock 全绿、生产 artifact 仍然是旧 runner 的假成功。
+</blockquote>
+<blockquote data-lang="en">
+Tests are layered by failure boundary: Python covers runner/daemon protocols, Node covers the control plane and E2B adapters, Vitest covers browser-workspace state, Playwright covers real user flows, and E2B smoke validates the final source + pinned template + provider/runtime combination. This prevents a false green where local mocks pass while production still runs an old runner artifact.
+</blockquote>
+
+<!-- ==================== 七、STAR ==================== -->
+<hr>
+<h2 id="star"><span data-lang="zh">七、你做了什么（STAR 法）</span><span data-lang="en">7. What You Did (STAR Method)</span></h2>
+
+<p data-lang="zh">面试官会问"你在这个项目里具体做了什么"。准备 2-3 个 STAR 故事：</p>
+<p data-lang="en">Interviewers will ask "what specifically did you do on this project?" Prepare 2-3 STAR stories:</p>
+
+<div class="card" data-lang="zh">
+  <h4>故事 1：从聊天功能演进为共享 Code Agent Runtime</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">RoomTalk 已支持 AI chat，但模型不能安全地读写项目、运行命令，也没有多人可检查的 workspace 或可靠的长任务生命周期。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不把不可信执行放进 Fly 服务、也不重写 Coco/Codex 工具循环的前提下，构建生产可用的共享 cloud code-agent room。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计 RoomTalk control plane + E2B execution plane；实现版本化 JSONL daemon 和三种 backend adapter、四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt；在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
+    <div class="star-label r">Result</div><div class="star-val">同一房间可以持续完成代码任务并在刷新后保留可审计 transcript；sandbox 可 pause/autoResume，artifact URL 独立于 sandbox 存活；Node/Vitest/Playwright/E2B smoke 覆盖关键边界。</div>
+  </div>
+</div>
+<div class="card" data-lang="en">
+  <h4>Story 1: Evolving Chat into a Shared Code-Agent Runtime</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">RoomTalk supported AI chat, but models could not safely edit projects or run commands, and users had no shared inspectable workspace or reliable long-task lifecycle.</div>
+    <div class="star-label t">Task</div><div class="star-val">Build a production-ready shared cloud code-agent room without executing untrusted work on Fly or reimplementing Coco/Codex tool loops.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed a RoomTalk control plane and E2B execution plane; implemented a versioned JSONL daemon with three backend adapters, four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
+    <div class="star-label r">Result</div><div class="star-val">A room can carry out sustained coding tasks with an auditable transcript that survives refresh. Sandboxes pause/auto-resume, artifact URLs outlive sandboxes, and Node/Vitest/Playwright/E2B smoke tests cover the critical boundaries.</div>
+  </div>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>故事 2：PostgreSQL 持久化迁移</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">项目最初用 Redis 做全量持久化，数据增长后内存成本上升，且缺少关系约束。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不停服的情况下迁移到 PostgreSQL。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计了 Store 接口抽象层，实现 Redis 和 PostgreSQL 双实现，写了幂等迁移脚本和安全 smoke 测试，通过环境变量切换实现零停机迁移。</div>
+    <div class="star-label r">Result</div><div class="star-val">Redis 和 PostgreSQL 通过同一 store contract、migration smoke 和 Playwright 流程验证；生产可以按配置切换并保留明确回滚路径，Redis 只承担实时状态和缓存职责。</div>
+  </div>
+</div>
+<div class="card" data-lang="en">
+  <h4>Story 2: PostgreSQL Persistence Migration</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">The project originally used Redis for all persistence. As data grew, memory costs increased and we lacked relational constraints.</div>
+    <div class="star-label t">Task</div><div class="star-val">Migrate to PostgreSQL with zero downtime.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed a Store interface abstraction layer, implemented both Redis and PostgreSQL backends, wrote an idempotent migration script and safety smoke tests, and used environment variable switching for zero-downtime migration.</div>
+    <div class="star-label r">Result</div><div class="star-val">Redis and PostgreSQL now pass the same store contracts, migration smoke, and Playwright flows. Production can switch by configuration with an explicit rollback path, while Redis is limited to realtime state and caching.</div>
+  </div>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>故事 3：移动端 WebSocket 可靠性</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">用户反馈手机切后台回来后消息丢失、需要刷新。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不改变 Socket.IO 架构的前提下，解决移动浏览器的连接恢复问题。</div>
+    <div class="star-label a">Action</div><div class="star-val">基于 Page Visibility API 实现多层恢复机制：幂等 rejoin、in-flight 去重、延迟指示器、密码房自动复用。每个机制都有对应的 E2E 测试覆盖。</div>
+    <div class="star-label r">Result</div><div class="star-val">恢复流程对用户透明，并用移动端 Playwright 覆盖 background/foreground、重连、成员计数和房间恢复回归。</div>
+  </div>
+</div>
+<div class="card" data-lang="en">
+  <h4>Story 3: Mobile WebSocket Reliability</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">Users reported lost messages and needing to manually refresh after backgrounding their phone.</div>
+    <div class="star-label t">Task</div><div class="star-val">Fix mobile browser connection recovery without changing the Socket.IO architecture.</div>
+    <div class="star-label a">Action</div><div class="star-val">Built a multi-layer recovery mechanism on the Page Visibility API: idempotent rejoin, in-flight dedup, delayed spinner, automatic password room reuse. Each mechanism has corresponding E2E test coverage.</div>
+    <div class="star-label r">Result</div><div class="star-val">Recovery became transparent to the user, with mobile Playwright coverage for background/foreground, reconnect, member counts, and active-room restoration.</div>
+  </div>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>故事 4：AI 多 Provider 集成</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">最初只接了 OpenRouter 做中转，但部分模型需要直连官方 API 才能使用 prompt caching 等特性。</div>
+    <div class="star-label t">Task</div><div class="star-val">支持 DeepSeek、Anthropic、OpenAI 直连 + OpenRouter 路由，同时保持用户侧的简单体验。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计 model registry + client factory 模式，流式处理层 provider-agnostic，支持运行时动态切换模型和 provider。前端展示 usage/cost 元数据，高价模型需要二次确认。</div>
+    <div class="star-label r">Result</div><div class="star-val">普通 chat 和 Code Agent 可以复用统一 model registry、usage normalization 和 cost reporting；新增模型主要是 registry/config 工作，而不是复制一套 streaming UI。</div>
+  </div>
+</div>
+<div class="card" data-lang="en">
+  <h4>Story 4: AI Multi-Provider Integration</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">Initially only used OpenRouter as a relay, but some models required direct API access for features like prompt caching.</div>
+    <div class="star-label t">Task</div><div class="star-val">Support direct connections to DeepSeek, Anthropic, and OpenAI alongside OpenRouter routing, while keeping the user experience simple.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed a model registry + client factory pattern with a provider-agnostic streaming layer. Supported runtime model/provider switching. Frontend displays usage/cost metadata with confirmation for expensive models.</div>
+    <div class="star-label r">Result</div><div class="star-val">Regular chat and code-agent paths reuse one model registry, usage normalization, and cost-reporting model. Adding a model is primarily registry/config work rather than duplicating the streaming UI.</div>
+  </div>
+</div>
+
+<!-- ==================== 八、追问 ==================== -->
+<hr>
+<h2 id="qa"><span data-lang="zh">八、常见追问与参考回答</span><span data-lang="en">8. Common Follow-Up Questions</span></h2>
+
+<p data-lang="zh">点击展开查看参考回答：</p>
+<p data-lang="en">Click to expand for sample answers:</p>
+
+<details data-lang="zh">
+  <summary>为什么用 E2B，而不是在 Fly 容器里直接跑 Docker 或 Shell？</summary>
+  <div class="answer">Fly 进程拥有数据库、Redis、对象存储和用户 session 等生产权限，不应该同时执行模型生成的不可信命令。E2B 提供独立生命周期、文件系统、进程和网络边界。RoomTalk 只通过窄协议控制 sandbox，即使 Agent 命令失控，也不会直接进入 control plane。</div>
+</details>
+<details data-lang="en">
+  <summary>Why E2B instead of running Docker or shell directly in the Fly container?</summary>
+  <div class="answer">The Fly process owns production database, Redis, object-storage, and user-session privileges, so it must not also execute model-generated commands. E2B provides an independent filesystem, process, network, and lifecycle boundary. RoomTalk controls it through a narrow protocol, keeping failures out of the control plane.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>为什么需要 sandbox daemon，而不是每轮启动一次 runner？</summary>
+  <div class="answer">每轮进程适合 MVP，但会重复加载 Python/Agent runtime，也很难拥有 terminal、后台服务和 backend thread 等跨 turn 状态。一个 sandbox 一个 daemon 可以复用执行环境，同时仍由 RoomTalk 保证同房间只跑一个 mutating turn。代价是必须处理 stale process、health check、shutdown ownership 和丢失 release signal。</div>
+</details>
+<details data-lang="en">
+  <summary>Why use a sandbox daemon instead of starting one runner per turn?</summary>
+  <div class="answer">Per-turn processes are useful for an MVP, but repeatedly load the runtime and cannot naturally own terminals, background services, or backend thread state across turns. One daemon per sandbox reuses the environment while RoomTalk still serializes mutating turns. The tradeoff is explicit stale-process cleanup, health checks, shutdown ownership, and lost-release handling.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>多个成员同时给 Agent 发消息，怎么避免同时修改 workspace？</summary>
+  <div class="answer">房间有一个 active-turn guard，真正执行的 mutating turn 串行化。后续 prompt 持久化为 queue，可以编辑、取消或提升为 steer。这样聊天仍是多人实时的，但共享文件系统不会被两个 Agent turn 并发修改。每个 turn 还持久化实际 mode/backend，retry 不会回退到默认权限。</div>
+</details>
+<details data-lang="en">
+  <summary>How do you prevent multiple room members from modifying the workspace concurrently?</summary>
+  <div class="answer">A room-level active-turn guard serializes mutating agent work. Later prompts become durable queue entries that can be edited, canceled, or promoted into steering input. Chat remains realtime and multi-user, while the shared filesystem never has two agent turns writing concurrently. Each turn persists its resolved mode/backend so retry cannot fall back to default permissions.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>Agent 如何看到历史，又不会拿到整个数据库或长期 token？</summary>
+  <div class="answer">Runner 为本轮创建 Unix socket broker，只把 <code>roomtalk</code> CLI 暴露给 Agent。CLI 的 history/search/delta/message 请求由 broker 带 scoped token 转发；服务端重新校验 room/client/turn，并只返回安全 projection。Model spend 与 static publish 使用另外两种 token，不能互相替代。</div>
+</details>
+<details data-lang="en">
+  <summary>How can the agent read history without receiving database access or a long-lived token?</summary>
+  <div class="answer">The runner creates a per-turn Unix-socket broker and exposes only the <code>roomtalk</code> CLI. The broker forwards history/search/delta/message requests with a scoped token; the server revalidates room/client/turn and returns a safe projection. Model spending and static publishing use separate non-interchangeable tokens.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>Sandbox 暂停或升级后，文件和网页会怎样？</summary>
+  <div class="answer">默认 idle 五分钟后 E2B pause，并启用 keep-memory + autoResume，所以同一个 sandbox 恢复时文件和进程内存可以继续。固定 artifact 版本变化时，RoomTalk 会 bounded export/import workspace archive 后原子替换 sandbox。公开静态站点单独存入 Tigris manifest/version，不依赖 sandbox 存活。</div>
+</details>
+<details data-lang="en">
+  <summary>What happens to files and published pages when a sandbox pauses or upgrades?</summary>
+  <div class="answer">The default E2B policy pauses after five idle minutes with keep-memory and autoResume, so the same sandbox can continue. When the pinned artifact changes, RoomTalk performs a bounded workspace archive export/import and atomically swaps sandboxes. Public static sites live in separate Tigris manifests/versions and do not depend on sandbox lifetime.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>为什么用 Socket.IO 而不是原生 WebSocket？</summary>
+  <div class="answer">Socket.IO 提供了开箱即用的自动重连、房间/命名空间、ack 回调、Redis adapter 多实例广播。原生 WebSocket 这些都要自己实现。对于聊天场景，Socket.IO 省了大量样板代码。</div>
+</details>
+<details data-lang="en">
+  <summary>Why Socket.IO instead of raw WebSocket?</summary>
+  <div class="answer">Socket.IO provides auto-reconnection, rooms/namespaces, ack callbacks, and Redis adapter for multi-instance broadcast out of the box. With raw WebSocket, you'd implement all of these yourself. For a chat scenario, Socket.IO saves enormous amounts of boilerplate.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>为什么不用微服务架构？</summary>
+  <div class="answer">当前规模不需要。单体的开发、部署、调试效率远高于微服务。如果将来 AI 处理成为瓶颈，可以把 AI worker 拆出来用队列解耦，但现在拆了是过度设计。</div>
+</details>
+<details data-lang="en">
+  <summary>Why not a microservices architecture?</summary>
+  <div class="answer">The current scale doesn't justify it. A monolith is far more efficient for development, deployment, and debugging. If AI processing becomes a bottleneck in the future, we can extract an AI worker and decouple with queues — but splitting now would be over-engineering.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>Redis 挂了怎么办？</summary>
+  <div class="answer">实时状态（在线成员、session）丢失，用户需要重连，服务端重建。持久数据在 PostgreSQL，不受影响。消息缓存丢失只是多查一次 PostgreSQL，有性能影响但不丢数据。</div>
+</details>
+<details data-lang="en">
+  <summary>What happens if Redis goes down?</summary>
+  <div class="answer">Realtime state (online members, sessions) is lost — users need to reconnect, and the server rebuilds it. Persistent data lives in PostgreSQL and is unaffected. Message cache loss just means an extra PostgreSQL query — performance impact but no data loss.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>数据库死锁怎么处理？</summary>
+  <div class="answer">当前消息写入是 append-only（INSERT），不存在行锁竞争。房间设置更新用 <code>room_version</code> 行级版本号 + <code>UPDATE ... RETURNING</code> 原子操作，失败重试。PostgreSQL 的 MVCC 天然避免了读写阻塞。</div>
+</details>
+<details data-lang="en">
+  <summary>How do you handle database deadlocks?</summary>
+  <div class="answer">Message writes are append-only (INSERT), so there's no row-lock contention. Room settings use <code>room_version</code> row-level versioning + <code>UPDATE ... RETURNING</code> atomic operations with retry on failure. PostgreSQL's MVCC naturally avoids read-write blocking.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>如何保证消息顺序？</summary>
+  <div class="answer">每条消息有 server-side timestamp 和 position（单调递增）。客户端按 position 排序显示。不依赖客户端时间戳，因为多设备间的时钟可能不同步。</div>
+</details>
+<details data-lang="en">
+  <summary>How do you guarantee message ordering?</summary>
+  <div class="answer">Every message has a server-side timestamp and a monotonically increasing position. The client sorts by position. We don't rely on client timestamps because clocks across devices can be out of sync.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>如果让你重新设计，会改什么？</summary>
+  <div class="answer">三件事：1) 增加 RoomTalk-owned immutable workspace revision 层，把 rollback 从当前 sandbox Git 状态提升为可持久恢复的 product contract；目前 archive migration 保证连续性，但不是通用 revision history。2) 如果 E2B 提供稳定 command reconnect handle，就把可重连 daemon metadata 持久化，减少 Fly restart 后的 cleanup/restart。3) 继续拆分 MessagePage 与 workspace orchestrator，把跨 panel session state 收敛到更明确的 store，而不是增加更多 props。</div>
+</details>
+<details data-lang="en">
+  <summary>If you were to redesign, what would you change?</summary>
+  <div class="answer">Three things: 1) Add a RoomTalk-owned immutable workspace revision layer so rollback becomes a durable product contract rather than current-sandbox Git state; archive migration preserves continuity but is not general revision history. 2) Persist reconnectable daemon metadata if E2B exposes stable command handles, reducing cleanup/restart after Fly restarts. 3) Keep decomposing MessagePage and the workspace orchestrator so cross-panel session state converges on explicit stores instead of deeper prop chains.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>怎么处理大量消息的性能？</summary>
+  <div class="answer">三个层面：1) 存储层：消息分页加载（<code>readMessagePageByRoom</code>，默认 80 条一页），不一次性加载全部历史。2) 渲染层：React 列表虚拟化可以进一步优化（当前未做，是已知改进点）。3) 缓存层：Redis <code>RoomMessageCacheStore</code> 缓存最近消息，cache hit 避免查 PostgreSQL。</div>
+</details>
+<details data-lang="en">
+  <summary>How do you handle performance with a large volume of messages?</summary>
+  <div class="answer">Three levels: 1) Storage: paginated message loading (<code>readMessagePageByRoom</code>, 80 messages per page by default) — never loads full history at once. 2) Rendering: React list virtualization could be added (not yet implemented — known improvement). 3) Caching: Redis <code>RoomMessageCacheStore</code> caches recent messages, cache hits avoid PostgreSQL queries.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>项目里遇到最难的 bug 是什么？</summary>
+  <div class="answer">移动端切后台回来后成员数翻倍。原因是 visibility change 触发重连，重连后 re-join 房间，但旧的 socket 还没断开，服务端认为是两个不同的连接。修复方法是在 <code>updateRoomMemberCount</code> 里按 clientId 去重，同一个 clientId 的多个 socket 只算一个成员。</div>
+</details>
+<details data-lang="en">
+  <summary>What was the hardest bug you encountered?</summary>
+  <div class="answer">Member count doubling after backgrounding on mobile. The cause: visibility change triggered a reconnect, which re-joined the room, but the old socket hadn't disconnected yet — the server counted two separate connections. The fix was deduplicating by clientId in <code>updateRoomMemberCount</code> — multiple sockets from the same clientId count as one member.</div>
+</details>
+
+<!-- ==================== 九、技术选型对比 ==================== -->
+<hr>
+<h2 id="compare"><span data-lang="zh">九、技术选型对比</span><span data-lang="en">9. Technology Comparisons</span></h2>
+
+<h3 data-lang="zh">实时通信方案对比</h3>
+<h3 data-lang="en">Real-Time Communication Options</h3>
+<table data-lang="zh">
+  <thead>
+    <tr><th>方案</th><th>延迟</th><th>双向</th><th>断线重连</th><th>多实例</th><th>适合场景</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>HTTP Polling</td><td>高 (秒级)</td><td>否</td><td>N/A</td><td>天然</td><td>仪表盘刷新</td></tr>
+    <tr><td>SSE</td><td>低</td><td>单向</td><td>自动</td><td>需要消息总线</td><td>通知推送</td></tr>
+    <tr><td>WebSocket</td><td>极低</td><td>双向</td><td>需实现</td><td>需要 adapter</td><td>聊天、游戏</td></tr>
+    <tr><td><strong>Socket.IO</strong></td><td>极低</td><td>双向</td><td>内置</td><td>Redis adapter</td><td>聊天 ✅</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th>Approach</th><th>Latency</th><th>Bidirectional</th><th>Reconnection</th><th>Multi-Instance</th><th>Best For</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>HTTP Polling</td><td>High (seconds)</td><td>No</td><td>N/A</td><td>Native</td><td>Dashboards</td></tr>
+    <tr><td>SSE</td><td>Low</td><td>One-way</td><td>Auto</td><td>Needs message bus</td><td>Notifications</td></tr>
+    <tr><td>WebSocket</td><td>Very low</td><td>Yes</td><td>Manual</td><td>Needs adapter</td><td>Chat, gaming</td></tr>
+    <tr><td><strong>Socket.IO</strong></td><td>Very low</td><td>Yes</td><td>Built-in</td><td>Redis adapter</td><td>Chat ✅</td></tr>
+  </tbody>
+</table>
+
+<h3 data-lang="zh">数据库选型</h3>
+<h3 data-lang="en">Database Selection</h3>
+<table data-lang="zh">
+  <thead>
+    <tr><th></th><th>Redis</th><th>PostgreSQL</th><th>MongoDB</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>数据模型</strong></td><td>KV / Hash / List</td><td>关系型</td><td>文档型</td></tr>
+    <tr><td><strong>一致性</strong></td><td>最终一致</td><td>强一致 (ACID)</td><td>可调一致性</td></tr>
+    <tr><td><strong>查询能力</strong></td><td>基础</td><td>SQL 完整</td><td>灵活查询</td></tr>
+    <tr><td><strong>适合</strong></td><td>缓存、session、实时状态</td><td>持久化、关系数据</td><td>非结构化数据</td></tr>
+    <tr><td><strong>我们的用法</strong></td><td>实时层 ✅</td><td>持久层 ✅</td><td>未使用</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th></th><th>Redis</th><th>PostgreSQL</th><th>MongoDB</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Data Model</strong></td><td>KV / Hash / List</td><td>Relational</td><td>Document</td></tr>
+    <tr><td><strong>Consistency</strong></td><td>Eventual</td><td>Strong (ACID)</td><td>Tunable</td></tr>
+    <tr><td><strong>Query Power</strong></td><td>Basic</td><td>Full SQL</td><td>Flexible queries</td></tr>
+    <tr><td><strong>Best For</strong></td><td>Cache, sessions, realtime</td><td>Persistence, relational data</td><td>Unstructured data</td></tr>
+    <tr><td><strong>Our Usage</strong></td><td>Realtime layer ✅</td><td>Durable layer ✅</td><td>Not used</td></tr>
+  </tbody>
+</table>
+
+<h3 data-lang="zh">部署方案对比</h3>
+<h3 data-lang="en">Deployment Options</h3>
+<table data-lang="zh">
+  <thead>
+    <tr><th></th><th>Fly.io</th><th>AWS ECS Fargate</th><th>AWS EKS</th><th>Vercel</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>运维复杂度</strong></td><td>低</td><td>中</td><td>高</td><td>极低</td></tr>
+    <tr><td><strong>WebSocket</strong></td><td>原生</td><td>ALB sticky</td><td>Ingress 配置</td><td>不支持长连接</td></tr>
+    <tr><td><strong>成本 (低流量)</strong></td><td>~$5-30/月</td><td>~$50-60/月</td><td>~$80+/月</td><td>不适用</td></tr>
+    <tr><td><strong>扩展上限</strong></td><td>中</td><td>高</td><td>极高</td><td>N/A</td></tr>
+    <tr><td><strong>适合阶段</strong></td><td>MVP ✅</td><td>生产化</td><td>大规模微服务</td><td>纯前端</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead>
+    <tr><th></th><th>Fly.io</th><th>AWS ECS Fargate</th><th>AWS EKS</th><th>Vercel</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Ops Complexity</strong></td><td>Low</td><td>Medium</td><td>High</td><td>Very low</td></tr>
+    <tr><td><strong>WebSocket</strong></td><td>Native</td><td>ALB sticky</td><td>Ingress config</td><td>No long connections</td></tr>
+    <tr><td><strong>Cost (low traffic)</strong></td><td>~$5-30/mo</td><td>~$50-60/mo</td><td>~$80+/mo</td><td>N/A</td></tr>
+    <tr><td><strong>Scale Ceiling</strong></td><td>Medium</td><td>High</td><td>Very high</td><td>N/A</td></tr>
+    <tr><td><strong>Best Stage</strong></td><td>MVP ✅</td><td>Production</td><td>Large-scale microservices</td><td>Frontend only</td></tr>
+  </tbody>
+</table>
+
+<!-- ==================== 十、数字 ==================== -->
+<hr>
+<h2 id="numbers"><span data-lang="zh">十、项目数据与指标</span><span data-lang="en">10. Project Metrics</span></h2>
+
+<p data-lang="zh">面试里有具体数字会更有说服力：</p>
+<p data-lang="en">Concrete numbers are more convincing in interviews:</p>
+
+<div class="stats">
+  <div class="stat"><div class="num">3</div><div class="label" data-lang="zh">Agent Backend</div><div class="label" data-lang="en">Agent Backends</div></div>
+  <div class="stat"><div class="num">4</div><div class="label" data-lang="zh">权限模式</div><div class="label" data-lang="en">Permission Modes</div></div>
+  <div class="stat"><div class="num">5</div><div class="label" data-lang="zh">支持语言</div><div class="label" data-lang="en">Supported Languages</div></div>
+  <div class="stat"><div class="num">170+</div><div class="label" data-lang="zh">Test / Spec 文件</div><div class="label" data-lang="en">Test / Spec Files</div></div>
+</div>
+<div class="stats">
+  <div class="stat"><div class="num">2</div><div class="label" data-lang="zh">持久化模式</div><div class="label" data-lang="en">Persistence Modes</div></div>
+  <div class="stat"><div class="num">5 min</div><div class="label" data-lang="zh">默认 Idle Pause</div><div class="label" data-lang="en">Default Idle Pause</div></div>
+  <div class="stat"><div class="num">100 MB</div><div class="label" data-lang="zh">单版本 Artifact 上限</div><div class="label" data-lang="en">Artifact Version Cap</div></div>
+  <div class="stat"><div class="num">1</div><div class="label" data-lang="zh">每房间共享 Sandbox</div><div class="label" data-lang="en">Shared Sandbox per Room</div></div>
+</div>
+
+<!-- ==================== 十一、加分项 ==================== -->
+<hr>
+<h2 id="bonus"><span data-lang="zh">十一、加分项 — 展示工程素养</span><span data-lang="en">11. Bonus Points — Demonstrating Engineering Maturity</span></h2>
+
+<p data-lang="zh">面试不只看技术实现，也看工程习惯。可以主动提这些：</p>
+<p data-lang="en">Interviews evaluate engineering habits, not just technical implementation. Proactively mention these:</p>
+
+<div class="card" data-lang="zh">
+  <h4>1. 渐进式迁移</h4>
+  <p>Redis → PostgreSQL 不是一刀切，而是接口抽象 + 环境变量切换 + 回滚方案。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>1. Incremental Migration</h4>
+  <p>Redis → PostgreSQL wasn't a big-bang migration — it used interface abstraction + environment variable switching + rollback plan.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>2. 防误操作</h4>
+  <p>persistence smoke test 只允许连名字含 <code>test</code> 或 <code>e2e</code> 的数据库，不可能误连生产。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>2. Safety Guards</h4>
+  <p>The persistence smoke test only allows connecting to databases with <code>test</code> or <code>e2e</code> in the name — impossible to accidentally hit production.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>3. 文档即代码</h4>
+  <p><code>.env.example</code> 是配置的 single source of truth，README 引用它而不是重复列表。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>3. Docs as Code</h4>
+  <p><code>.env.example</code> is the single source of truth for configuration — README references it rather than duplicating the list.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>4. CI 守门</h4>
+  <p>部署前校验必需的 Fly secrets，缺了就阻断，不是靠运行时 crash 发现。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>4. CI Guardrails</h4>
+  <p>Required Fly secrets are validated before deployment — missing secrets block the deploy, not discovered at runtime via crash.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>5. 幂等设计</h4>
+  <p>迁移脚本可以反复跑，room upsert + message 按 ID 去重。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>5. Idempotent Design</h4>
+  <p>Migration scripts can be run repeatedly — room upsert + message dedup by ID.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>6. 双层 Release Contract</h4>
+  <p>Fly app 与 E2B artifact 独立部署。Runner/tool/prompt 变更必须 bump lock + Dockerfile version、构建 template、跑真实 E2B smoke，再让生产 pin 对齐；只 push Node 源码不算完成。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>6. Two-Layer Release Contract</h4>
+  <p>The Fly app and E2B artifact deploy independently. Runner/tool/prompt changes require a lock + Dockerfile version bump, template build, real E2B smoke, and matching production pins; pushing Node source alone is not complete.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>7. 明确承认边界</h4>
+  <p>当前 Git + archive migration 保证 live workspace 连续性，但还不是 immutable revision/rollback 产品层。面试时清楚区分“已实现”“恢复机制”和“下一步架构”，比把所有能力都说成完成更可信。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>7. Explicit Boundaries</h4>
+  <p>Git plus archive migration preserves live workspace continuity, but it is not yet an immutable revision/rollback product layer. Clearly separating shipped behavior, recovery mechanisms, and next architecture steps is more credible than claiming everything is complete.</p>
+</div>
+
+</main>
+</div>
+<script>
+function setLang(lang) {
+  document.body.classList.toggle('lang-en', lang === 'en');
+  document.getElementById('btn-zh').classList.toggle('active', lang === 'zh');
+  document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+  document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+  try { localStorage.setItem('interview-prep-lang', lang); } catch {}
+}
+try {
+  var saved = localStorage.getItem('interview-prep-lang');
+  if (saved === 'en') setLang('en');
+} catch {}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-typescript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+</body>
+</html>

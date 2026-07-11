@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-RoomTalk — a real-time chat application with AI assistants, media sharing, stickers, and room management. Two packages in one repo: a React client (`client-heroui/`) and a Node.js server (`server/`).
+RoomTalk — a real-time AI collaboration platform with shared chat rooms and sandboxed code-agent workspaces. The repo contains a React client (`client-heroui/`), a Node.js control plane (`server/src/`), and a Python JSONL runner/daemon (`server/roomtalk_code_agent_runner/`) packaged into pinned E2B artifacts.
 
 ## Development Commands
 
@@ -56,6 +56,7 @@ Socket handlers are split by domain in `server/src/socket/`:
 - `roomHandlers.ts` — create/join/leave rooms, member management, room settings
 - `messageHandlers.ts` — send/edit/delete messages, message history, reactions
 - `aiHandlers.ts` — AI streaming (`ask_ai`), model selection, role drafts
+- `codeAgentWorkspaceHandlers.ts` — authenticated sandbox snapshots, files/diffs, PTY terminal, preview sessions, and workspace mutations
 - `transcriptionHandlers.ts` — audio transcription via AssemblyAI
 
 All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` context.
@@ -91,11 +92,25 @@ Upload: client requests presigned URL → uploads to S3/Tigris or local media st
 
 Client sends `ask_ai` socket event with role/model/context. Server selects the configured provider client (DeepSeek, Anthropic, OpenAI, or OpenRouter), streams chunks as `ai_chunk`, and ends with `ai_stream_end`. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
 
+### Code-Agent Runtime
+
+Code-agent rooms are a separate request path from ordinary chat. RoomTalk is the control plane; untrusted files, commands, terminals, and agent backends run in one room-scoped E2B sandbox.
+
+- `codeAgentSessionService.ts` validates room access/mode/backend, persists durable turns, issues scoped credentials, streams ordered runner events, handles queue/steer/interrupt/approval controls, and saves backend session IDs.
+- `codeAgentSandboxLifecycle.ts` creates or reconnects sandboxes, applies active/idle TTLs, recovers stale states, and migrates workspaces across pinned artifact upgrades.
+- `codeAgentDaemonRegistry.ts` serializes one reusable JSONL daemon per sandbox and reclaims daemons on shutdown.
+- `codeAgentRoomContext.ts` + `codeAgentRoomContextRoutes.ts` expose bounded room history/search/message/site reads through a turn-scoped sandbox broker and `roomtalk` CLI.
+- `codeAgentModelGateway.ts` proxies only the selected provider/model with turn-scoped tokens, budgets, and usage accounting; provider keys never reach the browser.
+- `publishedStaticSite.ts` stores room-owned versioned static artifacts in local/S3-compatible object storage and serves stable `/p/:slug/` URLs.
+- `e2bCodeAgentSandboxService.ts` owns workspace files, Git changes/diffs/refs, PTY sessions, preview targets, archive migration, and sandbox SDK operations.
+
+The browser workspace includes files/search/editing, asset previews, Git diff/review comments, a streamed PTY terminal, dev-server/browser previews, and published artifacts. The current architecture and ownership boundaries are documented in `docs/code-agent-runtime-architecture.md`.
+
 ## Deployment
 
 `master` is the release branch. CI/CD (`.github/workflows/fly-deploy.yml`) runs on its schedule or through manual dispatch; it builds server + client, checks translations, verifies Fly secrets, and deploys to Fly.io. A push alone does not immediately trigger this workflow. When an immediate production rollout is required, dispatch the workflow after pushing and verify both the workflow result and Fly health. Never run `fly deploy` manually.
 
-Production: Fly.io app `message-system` in `dfw` region, Node 22 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible).
+Production: Fly.io app `message-system` in `dfw` region, Node 24.18.0 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible), and per-room execution sandboxes on E2B.
 
 ### Code Agent / E2B Artifact Rule
 

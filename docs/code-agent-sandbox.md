@@ -1,5 +1,7 @@
 # Code Agent Sandbox 方案
 
+> 历史设计记录：当前生产实现已经扩展为 room-scoped E2B workspace、可复用 JSONL daemon、Coco/Codex backend、四种权限模式、room-context/model/publish broker、浏览器 files/diff/review/terminal/preview surface、持久 artifact，以及 pause/auto-resume 生命周期。当前架构请以 [code-agent-runtime-architecture.md](code-agent-runtime-architecture.md) 为准。
+>
 > 状态：分阶段实施中
 > 日期：2026-05-16，合并到最新 master 时更新于 2026-06-25
 > 范围：RoomTalk 中新增 Code Agent 代码助手房间

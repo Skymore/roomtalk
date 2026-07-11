@@ -1,223 +1,201 @@
 # RoomTalk
 
-[中文版](./README.zh.md)
+[Live app](https://room.ruit.me/) · [中文说明](./README.zh.md)
 
-RoomTalk is a real-time room chat system with AI assistants, private media, stickers, room management, saved rooms, mobile recovery, and optional PostgreSQL durable storage. The repository contains a React/Vite client and a Node/Express/Socket.IO server.
+RoomTalk is a real-time AI collaboration platform built around shared rooms and persistent, sandboxed code-agent workspaces. Humans and multiple agent backends can work in the same room while RoomTalk owns identity, permissions, durable transcripts, workspace access, artifacts, and recovery.
 
-## Current Capabilities
+The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plane, and a Python JSONL runner packaged into pinned E2B sandbox artifacts.
 
-- Room creation, joining by ID/link, saved rooms, room rename/delete, member roles, admin controls, ownership transfer, password rooms, and posting schedules.
-- Text, AI, media, sticker, reply, edit, delete, and clear-history message flows.
-- AI streaming with provider-aware clients for DeepSeek, Anthropic, OpenAI, and OpenRouter-routed models.
-- AI role presets, model selection, premium model confirmation, usage/cost metadata, retry/edit-and-ask flows, and A2UI streaming surfaces.
-- Private media upload/download via S3-compatible storage, local media fallback in development, media history, image/video/audio handling, and mobile media-viewer gestures.
-- Voice transcription via AssemblyAI when configured.
-- Google sign-in linking, client password protection, token-based socket registration, and optional web-push notifications.
-- i18n for English, Chinese, Hindi, Japanese, and Korean.
-- Mobile-focused reliability: active-room restore, reconnect handling, member-count recovery, keyboard viewport fixes, and mobile E2E coverage.
+## Highlights
 
-## Repository Layout
+### Shared AI collaboration
 
-```text
-client-heroui/     React + TypeScript + Vite frontend
-server/            Express + Socket.IO TypeScript backend
-docs/              Runbooks, design records, migration notes, reliability writeups
-Dockerfile         Production image build used by Fly.io
-fly.toml           Fly.io app configuration
-start.sh           Local convenience launcher: server on 3012, client on 3011
-CLAUDE.md          Agent/developer guide; AGENTS.md symlinks to it
-```
+- Realtime rooms with invitations, passwords, member roles, admin controls, ownership transfer, posting schedules, saved rooms, and multi-client presence.
+- Provider-neutral AI streaming across Anthropic, OpenAI, DeepSeek, and OpenRouter-compatible models, with role/context controls, usage and cost accounting, recovery of interrupted streams, and A2UI surfaces.
+- Text, private media, stickers, replies, edits, reactions, transcription, web push, Google sign-in, and English/Chinese/Hindi/Japanese/Korean UI.
+- Mobile recovery for reconnects, BFCache restores, keyboard viewport changes, room-version ordering, and read-your-write room updates.
+
+### Sandboxed code-agent rooms
+
+- One shared E2B workspace per code-agent room, with Coco, Codex CLI, and Codex app-server backends behind one RoomTalk turn protocol.
+- A reusable sandbox-local JSONL daemon that executes sequential turns, streams text/tool/model-step events, accepts interrupt and steer controls, and is reclaimed during sandbox or server shutdown.
+- Four permission modes: Plan, Edit, Approve for me, and Full access. Plan uses an OS-enforced read-only shell; writable modes can modify the workspace and run background jobs.
+- Turn-scoped model-gateway, room-context, and static-publish credentials. Provider keys and RoomTalk service secrets stay outside the browser and agent prompt.
+- Room-aware agents can query bounded history, deltas, individual messages, search results, and published sites through the sandbox-local `roomtalk` CLI.
+- Durable, correctly ordered AI/tool transcripts grouped by turn, including image inputs, model-step usage, queued prompts, live steering, interruption, retry, and approval events.
+
+### Browser workspace
+
+- File tree/search, source editing, image/Markdown/media previews, workspace asset access, and saved panel state.
+- Git-aware changed-file trees, branch/base-ref selection, unified and split diffs, viewed state, and line-scoped review comments that can be attached to the next agent turn.
+- Interactive PTY terminal over authenticated Socket.IO sessions, with resize handling, buffered input, local echo, and bounded output snapshots.
+- Embedded browser previews for workspace files and detected dev servers, responsive viewport controls, screenshots, recordings, and preview-server status.
+- Durable static-site publishing to RoomTalk object storage. Published artifacts remain available after an E2B sandbox pauses or is replaced and appear in the workspace Artifacts view.
+- Idle/active sandbox TTLs, reconnect and stale-state recovery, per-user/global limits, Git baseline initialization, and archive-based workspace migration across pinned artifact upgrades.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Client["React client"] <--> Socket["Socket.IO server"]
-  Client --> HTTP["Express API"]
-  Socket --> Store["CompositeRoomStore"]
-  HTTP --> Store
-  Store --> Durable["Redis or PostgreSQL durable store"]
-  Store --> Redis["Redis realtime state + Socket.IO adapter + cache"]
-  Socket --> AI["AI providers"]
-  HTTP --> Media["S3/Tigris or local media storage"]
+  Browser["React client"] <-->|"Socket.IO + HTTP"| Control["RoomTalk control plane\nNode 24 + Express"]
+
+  Control --> Store["CompositeRoomStore"]
+  Store --> Durable["PostgreSQL or Redis\ndurable state"]
+  Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
+
+  Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
+  Control --> Media["S3/Tigris\nprivate media + published artifacts"]
+
+  Control --> Lifecycle["Sandbox lifecycle + access control"]
+  Lifecycle --> E2B["Per-room E2B sandbox"]
+  E2B --> Daemon["RoomTalk JSONL daemon"]
+  Daemon --> Backends["Coco | Codex CLI | Codex app-server"]
+  Daemon --> Workspace["/workspace\nfiles, Git, PTY, previews, processes"]
+
+  Backends --> Broker["Turn-scoped RoomTalk broker\ncontext, model gateway, site publishing"]
+  Broker --> Control
 ```
 
-The server uses a `CompositeRoomStore`:
+The ownership boundary is deliberate:
 
-- Durable store: Redis by default, or PostgreSQL with `PERSISTENCE_STORE=postgres`.
-- Realtime store: Redis for socket sessions, online membership, and Socket.IO adapter state.
-- Message cache: Redis TTL cache in front of PostgreSQL message reads.
+- **RoomTalk control plane** owns rooms, membership, permissions, message/turn persistence, scoped credentials, sandbox lifecycle, object storage, and browser APIs.
+- **E2B execution plane** owns untrusted files, processes, terminals, dev servers, and agent execution inside `/workspace`.
+- **Agent backends** own reasoning and native tool loops. They consume RoomTalk capabilities through a narrow JSONL/CLI contract rather than receiving database or infrastructure credentials.
 
-Client state is centered in `MessagePage`, with reusable UI in `src/components`, socket/API wrappers in `src/utils`, and room/message sync logic in `src/hooks`.
+See [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md) for the complete turn flow, security model, workspace surfaces, persistence boundaries, and release process.
+
+## Repository Layout
+
+```text
+client-heroui/                    React + TypeScript + Vite client
+server/src/                       Express/Socket.IO control plane
+server/roomtalk_code_agent_runner Python runner, daemon, backends, and RoomTalk CLI
+ops/code-agent-sandbox/           pinned E2B artifact definition and lock
+scripts/code-agent/               artifact context preparation
+docs/                             architecture, runbooks, plans, and postmortems
+output/resume-overleaf/           generated resume sources and PDFs
+```
 
 ## Quick Start
 
 Requirements:
 
-- Node.js 24.18.0 LTS recommended.
-- Redis running locally at `localhost:6379`.
-- Optional: PostgreSQL test database for PostgreSQL-mode smoke/E2E.
+- Node.js 24.18.0 or newer.
+- Redis at `localhost:6379`.
+- Optional PostgreSQL test database for PostgreSQL-mode smoke/E2E.
+- Optional E2B credentials and pinned template settings for real code-agent rooms.
 
-Install dependencies:
+Install dependencies and create local configuration:
 
 ```bash
 cd server && npm install
 cd ../client-heroui && npm install
+cp ../server/.env.example ../server/.env
 ```
 
-Create local server config:
-
-```bash
-cp server/.env.example server/.env
-```
-
-For AI with the default model, set `DEEPSEEK_API_KEY`. For OpenRouter-routed models and AI role draft generation, set `OPENROUTER_API_KEY`.
-
-Start both apps:
+Start both applications:
 
 ```bash
 ./start.sh
 ```
 
-Manual development mode:
+The client runs at [http://localhost:3011](http://localhost:3011) and the server at `http://localhost:3012`.
+
+Manual development:
 
 ```bash
-cd server
-npm run dev
-
-cd ../client-heroui
-npm run dev
+cd server && npm run dev
+cd client-heroui && npm run dev
 ```
 
-Open [http://localhost:3011](http://localhost:3011).
-
-## Commands
+## Common Commands
 
 Server:
 
 ```bash
 cd server
-npm run dev                         # ts-node-dev server
-npm run build                       # TypeScript build
-npm start                           # run dist/src/server.js
-npm test                            # Node test runner over src/**/*.test.ts
-npm run migrate:redis-to-postgres   # Redis -> PostgreSQL durable migration
-npm run smoke:persistence           # safe local persistence smoke test
+npm run build
+npm test
+npm run smoke:persistence
+npm run smoke:code-agent:e2b
+npm run smoke:codex:e2b
+npm run migrate:redis-to-postgres
+npm run migrate:media-to-object-storage
 ```
 
 Client:
 
 ```bash
 cd client-heroui
-npm run dev                 # Vite dev server
-npm test                    # Vitest unit/component tests
-npm run lint                # ESLint
-npm run check:i18n          # verify translation keys
-npm run build               # i18n check + TypeScript + Vite build
-npm run test:e2e            # Playwright E2E against Redis mode
-npm run test:e2e:postgres   # Playwright E2E against PostgreSQL mode
+npm run lint
+npm run check:i18n
+npm test
+npm run build
+npm run test:e2e
+npm run test:e2e:postgres
 ```
 
 ## Configuration
 
-Use `server/.env.example` as the backend source of truth. Important groups:
+Use `server/.env.example` as the general backend starting point. Important groups include:
 
-| Area | Variables |
+| Area | Examples |
 | --- | --- |
-| HTTP/CORS | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
-| Redis | `REDIS_URL` |
-| PostgreSQL mode | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
-| AI | `AI_MODEL`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
-| Media storage | `MEDIA_BUCKET_NAME`, `MEDIA_STORAGE_REGION`, `MEDIA_STORAGE_ENDPOINT`, `MEDIA_STORAGE_FORCE_PATH_STYLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| Optional services | `ASSEMBLYAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_SUBJECT` |
+| HTTP and origins | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
+| Durable/realtime stores | `PERSISTENCE_STORE`, `DATABASE_URL`, `REDIS_URL`, PostgreSQL TLS, message-cache TTL |
+| Chat AI | provider API keys, default model, OpenRouter routing metadata |
+| Media and artifacts | S3/Tigris bucket, endpoint, region, and AWS-compatible credentials |
+| Optional services | Google OAuth, AssemblyAI, Web Push VAPID |
+| Code-agent control plane | backend allowlists, E2B template/artifact pins, TTL/limits, model-gateway and publish token secrets |
 
-Client configuration:
+Only browser-safe values belong in `VITE_*` variables. Code-agent provider keys, model-gateway tokens, room-context tokens, and static-publish tokens must never be exposed to the client.
 
-- `client-heroui/.env.development`: local `VITE_SOCKET_URL` and public Google client ID.
-- `client-heroui/.env.production`: same-origin `VITE_SOCKET_URL=/` for Fly deployment.
+Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Dockerfile, or code-agent engine changes require an artifact version bump, a new E2B template, matching production pins, and an E2B smoke test. See [Code-agent sandbox artifact](docs/code-agent-sandbox-artifact.md).
 
-Use `CLIENT_URL` for the primary public client URL. Set `CLIENT_URLS` to a comma-separated origin allowlist when multiple production domains should work, for example `https://room.ruit.me,https://room.ruit.me`.
+## Persistence and Object Storage
 
-Only put browser-safe values in `VITE_*` variables.
+`CompositeRoomStore` separates durable and realtime concerns:
 
-## Persistence And Migrations
+- PostgreSQL or Redis stores rooms, messages, members, auth, media metadata, AI runs, code-agent turns, and sandbox metadata.
+- Redis always owns presence, socket sessions, pub/sub, and optional short-TTL PostgreSQL message caching.
+- S3/Tigris-compatible storage holds private media and versioned static-site artifacts; development can use the local object-storage implementation.
 
-Redis remains the default local durable store. PostgreSQL mode makes PostgreSQL the durable source of truth while Redis still handles realtime state, Socket.IO scaling, and short TTL message cache.
+Migration and rollout references:
 
-Redis to PostgreSQL cutover:
+- [PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md)
+- [PostgreSQL migration summary](docs/postgres-migration-development-summary.zh.md)
+- [Media object-storage migration](docs/image-object-storage-migration-runbook.md)
+- [Static publishing implementation](docs/code-agent-static-publish-implementation.md)
 
-```bash
-cd server
-REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
-REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
-```
+## Testing
 
-Run the final migration during a write freeze or maintenance window, then set:
+The repository uses layered verification:
 
-```bash
-fly secrets set PERSISTENCE_STORE="postgres"
-fly secrets set DATABASE_URL="postgres://..."
-fly secrets set POSTGRES_SSL="true"
-```
+- Node's test runner for services, protocols, stores, socket handlers, E2B adapters, lifecycle, model gateway, and static publishing.
+- Vitest and Testing Library for client state, messages, workspace files/diffs/reviews, terminal behavior, browser previews, queue controls, and responsive views.
+- Playwright for desktop/mobile room flows, recovery, multi-client realtime behavior, media, AI, and PostgreSQL parity.
+- Real E2B smoke tests for pinned artifact metadata, daemon health, Coco/Codex execution, permissions, context access, publishing, and workspace behavior.
 
-Rollback is configuration-only while Redis durable data is retained:
-
-```bash
-fly secrets set PERSISTENCE_STORE="redis"
-```
-
-Full checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
-
-Persistence smoke tests are intentionally guarded:
-
-```bash
-cd server
-npm run smoke:persistence
-TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
-```
-
-The PostgreSQL smoke database name must include `test` or `e2e` as a separated token.
-
-## Media Storage
-
-New media uploads use private S3-compatible object storage via `MEDIA_*` and AWS credential variables. Development can use local object routes when storage is not configured.
-
-Legacy base64 image cleanup is available through `cd server && npm run migrate:media-to-object-storage`. It defaults to dry-run, converts candidate images to lossless WebP in memory, and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
+Run focused tests next to changed code, then run both production builds before shipping.
 
 ## Deployment
 
-Production deployment is CI-first:
+`master` is the release branch. `.github/workflows/fly-deploy.yml` runs on a schedule or through manual dispatch, checks whether `master` has changed since the latest successful run, builds both packages, validates translations and secrets, and deploys to Fly.io. Do not run `fly deploy` manually.
 
-- Pushes to `master` trigger `.github/workflows/fly-deploy.yml`.
-- CI installs dependencies, builds server/client, checks translations, verifies required Fly secrets, then deploys with `flyctl deploy --remote-only`.
-- The Fly app is `message-system` in `dfw`, with a Node 24.18.0 Alpine Docker image and a 512 MB VM.
-
-Required production services normally include Redis, PostgreSQL, S3/Tigris-compatible media storage, AI provider keys, and Google OAuth. Optional services include AssemblyAI and web-push VAPID keys.
-
-Deployment guide: [DeploymentGuide.md](DeploymentGuide.md). Chinese guide: [部署指南.md](部署指南.md).
-
-## Testing Coverage
-
-The test suite includes:
-
-- Server unit/socket/repository/API tests with Node's built-in runner.
-- Client component and utility tests with Vitest and Testing Library.
-- Playwright E2E for room flows, message flows, AI/media/sharing, mobile core paths, room restore, multi-client realtime, and PostgreSQL persistence.
-- i18n key checks in the client build.
-
-Use focused tests next to changed code. Use Playwright for browser-visible behavior and PostgreSQL E2E for persistence-mode regressions.
+Production uses Fly.io for the Node control plane, Supabase PostgreSQL, Upstash Redis, Tigris object storage, and E2B for per-room execution sandboxes.
 
 ## Documentation Map
 
-- [CLAUDE.md](CLAUDE.md): concise contributor/agent operating guide.
-- [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md): production PostgreSQL cutover checklist.
-- [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md): historical PostgreSQL migration review.
-- [docs/migration-completion-audit.md](docs/migration-completion-audit.md): current migration completion evidence and remaining external gates.
-- [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md): room restore and room-update reliability series.
-- [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md): active media-viewer gesture requirements.
-- [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md): iOS keyboard viewport fix record.
+- [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md): current end-to-end design and ownership boundaries.
+- [Code-agent sandbox artifact](docs/code-agent-sandbox-artifact.md): pinned artifact build and rollout contract.
+- [Room-context CLI design](docs/codex-room-context-cli-design.zh.md): brokered history/search access and Plan-mode isolation.
+- [Static publishing implementation](docs/code-agent-static-publish-implementation.md): durable artifact pipeline and RoomTalk CLI.
+- [Sandbox daemon plan](docs/sandbox-daemon-plan.md): daemon protocol and migration rationale.
+- [PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md): durable-store production cutover.
+- [Room reliability](docs/room-reliability/README.zh.md): restore, ordering, and multi-client consistency work.
+- [CLAUDE.md](CLAUDE.md): contributor and release guidance.
 
-Some files in `docs/` are historical plans or postmortems. Treat runbooks and this README as the active operational entry points.
+Some files under `docs/` are historical plans or postmortems. The architecture document, runbooks, this README, and the source code are the current operational references.
 
 ## License
 
