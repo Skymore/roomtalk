@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { RedisStore } from './redisStore';
-import { AICost, MediaAsset, Message, Room } from '../types';
+import { AICost, MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { OutboxEventRecord } from './store';
 
 const toTime = (value?: string) => Date.parse(value || '') || 0;
@@ -1294,5 +1294,28 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
     assert.equal(await store.getRoomById('room-1'), null);
     assert.deepEqual(await store.getUserRooms('socket-1'), []);
+  });
+
+  it('persists room agent turn metadata and recovers running turns', async () => {
+    const { store } = createStore();
+    const turn: RoomAgentTurn = {
+      id: 'turn-1',
+      roomId: 'room-1',
+      status: 'running',
+      startedAt: '2026-05-03T00:00:00.000Z',
+      backend: 'codex-app-server',
+      assistantName: 'Codex',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    };
+
+    assert.deepEqual(await store.upsertRoomAgentTurn(turn), turn);
+    assert.deepEqual(await store.readRoomAgentTurns('room-1', ['turn-1']), [turn]);
+    assert.equal(await store.failInterruptedRoomAgentTurns('2026-05-03T00:01:00.000Z'), 1);
+    assert.deepEqual(await store.readRoomAgentTurns('room-1'), [{
+      ...turn,
+      status: 'error',
+      completedAt: '2026-05-03T00:01:00.000Z',
+      updatedAt: '2026-05-03T00:01:00.000Z',
+    }]);
   });
 });

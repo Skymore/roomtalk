@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
+import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
@@ -17,6 +17,8 @@ const PENDING_MEDIA_UPLOADS_KEY = 'pending_media_uploads';
 const PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY = 'pending_media_uploads_by_expiry';
 const AUDIO_TRANSCRIPTIONS_KEY = 'audio_transcriptions';
 const ASSISTANT_RUNS_KEY = 'assistant_runs';
+const ROOM_AGENT_TURN_ROOMS_KEY = 'room_agent_turn_rooms';
+const getRoomAgentTurnsKey = (roomId: string) => `room:${roomId}:agent_turns`;
 const OUTBOX_EVENTS_KEY = 'outbox_events';
 const OUTBOX_EVENTS_BY_AVAILABLE_KEY = 'outbox_events_by_available';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
@@ -1072,6 +1074,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   async clearRoomMessages(roomId: string): Promise<number> {
     const messageKey = `room:${roomId}:messages`;
     const count = await this.redisClient.del(messageKey);
+    await Promise.all([
+      this.redisClient.del(getRoomAgentTurnsKey(roomId)),
+      this.redisClient.sRem(ROOM_AGENT_TURN_ROOMS_KEY, roomId),
+    ]);
     if (count > 0) {
       const room = await this.getRoomById(roomId);
       if (room) {
@@ -1112,14 +1118,35 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         if (targetIndex === -1) {
           return { roomId, messages: [], historyVersion, hasMore: false };
         }
-        endIndex = targetIndex;
+        const targetTurnId = allMessages[targetIndex].turnId;
+        endIndex = targetTurnId
+          ? allMessages.findIndex(message => message.turnId === targetTurnId)
+          : targetIndex;
       }
 
-      const startIndex = Math.max(0, endIndex - limit);
+      const selectedUnits = new Set<string>();
+      let startIndex = endIndex;
+      for (let index = endIndex - 1; index >= 0; index--) {
+        const message = allMessages[index];
+        const unitKey = message.turnId ? `turn:${message.turnId}` : `message:${message.id}`;
+        if (!selectedUnits.has(unitKey)) {
+          if (selectedUnits.size >= limit) break;
+          selectedUnits.add(unitKey);
+        }
+        startIndex = index;
+      }
+      for (const unitKey of selectedUnits) {
+        if (!unitKey.startsWith('turn:')) continue;
+        const turnId = unitKey.slice(5);
+        const turnStart = allMessages.findIndex(message => message.turnId === turnId);
+        if (turnStart >= 0) startIndex = Math.min(startIndex, turnStart);
+      }
       const messages = allMessages.slice(startIndex, endIndex);
+      const turns = await this.readRoomAgentTurns(roomId, Array.from(new Set(messages.map(message => message.turnId).filter((id): id is string => Boolean(id)))));
       return {
         roomId,
         messages,
+        turns,
         historyVersion,
         hasMore: startIndex > 0,
         oldestMessageId: messages[0]?.id,
@@ -1127,6 +1154,54 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error reading Redis room message page', { error, roomId, options });
       return { roomId, messages: [], historyVersion: 0, hasMore: false };
+    }
+  }
+
+  async upsertRoomAgentTurn(turn: RoomAgentTurn): Promise<RoomAgentTurn | null> {
+    try {
+      await Promise.all([
+        this.redisClient.hSet(getRoomAgentTurnsKey(turn.roomId), turn.id, JSON.stringify(turn)),
+        this.redisClient.sAdd(ROOM_AGENT_TURN_ROOMS_KEY, turn.roomId),
+      ]);
+      return turn;
+    } catch (error) {
+      this.logger.error('Error upserting Redis room agent turn', { error, roomId: turn.roomId, turnId: turn.id });
+      return null;
+    }
+  }
+
+  async readRoomAgentTurns(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]> {
+    if (turnIds && turnIds.length === 0) return [];
+    try {
+      const ids = turnIds || await this.redisClient.hKeys(getRoomAgentTurnsKey(roomId));
+      const rawTurns = await Promise.all(ids.map(turnId => this.redisClient.hGet(getRoomAgentTurnsKey(roomId), turnId)));
+      return rawTurns
+        .filter((raw): raw is string => Boolean(raw))
+        .map(raw => JSON.parse(raw) as RoomAgentTurn)
+        .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+    } catch (error) {
+      this.logger.error('Error reading Redis room agent turns', { error, roomId });
+      return [];
+    }
+  }
+
+  async failInterruptedRoomAgentTurns(completedAt = new Date().toISOString()): Promise<number> {
+    try {
+      const roomIds = await this.redisClient.sMembers(ROOM_AGENT_TURN_ROOMS_KEY);
+      let updated = 0;
+      for (const roomId of roomIds) {
+        const turns = await this.readRoomAgentTurns(roomId);
+        for (const turn of turns) {
+          if (turn.status !== 'running') continue;
+          const next = { ...turn, status: 'error' as const, completedAt, updatedAt: completedAt };
+          await this.redisClient.hSet(getRoomAgentTurnsKey(roomId), turn.id, JSON.stringify(next));
+          updated++;
+        }
+      }
+      return updated;
+    } catch (error) {
+      this.logger.error('Error recovering interrupted Redis room agent turns', { error });
+      return 0;
     }
   }
 
@@ -2559,6 +2634,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       await Promise.all([
         this.redisClient.hDel('rooms', roomId),
         this.redisClient.del(`room:${roomId}:messages`),
+        this.redisClient.del(getRoomAgentTurnsKey(roomId)),
+        this.redisClient.sRem(ROOM_AGENT_TURN_ROOMS_KEY, roomId),
         this.redisClient.del(this.getRoomMessagesCacheKey(roomId)),
         this.redisClient.del(this.getRoomAICostKey(roomId)),
         this.redisClient.del(getRoomPasswordHashKey(roomId)),

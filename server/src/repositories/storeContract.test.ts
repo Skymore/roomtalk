@@ -519,6 +519,8 @@ type MessageRow = {
   mime_type: string | null;
   status: Message['status'] | null;
   turn_id?: string | null;
+  model_step_id?: string | null;
+  model_step_sequence?: number | null;
   tool_call_id?: string | null;
   tool_name?: string | null;
   tool_args?: unknown;
@@ -766,6 +768,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         aiStreamOwnerId,
         codeAgentMode,
         position,
+        modelStepId,
+        modelStepSequence,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
       const existingIndex = roomMessages.findIndex(message => message.id === id);
@@ -796,6 +800,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ui_payload: jsonValue(uiPayload),
         ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
         code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : String(codeAgentMode),
+        model_step_id: modelStepId === null || modelStepId === undefined ? null : String(modelStepId),
+        model_step_sequence: modelStepSequence === null || modelStepSequence === undefined ? null : Number(modelStepSequence),
         position: existingPosition,
       };
       if (existingIndex === -1) {
@@ -1059,10 +1065,50 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: (deleted ? [{ id: messageId }] : []) as T[], rowCount: deleted ? 1 : 0 };
     }
 
-    if (/SELECT position FROM room_messages WHERE room_id = \$1 AND id = \$2/.test(compactSql)) {
+    if (/SELECT position(?:, turn_id)? FROM room_messages WHERE room_id = \$1 AND id = \$2/.test(compactSql)) {
       const [roomId, messageId] = params.map(String);
       const row = (this.messages.get(roomId) || []).find(item => item.id === messageId);
-      return { rows: (row ? [{ position: row.position }] : []) as T[], rowCount: row ? 1 : 0 };
+      return { rows: (row ? [{ position: row.position, turn_id: row.turn_id }] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND turn_id = \$2/.test(compactSql)) {
+      const rows = (this.messages.get(String(params[0])) || []).filter(row => row.turn_id === params[1]);
+      const position = rows.length ? Math.min(...rows.map(row => row.position)) : null;
+      return { rows: [{ position }] as T[], rowCount: 1 };
+    }
+
+    if (/SELECT CASE WHEN turn_id IS NULL THEN 'message:' \|\| id ELSE 'turn:' \|\| turn_id END AS unit_key/.test(compactSql)) {
+      const boundary = params[1] === null ? Number.POSITIVE_INFINITY : Number(params[1]);
+      const maxByUnit = new Map<string, number>();
+      for (const row of this.messages.get(String(params[0])) || []) {
+        if (row.position >= boundary) continue;
+        const key = row.turn_id ? `turn:${row.turn_id}` : `message:${row.id}`;
+        maxByUnit.set(key, Math.max(maxByUnit.get(key) ?? -1, row.position));
+      }
+      const rows = [...maxByUnit.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, Number(params[2]))
+        .map(([unit_key, max_position]) => ({ unit_key, max_position }));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
+    if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND CASE WHEN turn_id IS NULL/.test(compactSql)) {
+      const keys = new Set(params[1] as string[]);
+      const rows = (this.messages.get(String(params[0])) || []).filter(row => keys.has(row.turn_id ? `turn:${row.turn_id}` : `message:${row.id}`));
+      return { rows: [{ position: rows.length ? Math.min(...rows.map(row => row.position)) : null }] as T[], rowCount: 1 };
+    }
+
+    if (/FROM room_messages WHERE room_id = \$1 AND position >= \$2 AND \(\$3::bigint IS NULL OR position < \$3\)/.test(compactSql)) {
+      const boundary = params[2] === null ? Number.POSITIVE_INFINITY : Number(params[2]);
+      const rows = [...(this.messages.get(String(params[0])) || [])]
+        .filter(row => row.position >= Number(params[1]) && row.position < boundary)
+        .sort((left, right) => left.position - right.position || toTime(left.timestamp) - toTime(right.timestamp));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
+    if (/SELECT EXISTS\(SELECT 1 FROM room_messages WHERE room_id = \$1 AND position < \$2\) AS exists/.test(compactSql)) {
+      const exists = (this.messages.get(String(params[0])) || []).some(row => row.position < Number(params[1]));
+      return { rows: [{ exists }] as T[], rowCount: 1 };
     }
 
     if (/DELETE FROM room_messages WHERE room_id = \$1 AND position (>=|>) \$2/.test(compactSql)) {
@@ -1087,6 +1133,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const count = this.messages.get(roomId)?.length || 0;
       this.messages.delete(roomId);
       return { rows: [], rowCount: count };
+    }
+
+    if (/DELETE FROM room_agent_turns WHERE room_id = \$1/.test(compactSql)) {
+      return { rows: [], rowCount: 0 };
     }
 
     if (/FROM room_messages WHERE room_id = \$1 AND position < \$2 ORDER BY position DESC LIMIT \$3/.test(compactSql)) {
@@ -1440,6 +1490,32 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(firstPage.messages.map(item => item.id), ['m1']);
       assert.equal(firstPage.hasMore, false);
       assert.equal(firstPage.oldestMessageId, 'm1');
+    });
+
+    it('counts complete agent turns and standalone messages as pagination units', async () => {
+      const { store } = createFixture();
+      const baseRoom = room();
+      const messages = [
+        message({ id: 'user-1', content: 'first prompt', timestamp: '2026-05-03T00:00:01.000Z' }),
+        message({ id: 'turn-1-ai-1', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'checking', timestamp: '2026-05-03T00:00:02.000Z' }),
+        message({ id: 'turn-1-tool', clientId: 'code_agent_runner', messageType: 'tool_call', turnId: 'turn-1', toolCallId: 'tool-1', content: 'Read file', timestamp: '2026-05-03T00:00:03.000Z' }),
+        message({ id: 'turn-1-ai-2', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'done', timestamp: '2026-05-03T00:00:04.000Z' }),
+        message({ id: 'user-2', content: 'second prompt', timestamp: '2026-05-03T00:00:05.000Z' }),
+        message({ id: 'ordinary-ai', clientId: 'ai_assistant', messageType: 'ai', content: 'ordinary answer', timestamp: '2026-05-03T00:00:06.000Z' }),
+        message({ id: 'turn-2-tool', clientId: 'code_agent_runner', messageType: 'tool_call', turnId: 'turn-2', toolCallId: 'tool-2', content: 'Run tests', timestamp: '2026-05-03T00:00:07.000Z' }),
+        message({ id: 'turn-2-ai', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-2', content: 'tests passed', timestamp: '2026-05-03T00:00:08.000Z' }),
+      ];
+
+      await store.saveRoom(baseRoom);
+      for (const item of messages) await store.appendMessage(item);
+
+      const latestPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 3 });
+      assert.deepEqual(latestPage.messages.map(item => item.id), ['user-2', 'ordinary-ai', 'turn-2-tool', 'turn-2-ai']);
+      assert.equal(latestPage.hasMore, true);
+
+      const olderPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 3, beforeMessageId: latestPage.oldestMessageId });
+      assert.deepEqual(olderPage.messages.map(item => item.id), ['user-1', 'turn-1-ai-1', 'turn-1-tool', 'turn-1-ai-2']);
+      assert.equal(olderPage.hasMore, false);
     });
 
     it('tracks durable room membership and saved rooms separately from owned rooms', async () => {

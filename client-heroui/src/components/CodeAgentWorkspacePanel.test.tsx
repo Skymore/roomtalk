@@ -193,7 +193,7 @@ describe('CodeAgentWorkspacePanel', () => {
     );
 
     expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 50%');
-    expect(screen.getByText('Cost: $0.00')).toBeTruthy();
+    expect(screen.getByText('Cost: $0.000000')).toBeTruthy();
   });
 
   it('keeps workspace tabs horizontally scrollable on narrow screens', () => {

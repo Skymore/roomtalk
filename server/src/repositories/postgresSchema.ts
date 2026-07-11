@@ -135,6 +135,21 @@ export const POSTGRES_SCHEMA_SQL = [
     ON room_messages (message_type, room_id, tool_call_id)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_turn_model_step
     ON room_messages (room_id, turn_id, model_step_sequence)`,
+  `CREATE TABLE IF NOT EXISTS room_agent_turns (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('running', 'complete', 'error', 'cancelled')),
+    started_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    final_message_id TEXT REFERENCES room_messages(id) ON DELETE SET NULL,
+    backend TEXT NOT NULL CHECK (backend IN ('code-agent', 'codex', 'codex-app-server')),
+    assistant_name TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_room_agent_turns_room_started
+    ON room_agent_turns (room_id, started_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_room_agent_turns_status_updated
+    ON room_agent_turns (status, updated_at)`,
   `CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

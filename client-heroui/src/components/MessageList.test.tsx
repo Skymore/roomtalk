@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message, RoomPermissions } from '../utils/types';
-import { MessageList, MessageListHandle } from './MessageList';
+import { buildMessageTimeline, MessageList, MessageListHandle } from './MessageList';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
@@ -31,6 +31,27 @@ const socketMock = vi.hoisted(() => {
       handlers.clear();
     },
   };
+});
+
+describe('buildMessageTimeline', () => {
+  it('groups one full agent turn while keeping standalone AI and user messages separate', () => {
+    const messages = [
+      message({ id: 'user-1', content: 'prompt' }),
+      message({ id: 'turn-ai-1', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'working' }),
+      message({ id: 'turn-tool', clientId: 'code_agent_runner', messageType: 'tool_call', turnId: 'turn-1', content: 'Reading' }),
+      message({ id: 'turn-ai-2', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'done' }),
+      message({ id: 'ordinary-ai', clientId: 'ai_assistant', messageType: 'ai', content: 'ordinary answer' }),
+    ];
+
+    const timeline = buildMessageTimeline(messages, []);
+
+    expect(timeline.map(item => item.kind)).toEqual(['message', 'agent-turn', 'message']);
+    expect(timeline[1].kind === 'agent-turn' ? timeline[1].messages.map(item => item.id) : []).toEqual([
+      'turn-ai-1',
+      'turn-tool',
+      'turn-ai-2',
+    ]);
+  });
 });
 
 vi.mock('../utils/socket', () => ({
@@ -284,7 +305,7 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByText('message 6')).toBeTruthy();
     expect(screen.getByText('message 85')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('loadMoreMessages'));
+    fireEvent.click(screen.getByText('loadMoreHistory'));
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
       roomId: 'room-1',
       beforeMessageId: 'm-6',
@@ -334,7 +355,7 @@ describe('MessageList optimistic messages', () => {
     });
 
     await screen.findByText('timestamp oldest');
-    fireEvent.click(screen.getByText('loadMoreMessages'));
+    fireEvent.click(screen.getByText('loadMoreHistory'));
 
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
       roomId: 'room-1',

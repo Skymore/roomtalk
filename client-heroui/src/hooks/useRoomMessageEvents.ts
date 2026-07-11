@@ -1,6 +1,6 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
-import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
+import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomAgentTurn, RoomMessageHistoryPayload } from '../utils/types';
 import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
 import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
@@ -11,6 +11,7 @@ interface UseRoomMessageEventsArgs {
   containerRef: RefObject<HTMLDivElement>;
   getCurrentMessages: () => Message[];
   updateMessages: (updater: SetStateAction<Message[]>) => void;
+  setAgentTurns: Dispatch<SetStateAction<RoomAgentTurn[]>>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsLoadingMore: Dispatch<SetStateAction<boolean>>;
   setHasMoreMessages: Dispatch<SetStateAction<boolean>>;
@@ -32,6 +33,7 @@ export const useRoomMessageEvents = ({
   containerRef,
   getCurrentMessages,
   updateMessages,
+  setAgentTurns,
   setIsLoading,
   setIsLoadingMore,
   setHasMoreMessages,
@@ -63,6 +65,7 @@ export const useRoomMessageEvents = ({
 
   useEffect(() => {
     setSessionCostUsd(null);
+    setAgentTurns([]);
     setShowScrollButton(false);
     closeDeleteModal();
     closeEditModal();
@@ -166,11 +169,17 @@ export const useRoomMessageEvents = ({
       const roomMessages = filterRoomMessages(historyPayload.messages);
 
       if (mode === 'prepend') {
+        setAgentTurns(previous => {
+          const next = new Map(previous.map(turn => [turn.id, turn]));
+          (historyPayload.turns || []).forEach(turn => next.set(turn.id, turn));
+          return Array.from(next.values());
+        });
         updateMessages(prev => {
           const existingIds = new Set(prev.map(message => message.id));
           return [...roomMessages.filter(message => !existingIds.has(message.id)), ...prev];
         });
       } else {
+        setAgentTurns(historyPayload.turns || []);
         const currentMessages = filterRoomMessages(getCurrentMessages());
         const windowChanged = !isSameMessageWindow(currentMessages, roomMessages);
 
@@ -209,6 +218,17 @@ export const useRoomMessageEvents = ({
           setShowScrollButton(true);
         }
       }
+    };
+
+    const handleAgentTurnUpdated = (turn: RoomAgentTurn) => {
+      if (turn.roomId !== roomId) return;
+      setAgentTurns(previous => {
+        const index = previous.findIndex(item => item.id === turn.id);
+        if (index === -1) return [...previous, turn];
+        const next = [...previous];
+        next[index] = turn;
+        return next;
+      });
     };
 
     const handleAIChunk = (data: AIChunkEvent) => {
@@ -288,6 +308,7 @@ export const useRoomMessageEvents = ({
     const handleMessagesCleared = (clearedRoomId: string) => {
       if (clearedRoomId === roomId) {
         updateMessages([]);
+        setAgentTurns([]);
         deleteCachedRoomMessageWindow(roomId);
         bumpLocalHistoryVersion();
         setHasMoreMessagesState(false);
@@ -345,6 +366,7 @@ export const useRoomMessageEvents = ({
 
     socket.on('message_history', handleMessageHistory);
     socket.on('new_message', handleNewMessage);
+    socket.on('agent_turn_updated', handleAgentTurnUpdated);
     socket.on('ai_chunk', handleAIChunk);
     socket.on('a2ui_update', handleA2UIUpdate);
     socket.on('ai_stream_end', handleAIStreamEnd);
@@ -369,6 +391,7 @@ export const useRoomMessageEvents = ({
       }
       socket.off('message_history', handleMessageHistory);
       socket.off('new_message', handleNewMessage);
+      socket.off('agent_turn_updated', handleAgentTurnUpdated);
       socket.off('ai_chunk', handleAIChunk);
       socket.off('a2ui_update', handleA2UIUpdate);
       socket.off('ai_stream_end', handleAIStreamEnd);
@@ -384,6 +407,7 @@ export const useRoomMessageEvents = ({
     containerRef,
     getCurrentMessages,
     updateMessages,
+    setAgentTurns,
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,

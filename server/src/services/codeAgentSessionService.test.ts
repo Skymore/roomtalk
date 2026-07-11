@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Logger } from '../logger';
-import { AIModelOption, CodeAgentMode, Message, Room, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentMode, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
@@ -59,6 +59,7 @@ const createMemoryObservability = () => {
 class MemoryCodeAgentStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
+  agentTurns = new Map<string, RoomAgentTurn>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
   upsertFailures = 0;
@@ -126,6 +127,11 @@ class MemoryCodeAgentStore {
     if (!room) return null;
     this.messages.set(message.roomId, [...(this.messages.get(message.roomId) || []), message]);
     return { ...room, lastActivityAt: message.timestamp };
+  }
+
+  async upsertRoomAgentTurn(turn: RoomAgentTurn) {
+    this.agentTurns.set(turn.id, turn);
+    return turn;
   }
 
   async deleteMessageById(roomId: string, messageId: string) {
@@ -400,6 +406,14 @@ describe('CodeAgentSessionService', () => {
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+    const persistedTurn = [...store.agentTurns.values()][0];
+    assert.equal(persistedTurn.status, 'complete');
+    assert.equal(persistedTurn.finalMessageId, messages[4].id);
+    assert.ok(persistedTurn.completedAt);
+    assert.deepEqual(
+      emitter.roomEmits.filter(event => event.event === 'agent_turn_updated').map(event => (event.args[0] as RoomAgentTurn).status),
+      ['running', 'complete'],
+    );
     assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
     assert.deepEqual(observability.events.map(event => event.event), [
       'code_agent.turn.started',

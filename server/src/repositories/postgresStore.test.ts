@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { AICost, MediaAsset, Message, Room } from '../types';
+import { AICost, MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { PostgresClient, PostgresPool, PostgresQueryResult, PostgresStore } from './postgresStore';
 
@@ -1029,6 +1029,7 @@ describe('PostgresStore', () => {
       { rowCount: 0 },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       { rows: [], assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE room_id = \$1 RETURNING object_key/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM room_agent_turns/) },
       { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /message_version = message_version \+ 1/) },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
@@ -1150,5 +1151,38 @@ describe('PostgresStore', () => {
     await store.resetAllDataForTests();
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 2);
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.', { aiStreamOwnerId: 'owner-1' }), 1);
+  });
+
+  it('persists room agent turn lifecycle metadata and recovers running turns', async () => {
+    const turn: RoomAgentTurn = {
+      id: 'turn-1',
+      roomId: 'room-1',
+      status: 'running',
+      startedAt: '2026-05-03T00:00:00.000Z',
+      backend: 'codex-app-server',
+      assistantName: 'Codex',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    };
+    const row = {
+      id: turn.id,
+      room_id: turn.roomId,
+      status: turn.status,
+      started_at: turn.startedAt,
+      completed_at: null,
+      final_message_id: null,
+      backend: turn.backend,
+      assistant_name: turn.assistantName,
+      updated_at: turn.updatedAt,
+    };
+    const pool = new ScriptedPool([
+      { rows: [row], assertCall: call => assert.match(call.sql, /INSERT INTO room_agent_turns/) },
+      { rows: [row], assertCall: call => assert.match(call.sql, /FROM room_agent_turns WHERE room_id/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /status = 'error'/) },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.upsertRoomAgentTurn(turn), turn);
+    assert.deepEqual(await store.readRoomAgentTurns('room-1', ['turn-1']), [turn]);
+    assert.equal(await store.failInterruptedRoomAgentTurns('2026-05-03T00:01:00.000Z'), 1);
   });
 });

@@ -1,9 +1,11 @@
-import { AICost, AIModelProvider, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
+import { AICost, AIModelProvider, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
 export interface RoomMessagePageOptions {
+  // A complete agent turn counts as one unit. Messages without turnId each
+  // count as one unit, so a page never splits an agent turn at its boundary.
   limit?: number;
   beforeMessageId?: string;
 }
@@ -255,6 +257,9 @@ export interface DurableRoomStore {
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions): Promise<RoomMessagePage>;
+  upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
+  readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
+  failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
   saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
   replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset): Promise<MessageUpdateResult | null>;
   getMediaAsset(assetId: string): Promise<MediaAsset | null>;
@@ -497,6 +502,18 @@ export class CompositeRoomStore implements RoomStore {
 
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions) {
     return this.durableStore.readMessagePageByRoom(roomId, options);
+  }
+
+  upsertRoomAgentTurn(turn: RoomAgentTurn) {
+    return this.durableStore.upsertRoomAgentTurn?.(turn) || Promise.resolve(null);
+  }
+
+  readRoomAgentTurns(roomId: string, turnIds?: string[]) {
+    return this.durableStore.readRoomAgentTurns?.(roomId, turnIds) || Promise.resolve([]);
+  }
+
+  failInterruptedRoomAgentTurns(completedAt?: string) {
+    return this.durableStore.failInterruptedRoomAgentTurns?.(completedAt) || Promise.resolve(0);
   }
 
   saveMediaAsset(asset: MediaAsset) {

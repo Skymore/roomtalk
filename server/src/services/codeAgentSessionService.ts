@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentBackend, Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
+import { AIModelOption, CodeAgentBackend, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
 import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
@@ -130,6 +130,7 @@ interface ActiveCodeAgentTurn {
 
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
+  lastMessageId: string;
   segmentContent: string;
   fullContent: string;
   segmentHasUnsealedText: boolean;
@@ -233,6 +234,7 @@ export class CodeAgentSessionService {
     let placeholderAnnounced = false;
     let roomMarkedRunning = false;
     let streamState: CodeAgentTurnStreamState | null = null;
+    let turnRecord: RoomAgentTurn | null = null;
 
     try {
       aiMessageId = this.createId();
@@ -332,12 +334,23 @@ export class CodeAgentSessionService {
         return ack({ success: false, error: 'Unable to start a durable agent response' });
       }
       this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
+      const turnStartedAt = new Date(turnStartedAtMs).toISOString();
+      turnRecord = await this.publishRoomAgentTurn({
+        id: turnId,
+        roomId: input.roomId,
+        status: 'running',
+        startedAt: turnStartedAt,
+        backend: turnBackend,
+        assistantName: this.displayBackendName(turnBackend),
+        updatedAt: turnStartedAt,
+      });
       this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
       placeholderAnnounced = true;
       ack({ success: true, messageId: aiMessageId });
 
       streamState = {
         activeMessageId: aiMessageId,
+        lastMessageId: aiMessageId,
         segmentContent: '',
         fullContent: '',
         segmentHasUnsealedText: false,
@@ -529,6 +542,16 @@ export class CodeAgentSessionService {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
         runnerProcess = null;
       }
+      const turnCompletedAt = this.now().toISOString();
+      if (turnRecord) {
+        turnRecord = await this.publishRoomAgentTurn({
+          ...turnRecord,
+          status: 'complete',
+          completedAt: turnCompletedAt,
+          finalMessageId: finalMessage?.id || streamState.lastMessageId,
+          updatedAt: turnCompletedAt,
+        });
+      }
       this.activeTurns.delete(input.roomId);
       if (finalMessage) {
         this.emitter.to(input.roomId).emit('ai_stream_end', {
@@ -584,6 +607,16 @@ export class CodeAgentSessionService {
         }
         const errorTargetMessage = streamState?.completedAIMessageById.get(errorTargetId) || { ...aiMessage, id: errorTargetId };
         await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
+        if (turnRecord) {
+          const turnCompletedAt = this.now().toISOString();
+          turnRecord = await this.publishRoomAgentTurn({
+            ...turnRecord,
+            status: 'error',
+            completedAt: turnCompletedAt,
+            finalMessageId: errorTargetId,
+            updatedAt: turnCompletedAt,
+          });
+        }
       } else if (roomMarkedRunning) {
         const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
         if (errorRoom) {
@@ -1246,6 +1279,7 @@ export class CodeAgentSessionService {
         this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
         this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
         state.activeMessageId = newId;
+        state.lastMessageId = newId;
         state.segmentContent = '';
         state.segmentHasUnsealedText = false;
         state.needsNewSegment = false;
@@ -1305,6 +1339,7 @@ export class CodeAgentSessionService {
       } else if (event.type === 'tool_result') {
         state.pendingToolCalls.delete(event.id);
       }
+      state.lastMessageId = mapped.message.id;
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       this.emitter.to(roomId).emit('new_message', mapped.message);
     }
@@ -1506,6 +1541,16 @@ export class CodeAgentSessionService {
       return null;
     }
     return this.store.saveRoom({ ...currentRoom, ...patch });
+  }
+
+  private async publishRoomAgentTurn(turn: RoomAgentTurn): Promise<RoomAgentTurn> {
+    const persisted = await this.store.upsertRoomAgentTurn?.(turn).catch(error => {
+      this.logger.error('Failed to persist room agent turn', { error, roomId: turn.roomId, turnId: turn.id, status: turn.status });
+      return null;
+    });
+    const published = persisted || turn;
+    this.emitter.to(turn.roomId).emit('agent_turn_updated', published);
+    return published;
   }
 
   private async recordTurnEvent(

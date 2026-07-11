@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { Dispatch, SetStateAction, useCallback, useRef } from 'react';
+import { Dispatch, SetStateAction, useCallback, useRef, useState } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { Message } from '../utils/types';
+import { Message, RoomAgentTurn } from '../utils/types';
 import { useRoomMessageEvents } from './useRoomMessageEvents';
 
 const socketMock = vi.hoisted(() => {
@@ -114,12 +114,14 @@ const Harness = ({
 }: HarnessProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const getCurrentMessages = useCallback(() => currentMessages, [currentMessages]);
+  const [, setAgentTurns] = useState<RoomAgentTurn[]>([]);
 
   useRoomMessageEvents({
     roomId,
     containerRef,
     getCurrentMessages,
     updateMessages,
+    setAgentTurns,
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,

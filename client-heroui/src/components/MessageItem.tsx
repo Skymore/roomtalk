@@ -42,6 +42,7 @@ interface MessageItemProps {
   onUserAction?: (action: MessageUserAction, message: Message) => void;
   onOpenWorkspaceFile?: (path: string) => void;
   workspaceRoot?: string | null;
+  turnGrouped?: boolean;
 }
 
 export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
@@ -268,6 +269,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onUserAction,
   onOpenWorkspaceFile,
   workspaceRoot,
+  turnGrouped = false,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
@@ -870,15 +872,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         data-message-id={message.id}
         className="group mb-1 flex w-full items-start justify-start"
       >
-        <Avatar
+        {!turnGrouped ? <Avatar
           icon={<Icon icon="lucide:bot" />}
           color="secondary"
           size="sm"
           classNames={{
             base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5] invisible",
           }}
-        />
-        <div className="flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] items-start">
+        /> : null}
+        <div className={`flex flex-col min-w-0 items-start ${turnGrouped ? 'max-w-full' : 'max-w-[82%] sm:max-w-[70%]'}`}>
           <CodeAgentToolMessage message={message} pairedResult={pairedToolResult} />
         </div>
       </div>
@@ -892,7 +894,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
       >
         {/* Opponent's avatar or AI avatar */}
-        {(!isMine || isAI) && !isMine && (
+        {!turnGrouped && (!isMine || isAI) && !isMine && (
           isAI ? (
             <Avatar
               name={message.avatar?.text || undefined}
@@ -909,9 +911,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         )}
 
       {/* Message Content Area */}
-      <div className={`flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col min-w-0 ${turnGrouped ? 'max-w-full' : 'max-w-[82%] sm:max-w-[70%]'} ${isMine ? 'items-end' : 'items-start'}`}>
         {/* Username or AI name */}
-        {(!isMine || isAI) && !isMine && (message.username || isAI) && (
+        {!turnGrouped && (!isMine || isAI) && !isMine && (message.username || isAI) && (
           <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
             {isAI ? assistantDisplayName : message.username}
           </div>

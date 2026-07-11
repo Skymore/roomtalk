@@ -126,6 +126,20 @@ export interface Message {
   uiPayload?: A2UIPayload;
 }
 
+export type RoomAgentTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';
+
+export interface RoomAgentTurn {
+  id: string;
+  roomId: string;
+  status: RoomAgentTurnStatus;
+  startedAt: string;
+  completedAt?: string;
+  finalMessageId?: string;
+  backend: CodeAgentBackend;
+  assistantName: string;
+  updatedAt: string;
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -184,6 +198,7 @@ export interface RoomPermissions {
 export interface RoomMessageHistoryPayload {
   roomId: string;
   messages: Message[];
+  turns?: RoomAgentTurn[];
   historyVersion: number;
   hasMore: boolean;
   oldestMessageId?: string;

@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } 
 import { Icon } from '@iconify/react';
 import { getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
-import { Message, Room, RoomPermissions, RoomRoleMember } from '../utils/types';
+import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
+import { AgentTurnItem } from './AgentTurnItem';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getRoomAIRequestSettingsForKind, type AIRequestRoomKind } from '../utils/aiRequestSettings';
@@ -31,7 +32,59 @@ import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
-const LOAD_MORE_MESSAGE_COUNT = 80;
+const LOAD_MORE_HISTORY_UNIT_COUNT = 80;
+
+type MessageTimelineItem =
+  | { kind: 'message'; message: Message }
+  | { kind: 'agent-turn'; turn: RoomAgentTurn; messages: Message[] };
+
+export const buildMessageTimeline = (
+  messages: Message[],
+  turns: RoomAgentTurn[],
+  activeTurnId?: string,
+): MessageTimelineItem[] => {
+  const turnById = new Map(turns.map(turn => [turn.id, turn]));
+  const lastIndexByTurn = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (message.turnId) lastIndexByTurn.set(message.turnId, index);
+  });
+
+  const timeline: MessageTimelineItem[] = [];
+  for (let index = 0; index < messages.length;) {
+    const message = messages[index];
+    if (!message.turnId) {
+      timeline.push({ kind: 'message', message });
+      index++;
+      continue;
+    }
+
+    const lastIndex = lastIndexByTurn.get(message.turnId) ?? index;
+    const groupedMessages = messages.slice(index, lastIndex + 1);
+    const ownMessages = groupedMessages.filter(item => item.turnId === message.turnId);
+    const firstTimestamp = ownMessages[0]?.timestamp || message.timestamp;
+    const lastTimestamp = ownMessages.at(-1)?.timestamp || firstTimestamp;
+    const lastAIMessage = [...ownMessages].reverse().find(item => item.messageType === 'ai');
+    const persisted = turnById.get(message.turnId);
+    const isRunning = persisted?.status === 'running' || (!persisted && activeTurnId === message.turnId);
+    timeline.push({
+      kind: 'agent-turn',
+      messages: groupedMessages,
+      turn: persisted || {
+        id: message.turnId,
+        roomId: message.roomId,
+        status: isRunning ? 'running' : 'complete',
+        startedAt: firstTimestamp,
+        ...(!isRunning ? { completedAt: lastTimestamp } : {}),
+        ...(lastAIMessage ? { finalMessageId: lastAIMessage.id } : {}),
+        backend: 'code-agent',
+        assistantName: message.username || 'Coco',
+        updatedAt: lastTimestamp,
+      },
+    });
+    index = lastIndex + 1;
+  }
+  return timeline;
+};
 
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
@@ -98,6 +151,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     const cached = readMemoryRoomMessageWindow(roomId);
     return cached ? cached.messages.filter(msg => msg.roomId === roomId) : [];
   });
+  const [agentTurns, setAgentTurns] = useState<RoomAgentTurn[]>([]);
   const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
@@ -158,6 +212,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
     return { resultByCallId, consumed };
   }, [messages]);
+  const displayMessages = React.useMemo(
+    () => messages.filter(message => !(message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id))),
+    [messages, toolResultPairing.consumed],
+  );
+  const activeTurnId = React.useMemo(() => {
+    if (codeAgentRoom?.codeAgentStatus !== 'running') return undefined;
+    return [...messages].reverse().find(message => message.turnId)?.turnId;
+  }, [codeAgentRoom?.codeAgentStatus, messages]);
+  const timelineItems = React.useMemo(
+    () => buildMessageTimeline(displayMessages, agentTurns, activeTurnId),
+    [activeTurnId, agentTurns, displayMessages],
+  );
 
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
@@ -243,7 +309,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     socket.emit('get_room_messages', {
       roomId,
       beforeMessageId: oldestMessageId || messages[0].id,
-      limit: LOAD_MORE_MESSAGE_COUNT,
+      limit: LOAD_MORE_HISTORY_UNIT_COUNT,
     });
   }, [hasMoreMessages, isLoadingMore, messages, oldestMessageId, roomId]);
 
@@ -566,6 +632,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     containerRef,
     getCurrentMessages,
     updateMessages,
+    setAgentTurns,
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,
@@ -709,7 +776,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                   disabled={isLoadingMore}
                   className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
                 >
-                  {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
+                  {isLoadingMore ? t('loadingMore') : t('loadMoreHistory')}
                 </button>
               </div>
             )}
@@ -727,13 +794,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             )}
             {!isLoading && messages.length > 0 && (
               <div className="flex flex-col space-y-2">
-                {messages.map((message) => {
-                  if (message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id)) {
-                    return null;
-                  }
-                  return (
+                {timelineItems.map((item) => {
+                  const renderMessage = (message: Message, turnGrouped = false) => (
                     <MessageItem
-                      key={message.id}
+                      key={turnGrouped ? undefined : message.id}
                       message={message}
                       pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
                         ? toolResultPairing.resultByCallId.get(message.toolCallId)
@@ -751,8 +815,21 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       onUserAction={handleUserAction}
                       onOpenWorkspaceFile={onOpenWorkspaceFile}
                       workspaceRoot={workspaceRoot}
+                      turnGrouped={turnGrouped}
                     />
                   );
+                  if (item.kind === 'agent-turn') {
+                    return (
+                      <AgentTurnItem
+                        key={`turn:${item.turn.id}`}
+                        turn={item.turn}
+                        messages={item.messages}
+                        renderAgentMessage={message => renderMessage(message, true)}
+                        renderStandaloneMessage={message => renderMessage(message)}
+                      />
+                    );
+                  }
+                  return renderMessage(item.message);
                 })}
               </div>
             )}
