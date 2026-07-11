@@ -53,15 +53,8 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const completedAtMs = timestampMs(turn.completedAt) || Math.max(...ownMessages.map(message => timestampMs(message.timestamp)), startedAtMs);
   const totalDuration = formatAgentTurnDuration((turn.status === 'running' ? now : completedAtMs) - startedAtMs);
 
-  const renderOwnMessage = (message: Message, showWorkingHeader: boolean) => (
+  const renderOwnMessage = (message: Message) => (
     <div key={message.id} className="ml-10 max-w-[82%] sm:max-w-[70%]">
-      {showWorkingHeader ? (
-        <div className="mb-1 border-b border-[#dedbd0] px-1 pb-1.5 text-xs text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
-          {t('agentWorkingFor', {
-            duration: formatAgentTurnDuration(((message.id === lastAIMessageId ? now : timestampMs(message.timestamp)) || now) - startedAtMs),
-          })}
-        </div>
-      ) : null}
       {renderAgentMessage(message)}
     </div>
   );
@@ -78,7 +71,13 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
         }}
       />
 
-      {turn.status !== 'running' ? (
+      {turn.status === 'running' ? (
+        <div className="ml-10 max-w-[82%] sm:max-w-[70%]">
+          <div className="mb-1 border-b border-[#dedbd0] px-1 pb-1.5 text-xs text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
+            {t('agentWorkingFor', { duration: totalDuration })}
+          </div>
+        </div>
+      ) : (
         <div className="ml-10 max-w-[82%] sm:max-w-[70%]">
           <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">{turn.assistantName}</div>
           <button
@@ -92,14 +91,14 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
             <Icon icon="lucide:chevron-right" className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
           </button>
         </div>
-      ) : null}
+      )}
 
       <div className="mt-1 flex flex-col space-y-2">
         {messages.map(message => {
           if (message.turnId !== turn.id) return renderStandaloneMessage(message);
-          if (turn.status === 'running') return renderOwnMessage(message, message.messageType === 'ai');
-          if (message.id === finalMessageId) return renderOwnMessage(message, false);
-          if (expanded) return renderOwnMessage(message, false);
+          if (turn.status === 'running') return renderOwnMessage(message);
+          if (message.id === finalMessageId) return renderOwnMessage(message);
+          if (expanded) return renderOwnMessage(message);
           return null;
         })}
       </div>

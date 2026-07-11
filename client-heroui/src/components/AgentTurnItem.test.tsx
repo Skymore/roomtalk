@@ -47,7 +47,7 @@ const turn = (overrides: Partial<RoomAgentTurn> = {}): RoomAgentTurn => ({
 afterEach(cleanup);
 
 describe('AgentTurnItem', () => {
-  it('shows every running AI segment with one turn avatar', () => {
+  it('shows one working header and one avatar for a running turn', () => {
     const messages = [
       message({ id: 'ai-first', content: 'first update', status: 'complete' }),
       message({ id: 'tool', clientId: 'code_agent_runner', messageType: 'tool_call', content: 'Reading file', timestamp: '2026-05-03T00:00:02.000Z' }),
@@ -63,7 +63,7 @@ describe('AgentTurnItem', () => {
     );
 
     expect(screen.getAllByTestId('turn-avatar')).toHaveLength(1);
-    expect(screen.getAllByText(/agentWorkingFor/)).toHaveLength(2);
+    expect(screen.getAllByText(/agentWorkingFor/)).toHaveLength(1);
     expect(screen.getByText('first update')).toBeTruthy();
     expect(screen.getByText('Reading file')).toBeTruthy();
     expect(screen.getByText('latest update')).toBeTruthy();
