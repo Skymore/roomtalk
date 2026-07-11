@@ -3,6 +3,7 @@ import { CodeAgentRunnerProcess, CodeAgentSandboxHandle } from './codeAgentSandb
 interface TrackedDaemonProcess {
   realProcess: CodeAgentRunnerProcess;
   exposedProcess: CodeAgentRunnerProcess;
+  stop(): Promise<void>;
 }
 
 export interface EnsureCodeAgentDaemonProcessInput {
@@ -13,37 +14,74 @@ export interface EnsureCodeAgentDaemonProcessInput {
 }
 
 export class CodeAgentDaemonProcessRegistry {
-  private readonly processes = new Map<string, TrackedDaemonProcess>();
+  private readonly processes = new Map<string, Promise<TrackedDaemonProcess>>();
+  private shuttingDown = false;
 
   async ensure(input: EnsureCodeAgentDaemonProcessInput): Promise<CodeAgentRunnerProcess> {
+    if (this.shuttingDown) {
+      throw new Error('Code agent daemon registry is shutting down');
+    }
     const existing = this.processes.get(input.handle.id);
     if (existing) {
-      return existing.exposedProcess;
+      return (await existing).exposedProcess;
     }
 
-    const realProcess = await input.start(baseDaemonEnv(input.env));
-    const exposedProcess: CodeAgentRunnerProcess = {
-      ...realProcess,
-      command: input.command,
-      stop: async () => {},
-    };
-    const tracked = { realProcess, exposedProcess };
-    this.processes.set(input.handle.id, tracked);
-    realProcess.completed?.finally(() => {
-      if (this.processes.get(input.handle.id) === tracked) {
-        this.processes.delete(input.handle.id);
-      }
+    let pending!: Promise<TrackedDaemonProcess>;
+    pending = input.start(baseDaemonEnv(input.env)).then(realProcess => {
+      const exposedProcess: CodeAgentRunnerProcess = {
+        ...realProcess,
+        command: input.command,
+        stop: async () => {},
+      };
+      let stopPromise: Promise<void> | undefined;
+      const tracked: TrackedDaemonProcess = {
+        realProcess,
+        exposedProcess,
+        stop: () => {
+          stopPromise ||= realProcess.stop();
+          return stopPromise;
+        },
+      };
+      realProcess.completed?.then(
+        () => this.remove(input.handle.id, pending),
+        () => {
+          this.remove(input.handle.id, pending);
+          void tracked.stop().catch(() => {});
+        }
+      );
+      return tracked;
+    }, error => {
+      this.remove(input.handle.id, pending);
+      throw error;
     });
-    return exposedProcess;
+    this.processes.set(input.handle.id, pending);
+    return (await pending).exposedProcess;
   }
 
   async shutdown(handle: CodeAgentSandboxHandle): Promise<void> {
-    const tracked = this.processes.get(handle.id);
-    if (!tracked) {
+    const pending = this.processes.get(handle.id);
+    if (!pending) {
       return;
     }
     this.processes.delete(handle.id);
-    await tracked.realProcess.stop();
+    const tracked = await pending;
+    await tracked.stop();
+  }
+
+  async shutdownAll(): Promise<void> {
+    this.shuttingDown = true;
+    const pending = Array.from(this.processes.values());
+    this.processes.clear();
+    await Promise.allSettled(pending.map(async process => {
+      const tracked = await process;
+      await tracked.stop();
+    }));
+  }
+
+  private remove(sandboxId: string, pending: Promise<TrackedDaemonProcess>) {
+    if (this.processes.get(sandboxId) === pending) {
+      this.processes.delete(sandboxId);
+    }
   }
 }
 

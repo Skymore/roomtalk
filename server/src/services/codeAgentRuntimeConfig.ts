@@ -50,7 +50,14 @@ export interface CodeAgentRuntimeConfig {
 export const DEFAULT_CODE_AGENT_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner';
 export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_cli';
 export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_sdk_app_server';
-export const DEFAULT_CODE_AGENT_DAEMON_COMMAND = 'python -m roomtalk_code_agent_runner.daemon';
+export const DEFAULT_CODE_AGENT_DAEMON_COMMAND = [
+  "bash -lc '",
+  'pkill -TERM -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host" 2>/dev/null || true;',
+  'sleep 0.2;',
+  'pkill -KILL -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host" 2>/dev/null || true;',
+  'exec python -m roomtalk_code_agent_runner.daemon',
+  "'",
+].join(' ');
 export const DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH = '/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner';
 export const DEFAULT_CODE_AGENT_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_PLAYWRIGHT_BROWSERS_PATH = '/ms-playwright';

@@ -593,13 +593,22 @@ process.on('unhandledRejection', (reason, promise) => {
   });
 });
 
-process.on('SIGTERM', () => {
+let shutdownStarted = false;
+const shutdown = () => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   outboxWorker?.stop();
-});
+  server.close();
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  forceExit.unref();
+  void (codeAgentDaemonRegistry?.shutdownAll() || Promise.resolve()).finally(() => {
+    clearTimeout(forceExit);
+    process.exit(0);
+  });
+};
 
-process.on('SIGINT', () => {
-  outboxWorker?.stop();
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 // ---------------------- 启动服务器 ----------------------
 const PORT: number = parseInt(process.env.PORT || '3012', 10);
