@@ -93,7 +93,7 @@ const makeService = (driver: CodexDeviceAuthDriver) => new CodexConnectionServic
   new CodexAuthCipher('test-secret', 'key-v1'),
   driver,
   {
-    lockTtlMs: 60_000,
+    authRefreshLockTtlMs: 60_000,
     now: () => new Date('2026-07-04T00:00:00.000Z'),
   }
 );

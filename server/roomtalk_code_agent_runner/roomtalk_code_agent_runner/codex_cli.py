@@ -49,6 +49,9 @@ class CodexCliRunConfig:
     secret_parent: Path = Path(DEFAULT_CODEX_SECRET_PARENT)
     auth_json_path: Path | None = None
     refreshed_auth_json_path: Path | None = None
+    auth_refresh_url: str | None = None
+    auth_refresh_token: str | None = None
+    auth_version: int = 0
     keep_codex_home: bool = False
 
 
@@ -195,6 +198,9 @@ def config_from_env(env: dict[str, str] | None = None) -> CodexCliRunConfig:
         secret_parent=Path(env.get("ROOMTALK_CODEX_SECRET_PARENT") or DEFAULT_CODEX_SECRET_PARENT),
         auth_json_path=auth_json_path,
         refreshed_auth_json_path=refreshed_auth_json_path,
+        auth_refresh_url=(env.get("ROOMTALK_CODEX_AUTH_REFRESH_URL") or "").strip() or None,
+        auth_refresh_token=(env.get("ROOMTALK_CODEX_AUTH_REFRESH_TOKEN") or "").strip() or None,
+        auth_version=_non_negative_int(env.get("ROOMTALK_CODEX_AUTH_VERSION")),
         keep_codex_home=env.get("ROOMTALK_CODEX_KEEP_HOME") == "true",
     )
 
@@ -722,6 +728,13 @@ def _path_from_env(value: str | None) -> Path | None:
     if not path.is_absolute():
         raise RunnerError("Codex auth paths must be absolute", code="invalid_codex_auth_path")
     return path
+
+
+def _non_negative_int(value: str | None) -> int:
+    try:
+        return max(0, int(value or "0"))
+    except ValueError:
+        return 0
 
 
 def _emit_error(stream: TextIO, error: Exception, turn_id: str | None = None) -> None:

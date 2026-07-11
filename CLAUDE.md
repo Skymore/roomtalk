@@ -117,6 +117,10 @@ Production: Fly.io app `message-system` in `dfw` region, Node 24.18.0 Alpine, 51
 
 Production code-agent rooms run from a pinned E2B sandbox artifact, not directly from the deployed Node app source or a local code-agent engine checkout. Any change to `server/roomtalk_code_agent_runner`, runner tools, runner system prompts, the sandbox Dockerfile, or files copied by `scripts/code-agent/prepare-sandbox-context.mjs` must bump `ops/code-agent-sandbox/artifact.lock.json` and `ops/code-agent-sandbox/Dockerfile`, rebuild the E2B template, update `CODE_AGENT_E2B_TEMPLATE_ID` / `CODE_AGENT_ARTIFACT_VERSION`, and verify with an E2B smoke or direct runner check. Any code-agent engine change in `/Users/sky/projects/code-agent-engine` must first be committed and pushed there, then RoomTalk must update `ops/code-agent-sandbox/artifact.lock.json` `codeAgentEngine.sourceRef` and production `CODE_AGENT_SOURCE_REF`, rebuild the E2B template, and verify it. Otherwise production sandboxes will keep using the old runner or old code-agent engine even after app deploys.
 
+### Codex Backend Direction
+
+`codex-app-server` is the supported Codex backend and the target for all new features, fixes, protocol work, and production behavior. The `codex` backend and `roomtalk_code_agent_runner.codex_cli` are deprecated legacy compatibility paths. Keep them only while existing data or explicit migration work still requires them; do not add new product capabilities, UI behavior, or architecture to the Codex CLI path. Shared code must follow app-server semantics and must not reintroduce CLI-era constraints such as a client-wide turn lock.
+
 ### Task Completion and Push Rule
 
 After completing any task, run both production builds (`cd server && npm run build` and `cd client-heroui && npm run build`) plus any focused tests needed for the change. Then commit the completed work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree.

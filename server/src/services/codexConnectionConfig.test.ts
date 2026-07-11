@@ -14,6 +14,10 @@ describe('resolveCodexConnectionConfig', () => {
       cliBin: 'codex',
       authScriptBin: undefined,
       authLoginTimeoutMs: 900_000,
+      authRefreshLockTtlMs: 30_000,
+      authRefreshWaitMs: 30_000,
+      refreshTokenUrl: undefined,
+      oauthClientId: undefined,
     });
   });
 
@@ -31,12 +35,20 @@ describe('resolveCodexConnectionConfig', () => {
       CODEX_CLI_BIN: '/usr/local/bin/codex',
       CODEX_DEVICE_AUTH_SCRIPT_BIN: '/tmp/fake-script',
       CODEX_AUTH_LOGIN_TIMEOUT_MS: '120000',
+      CODEX_AUTH_REFRESH_LOCK_TTL_MS: '15000',
+      CODEX_AUTH_REFRESH_WAIT_MS: '45000',
+      CODEX_REFRESH_TOKEN_URL_OVERRIDE: 'https://auth.example/token',
+      CODEX_APP_SERVER_LOGIN_CLIENT_ID: 'codex-client',
     }), {
       enabled: true,
       authEncryptionKey: 'secret',
       cliBin: '/usr/local/bin/codex',
       authScriptBin: '/tmp/fake-script',
       authLoginTimeoutMs: 120_000,
+      authRefreshLockTtlMs: 15_000,
+      authRefreshWaitMs: 45_000,
+      refreshTokenUrl: 'https://auth.example/token',
+      oauthClientId: 'codex-client',
     });
   });
 

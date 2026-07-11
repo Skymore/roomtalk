@@ -125,7 +125,14 @@ export class CodeAgentRoomContextService {
     this.tokenTtlSeconds = options.tokenTtlSeconds || DEFAULT_ROOM_CONTEXT_TOKEN_TTL_SECONDS;
   }
 
-  issueTurnToken(input: { roomId: string; clientId: string; turnId: string; mode: CodeAgentRunnerMode }) {
+  issueTurnToken(
+    input: { roomId: string; clientId: string; turnId: string; mode: CodeAgentRunnerMode },
+    options: { ttlSeconds?: number } = {}
+  ) {
+    const requestedTtl = Number(options.ttlSeconds);
+    const ttlSeconds = Number.isFinite(requestedTtl) && requestedTtl > 0
+      ? Math.floor(requestedTtl)
+      : this.tokenTtlSeconds;
     const claims: CodeAgentRoomContextTokenClaims = {
       v: 1,
       jti: this.createId(),
@@ -133,7 +140,7 @@ export class CodeAgentRoomContextService {
       clientId: input.clientId,
       turnId: input.turnId,
       mode: input.mode,
-      exp: Math.floor(this.nowMs() / 1000) + this.tokenTtlSeconds,
+      exp: Math.floor(this.nowMs() / 1000) + ttlSeconds,
     };
     const payload = encode(stableJson(claims as unknown as Record<string, unknown>));
     return `${payload}.${sign(payload, this.options.tokenSecret)}`;

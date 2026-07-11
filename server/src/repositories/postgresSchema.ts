@@ -403,6 +403,8 @@ export const POSTGRES_SCHEMA_SQL = [
     last_used_at TIMESTAMPTZ,
     active_run_id TEXT,
     locked_until TIMESTAMPTZ,
+    auth_refresh_owner_id TEXT,
+    auth_refresh_locked_until TIMESTAMPTZ,
     last_error TEXT
   )`,
   `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS encrypted_auth_json JSONB`,
@@ -412,6 +414,8 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ`,
   `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS active_run_id TEXT`,
   `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS auth_refresh_owner_id TEXT`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS auth_refresh_locked_until TIMESTAMPTZ`,
   `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS last_error TEXT`,
   `ALTER TABLE codex_connections DROP CONSTRAINT IF EXISTS codex_connections_provider_check`,
   `ALTER TABLE codex_connections ADD CONSTRAINT codex_connections_provider_check
@@ -424,6 +428,9 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_codex_connections_locked_until
     ON codex_connections (locked_until)
     WHERE locked_until IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_codex_connections_auth_refresh_locked_until
+    ON codex_connections (auth_refresh_locked_until)
+    WHERE auth_refresh_locked_until IS NOT NULL`,
   `CREATE TABLE IF NOT EXISTS github_connections (
     client_id TEXT PRIMARY KEY,
     provider TEXT NOT NULL DEFAULT 'github' CHECK (provider = 'github'),

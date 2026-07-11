@@ -66,7 +66,9 @@ class FakeDeviceAuthDriver implements CodexDeviceAuthDriver {
 const makeService = (options: {
   driver?: FakeDeviceAuthDriver;
   now?: Date;
-  lockTtlMs?: number;
+  fetch?: typeof globalThis.fetch;
+  createId?: () => string;
+  authRefreshPollMs?: number;
 } = {}) => {
   let current = options.now || new Date('2026-07-04T00:00:00.000Z');
   const store = new InMemoryCodexConnectionStore();
@@ -76,7 +78,11 @@ const makeService = (options: {
     new CodexAuthCipher('test-secret', 'test-key-v1'),
     driver,
     {
-      lockTtlMs: options.lockTtlMs || 60_000,
+      authRefreshLockTtlMs: 5_000,
+      authRefreshWaitMs: 1_000,
+      authRefreshPollMs: options.authRefreshPollMs || 10,
+      fetch: options.fetch,
+      createId: options.createId,
       now: () => current,
     }
   );
@@ -186,7 +192,7 @@ describe('Codex connection service', () => {
     assert.equal(await store.getConnection('client-1'), null);
   });
 
-  it('runs work with decrypted auth, saves refreshed auth, and releases the lock', async () => {
+  it('runs work with decrypted auth and saves changed auth with a versioned update', async () => {
     const { service, store } = makeService();
     await service.connectWithDeviceAuth('client-1');
     const refreshedAuthJson = authJson.replace('secret-access-token', 'refreshed-access-token');
@@ -203,8 +209,8 @@ describe('Codex connection service', () => {
     assert.equal(result, 'ok');
     const stored = await store.getConnection('client-1');
     assert.equal(stored?.authVersion, 2);
-    assert.equal(stored?.activeRunId, undefined);
-    assert.equal(stored?.lockedUntil, undefined);
+    assert.equal(stored?.authRefreshOwnerId, undefined);
+    assert.equal(stored?.authRefreshLockedUntil, undefined);
     assert.equal(stored?.lastUsedAt, '2026-07-04T00:00:00.000Z');
 
     const secondResult = await service.withCodexAuth('client-1', 'run-2', async decrypted => {
@@ -214,19 +220,85 @@ describe('Codex connection service', () => {
     assert.equal(secondResult, 'ok-again');
   });
 
-  it('rejects concurrent runs for the same connected client', async () => {
+  it('allows concurrent runs for the same connected client', async () => {
     const { service } = makeService();
     await service.connectWithDeviceAuth('client-1');
 
-    const result = await service.withCodexAuth('client-1', 'run-1', async () => {
-      await assert.rejects(
-        () => service.withCodexAuth('client-1', 'run-2', async () => ({ result: 'unexpected' })),
-        (error: unknown) => error instanceof CodexConnectionError && error.code === 'connection_locked'
-      );
-      return { result: 'locked' };
+    const result = await service.withCodexAuth('client-1', 'run-1', async decrypted => {
+      assert.equal(decrypted, authJson);
+      const concurrent = await service.withCodexAuth('client-1', 'run-2', async concurrentAuth => {
+        assert.equal(concurrentAuth, authJson);
+        return { result: 'concurrent' };
+      });
+      return { result: concurrent };
     });
 
-    assert.equal(result, 'locked');
+    assert.equal(result, 'concurrent');
+  });
+
+  it('does not increment authVersion when the runner only copies unchanged credentials', async () => {
+    const { service, store } = makeService();
+    await service.connectWithDeviceAuth('client-1');
+
+    await service.withCodexAuth('client-1', 'run-1', async () => ({
+      result: undefined,
+      refreshedAuthJson: JSON.stringify(JSON.parse(authJson)),
+    }));
+
+    assert.equal((await store.getConnection('client-1'))?.authVersion, 1);
+  });
+
+  it('does not let a stale concurrent auth write overwrite a newer version', async () => {
+    const { service } = makeService();
+    await service.connectWithDeviceAuth('client-1');
+    const firstRefresh = authJson.replace('secret-access-token', 'first-access-token');
+    const secondRefresh = authJson.replace('secret-access-token', 'second-access-token');
+
+    await service.withCodexAuth('client-1', 'run-1', async () => {
+      await service.withCodexAuth('client-1', 'run-2', async () => ({
+        result: undefined,
+        refreshedAuthJson: secondRefresh,
+      }));
+      return { result: undefined, refreshedAuthJson: firstRefresh };
+    });
+
+    await service.withCodexAuth('client-1', 'run-3', async currentAuth => {
+      assert.equal(currentAuth, secondRefresh);
+      return { result: undefined };
+    });
+  });
+
+  it('serializes real ChatGPT token refreshes and reuses the newer auth version', async () => {
+    let refreshCalls = 0;
+    const fetchImpl: typeof globalThis.fetch = async (_input, init) => {
+      refreshCalls += 1;
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.refresh_token, 'secret-refresh-token');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return new Response(JSON.stringify({
+        access_token: 'refreshed-access-token',
+        refresh_token: 'rotated-refresh-token',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    let nextId = 0;
+    const { service, store } = makeService({
+      fetch: fetchImpl,
+      createId: () => `refresh-${++nextId}`,
+      authRefreshPollMs: 1,
+    });
+    await service.connectWithDeviceAuth('client-1');
+
+    const [first, second] = await Promise.all([
+      service.refreshChatgptAuth('client-1', 1),
+      service.refreshChatgptAuth('client-1', 1),
+    ]);
+
+    assert.equal(refreshCalls, 1);
+    assert.equal(first.authVersion, 2);
+    assert.equal(second.authVersion, 2);
+    assert.equal(first.accessToken, 'refreshed-access-token');
+    assert.equal(second.accessToken, 'refreshed-access-token');
+    assert.equal((await store.getConnection('client-1'))?.authRefreshOwnerId, undefined);
   });
 
   it('does not allow work for missing or not-ready connections', async () => {

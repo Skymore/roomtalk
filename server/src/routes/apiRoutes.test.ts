@@ -627,6 +627,7 @@ describe('API routes', () => {
       features: {
         codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
         codex: { connections: { enabled: boolean } };
+        github: { connections: { enabled: boolean } };
       };
     };
     assert.equal(status.status, 'online');
@@ -635,6 +636,7 @@ describe('API routes', () => {
     assert.equal(status.rooms, 1);
     assert.deepEqual(status.features.codeAgent, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
+    assert.deepEqual(status.features.github, { connections: { enabled: false } });
 
     const featuresResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
     assert.equal(featuresResponse.status, 200);
@@ -647,6 +649,11 @@ describe('API routes', () => {
         defaultMode: 'plan',
       },
       codex: {
+        connections: {
+          enabled: false,
+        },
+      },
+      github: {
         connections: {
           enabled: false,
         },

@@ -198,7 +198,7 @@ const createTestServer = async (options: { enabled?: boolean } = {}): Promise<Te
     driver,
     {
       now: () => new Date('2026-07-04T00:00:00.000Z'),
-      lockTtlMs: 60_000,
+      authRefreshLockTtlMs: 60_000,
     }
   );
   const sessions = new CodexDeviceAuthSessionManager(service, { deviceCodeTimeoutMs: 1000 });

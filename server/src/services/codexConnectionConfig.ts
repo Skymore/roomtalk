@@ -4,10 +4,16 @@ export interface CodexConnectionConfig {
   cliBin: string;
   authScriptBin?: string;
   authLoginTimeoutMs: number;
+  authRefreshLockTtlMs: number;
+  authRefreshWaitMs: number;
+  refreshTokenUrl?: string;
+  oauthClientId?: string;
 }
 
 const DEFAULT_CODEX_CLI_BIN = 'codex';
 const DEFAULT_CODEX_AUTH_LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_CODEX_AUTH_REFRESH_LOCK_TTL_MS = 30_000;
+const DEFAULT_CODEX_AUTH_REFRESH_WAIT_MS = 30_000;
 const FORBIDDEN_CODEX_AUTH_ENV_KEYS = ['CODEX_API_KEY'];
 const STRIPPED_CHILD_ENV_KEYS = ['CODEX_API_KEY', 'OPENAI_API_KEY'];
 const SECRET_ENV_SUFFIXES = ['_TOKEN', '_SECRET', '_KEY'];
@@ -29,6 +35,18 @@ export function resolveCodexConnectionConfig(env: NodeJS.ProcessEnv = process.en
       DEFAULT_CODEX_AUTH_LOGIN_TIMEOUT_MS,
       'CODEX_AUTH_LOGIN_TIMEOUT_MS'
     ),
+    authRefreshLockTtlMs: parsePositiveIntegerEnv(
+      env.CODEX_AUTH_REFRESH_LOCK_TTL_MS,
+      DEFAULT_CODEX_AUTH_REFRESH_LOCK_TTL_MS,
+      'CODEX_AUTH_REFRESH_LOCK_TTL_MS'
+    ),
+    authRefreshWaitMs: parsePositiveIntegerEnv(
+      env.CODEX_AUTH_REFRESH_WAIT_MS,
+      DEFAULT_CODEX_AUTH_REFRESH_WAIT_MS,
+      'CODEX_AUTH_REFRESH_WAIT_MS'
+    ),
+    refreshTokenUrl: env.CODEX_REFRESH_TOKEN_URL_OVERRIDE?.trim() || undefined,
+    oauthClientId: env.CODEX_APP_SERVER_LOGIN_CLIENT_ID?.trim() || undefined,
   };
 }
 

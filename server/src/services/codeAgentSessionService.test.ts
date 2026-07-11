@@ -867,9 +867,9 @@ describe('CodeAgentSessionService', () => {
       },
     };
     const codexConnectionService = {
-      async withCodexAuth(clientId: string, runId: string, work: (authJson: string) => Promise<any>) {
+      async withCodexAuth(clientId: string, runId: string, work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>) {
         authCalls.push({ clientId, runId });
-        const workResult = await work(initialAuthJson);
+        const workResult = await work(initialAuthJson, { authVersion: 1 });
         refreshedAuths.push(workResult.refreshedAuthJson);
         return workResult.result;
       },
@@ -958,9 +958,12 @@ describe('CodeAgentSessionService', () => {
       },
     };
     const codexConnectionService = {
-      async withCodexAuth(clientId: string, runId: string, work: (authJson: string) => Promise<any>) {
+      async withCodexAuth(clientId: string, runId: string, work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>) {
         authCalls.push({ clientId, runId });
-        const workResult = await work(JSON.stringify({ OPENAI_AUTH: { access_token: 'room-token' } }));
+        const workResult = await work(
+          JSON.stringify({ OPENAI_AUTH: { access_token: 'room-token' } }),
+          { authVersion: 1 }
+        );
         return workResult.result;
       },
     };
@@ -1039,14 +1042,28 @@ describe('CodeAgentSessionService', () => {
       },
     };
     const codexConnectionService = {
-      async withCodexAuth(clientId: string, runId: string, work: (authJson: string) => Promise<any>) {
+      async withCodexAuth(clientId: string, runId: string, work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>) {
         authCalls.push({ clientId, runId });
-        const workResult = await work(JSON.stringify({ OPENAI_AUTH: { access_token: 'app-server-token' } }));
+        const workResult = await work(
+          JSON.stringify({ OPENAI_AUTH: { access_token: 'app-server-token' } }),
+          { authVersion: 1 }
+        );
         return workResult.result;
       },
     };
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.example',
+    });
+    const roomContext = new CodeAgentRoomContextService(store as any, {
+      tokenSecret: 'room-context-secret',
+      createId: () => 'room-context-token-id',
+    });
     const setup = createService({
-      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
+      store,
       runner,
       backend: 'code-agent',
       runnerCommandByBackend: {
@@ -1059,6 +1076,8 @@ describe('CodeAgentSessionService', () => {
       },
       codexBackendEnabled: true,
       codexConnectionService,
+      staticSitePublisher,
+      roomContext,
       ids: ['ai-1', 'turn-1'],
     });
     sandboxService = setup.sandboxService;
@@ -1073,6 +1092,15 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
+    const runnerEnv = sandboxService.startedRunnerEnvs[0];
+    assert.equal(runnerEnv.ROOMTALK_CODEX_AUTH_VERSION, '1');
+    assert.equal(runnerEnv.ROOMTALK_CODEX_AUTH_REFRESH_URL, 'https://room.example/api/code-agent/codex-auth/refresh');
+    const roomContextClaims = roomContext.verifyTurnToken(runnerEnv.ROOMTALK_ROOM_CONTEXT_TOKEN)!;
+    const authRefreshClaims = roomContext.verifyTurnToken(runnerEnv.ROOMTALK_CODEX_AUTH_REFRESH_TOKEN)!;
+    assert.equal(authRefreshClaims.roomId, 'room-1');
+    assert.equal(authRefreshClaims.clientId, 'client-1');
+    assert.equal(authRefreshClaims.turnId, 'turn-1');
+    assert.ok(authRefreshClaims.exp > roomContextClaims.exp);
     const usageUpdate = setup.emitter.roomEmits.find(event => event.event === 'ai_usage_update');
     assert.deepEqual(usageUpdate?.args[0], {
       messageId: 'ai-1',

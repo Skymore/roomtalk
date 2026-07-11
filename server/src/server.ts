@@ -19,6 +19,7 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
 import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContextRoutes';
+import { registerCodeAgentCodexAuthRoutes } from './routes/codeAgentCodexAuthRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { executeQueuedAssistantRun } from './socket/aiHandlers';
@@ -202,7 +203,10 @@ if (codexConnectionConfig.enabled) {
       scriptBin: codexConnectionConfig.authScriptBin,
     }),
     {
-      lockTtlMs: parsePositiveIntegerEnv('CODEX_CONNECTION_LOCK_TTL_MS', 10 * 60 * 1000),
+      authRefreshLockTtlMs: codexConnectionConfig.authRefreshLockTtlMs,
+      authRefreshWaitMs: codexConnectionConfig.authRefreshWaitMs,
+      refreshTokenUrl: codexConnectionConfig.refreshTokenUrl,
+      oauthClientId: codexConnectionConfig.oauthClientId,
     }
   );
   codexDeviceAuthSessions = new CodexDeviceAuthSessionManager(codexConnectionService, {
@@ -559,6 +563,14 @@ registerCodeAgentRoomContextRoutes(app, {
   logger: codeAgentLogger,
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
 });
+
+if (codexConnectionService) {
+  registerCodeAgentCodexAuthRoutes(app, {
+    authorizationService: codeAgentRoomContextService,
+    connectionService: codexConnectionService,
+    logger: codexLogger,
+  });
+}
 
 registerCodeWorkspaceAssetRoutes(app, {
   assetAccess: codeWorkspaceAssetAccess,

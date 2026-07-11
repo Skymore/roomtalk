@@ -38,7 +38,7 @@ import { PublishedStaticSiteService } from './publishedStaticSite';
 import { CODE_AGENT_ROOM_CONTEXT_API_PREFIX, CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAgentRoomAccess';
-import { CodexConnectionService } from './codexConnection';
+import { CODE_AGENT_CODEX_AUTH_API_PREFIX, CodexConnectionService } from './codexConnection';
 import { GitHubConnectionService } from './githubConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
@@ -178,6 +178,7 @@ export class CodeAgentSessionService {
 
   private static readonly MAX_TURN_IMAGE_BYTES = 5 * 1024 * 1024;
   private static readonly TURN_IMAGE_URL_TTL_SECONDS = 2 * 60 * 60;
+  private static readonly CODEX_AUTH_REFRESH_TOKEN_TTL_SECONDS = 24 * 60 * 60;
   private static readonly TURN_IMAGE_EXTENSION: Record<string, string> = {
     'image/png': 'png',
     'image/jpeg': 'jpg',
@@ -1035,7 +1036,7 @@ export class CodeAgentSessionService {
     }
 
     const queryId = this.createId();
-    return connectionService.withCodexAuth(input.clientId, queryId, async authJson => {
+    return connectionService.withCodexAuth(input.clientId, queryId, async (authJson, snapshot) => {
       const authPath = this.codexSecretFilePath(queryId, 'auth.json');
       const refreshedAuthPath = this.codexSecretFilePath(queryId, 'refreshed-auth.json');
       await this.sandboxService.writeSecretFile!(input.sandbox, {
@@ -1051,6 +1052,7 @@ export class CodeAgentSessionService {
           ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
           ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
           ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+          ROOMTALK_CODEX_AUTH_VERSION: String(snapshot.authVersion),
         };
         const runnerProcess = this.options.runnerClient === 'daemon'
           ? await this.startDaemonProcess(input.sandbox, runnerEnv)
@@ -1185,7 +1187,7 @@ export class CodeAgentSessionService {
       throw new Error('Codex backend requires sandbox secret file support');
     }
 
-    return connectionService.withCodexAuth(input.clientId, input.turnId, async authJson => {
+    return connectionService.withCodexAuth(input.clientId, input.turnId, async (authJson, snapshot) => {
       const authPath = this.codexSecretFilePath(input.turnId, 'auth.json');
       const refreshedAuthPath = this.codexSecretFilePath(input.turnId, 'refreshed-auth.json');
       await this.sandboxService.writeSecretFile!(input.sandbox, {
@@ -1199,6 +1201,7 @@ export class CodeAgentSessionService {
           ...input.runnerEnv,
           ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
           ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+          ROOMTALK_CODEX_AUTH_VERSION: String(snapshot.authVersion),
         };
         const process = await input.startRunnerProcess(effectiveRunnerEnv);
         const result = await this.runner.run(input.request, input.handlers, {
@@ -2223,15 +2226,25 @@ export class CodeAgentSessionService {
         context.clientOrigin,
         context.serverOrigin
       );
-      env.ROOMTALK_ROOM_CONTEXT_URL = publicBaseUrl
-        ? `${publicBaseUrl}${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}`
-        : CODE_AGENT_ROOM_CONTEXT_API_PREFIX;
-      env.ROOMTALK_ROOM_CONTEXT_TOKEN = this.options.roomContext.issueTurnToken({
+      const turnToken = this.options.roomContext.issueTurnToken({
         roomId: context.roomId,
         clientId: context.clientId,
         turnId: context.turnId,
         mode: normalizedMode,
       });
+      env.ROOMTALK_ROOM_CONTEXT_URL = publicBaseUrl
+        ? `${publicBaseUrl}${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}`
+        : CODE_AGENT_ROOM_CONTEXT_API_PREFIX;
+      env.ROOMTALK_ROOM_CONTEXT_TOKEN = turnToken;
+      if (context.backend === 'codex-app-server' && publicBaseUrl) {
+        env.ROOMTALK_CODEX_AUTH_REFRESH_URL = `${publicBaseUrl}${CODE_AGENT_CODEX_AUTH_API_PREFIX}/refresh`;
+        env.ROOMTALK_CODEX_AUTH_REFRESH_TOKEN = this.options.roomContext.issueTurnToken({
+          roomId: context.roomId,
+          clientId: context.clientId,
+          turnId: context.turnId,
+          mode: normalizedMode,
+        }, { ttlSeconds: CodeAgentSessionService.CODEX_AUTH_REFRESH_TOKEN_TTL_SECONDS });
+      }
     }
 
     if (codeAgentModeAllowsWriteTools(normalizedMode)) {

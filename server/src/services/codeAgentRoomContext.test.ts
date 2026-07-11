@@ -46,6 +46,14 @@ describe('CodeAgentRoomContextService', () => {
       v: 1, jti: 'token-1', roomId: room.id, clientId: 'client-1', turnId: 'turn-1', mode: 'plan',
       exp: Math.floor(Date.parse('2026-07-10T00:10:00.000Z') / 1000) + 60,
     });
+    const extended = service.issueTurnToken(
+      { roomId: room.id, clientId: 'client-1', turnId: 'turn-1', mode: 'plan' },
+      { ttlSeconds: 3_600 }
+    );
+    assert.equal(
+      service.verifyTurnToken(extended)?.exp,
+      Math.floor(Date.parse('2026-07-10T00:10:00.000Z') / 1000) + 3_600
+    );
     assert.equal(service.verifyTurnToken(`${token}x`), null);
   });
 

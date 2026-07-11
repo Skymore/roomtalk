@@ -1342,7 +1342,8 @@ def _respond_to_server_request(
         result = {"action": "decline", "content": None, "_meta": None}
     elif method == "account/chatgptAuthTokens/refresh":
         try:
-            result = _chatgpt_auth_tokens_refresh_result(config, codex_home)
+            params = message.get("params") if isinstance(message.get("params"), dict) else {}
+            result = _chatgpt_auth_tokens_refresh_result(config, codex_home, params)
         except RunnerError as exc:
             _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32010, "message": str(exc)}}, send_lock=send_lock)
             return
@@ -1364,7 +1365,37 @@ def _write_json_rpc_response(process: Any, payload: dict[str, Any], *, send_lock
 
 
 
-def _chatgpt_auth_tokens_refresh_result(config: CodexCliRunConfig, codex_home: Path) -> dict[str, Any]:
+def _chatgpt_auth_tokens_refresh_result(
+    config: CodexCliRunConfig,
+    codex_home: Path,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if config.auth_refresh_url and config.auth_refresh_token:
+        payload = _request_roomtalk_auth_refresh(config, params or {})
+        auth_json = payload.get("authJson")
+        if not isinstance(auth_json, str) or not auth_json.strip():
+            raise RunnerError(
+                "RoomTalk Codex auth refresh response did not include authJson",
+                code="codex_auth_refresh_invalid_response",
+            )
+        _write_private_file(codex_home / "auth.json", auth_json)
+        auth_version = payload.get("authVersion")
+        if isinstance(auth_version, int) and auth_version >= 0:
+            config.auth_version = auth_version
+        access_token = payload.get("accessToken")
+        account_id = payload.get("chatgptAccountId")
+        if not isinstance(access_token, str) or not access_token or not isinstance(account_id, str) or not account_id:
+            raise RunnerError(
+                "RoomTalk Codex auth refresh response did not include accessToken and chatgptAccountId",
+                code="codex_auth_refresh_invalid_response",
+            )
+        plan_type = payload.get("chatgptPlanType")
+        return {
+            "accessToken": access_token,
+            "chatgptAccountId": account_id,
+            "chatgptPlanType": plan_type if isinstance(plan_type, str) and plan_type else None,
+        }
+
     auth_path = codex_home / "auth.json"
     if not auth_path.exists() and config.auth_json_path:
         auth_path = config.auth_json_path
@@ -1389,6 +1420,54 @@ def _chatgpt_auth_tokens_refresh_result(config: CodexCliRunConfig, codex_home: P
         "chatgptAccountId": account_id,
         "chatgptPlanType": plan_type,
     }
+
+
+def _request_roomtalk_auth_refresh(config: CodexCliRunConfig, params: dict[str, Any]) -> dict[str, Any]:
+    assert config.auth_refresh_url is not None
+    assert config.auth_refresh_token is not None
+    body = json.dumps({
+        "authVersion": config.auth_version,
+        "reason": params.get("reason"),
+        "previousAccountId": params.get("previousAccountId"),
+    }, separators=(",", ":")).encode("utf-8")
+    request = urllib_request.Request(
+        config.auth_refresh_url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.auth_refresh_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "roomtalk-code-agent-runner/1",
+        },
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=30) as response:
+            raw = response.read(2 * 1024 * 1024 + 1)
+    except urllib_error.HTTPError as exc:
+        try:
+            error_payload = json.loads(exc.read(64 * 1024).decode("utf-8"))
+        except Exception:
+            error_payload = {}
+        message = error_payload.get("error") if isinstance(error_payload, dict) else None
+        raise RunnerError(
+            str(message or f"RoomTalk Codex auth refresh failed with HTTP {exc.code}"),
+            code="codex_auth_refresh_failed",
+        ) from exc
+    except Exception as exc:
+        raise RunnerError(
+            f"RoomTalk Codex auth refresh request failed: {exc}",
+            code="codex_auth_refresh_failed",
+        ) from exc
+    if len(raw) > 2 * 1024 * 1024:
+        raise RunnerError("RoomTalk Codex auth refresh response is too large", code="codex_auth_refresh_invalid_response")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RunnerError("RoomTalk Codex auth refresh response is not valid JSON", code="codex_auth_refresh_invalid_response") from exc
+    if not isinstance(payload, dict):
+        raise RunnerError("RoomTalk Codex auth refresh response was not an object", code="codex_auth_refresh_invalid_response")
+    return payload
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

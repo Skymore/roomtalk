@@ -480,6 +480,77 @@ def test_codex_app_server_responds_to_auth_refresh_from_auth_json(tmp_path: Path
     }
 
 
+def test_codex_app_server_delegates_auth_refresh_to_roomtalk(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text(json.dumps({
+        "tokens": {
+            "access_token": "expired-access-token",
+            "refresh_token": "secret-refresh-token",
+            "account_id": "acct-token",
+        },
+    }), encoding="utf-8")
+    refreshed_auth_path = tmp_path / "refreshed-auth.json"
+    refreshed_auth_json = json.dumps({
+        "tokens": {
+            "access_token": "fresh-access-token",
+            "refresh_token": "rotated-refresh-token",
+            "account_id": "acct-token",
+        },
+    })
+    refresh_requests = []
+
+    def fake_refresh(config, params):
+        refresh_requests.append((config.auth_version, params))
+        return {
+            "authJson": refreshed_auth_json,
+            "authVersion": 8,
+            "accessToken": "fresh-access-token",
+            "chatgptAccountId": "acct-token",
+            "chatgptPlanType": "pro",
+        }
+
+    monkeypatch.setattr(codex_app_server, "_request_roomtalk_auth_refresh", fake_refresh)
+    popen = FakeAppServerPopenFactory([
+        {"id": 0, "result": {}},
+        {"id": 1, "result": {"thread": {"id": "thread-app-refresh"}}},
+        {
+            "id": 44,
+            "method": "account/chatgptAuthTokens/refresh",
+            "params": {"reason": "unauthorized", "previousAccountId": "acct-token"},
+        },
+        {"id": 2, "result": {"turn": {"id": "turn-app-refresh"}}},
+        {"method": "turn/completed", "params": {"threadId": "thread-app-refresh", "turn": {"id": "turn-app-refresh", "status": "completed", "items": []}}},
+    ])
+    config = codex_app_server.CodexCliRunConfig(
+        secret_parent=tmp_path / "secrets",
+        auth_json_path=auth_json,
+        refreshed_auth_json_path=refreshed_auth_path,
+        auth_refresh_url="https://room.example/api/code-agent/codex-auth/refresh",
+        auth_refresh_token="turn-token",
+        auth_version=7,
+    )
+
+    codex_app_server.run_request(
+        codex_app_request(workspace),
+        emitter=EventEmitter(io.StringIO()),
+        config=config,
+        popen_factory=popen,
+        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    response = next(message for message in jsonrpc_lines(popen.processes[0]) if message.get("id") == 44)
+    assert response["result"] == {
+        "accessToken": "fresh-access-token",
+        "chatgptAccountId": "acct-token",
+        "chatgptPlanType": "pro",
+    }
+    assert refresh_requests == [(7, {"reason": "unauthorized", "previousAccountId": "acct-token"})]
+    assert config.auth_version == 8
+    assert json.loads(refreshed_auth_path.read_text(encoding="utf-8"))["tokens"]["access_token"] == "fresh-access-token"
+
+
 def test_codex_app_server_emits_interactive_approval_request_in_edit_mode(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

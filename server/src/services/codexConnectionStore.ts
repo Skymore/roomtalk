@@ -1,6 +1,7 @@
 import { RedisClientType } from 'redis';
 import { PostgresPool } from '../repositories/postgresStore';
 import {
+  CodexConnectionAuthUpdate,
   CodexConnectionRecord,
   CodexConnectionStatus,
   CodexConnectionStore,
@@ -18,8 +19,8 @@ const CODEX_CONNECTION_COLUMNS = [
   'updated_at',
   'last_validated_at',
   'last_used_at',
-  'active_run_id',
-  'locked_until',
+  'auth_refresh_owner_id',
+  'auth_refresh_locked_until',
   'last_error',
 ].join(', ');
 
@@ -34,8 +35,8 @@ type CodexConnectionRow = {
   updated_at: string | Date;
   last_validated_at: string | Date | null;
   last_used_at: string | Date | null;
-  active_run_id: string | null;
-  locked_until: string | Date | null;
+  auth_refresh_owner_id: string | null;
+  auth_refresh_locked_until: string | Date | null;
   last_error: string | null;
 };
 
@@ -65,8 +66,8 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         updated_at,
         last_validated_at,
         last_used_at,
-        active_run_id,
-        locked_until,
+        auth_refresh_owner_id,
+        auth_refresh_locked_until,
         last_error
       )
       VALUES ($1, 'codex', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -78,8 +79,8 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         updated_at = EXCLUDED.updated_at,
         last_validated_at = EXCLUDED.last_validated_at,
         last_used_at = EXCLUDED.last_used_at,
-        active_run_id = EXCLUDED.active_run_id,
-        locked_until = EXCLUDED.locked_until,
+        auth_refresh_owner_id = EXCLUDED.auth_refresh_owner_id,
+        auth_refresh_locked_until = EXCLUDED.auth_refresh_locked_until,
         last_error = EXCLUDED.last_error
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
       [
@@ -92,8 +93,8 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         record.updatedAt,
         record.lastValidatedAt || null,
         record.lastUsedAt || null,
-        record.activeRunId || null,
-        record.lockedUntil || null,
+        record.authRefreshOwnerId || null,
+        record.authRefreshLockedUntil || null,
         record.lastError || null,
       ]
     );
@@ -112,42 +113,89 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
     return (result.rowCount || 0) > 0;
   }
 
-  async acquireConnectionLock(
+  async compareAndSwapAuth(
     clientId: string,
-    runId: string,
+    expectedAuthVersion: number,
+    update: CodexConnectionAuthUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const result = await this.pool.query<CodexConnectionRow>(
+      `UPDATE codex_connections
+      SET encrypted_auth_json = $3,
+          auth_version = auth_version + 1,
+          key_version = $4,
+          updated_at = $5,
+          last_used_at = $6,
+          last_validated_at = COALESCE($7, last_validated_at),
+          last_error = NULL
+      WHERE client_id = $1
+        AND status = 'connected'
+        AND auth_version = $2
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [
+        clientId,
+        expectedAuthVersion,
+        update.encryptedAuthJson,
+        update.keyVersion,
+        update.updatedAt,
+        update.lastUsedAt,
+        update.lastValidatedAt || null,
+      ]
+    );
+    return mapPostgresConnectionRow(result.rows[0]);
+  }
+
+  async touchConnection(
+    clientId: string,
+    lastUsedAt: string,
+    lastValidatedAt?: string
+  ): Promise<CodexConnectionRecord | null> {
+    const result = await this.pool.query<CodexConnectionRow>(
+      `UPDATE codex_connections
+      SET updated_at = $2,
+          last_used_at = $2,
+          last_validated_at = COALESCE($3, last_validated_at)
+      WHERE client_id = $1
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [clientId, lastUsedAt, lastValidatedAt || null]
+    );
+    return mapPostgresConnectionRow(result.rows[0]);
+  }
+
+  async acquireAuthRefreshLease(
+    clientId: string,
+    ownerId: string,
     lockedUntil: string,
     now: string
   ): Promise<CodexConnectionRecord | null> {
     const result = await this.pool.query<CodexConnectionRow>(
       `UPDATE codex_connections
-      SET active_run_id = $2,
-          locked_until = $3,
-          updated_at = $4
+      SET auth_refresh_owner_id = $2,
+          auth_refresh_locked_until = $3
       WHERE client_id = $1
         AND status = 'connected'
         AND encrypted_auth_json IS NOT NULL
         AND (
-          active_run_id IS NULL
-          OR locked_until IS NULL
-          OR locked_until <= $4
-          OR active_run_id = $2
+          auth_refresh_owner_id IS NULL
+          OR auth_refresh_locked_until IS NULL
+          OR auth_refresh_locked_until <= $4
+          OR auth_refresh_owner_id = $2
         )
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
-      [clientId, runId, lockedUntil, now]
+      [clientId, ownerId, lockedUntil, now]
     );
     return mapPostgresConnectionRow(result.rows[0]);
   }
 
-  async releaseConnectionLock(clientId: string, runId: string, now: string): Promise<CodexConnectionRecord | null> {
+  async releaseAuthRefreshLease(clientId: string, ownerId: string, now: string): Promise<CodexConnectionRecord | null> {
     const result = await this.pool.query<CodexConnectionRow>(
       `UPDATE codex_connections
-      SET active_run_id = NULL,
-          locked_until = NULL,
+      SET auth_refresh_owner_id = NULL,
+          auth_refresh_locked_until = NULL,
           updated_at = $3
       WHERE client_id = $1
-        AND active_run_id = $2
+        AND auth_refresh_owner_id = $2
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
-      [clientId, runId, now]
+      [clientId, ownerId, now]
     );
     return mapPostgresConnectionRow(result.rows[0]) || this.getConnection(clientId);
   }
@@ -173,29 +221,118 @@ export class RedisCodexConnectionStore implements CodexConnectionStore {
     return deleted > 0;
   }
 
-  async acquireConnectionLock(
+  async compareAndSwapAuth(
     clientId: string,
-    runId: string,
-    lockedUntil: string,
-    now: string
+    expectedAuthVersion: number,
+    update: CodexConnectionAuthUpdate
   ): Promise<CodexConnectionRecord | null> {
-    const raw = await (this.redisClient as any).eval(REDIS_ACQUIRE_CODEX_CONNECTION_LOCK_SCRIPT, {
+    const raw = await (this.redisClient as any).eval(REDIS_COMPARE_AND_SWAP_CODEX_AUTH_SCRIPT, {
       keys: [REDIS_CODEX_CONNECTIONS_KEY],
-      arguments: [clientId, runId, lockedUntil, now],
+      arguments: [
+        clientId,
+        String(expectedAuthVersion),
+        JSON.stringify(update.encryptedAuthJson),
+        update.keyVersion,
+        update.updatedAt,
+        update.lastUsedAt,
+        update.lastValidatedAt || '',
+      ],
     }) as string | null;
     return parseRedisConnectionRecord(raw);
   }
 
-  async releaseConnectionLock(clientId: string, runId: string, now: string): Promise<CodexConnectionRecord | null> {
-    const raw = await (this.redisClient as any).eval(REDIS_RELEASE_CODEX_CONNECTION_LOCK_SCRIPT, {
+  async touchConnection(
+    clientId: string,
+    lastUsedAt: string,
+    lastValidatedAt?: string
+  ): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_TOUCH_CODEX_CONNECTION_SCRIPT, {
       keys: [REDIS_CODEX_CONNECTIONS_KEY],
-      arguments: [clientId, runId, now],
+      arguments: [clientId, lastUsedAt, lastValidatedAt || ''],
+    }) as string | null;
+    return parseRedisConnectionRecord(raw);
+  }
+
+  async acquireAuthRefreshLease(
+    clientId: string,
+    ownerId: string,
+    lockedUntil: string,
+    now: string
+  ): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_ACQUIRE_CODEX_AUTH_REFRESH_LEASE_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [clientId, ownerId, lockedUntil, now],
+    }) as string | null;
+    return parseRedisConnectionRecord(raw);
+  }
+
+  async releaseAuthRefreshLease(clientId: string, ownerId: string, now: string): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_RELEASE_CODEX_AUTH_REFRESH_LEASE_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [clientId, ownerId, now],
     }) as string | null;
     return parseRedisConnectionRecord(raw);
   }
 }
 
-const REDIS_ACQUIRE_CODEX_CONNECTION_LOCK_SCRIPT = `
+const REDIS_COMPARE_AND_SWAP_CODEX_AUTH_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then
+  return ''
+end
+
+local ok, record = pcall(cjson.decode, raw)
+if not ok then
+  return ''
+end
+
+if record['status'] ~= 'connected' or tonumber(record['authVersion']) ~= tonumber(ARGV[2]) then
+  return ''
+end
+
+local auth_ok, encrypted_auth_json = pcall(cjson.decode, ARGV[3])
+if not auth_ok then
+  return ''
+end
+
+record['encryptedAuthJson'] = encrypted_auth_json
+record['authVersion'] = tonumber(ARGV[2]) + 1
+record['keyVersion'] = ARGV[4]
+record['updatedAt'] = ARGV[5]
+record['lastUsedAt'] = ARGV[6]
+if ARGV[7] ~= '' then
+  record['lastValidatedAt'] = ARGV[7]
+end
+record['lastError'] = nil
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REDIS_TOUCH_CODEX_CONNECTION_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then
+  return ''
+end
+
+local ok, record = pcall(cjson.decode, raw)
+if not ok then
+  return ''
+end
+
+record['updatedAt'] = ARGV[2]
+record['lastUsedAt'] = ARGV[2]
+if ARGV[3] ~= '' then
+  record['lastValidatedAt'] = ARGV[3]
+end
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REDIS_ACQUIRE_CODEX_AUTH_REFRESH_LEASE_SCRIPT = `
 local raw = redis.call('HGET', KEYS[1], ARGV[1])
 if not raw then
   return ''
@@ -210,22 +347,21 @@ if record['status'] ~= 'connected' or not record['encryptedAuthJson'] then
   return ''
 end
 
-local active_run_id = record['activeRunId']
-local locked_until = record['lockedUntil']
-if active_run_id and locked_until and tostring(locked_until) > ARGV[4] and active_run_id ~= ARGV[2] then
+local owner_id = record['authRefreshOwnerId']
+local locked_until = record['authRefreshLockedUntil']
+if owner_id and locked_until and tostring(locked_until) > ARGV[4] and owner_id ~= ARGV[2] then
   return ''
 end
 
-record['activeRunId'] = ARGV[2]
-record['lockedUntil'] = ARGV[3]
-record['updatedAt'] = ARGV[4]
+record['authRefreshOwnerId'] = ARGV[2]
+record['authRefreshLockedUntil'] = ARGV[3]
 
 local encoded = cjson.encode(record)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
 `;
 
-const REDIS_RELEASE_CODEX_CONNECTION_LOCK_SCRIPT = `
+const REDIS_RELEASE_CODEX_AUTH_REFRESH_LEASE_SCRIPT = `
 local raw = redis.call('HGET', KEYS[1], ARGV[1])
 if not raw then
   return ''
@@ -236,12 +372,12 @@ if not ok then
   return ''
 end
 
-if record['activeRunId'] ~= ARGV[2] then
+if record['authRefreshOwnerId'] ~= ARGV[2] then
   return raw
 end
 
-record['activeRunId'] = nil
-record['lockedUntil'] = nil
+record['authRefreshOwnerId'] = nil
+record['authRefreshLockedUntil'] = nil
 record['updatedAt'] = ARGV[3]
 
 local encoded = cjson.encode(record)
@@ -264,8 +400,8 @@ const mapPostgresConnectionRow = (row?: CodexConnectionRow): CodexConnectionReco
     updatedAt: toIsoString(row.updated_at),
     lastValidatedAt: toOptionalIsoString(row.last_validated_at),
     lastUsedAt: toOptionalIsoString(row.last_used_at),
-    activeRunId: row.active_run_id || undefined,
-    lockedUntil: toOptionalIsoString(row.locked_until),
+    authRefreshOwnerId: row.auth_refresh_owner_id || undefined,
+    authRefreshLockedUntil: toOptionalIsoString(row.auth_refresh_locked_until),
     lastError: row.last_error || undefined,
   };
 };
