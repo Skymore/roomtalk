@@ -410,7 +410,7 @@ export class PublishedStaticSiteService {
       throw new PublishedStaticSiteError('Static site publishing is not configured', 503);
     }
     if (!codeAgentModeAllowsStaticPublish(claims.mode)) {
-      throw new PublishedStaticSiteError('Static site publishing requires full access mode', 403);
+      throw new PublishedStaticSiteError('Static site publishing requires a writable agent mode', 403);
     }
     if (input.roomId !== claims.roomId || input.turnId !== claims.turnId) {
       throw new PublishedStaticSiteError('Publish token does not match this agent turn', 403);

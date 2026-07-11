@@ -64,5 +64,5 @@ export const codeAgentModeAllowsShell = (mode: CodeAgentMode): boolean => (
 );
 
 export const codeAgentModeAllowsStaticPublish = (mode: CodeAgentMode): boolean => (
-  codeAgentModeRank(mode) >= CODE_AGENT_MODE_RANK.fullAccess
+  codeAgentModeAllowsWriteTools(mode)
 );

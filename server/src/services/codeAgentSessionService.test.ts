@@ -1328,7 +1328,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(runner.requests[0].mode, 'edit');
   });
 
-  it('injects a scoped static publish token for configured full access turns', async () => {
+  it('injects a scoped static publish token for configured approve-for-me turns', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
@@ -1340,7 +1340,7 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'approveForMe' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
@@ -1363,7 +1363,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(claims?.roomId, 'room-1');
     assert.equal(claims?.clientId, 'client-1');
     assert.equal(claims?.turnId, 'turn-1');
-    assert.equal(claims?.mode, 'fullAccess');
+    assert.equal(claims?.mode, 'approveForMe');
   });
 
   it('injects a read-only room context CLI token in every agent mode', async () => {

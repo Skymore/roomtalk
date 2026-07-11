@@ -68,13 +68,13 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(service.verifyTurnToken(token), null);
   });
 
-  it('publishes files, stores a manifest, and resolves published assets', async () => {
+  it('publishes files from approve-for-me mode, stores a manifest, and resolves published assets', async () => {
     const { service, storage } = createService();
     const token = service.issueTurnToken({
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'fullAccess',
+      mode: 'approveForMe',
     });
     const claims = service.verifyTurnToken(token)!;
 
@@ -349,7 +349,7 @@ describe('PublishedStaticSiteService', () => {
         turnId: 'turn-1',
         files: [textFile('index.html', '<!doctype html>')],
       }, claims),
-      /requires full access mode/
+      /requires a writable agent mode/
     );
   });
 });
