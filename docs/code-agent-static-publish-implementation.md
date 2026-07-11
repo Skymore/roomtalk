@@ -17,8 +17,8 @@ sequenceDiagram
     User->>UI: ask Code Agent to build and publish a static page
     UI->>Node: ask_ai
     Node->>Runner: run request + scoped publish URL/token
-    Runner->>Code Agent: Engine(tools=[..., PublishStaticSite])
-    Code Agent->>Runner: tool call PublishStaticSite(root, entry, slug)
+    Runner->>Code Agent: Shell + RoomTalk CLI instructions
+    Code Agent->>Runner: roomtalk site publish --root ... --slug ...
     Runner->>Runner: read and validate workspace files
     Runner->>Node: POST /api/code-agent/publish-static-site
     Node->>Node: verify token and validate files
@@ -97,6 +97,15 @@ Routes:
   - Uses a larger JSON body limit for small static artifacts.
   - Returns `{ url, slug, entry, versionId, fileCount, totalBytes }`.
 
+- `DELETE /api/code-agent/publish-static-site`
+  - Uses the same scoped turn token and accepts `{ slug }`.
+  - Verifies that the slug belongs to the token's room, removes every stored version, and updates the room index.
+  - Returns `{ url, slug, objectCount }`; the returned URL is the address that was taken offline.
+
+- `GET /api/code-agent/room-context/sites`
+  - Uses the read-only room-context token and rechecks current room access.
+  - Returns the sites owned by the current room for `roomtalk site list --json`.
+
 - `GET /p/:slug`
 - `GET /p/:slug/*`
   - Reads manifest and serves the requested file.
@@ -120,15 +129,26 @@ ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL=https://room.ruit.me
 
 The token is not stored in messages and is not sent to the browser.
 
-### 5. Runner Tool
+The RoomTalk CLI exposes the capability symmetrically:
 
-`roomtalk_code_agent_runner` adds `PublishStaticSite` when all are true:
+```bash
+roomtalk site publish --root dist --entry index.html --slug roomtalk-demo
+roomtalk site unpublish --slug roomtalk-demo
+```
+
+`roomtalk publish-static-site` remains as a compatibility alias for `roomtalk site publish`.
+
+### 5. RoomTalk CLI
+
+The runner exposes static-site management only through the shared `roomtalk` CLI. The previous native `PublishStaticSite` engine tool is removed so Coco, Codex CLI, and Codex app-server use one contract.
+
+`roomtalk site list --json` is read-only and uses the room-context broker, so it is available in every mode without exposing a publish token. `site publish` and `site unpublish` require all of:
 
 - Mode is Edit, Approve for me, or Full access (`acceptEdits` is treated as the legacy alias for Edit).
 - `ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH=true`.
 - Publish URL and token are present.
 
-Tool input:
+Publish input:
 
 ```json
 {
@@ -139,7 +159,7 @@ Tool input:
 }
 ```
 
-The tool:
+The publish command:
 
 1. Resolves `root` inside the current workspace.
 2. Walks files recursively.
@@ -147,16 +167,18 @@ The tool:
 4. Enforces file count and byte limits.
 5. Base64-encodes file contents.
 6. POSTs the payload to RoomTalk.
-7. Returns a concise tool result with the durable URL.
+7. Returns a concise JSON or human-readable result with the durable URL.
+
+The unpublish command sends `DELETE /api/code-agent/publish-static-site` with the scoped token. The server verifies room ownership, removes every stored version for the slug, and updates or deletes the room index. It never deletes workspace files.
 
 ### 6. System Prompt
 
-The runner system prompt should describe the new tool only when available:
+The runner system prompt describes the CLI only when the matching read or write capability is available:
 
 ```text
-PublishStaticSite: Publish a static site directory to a stable RoomTalk URL.
-Use it after creating a static HTML/CSS/JS site. Do not use it for Flask, Node,
-or other server-side apps.
+roomtalk site list --json
+roomtalk site publish --root dist --entry index.html --slug roomtalk-demo
+roomtalk site unpublish --slug roomtalk-demo
 ```
 
 ## Tests
@@ -167,14 +189,17 @@ or other server-side apps.
 - Publish stores files and manifest.
 - Publish rejects missing entry, bad path traversal, unsupported MIME/type, oversized payload, and slug ownership conflict.
 - Routes serve `index.html`, assets, directory index, and SPA fallback.
+- Unpublish rejects cross-room and Plan-mode tokens, removes all stored versions, and keeps the room index consistent.
 - Routes return 404 for missing slugs and unsafe paths.
 
 ### Runner
 
-- Plan mode does not expose `PublishStaticSite`.
-- Edit mode exposes `PublishStaticSite` only with publish env vars.
-- System prompt lists the tool only when present.
+- Plan mode can run `site list`, but rejects `site publish` and `site unpublish`.
+- Writable modes expose publish credentials to the CLI.
+- The native `PublishStaticSite` engine tool is absent.
+- System prompts list only the CLI commands available in the current mode.
 - Tool posts valid payloads and returns the URL.
+- CLI supports `site publish` and `site unpublish`; both reject Plan-mode access.
 - Tool rejects traversal, missing entry, oversized files, and secret-like files before making an HTTP request.
 
 ### Integration

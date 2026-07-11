@@ -74,3 +74,29 @@ def test_broker_rejects_paths_outside_read_only_room_context_api(tmp_path: Path)
         assert response["code"] == "room_context_broker_path_denied"
     finally:
         broker.close()
+
+
+def test_broker_allows_read_only_static_site_listing(monkeypatch):
+    requested: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout):
+        requested["url"] = request.full_url
+        requested["authorization"] = request.headers["Authorization"]
+        return FakeResponse({"roomId": "room-1", "sites": []})
+
+    monkeypatch.setattr(room_context_broker.urllib_request, "urlopen", fake_urlopen)
+    env = {
+        "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+        "ROOMTALK_ROOM_CONTEXT_TOKEN": "secret-turn-token",
+        "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}",
+    }
+    broker = room_context_broker.start_room_context_broker(env, "turn-1")
+    try:
+        result = platform_tools._get_room_context_from_broker(env["ROOMTALK_ROOM_CONTEXT_SOCKET"], "/sites")
+        assert result["sites"] == []
+        assert requested == {
+            "url": "https://room.example/api/code-agent/room-context/sites",
+            "authorization": "Bearer secret-turn-token",
+        }
+    finally:
+        broker.close()

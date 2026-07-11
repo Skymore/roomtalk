@@ -18,9 +18,18 @@ const positiveInteger = (value: unknown) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 };
 
+const requestBaseUrl = (req: Request) => {
+  const forwardedProto = req.header('x-forwarded-proto')?.split(',')[0]?.trim();
+  const forwardedHost = req.header('x-forwarded-host')?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol;
+  const host = forwardedHost || req.get('host');
+  return host ? `${proto}://${host}` : undefined;
+};
+
 export function registerCodeAgentRoomContextRoutes(app: Express, options: {
   service: CodeAgentRoomContextService;
   logger: Logger;
+  listPublishedSites?: (roomId: string, requestBaseUrl?: string) => Promise<unknown>;
 }) {
   const authorize = (req: Request, res: Response): CodeAgentRoomContextTokenClaims | null => {
     const token = bearerToken(req);
@@ -70,4 +79,12 @@ export function registerCodeAgentRoomContextRoutes(app: Express, options: {
     res,
     claims => options.service.message(claims, req.params.messageId),
   ));
+
+  app.get(`${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}/sites`, (req, res) => run(req, res, async claims => {
+    await options.service.assertAccess(claims);
+    const sites = options.listPublishedSites
+      ? await options.listPublishedSites(claims.roomId, requestBaseUrl(req))
+      : [];
+    return { roomId: claims.roomId, sites };
+  }));
 }

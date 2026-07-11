@@ -26,7 +26,6 @@ READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 WRITE_TOOLS = ("Write", "Edit")
 SHELL_TOOL = "Shell"
 BACKGROUND_SHELL_TOOL = "BackgroundShell"
-PUBLISH_STATIC_SITE_TOOL = "PublishStaticSite"
 MAX_TOOL_OUTPUT_CHARS = 20_000
 DEFAULT_WORKSPACE_ROOT = "/workspace"
 MAX_STATIC_PUBLISH_FILES = 100
@@ -282,8 +281,6 @@ def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[s
     if env.get("ROOMTALK_CODE_AGENT_ALLOW_SHELL") == "true":
         tools.append(SHELL_TOOL)
         tools.append(BACKGROUND_SHELL_TOOL)
-    if _static_publish_enabled(env):
-        tools.append(PUBLISH_STATIC_SITE_TOOL)
     return tuple(tools)
 
 
@@ -295,10 +292,16 @@ def _static_publish_enabled(env: dict[str, str]) -> bool:
     )
 
 
-def system_prompt_for_tools(tool_names: Iterable[str], mode: str, *, room_context_enabled: bool = False) -> str:
+def system_prompt_for_tools(
+    tool_names: Iterable[str],
+    mode: str,
+    *,
+    room_context_enabled: bool = False,
+    static_site_write_enabled: bool = False,
+) -> str:
     available = tuple(tool_names)
     unavailable = tuple(
-        tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL, BACKGROUND_SHELL_TOOL, PUBLISH_STATIC_SITE_TOOL)
+        tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL, BACKGROUND_SHELL_TOOL)
         if tool not in available
     )
     descriptions = {
@@ -309,7 +312,6 @@ def system_prompt_for_tools(tool_names: Iterable[str], mode: str, *, room_contex
         "Edit": "Replace an exact unique string in an existing file",
         "Shell": "Run foreground shell commands within the current mode's filesystem and network sandbox",
         "BackgroundShell": "Start or manage tracked long-running background commands and exposed port URLs",
-        "PublishStaticSite": "Publish a static HTML/CSS/JS site directory to a stable RoomTalk URL",
     }
     available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
     unavailable_line = ", ".join(unavailable) if unavailable else "none"
@@ -320,8 +322,13 @@ def system_prompt_for_tools(tool_names: Iterable[str], mode: str, *, room_contex
         else "This run may use only the available tools listed below. Do not call any unavailable tools."
     )
     room_context_guidance = (
-        "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Do not load the full room history by default."
+        "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Use `roomtalk site list --json` to inspect sites published by this room. Do not load the full room history by default."
         if room_context_enabled and SHELL_TOOL in available
+        else ""
+    )
+    static_site_guidance = (
+        "\nUse Shell to run `roomtalk site publish --root <dir> --entry index.html` for plain HTML/CSS/JS output. Use `roomtalk site unpublish --slug <slug>` to take a site offline without deleting workspace files. Do not use static publishing for Flask, Node, Python, databases, or any server-side app."
+        if static_site_write_enabled and SHELL_TOOL in available
         else ""
     )
     return f"""You are Code Agent, a terminal coding assistant.
@@ -332,11 +339,11 @@ Available tools for this run:
 Unavailable tools for this run: {unavailable_line}.
 {mode_guidance}
 {room_context_guidance}
+{static_site_guidance}
 
 Use Read / Glob / Grep to verify the workspace before editing. Edit requires old_string to match exactly once.
 Keep all downloaded repositories, fetched reference files, generated files, and publish roots inside the current workspace. In RoomTalk sandboxes this is normally /workspace. Do not work in /tmp or /var/tmp unless a tool explicitly needs an ephemeral cache; workspace-scoped tools cannot read, edit, or publish files outside the workspace.
 Use Shell only for foreground commands that finish. Use BackgroundShell for servers, watchers, dev servers, slow async tasks, or anything that should keep running after the tool returns. Pass a foreground command to BackgroundShell; do not include nohup, disown, setsid, or '&'. Include expected ports when starting web apps so URLs can be returned.
-Use PublishStaticSite after creating a static site directory that can run as plain HTML/CSS/JS. Do not use PublishStaticSite for Flask, Node, Python, databases, or any server-side app.
 When exploring a project structure, use Glob with pattern "**/*" to find files recursively.
 After tools return, answer clearly. Avoid redundant calls and endless loops."""
 
@@ -590,86 +597,6 @@ def _post_static_publish_payload(url: str, token: str, payload: dict[str, Any]) 
         raise RunnerError(f"PublishStaticSite request failed: {exc.reason}", code="publish_request_failed") from exc
 
 
-def _create_publish_static_site_tool(Tool, ToolOutcome, ToolSpec, request: RunnerRequest, env: dict[str, str]):
-    workspace = request.workspace.resolve(strict=False)
-    publish_url = (env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip()
-    publish_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
-
-    class PublishStaticSiteTool(Tool):
-        @property
-        def spec(self):
-            return ToolSpec(
-                name=PUBLISH_STATIC_SITE_TOOL,
-                description=(
-                    "Publish a static site directory from the current workspace to a stable RoomTalk URL. "
-                    "Use only for static HTML/CSS/JS assets, not server-side apps."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "root": {
-                            "type": "string",
-                            "description": "Directory containing the static site, relative to the workspace. Defaults to current directory.",
-                        },
-                        "entry": {
-                            "type": "string",
-                            "description": "Entry HTML file relative to root. Defaults to index.html.",
-                        },
-                        "slug": {
-                            "type": "string",
-                            "description": "Optional URL slug. RoomTalk will sanitize it and reject slugs owned by another room.",
-                        },
-                        "title": {
-                            "type": "string",
-                            "description": "Optional display title for the published site manifest.",
-                        },
-                    },
-                    "required": [],
-                },
-                is_read_only=False,
-                is_concurrency_safe=False,
-            )
-
-        def invoke(self, arguments: dict[str, Any]):
-            try:
-                entry, files, total_bytes = _collect_static_publish_files(workspace, arguments)
-                payload: dict[str, Any] = {
-                    "roomId": request.room_id,
-                    "turnId": request.turn_id,
-                    "entry": entry,
-                    "files": files,
-                }
-                if isinstance(arguments.get("slug"), str) and arguments["slug"].strip():
-                    payload["slug"] = arguments["slug"].strip()
-                if isinstance(arguments.get("title"), str) and arguments["title"].strip():
-                    payload["title"] = arguments["title"].strip()
-
-                response = _post_static_publish_payload(publish_url, publish_token, payload)
-                url = response.get("url")
-                if not isinstance(url, str) or not url:
-                    raise RunnerError("PublishStaticSite response did not include a URL", code="invalid_publish_response")
-                slug = response.get("slug")
-                version_id = response.get("versionId")
-                file_count = response.get("fileCount", len(files))
-                byte_count = response.get("totalBytes", total_bytes)
-                content = (
-                    f"Published static site: {url}\n"
-                    f"Slug: {slug or 'unknown'}\n"
-                    f"Entry: {entry}\n"
-                    f"Version: {version_id or 'unknown'}\n"
-                    f"Files: {file_count}\n"
-                    f"Bytes: {byte_count}"
-                )
-                return ToolOutcome(success=True, content=content, metadata=response)
-            except RunnerError as exc:
-                return ToolOutcome(success=False, content=str(exc), error=str(exc))
-            except OSError as exc:
-                message = f"PublishStaticSite failed to read files: {exc}"
-                return ToolOutcome(success=False, content=message, error=message)
-
-    return PublishStaticSiteTool()
-
-
 def _read_only_shell_argv(command: str, cwd: Path, env: dict[str, str]) -> list[str]:
     argv = [
         "bwrap",
@@ -902,9 +829,6 @@ def create_code_agent_engine(
             tools.append(ShellTool(workspace))
     if "BackgroundShell" in tool_names and BackgroundShellTool is not None:
         tools.append(BackgroundShellTool(workspace))
-    if PUBLISH_STATIC_SITE_TOOL in tool_names:
-        tools.append(_create_publish_static_site_tool(Tool, ToolOutcome, ToolSpec, request, env))
-
     settings = AppSettings(
         provider=_provider_for_code_agent_engine(request.provider),
         model=request.api_model,
@@ -926,6 +850,7 @@ def create_code_agent_engine(
             tool_names,
             request.mode,
             room_context_enabled=bool((env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()),
+            static_site_write_enabled=_static_publish_enabled(env),
         ),
         permissions=permissions,
         allowed_tools=allowed_tools,

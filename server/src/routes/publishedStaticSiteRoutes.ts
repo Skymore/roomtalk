@@ -6,6 +6,7 @@ import {
   PublishedStaticSiteError,
   PublishedStaticSitePublishInput,
   PublishedStaticSiteService,
+  PublishedStaticSiteUnpublishInput,
   normalizePublishedSiteSlug,
 } from '../services/publishedStaticSite';
 
@@ -62,6 +63,26 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
       return res.status(201).json(result);
     } catch (error) {
       return sendPublishError(res, error, logger, { endpoint: CODE_AGENT_STATIC_PUBLISH_API_PATH, roomId: claims.roomId, turnId: claims.turnId });
+    }
+  });
+
+  app.delete(CODE_AGENT_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
+    const token = readBearerToken(req);
+    const claims = token ? service.verifyTurnToken(token) : null;
+    if (!claims) {
+      return res.status(401).json({ error: 'Invalid or expired publish token' });
+    }
+
+    try {
+      const result = await service.unpublish(req.body as PublishedStaticSiteUnpublishInput, claims, requestBaseUrl(req));
+      return res.status(200).json(result);
+    } catch (error) {
+      return sendPublishError(res, error, logger, {
+        endpoint: CODE_AGENT_STATIC_PUBLISH_API_PATH,
+        operation: 'unpublish',
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
     }
   });
 

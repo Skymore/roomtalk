@@ -276,6 +276,52 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(storage.deletedObjectKeys.includes('published-sites/by-room/cm9vbS0x/index.json'), true);
   });
 
+  it('unpublishes every stored version for one slug and keeps the room index consistent', async () => {
+    const ids = [
+      'token-token-token-token-token000001',
+      'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service, storage } = createService({ createId: () => ids.shift() || 'dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee' });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'approveForMe',
+    }))!;
+
+    for (const version of ['v1', 'v2']) {
+      await service.publish({
+        roomId: 'room-1',
+        turnId: 'turn-1',
+        slug: 'roomtalk-demo',
+        entry: 'index.html',
+        files: [textFile('index.html', `<!doctype html>${version}`)],
+      }, claims);
+    }
+    await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'keep-demo',
+      entry: 'index.html',
+      files: [textFile('index.html', '<!doctype html>keep')],
+    }, claims);
+
+    const result = await service.unpublish({ slug: 'roomtalk-demo' }, claims);
+
+    assert.equal(result.url, 'https://room.example/p/roomtalk-demo/');
+    assert.equal(result.slug, 'roomtalk-demo');
+    assert.equal(result.objectCount, 3);
+    assert.equal(await service.readManifest('roomtalk-demo'), null);
+    assert.equal([...storage.objects.keys()].some(key => key.startsWith('published-sites/roomtalk-demo/')), false);
+    assert.deepEqual((await service.listSitesForRoom('room-1')).map(site => site.slug), ['keep-demo']);
+
+    const finalResult = await service.unpublish({ slug: 'keep-demo' }, claims);
+    assert.equal(finalResult.objectCount, 3);
+    assert.deepEqual([...storage.objects.keys()].filter(key => key.startsWith('published-sites/')), []);
+  });
+
   it('rejects invalid publish payloads and slug ownership conflicts', async () => {
     const { service } = createService();
     const firstClaims = service.verifyTurnToken(service.issueTurnToken({
@@ -332,6 +378,11 @@ describe('PublishedStaticSiteService', () => {
       }, secondClaims),
       /already owned by another room/
     );
+
+    await assert.rejects(
+      service.unpublish({ slug: 'roomtalk-demo' }, secondClaims),
+      /belongs to another room/
+    );
   });
 
   it('rejects publish attempts from plan-mode tokens', async () => {
@@ -349,6 +400,10 @@ describe('PublishedStaticSiteService', () => {
         turnId: 'turn-1',
         files: [textFile('index.html', '<!doctype html>')],
       }, claims),
+      /requires a writable agent mode/
+    );
+    await assert.rejects(
+      service.unpublish({ slug: 'roomtalk-demo' }, claims),
       /requires a writable agent mode/
     );
   });

@@ -69,6 +69,16 @@ export interface PublishedStaticSitePublishResult {
   totalBytes: number;
 }
 
+export interface PublishedStaticSiteUnpublishInput {
+  slug: string;
+}
+
+export interface PublishedStaticSiteUnpublishResult {
+  url: string;
+  slug: string;
+  objectCount: number;
+}
+
 export interface PublishedStaticSiteArtifact {
   slug: string;
   url: string;
@@ -557,6 +567,37 @@ export class PublishedStaticSiteService {
     };
   }
 
+  async unpublish(
+    input: PublishedStaticSiteUnpublishInput,
+    claims: PublishedStaticSiteTokenClaims,
+    requestBaseUrl?: string
+  ): Promise<PublishedStaticSiteUnpublishResult> {
+    if (!this.isConfigured()) {
+      throw new PublishedStaticSiteError('Static site management is not configured', 503);
+    }
+    if (!codeAgentModeAllowsStaticPublish(claims.mode)) {
+      throw new PublishedStaticSiteError('Static site unpublishing requires a writable agent mode', 403);
+    }
+    if (typeof input.slug !== 'string' || !input.slug.trim()) {
+      throw new PublishedStaticSiteError('slug is required');
+    }
+    const slug = normalizePublishedSiteSlug(input.slug, '');
+    const manifest = await this.readManifest(slug);
+    if (!manifest) {
+      throw new PublishedStaticSiteError('Published site not found', 404);
+    }
+    if (manifest.roomId !== claims.roomId) {
+      throw new PublishedStaticSiteError('Published site belongs to another room', 403);
+    }
+
+    const { objectCount } = await this.deletePublishedSiteBySlug(slug);
+    return {
+      url: this.publicUrlForSlug(slug, requestBaseUrl),
+      slug,
+      objectCount,
+    };
+  }
+
   async readManifest(slug: string): Promise<PublishedStaticSiteManifest | null> {
     if (!this.options.mediaObjectStorage.getMediaObject) {
       return null;
@@ -625,10 +666,35 @@ export class PublishedStaticSiteService {
       return { objectCount: 0 };
     }
 
-    const objectCount = await this.deleteObjectKeys([
+    const index = await this.readRoomIndex(manifest.roomId);
+    const siteObjectPrefix = `published-sites/${manifest.slug}/`;
+    const siteObjectKeys = Array.from(new Set([
       manifestObjectKey(manifest.slug),
       ...manifest.files.map(file => file.objectKey),
-    ]);
+      ...(index?.objectKeys.filter(objectKey => objectKey.startsWith(siteObjectPrefix)) || []),
+    ]));
+    let objectCount = await this.deleteObjectKeys(siteObjectKeys);
+
+    if (index) {
+      const nextIndex: PublishedStaticSiteRoomIndex = {
+        ...index,
+        slugs: index.slugs.filter(indexedSlug => indexedSlug !== manifest.slug),
+        objectKeys: index.objectKeys.filter(objectKey => !objectKey.startsWith(siteObjectPrefix)),
+        updatedAt: new Date(this.nowMs()).toISOString(),
+      };
+      if (nextIndex.slugs.length === 0) {
+        objectCount += await this.deleteObjectKeys([roomIndexObjectKey(manifest.roomId)]);
+      } else {
+        const body = Buffer.from(JSON.stringify(nextIndex, null, 2), 'utf8');
+        await this.options.mediaObjectStorage.putMediaObject({
+          objectKey: roomIndexObjectKey(manifest.roomId),
+          body,
+          mimeType: MANIFEST_MIME_TYPE,
+          byteSize: body.length,
+        });
+      }
+    }
+
     this.options.logger.info('Deleted published static site by slug', {
       roomId: manifest.roomId,
       slug: manifest.slug,

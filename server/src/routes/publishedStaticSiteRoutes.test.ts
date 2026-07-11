@@ -62,7 +62,7 @@ describe('published static site routes', () => {
     await server.close();
   });
 
-  it('publishes with a scoped token and serves the site publicly', async () => {
+  it('publishes and unpublishes with a scoped token', async () => {
     const token = server.service.issueTurnToken({
       roomId: 'room-1',
       clientId: 'client-1',
@@ -104,6 +104,23 @@ describe('published static site routes', () => {
     assert.equal(assetResponse.status, 200);
     assert.match(assetResponse.headers.get('content-type') || '', /^text\/javascript/);
     assert.equal(await assetResponse.text(), 'window.roomtalkDemo = true');
+
+    const unpublishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ slug: 'roomtalk-demo' }),
+    });
+    assert.equal(unpublishResponse.status, 200);
+    const unpublished = await unpublishResponse.json() as { url: string; slug: string; objectCount: number };
+    assert.equal(unpublished.url, `${server.baseUrl}/p/roomtalk-demo/`);
+    assert.equal(unpublished.slug, 'roomtalk-demo');
+    assert.equal(unpublished.objectCount, 4);
+
+    const unpublishedResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
+    assert.equal(unpublishedResponse.status, 404);
   });
 
   it('does not serve a published site after its room is deleted', async () => {
@@ -143,6 +160,13 @@ describe('published static site routes', () => {
       body: JSON.stringify({}),
     });
     assert.equal(publishResponse.status, 401);
+
+    const unpublishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'missing-site' }),
+    });
+    assert.equal(unpublishResponse.status, 401);
 
     const missingResponse = await fetch(`${server.baseUrl}/p/missing-site/`);
     assert.equal(missingResponse.status, 404);

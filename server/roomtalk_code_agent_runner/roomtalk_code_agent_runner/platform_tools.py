@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 from urllib import parse as urllib_parse
+from urllib import error as urllib_error
 from urllib import request as urllib_request
 from pathlib import Path
 from typing import Any, Sequence
@@ -23,9 +24,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     env = dict(os.environ)
     try:
-        if args.command == "publish-static-site":
+        if args.command == "publish-static-site" or (args.command == "site" and args.site_command == "publish"):
             _require_write_access(env)
             result = _publish_static_site(args, env)
+        elif args.command == "site" and args.site_command == "list":
+            result = _list_static_sites(env)
+        elif args.command == "site" and args.site_command == "unpublish":
+            _require_write_access(env)
+            result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
         else:  # pragma: no cover - argparse prevents this.
@@ -56,15 +62,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    publish = subparsers.add_parser(
+    legacy_publish = subparsers.add_parser(
         "publish-static-site",
-        help="Publish a static HTML/CSS/JS directory to RoomTalk.",
+        help="Compatibility alias for `roomtalk site publish`.",
     )
-    publish.add_argument("--root", default=".", help="Static site directory, relative to the workspace.")
-    publish.add_argument("--entry", default="index.html", help="Entry file relative to --root.")
-    publish.add_argument("--slug", default="", help="Optional URL slug.")
-    publish.add_argument("--title", default="", help="Optional display title.")
-    publish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    _add_publish_arguments(legacy_publish)
+
+    site = subparsers.add_parser("site", help="Publish or unpublish a RoomTalk static site.")
+    site_subparsers = site.add_subparsers(dest="site_command", required=True)
+    site_list = site_subparsers.add_parser("list", help="List static sites published by the current room.")
+    site_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    site_publish = site_subparsers.add_parser("publish", help="Publish a static HTML/CSS/JS directory.")
+    _add_publish_arguments(site_publish)
+    site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
+    site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
+    site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     room = subparsers.add_parser("room", help="Read the current RoomTalk room context.")
     room_subparsers = room.add_subparsers(dest="room_command", required=True)
@@ -91,13 +103,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
-    base_url = (env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip().rstrip("/")
-    token = (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
-    socket_path = (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
-    if not socket_path and (not base_url or not token):
-        raise RunnerError("Room context is not available for this turn", code="room_context_unavailable")
+def _add_publish_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--root", default=".", help="Static site directory, relative to the workspace.")
+    parser.add_argument("--entry", default="index.html", help="Entry file relative to --root.")
+    parser.add_argument("--slug", default="", help="Optional URL slug.")
+    parser.add_argument("--title", default="", help="Optional display title.")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
+
+def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     if args.room_command == "history":
         query: dict[str, Any] = {"limit": args.limit}
         if args.before:
@@ -112,9 +126,24 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
     else:  # pragma: no cover - argparse prevents this.
         raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
 
+    return _read_room_context_path(path, env)
+
+
+def _read_room_context_path(path: str, env: dict[str, str]) -> dict[str, Any]:
+    base_url = (env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip().rstrip("/")
+    token = (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
+    socket_path = (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
+    if not socket_path and (not base_url or not token):
+        raise RunnerError("Room context is not available for this turn", code="room_context_unavailable")
+
     if socket_path:
         return _get_room_context_from_broker(socket_path, path)
     return _get_room_context(f"{base_url}{path}", token)
+
+
+def _list_static_sites(env: dict[str, str]) -> dict[str, Any]:
+    result = _read_room_context_path("/sites", env)
+    return {**result, "tool": "ListStaticSites"}
 
 
 def _get_room_context_from_broker(socket_path: str, path: str) -> dict[str, Any]:
@@ -209,6 +238,58 @@ def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[
     }
 
 
+def _unpublish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    publish_url = (env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip()
+    publish_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
+    if not publish_url or not publish_token:
+        raise RunnerError("Static site management is not available for this turn", code="unpublish_unavailable")
+
+    response = _delete_static_publish_payload(publish_url, publish_token, {"slug": str(args.slug).strip()})
+    slug = response.get("slug")
+    url = response.get("url")
+    if not isinstance(slug, str) or not slug or not isinstance(url, str) or not url:
+        raise RunnerError("Static site unpublish response was incomplete", code="invalid_unpublish_response")
+    return {
+        "success": True,
+        "tool": "UnpublishStaticSite",
+        "url": url,
+        "slug": slug,
+        "objectCount": response.get("objectCount", 0),
+    }
+
+
+def _delete_static_publish_payload(url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = urllib_request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="DELETE",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+            parsed = json.loads(raw) if raw.strip() else {}
+            return parsed if isinstance(parsed, dict) else {}
+    except urllib_error.HTTPError as exc:
+        response_text = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed_error = json.loads(response_text)
+            message = parsed_error.get("error") if isinstance(parsed_error, dict) else None
+        except json.JSONDecodeError:
+            message = None
+        raise RunnerError(
+            f"UnpublishStaticSite failed with HTTP {exc.code}: {message or response_text or exc.reason}",
+            code="unpublish_http_error",
+        ) from exc
+    except urllib_error.URLError as exc:
+        raise RunnerError(f"UnpublishStaticSite request failed: {exc.reason}", code="unpublish_request_failed") from exc
+
+
 def _workspace_from_env(env: dict[str, str]) -> Path:
     raw_workspace = (env.get("ROOMTALK_WORKSPACE") or os.getcwd()).strip()
     return validate_workspace_path(Path(raw_workspace), env)
@@ -219,6 +300,16 @@ def _print_result(result: dict[str, Any], *, json_output: bool) -> None:
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return
     if result.get("success") is True:
+        if result.get("tool") == "UnpublishStaticSite":
+            print(
+                "Unpublished static site: {url}\n"
+                "Slug: {slug}\n"
+                "Objects deleted: {objectCount}".format(**result)
+            )
+            return
+        if result.get("tool") == "ListStaticSites":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
         if result.get("tool") == "PublishStaticSite":
             print(
                 "Published static site: {url}\n"

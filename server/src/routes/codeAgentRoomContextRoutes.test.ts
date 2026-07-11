@@ -32,7 +32,15 @@ describe('code-agent room context routes', () => {
     } as unknown as RoomStore;
     service = new CodeAgentRoomContextService(store, { tokenSecret: 'secret', createId: () => 'token-1' });
     const app = express();
-    registerCodeAgentRoomContextRoutes(app, { service, logger: new Logger('RoomContextRoutesTest') });
+    registerCodeAgentRoomContextRoutes(app, {
+      service,
+      logger: new Logger('RoomContextRoutesTest'),
+      listPublishedSites: async (roomId, requestBaseUrl) => [{
+        slug: 'roomtalk-demo',
+        url: `${requestBaseUrl}/p/roomtalk-demo/`,
+        roomId,
+      }],
+    });
     server = await new Promise<HttpServer>(resolve => {
       const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
     });
@@ -62,5 +70,21 @@ describe('code-agent room context routes', () => {
     assert.deepEqual(((await search.json()) as any).messages.map((message: any) => message.id), ['m2']);
     const message = await fetch(`${baseUrl}/api/code-agent/room-context/messages/m1`, { headers });
     assert.equal(((await message.json()) as any).message.content, 'first message');
+  });
+
+  it('lists published sites through the read-only room-scoped token', async () => {
+    const token = service.issueTurnToken({ roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1', mode: 'plan' });
+    const response = await fetch(`${baseUrl}/api/code-agent/room-context/sites`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as { roomId: string; sites: Array<{ slug: string; url: string; roomId: string }> };
+    assert.equal(body.roomId, 'room-1');
+    assert.deepEqual(body.sites, [{
+      slug: 'roomtalk-demo',
+      url: `${baseUrl}/p/roomtalk-demo/`,
+      roomId: 'room-1',
+    }]);
   });
 });

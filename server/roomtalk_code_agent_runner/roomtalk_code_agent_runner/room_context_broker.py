@@ -14,7 +14,7 @@ from urllib import request as urllib_request
 ROOM_CONTEXT_SOCKET_ENV = "ROOMTALK_ROOM_CONTEXT_SOCKET"
 MAX_BROKER_REQUEST_BYTES = 16 * 1024
 MAX_BROKER_RESPONSE_BYTES = 25 * 1024 * 1024
-_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$")
+_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$")
 
 
 class RoomContextBrokerError(Exception):

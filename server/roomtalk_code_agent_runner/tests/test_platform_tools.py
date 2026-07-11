@@ -67,6 +67,130 @@ def test_publish_static_site_is_rejected_by_read_only_cli_access(monkeypatch, ca
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
 
 
+def test_site_publish_command_uses_the_publish_implementation(monkeypatch, capsys):
+    called: dict[str, str] = {}
+
+    def fake_publish(args, _env):
+        called["root"] = args.root
+        return {
+            "success": True,
+            "tool": "PublishStaticSite",
+            "url": "https://room.example/p/demo/",
+            "slug": "demo",
+            "entry": "index.html",
+            "versionId": "version-1",
+            "fileCount": 1,
+            "totalBytes": 10,
+        }
+
+    monkeypatch.setattr(platform_tools, "_publish_static_site", fake_publish)
+
+    assert platform_tools.main(["site", "publish", "--root", "dist", "--json"]) == 0
+    assert called == {"root": "dist"}
+    assert json.loads(capsys.readouterr().out)["tool"] == "PublishStaticSite"
+
+
+def test_site_unpublish_command_uses_scoped_publish_api(monkeypatch, capsys):
+    deleted: dict[str, Any] = {}
+
+    def fake_delete(url: str, token: str, payload: dict[str, Any]):
+        deleted.update({"url": url, "token": token, "payload": payload})
+        return {
+            "url": "https://room.example/p/coffee/",
+            "slug": "coffee",
+            "objectCount": 4,
+        }
+
+    monkeypatch.setattr(platform_tools, "_delete_static_publish_payload", fake_delete)
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_URL", "https://room.example/api/code-agent/publish-static-site")
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_TOKEN", "turn-token")
+
+    assert platform_tools.main(["site", "unpublish", "--slug", "coffee", "--json"]) == 0
+    assert deleted == {
+        "url": "https://room.example/api/code-agent/publish-static-site",
+        "token": "turn-token",
+        "payload": {"slug": "coffee"},
+    }
+    output = json.loads(capsys.readouterr().out)
+    assert output["tool"] == "UnpublishStaticSite"
+    assert output["slug"] == "coffee"
+
+
+def test_unpublish_request_uses_delete_with_bearer_token(monkeypatch):
+    requested: dict[str, Any] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"url":"https://room.example/p/coffee/","slug":"coffee","objectCount":3}'
+
+    def fake_urlopen(request, timeout):
+        requested.update({
+            "method": request.method,
+            "url": request.full_url,
+            "authorization": request.headers["Authorization"],
+            "payload": json.loads(request.data.decode("utf-8")),
+            "timeout": timeout,
+        })
+        return FakeResponse()
+
+    monkeypatch.setattr(platform_tools.urllib_request, "urlopen", fake_urlopen)
+
+    result = platform_tools._delete_static_publish_payload(
+        "https://room.example/api/code-agent/publish-static-site",
+        "turn-token",
+        {"slug": "coffee"},
+    )
+
+    assert result["slug"] == "coffee"
+    assert requested == {
+        "method": "DELETE",
+        "url": "https://room.example/api/code-agent/publish-static-site",
+        "authorization": "Bearer turn-token",
+        "payload": {"slug": "coffee"},
+        "timeout": 30,
+    }
+
+
+def test_site_unpublish_is_rejected_by_read_only_cli_access(monkeypatch, capsys):
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+
+    assert platform_tools.main(["site", "unpublish", "--slug", "coffee", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_site_list_uses_read_only_room_context_capability(monkeypatch, capsys):
+    requested: dict[str, str] = {}
+
+    def fake_get(url: str, token: str):
+        requested.update({"url": url, "token": token})
+        return {
+            "success": True,
+            "tool": "RoomContext",
+            "roomId": "room-1",
+            "sites": [{"slug": "coffee", "url": "https://room.example/p/coffee/"}],
+        }
+
+    monkeypatch.setattr(platform_tools, "_get_room_context", fake_get)
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_URL", "https://room.example/api/code-agent/room-context")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_TOKEN", "room-token")
+
+    assert platform_tools.main(["site", "list", "--json"]) == 0
+    assert requested == {
+        "url": "https://room.example/api/code-agent/room-context/sites",
+        "token": "room-token",
+    }
+    output = json.loads(capsys.readouterr().out)
+    assert output["tool"] == "ListStaticSites"
+    assert output["sites"][0]["slug"] == "coffee"
+
+
 @pytest.mark.parametrize(("argv", "expected_suffix"), [
     (["room", "history", "--limit", "12", "--before", "m-20", "--json"], "/history?limit=12&beforeMessageId=m-20"),
     (["room", "delta", "--since", "m-10", "--limit", "30", "--json"], "/delta?sinceMessageId=m-10&limit=30"),

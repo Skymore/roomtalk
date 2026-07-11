@@ -25,6 +25,7 @@ roomtalk room history --before <message-id> --limit 20 --json
 roomtalk room delta --since <message-id> --limit 50 --json
 roomtalk room search --query "关键词" --limit 20 --json
 roomtalk room message <message-id> --json
+roomtalk site list --json
 ```
 
 Codex prompt 只注入当前 RoomTalk room 身份和最短使用说明。Codex 在缺少背景、用户引用旧讨论或需要确认其他参与者意见时主动调用 CLI。默认不读取整个历史。
@@ -85,7 +86,7 @@ token 使用 HMAC 签名并包含：
 
 API 不接受调用者指定 `roomId`，只读取 token 声明中的房间。这样即使 Codex 修改命令参数，也不能跨房间读取。
 
-CLI 按能力分为只读面和写入面：`roomtalk room ...` 属于只读面，`roomtalk publish-static-site` 等属于写入面。Plan 的 shell environment 只拿到 broker socket 路径，并设置 `ROOMTALK_CODE_AGENT_CLI_ACCESS=read-only`；写命令会在 CLI 入口再次拒绝。Edit、Approve for me 和 Full access 才能拿到对应写入凭证。
+CLI 按能力分为只读面和写入面：`roomtalk room ...` 与 `roomtalk site list --json` 属于只读面；`roomtalk site publish ...` 和 `roomtalk site unpublish --slug <slug>` 属于写入面。取消发布表示下线该房间拥有的公开站点并清理其全部版本，不删除 workspace 文件。Plan 的 shell environment 只拿到 broker socket 路径，并设置 `ROOMTALK_CODE_AGENT_CLI_ACCESS=read-only`；写命令会在 CLI 入口再次拒绝。Edit、Approve for me 和 Full access 才能拿到对应写入凭证。旧命令 `roomtalk publish-static-site` 保留为发布别名；原生 `PublishStaticSite` engine tool 删除，三种 backend 统一走 CLI。
 
 Plan shell 始终关闭直接 IP 网络。room-context broker 在 sandbox 外访问 RoomTalk API，模型命令只能连接本轮 Unix socket。broker 还会再次限制路径，只接受四类 GET 读取操作，因此即使模型绕过 CLI 手写 socket 请求，也不能借 broker 调用写接口。
 
@@ -145,6 +146,14 @@ GET /api/code-agent/room-context/search?query=<text>&limit=20
 ```http
 GET /api/code-agent/room-context/messages/:messageId
 ```
+
+### 已发布站点
+
+```http
+GET /api/code-agent/room-context/sites
+```
+
+使用同一个只读 room-context token 返回当前房间拥有的静态站点，供 `roomtalk site list --json` 使用；Plan 无需获得发布 token。
 
 ## 为什么不用 MCP
 

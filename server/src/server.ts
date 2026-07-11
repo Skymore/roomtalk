@@ -534,6 +534,7 @@ registerPublishedStaticSiteRoutes(app, {
 registerCodeAgentRoomContextRoutes(app, {
   service: codeAgentRoomContextService,
   logger: codeAgentLogger,
+  listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
 });
 
 registerCodeWorkspaceAssetRoutes(app, {

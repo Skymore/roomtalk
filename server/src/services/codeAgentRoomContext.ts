@@ -227,6 +227,10 @@ export class CodeAgentRoomContextService {
     return { roomId: claims.roomId, message: projected };
   }
 
+  async assertAccess(claims: CodeAgentRoomContextTokenClaims) {
+    await this.assertRoomAccess(claims);
+  }
+
   private async assertRoomAccess(claims: CodeAgentRoomContextTokenClaims) {
     const room = await this.store.getRoomById(claims.roomId);
     if (!room) {
