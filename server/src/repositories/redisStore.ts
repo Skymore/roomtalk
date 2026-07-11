@@ -7,6 +7,7 @@ import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, Audio
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
+export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_members`;
@@ -36,8 +37,57 @@ const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
 
 interface RoomMessagesCachePayload {
   messageVersion: number;
-  messages: Message[];
+  messages: Array<Partial<Message>>;
 }
+
+const deriveToolCallContent = (message: Partial<Message>): string | null => {
+  if (message.messageType !== 'tool_call' || !message.toolName || !message.toolArgs) {
+    return null;
+  }
+  try {
+    return `${message.toolName} ${JSON.stringify(message.toolArgs, null, 2)}`;
+  } catch {
+    return null;
+  }
+};
+
+const deriveToolOutputPreview = (content: string): string => (
+  content.length <= 4096
+    ? content
+    : `${content.slice(0, 4096)}\n[display truncated]`
+);
+
+const compactRoomMessageForCache = (message: Message): Partial<Message> => {
+  const compact: Partial<Message> = { ...message };
+  const derivedToolCallContent = deriveToolCallContent(message);
+  if (derivedToolCallContent !== null && message.content === derivedToolCallContent) {
+    delete compact.content;
+  }
+  if (
+    message.messageType === 'tool_result'
+    && typeof message.content === 'string'
+    && message.toolOutputPreview === deriveToolOutputPreview(message.content)
+  ) {
+    delete compact.toolOutputPreview;
+  }
+  return compact;
+};
+
+const restoreRoomMessageFromCache = (cached: Partial<Message>): Message => {
+  const derivedToolCallContent = deriveToolCallContent(cached);
+  const content = typeof cached.content === 'string'
+    ? cached.content
+    : derivedToolCallContent || '';
+  const restored: Message = { ...cached, content } as Message;
+  if (
+    restored.messageType === 'tool_result'
+    && !restored.toolOutputPreview
+    && content
+  ) {
+    restored.toolOutputPreview = deriveToolOutputPreview(content);
+  }
+  return stripAIStreamRecoveryMetadata(restored);
+};
 
 const normalizeMediaHistoryPageLimit = (limit?: number): number => {
   if (!Number.isFinite(limit)) {
@@ -84,6 +134,13 @@ export const resolveRoomMessagesCacheTtlSeconds = (env: NodeJS.ProcessEnv = proc
 
   const parsed = Number.parseInt(rawValue, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+export const resolveRoomMessagesCacheMaxBytes = (env: NodeJS.ProcessEnv = process.env): number => {
+  const parsed = Number.parseInt(env.ROOM_MESSAGES_CACHE_MAX_BYTES || '', 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES;
 };
 
 // 原子房间写入:roomVersion 以"写入时刻存储中的值"为准自增,
@@ -814,7 +871,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   constructor(
     private readonly redisClient: RedisClientType,
     private readonly logger: Logger,
-    private readonly roomMessagesCacheTtlSeconds = resolveRoomMessagesCacheTtlSeconds()
+    private readonly roomMessagesCacheTtlSeconds = resolveRoomMessagesCacheTtlSeconds(),
+    private readonly roomMessagesCacheMaxBytes = resolveRoomMessagesCacheMaxBytes()
   ) {}
 
   getRoomMessagesCacheKey(roomId: string): string {
@@ -834,7 +892,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
       const parsed = JSON.parse(cached) as unknown;
       let cachedMessageVersion: number | undefined;
-      let messages: Message[] | null = null;
+      let messages: Array<Partial<Message>> | null = null;
 
       if (Array.isArray(parsed)) {
         if (requiresVersion) {
@@ -842,7 +900,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           this.logger.debug('Legacy room message cache payload discarded', { roomId, expectedMessageVersion: messageVersion });
           return null;
         }
-        messages = parsed as Message[];
+        messages = parsed as Array<Partial<Message>>;
       } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Partial<RoomMessagesCachePayload>).messages)) {
         const payload = parsed as Partial<RoomMessagesCachePayload>;
         cachedMessageVersion = payload.messageVersion;
@@ -855,7 +913,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           });
           return null;
         }
-        messages = payload.messages as Message[];
+        messages = payload.messages || null;
       }
 
       if (!messages) {
@@ -865,7 +923,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }
 
       this.logger.debug('Room message cache hit', { roomId, count: messages.length, messageVersion: cachedMessageVersion });
-      return messages.map(stripAIStreamRecoveryMetadata);
+      return messages.map(restoreRoomMessageFromCache);
     } catch (error) {
       this.logger.error('Error reading room message cache', { error, roomId });
       return null;
@@ -879,12 +937,25 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
     try {
       const versionedPayload = typeof messageVersion === 'number' && Number.isFinite(messageVersion)
-        ? { messageVersion, messages }
-        : messages;
+        ? { messageVersion, messages: messages.map(compactRoomMessageForCache) }
+        : messages.map(compactRoomMessageForCache);
+      const serializedPayload = JSON.stringify(versionedPayload);
+      const byteSize = Buffer.byteLength(serializedPayload, 'utf8');
+      if (byteSize > this.roomMessagesCacheMaxBytes) {
+        await this.redisClient.del(this.getRoomMessagesCacheKey(roomId));
+        this.logger.warn('Room message cache skipped because payload is too large', {
+          roomId,
+          count: messages.length,
+          messageVersion,
+          byteSize,
+          maxBytes: this.roomMessagesCacheMaxBytes,
+        });
+        return;
+      }
       await this.redisClient.setEx(
         this.getRoomMessagesCacheKey(roomId),
         this.roomMessagesCacheTtlSeconds,
-        JSON.stringify(versionedPayload)
+        serializedPayload
       );
       this.logger.debug('Room message cache written', { roomId, count: messages.length, messageVersion, ttlSeconds: this.roomMessagesCacheTtlSeconds });
     } catch (error) {

@@ -1,6 +1,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { RedisStore } from './redisStore';
+import {
+  DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES,
+  RedisStore,
+  resolveRoomMessagesCacheMaxBytes,
+} from './redisStore';
 import { AICost, MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { OutboxEventRecord } from './store';
 
@@ -623,6 +627,12 @@ const createStore = () => {
 };
 
 describe('RedisStore', () => {
+  it('uses a safe default maximum for room message cache payloads', () => {
+    assert.equal(resolveRoomMessagesCacheMaxBytes({}), DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES);
+    assert.equal(resolveRoomMessagesCacheMaxBytes({ ROOM_MESSAGES_CACHE_MAX_BYTES: '4096' }), 4096);
+    assert.equal(resolveRoomMessagesCacheMaxBytes({ ROOM_MESSAGES_CACHE_MAX_BYTES: 'invalid' }), DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES);
+  });
+
   it('checks fallback room IDs for uniqueness after repeated collisions', async () => {
     const redis = new CollisionThenUniqueRedis();
     const store = new RedisStore(redis as any, logger as any);
@@ -1132,6 +1142,45 @@ describe('RedisStore', () => {
 
     assert.equal(await store.readCachedRoomMessages('room-1'), null);
     assert.equal(await store.readCachedRoomMessages('room-2'), null);
+  });
+
+  it('skips room message caches that exceed the configured byte limit', async () => {
+    const redis = new MemoryRedis();
+    const store = new RedisStore(redis as any, logger as any, 30, 256);
+    const cacheKey = store.getRoomMessagesCacheKey('room-1');
+
+    await store.writeRoomMessagesCache('room-1', [message({ content: 'x'.repeat(512) })], 1);
+
+    assert.equal(await redis.get(cacheKey), undefined);
+  });
+
+  it('compacts duplicate tool fields in room message caches and restores them on read', async () => {
+    const { redis, store } = createStore();
+    const cacheKey = store.getRoomMessagesCacheKey('room-1');
+    const toolArgs = { command: 'printf hello' };
+    const toolCall = message({
+      id: 'tool-call',
+      messageType: 'tool_call',
+      toolCallId: 'call-1',
+      toolName: 'shell',
+      toolArgs,
+      content: `shell ${JSON.stringify(toolArgs, null, 2)}`,
+    });
+    const toolResult = message({
+      id: 'tool-result',
+      messageType: 'tool_result',
+      toolCallId: 'call-1',
+      toolName: 'shell',
+      content: 'hello',
+      toolOutputPreview: 'hello',
+    });
+
+    await store.writeRoomMessagesCache('room-1', [toolCall, toolResult], 2);
+
+    const raw = JSON.parse((await redis.get(cacheKey)) as string);
+    assert.equal(raw.messages[0].content, undefined);
+    assert.equal(raw.messages[1].toolOutputPreview, undefined);
+    assert.deepEqual(await store.readCachedRoomMessages('room-1', 2), [toolCall, toolResult]);
   });
 
   it('validates room message caches by message version', async () => {
