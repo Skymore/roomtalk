@@ -135,7 +135,7 @@ interface MessageInputAIControlsProps {
   onAddRole: (role: AIRole) => void;
   onUpdateRole: (role: AIRole) => void;
   onDeleteRole: (roleId: string) => void;
-  onAskAI: () => void;
+  onAskAI: (action: MessageInputAIAction) => void;
   onSend: () => void;
   isCodeAgentRoom?: boolean;
   codeAgentBackend?: CodeAgentBackend;
@@ -146,6 +146,8 @@ interface MessageInputAIControlsProps {
   codexRunSettings?: CodexRunSettings;
   onCodexRunSettingsChange?: (settings: Partial<CodexRunSettings>) => void;
 }
+
+export type MessageInputAIAction = 'run' | 'stop' | 'queue';
 
 export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   roles,
@@ -203,6 +205,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const askActionIcon = isAgentRunning
     ? (hasQueueContent ? 'lucide:list-end' : 'lucide:square')
     : (isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon);
+  const askAction: MessageInputAIAction = isAgentRunning
+    ? (hasQueueContent ? 'queue' : 'stop')
+    : 'run';
   const isCodexCodeAgent = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend);
   const isCodexAppServer = isCodeAgentRoom && codeAgentBackend === 'codex-app-server';
   const effectiveAvailableCodeAgentModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
@@ -385,7 +390,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           <Button
             color={isCodeAgentRoom ? 'default' : selectedRole.color}
             size="sm"
-            onPress={onAskAI}
+            onPress={() => onAskAI(askAction)}
             isDisabled={isAgentRunning ? isSending || isAiProcessing || (hasQueueContent && !canPost) : isControlLocked}
             aria-label={askActionLabel}
             className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"

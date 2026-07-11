@@ -48,10 +48,27 @@ export const buildMessageTimeline = (
   messages.forEach((message, index) => {
     if (message.turnId) lastIndexByTurn.set(message.turnId, index);
   });
+  const visibleTurnIds = new Set(lastIndexByTurn.keys());
+  const startedPromptByTurn = new Map<string, Message[]>();
+  const relocatedPromptIds = new Set<string>();
+  messages.forEach(message => {
+    const queuedInput = message.codeAgentQueuedInput;
+    if (queuedInput?.state !== 'started' || !queuedInput.turnId || !visibleTurnIds.has(queuedInput.turnId)) {
+      return;
+    }
+    const prompts = startedPromptByTurn.get(queuedInput.turnId) || [];
+    prompts.push(message);
+    startedPromptByTurn.set(queuedInput.turnId, prompts);
+    relocatedPromptIds.add(message.id);
+  });
 
   const timeline: MessageTimelineItem[] = [];
   for (let index = 0; index < messages.length;) {
     const message = messages[index];
+    if (relocatedPromptIds.has(message.id)) {
+      index++;
+      continue;
+    }
     if (!message.turnId) {
       timeline.push({ kind: 'message', message });
       index++;
@@ -59,7 +76,9 @@ export const buildMessageTimeline = (
     }
 
     const lastIndex = lastIndexByTurn.get(message.turnId) ?? index;
-    const groupedMessages = messages.slice(index, lastIndex + 1);
+    const groupedMessages = messages
+      .slice(index, lastIndex + 1)
+      .filter(item => !relocatedPromptIds.has(item.id));
     const ownMessages = groupedMessages.filter(item => item.turnId === message.turnId);
     const firstTimestamp = ownMessages[0]?.timestamp || message.timestamp;
     const lastTimestamp = ownMessages.at(-1)?.timestamp || firstTimestamp;
@@ -67,6 +86,9 @@ export const buildMessageTimeline = (
     const persisted = turnById.get(message.turnId);
     const isRunning = persisted?.status === 'running' || (!persisted && activeTurnId === message.turnId);
     const assistantName = getCodeAgentAssistantDisplayName(message.username) || 'Coco';
+    for (const prompt of startedPromptByTurn.get(message.turnId) || []) {
+      timeline.push({ kind: 'message', message: prompt });
+    }
     timeline.push({
       kind: 'agent-turn',
       messages: groupedMessages,

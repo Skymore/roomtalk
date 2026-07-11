@@ -70,6 +70,34 @@ describe('buildMessageTimeline', () => {
     expect(timeline[0].kind === 'agent-turn' ? timeline[0].turn.backend : null).toBe('codex-app-server');
     expect(timeline[0].kind === 'agent-turn' ? timeline[0].turn.assistantName : null).toBe('Codex');
   });
+
+  it('moves a started queued prompt from the previous turn into the next turn boundary', () => {
+    const messages = [
+      message({ id: 'turn-1-ai', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'working' }),
+      message({
+        id: 'queued-next',
+        content: 'do this next',
+        codeAgentQueuedInput: {
+          state: 'started',
+          queuedAt: '2026-07-10T00:00:01.000Z',
+          updatedAt: '2026-07-10T00:00:03.000Z',
+          turnId: 'turn-2',
+        },
+      }),
+      message({ id: 'turn-1-final', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'done' }),
+      message({ id: 'turn-2-ai', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-2', content: 'next work' }),
+    ];
+
+    const timeline = buildMessageTimeline(messages, []);
+
+    expect(timeline.map(item => item.kind)).toEqual(['agent-turn', 'message', 'agent-turn']);
+    expect(timeline[0].kind === 'agent-turn' ? timeline[0].messages.map(item => item.id) : []).toEqual([
+      'turn-1-ai',
+      'turn-1-final',
+    ]);
+    expect(timeline[1].kind === 'message' ? timeline[1].message.id : null).toBe('queued-next');
+    expect(timeline[2].kind === 'agent-turn' ? timeline[2].turn.id : null).toBe('turn-2');
+  });
 });
 
 vi.mock('../utils/socket', () => ({

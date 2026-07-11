@@ -36,7 +36,7 @@ import {
 import { useAIRoles } from '../hooks/useAIRoles';
 import { useAIModelSelection } from '../hooks/useAIModelSelection';
 import { startStreamingTranscription, StreamingTranscriber } from '../utils/streamingTranscription';
-import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
+import { MessageInputAIControls, MessageInputAISettingsButton, type MessageInputAIAction } from './MessageInputAIControls';
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments';
 import {
@@ -539,12 +539,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [parseEditorContent]);
 
   // 发送AI消息的新方法
-  const handleAskAI = async () => {
+  const handleAskAI = async (requestedAction?: MessageInputAIAction) => {
     const latestContentItems = parseEditorContent();
     const prompt = buildAIPrompt(latestContentItems);
     const hasInputContent = hasMessageContent(latestContentItems);
+    const agentAction: MessageInputAIAction = isCodeAgentRoom
+      ? (requestedAction || (isAgentRunning ? (hasInputContent ? 'queue' : 'stop') : 'run'))
+      : 'run';
 
-    if (!canPost && !(isAgentRunning && !hasInputContent)) {
+    if (!canPost && agentAction !== 'stop') {
       setErrorMessage(postingClosedMessage);
       return;
     }
@@ -557,11 +560,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
 
-      if (isAgentRunning && imageCountRef.current > 0) {
+      if (agentAction === 'queue' && imageCountRef.current > 0) {
         setErrorMessage(t('codeAgentQueueTextOnly'));
         return;
       }
-      if (isAgentRunning && !prompt) {
+      if (agentAction === 'stop') {
         setIsInterruptingCodeAgent(true);
         try {
           await interruptCodeAgentTurn(roomId);
@@ -589,7 +592,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           }
         : {};
 
-      if (isAgentRunning) {
+      if (agentAction === 'queue') {
         if (!promptForSend) {
           return;
         }

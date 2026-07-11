@@ -661,9 +661,6 @@ export class CodeAgentSessionService {
   }
 
   async queueTurn(input: CodeAgentTurnInput, message: Message): Promise<{ success: boolean; message?: Message; error?: string }> {
-    if (!this.activeTurns.has(input.roomId)) {
-      return { success: false, error: 'No agent turn is running in this workspace' };
-    }
     if (!this.store.updateCodeAgentQueuedMessage || !this.store.claimNextCodeAgentQueuedMessage) {
       return { success: false, error: 'Queued agent inputs are unavailable' };
     }
@@ -694,7 +691,7 @@ export class CodeAgentSessionService {
     this.emitter.to(room.creatorId).emit('room_updated', room);
     this.emitter.to(input.roomId).emit('new_message', queuedMessage);
 
-    // The active turn can complete between the initial check and durable append.
+    // Queue is also valid in the completion race: it becomes the next turn immediately.
     if (!this.activeTurns.has(input.roomId)) {
       this.scheduleQueuedTurn(input.roomId);
     }
@@ -1466,7 +1463,10 @@ export class CodeAgentSessionService {
           return;
         }
         settled = true;
-        void this.settleClaimedQueuedTurn(claim.message, response).finally(resolve);
+        const startedTurnId = response.success
+          ? this.activeTurns.get(roomId)?.turnId
+          : undefined;
+        void this.settleClaimedQueuedTurn(claim.message, response, startedTurnId).finally(resolve);
       };
       void this.startTurn(input, settle).then(response => {
         if (!settled) {
@@ -1478,7 +1478,11 @@ export class CodeAgentSessionService {
     });
   }
 
-  private async settleClaimedQueuedTurn(message: Message, response: CodeAgentTurnAck): Promise<void> {
+  private async settleClaimedQueuedTurn(
+    message: Message,
+    response: CodeAgentTurnAck,
+    startedTurnId?: string
+  ): Promise<void> {
     const queuedInput = message.codeAgentQueuedInput;
     if (!queuedInput) {
       return;
@@ -1487,8 +1491,14 @@ export class CodeAgentSessionService {
     const result = await this.store.updateCodeAgentQueuedMessage?.(message.roomId, message.id, {
       expectedState: 'starting',
       updatedAt,
-      queuedInput: response.success
-        ? null
+      queuedInput: response.success && startedTurnId
+        ? {
+            ...queuedInput,
+            state: 'started',
+            turnId: startedTurnId,
+            updatedAt,
+            lastError: undefined,
+          }
         : {
             ...queuedInput,
             state: 'queued',

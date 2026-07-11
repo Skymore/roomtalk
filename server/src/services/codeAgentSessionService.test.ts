@@ -1754,13 +1754,49 @@ describe('CodeAgentSessionService', () => {
     assert.equal(runner.requests[1].priorMessages?.some(item => item.role === 'user' && item.content === 'run the tests next') ?? false, false);
 
     const deadline = Date.now() + 1_000;
-    while (store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput && Date.now() < deadline) {
+    while (store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput?.state === 'starting' && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
-    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput, undefined);
+    assert.deepEqual(store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput, {
+      ...queued.message?.codeAgentQueuedInput,
+      state: 'started',
+      turnId: 'turn-2',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+      lastError: undefined,
+    });
 
     runner.release(1);
     await runner.waitForCompletions(2);
+  });
+
+  it('accepts Queue during the completion race and starts it immediately when no turn is active', async () => {
+    const runner = new SequencedBlockingRunner();
+    const { service, store } = createService({
+      runner,
+      ids: ['ai-1', 'turn-1'],
+    });
+    const queued = await service.queueTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }, {
+      id: 'queued-race-1',
+      clientId: 'client-1',
+      content: 'start this queued task',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    });
+
+    assert.equal(queued.success, true);
+    await runner.waitForRuns(1);
+    assert.equal(runner.requests[0].prompt, 'start this queued task');
+
+    const deadline = Date.now() + 1_000;
+    while (store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.state === 'starting' && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.state, 'started');
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.turnId, 'turn-1');
+
+    runner.release(0);
+    await runner.waitForCompletions(1);
   });
 
   it('keeps queued follow-up input after an explicit user interrupt', async () => {

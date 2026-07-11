@@ -104,7 +104,7 @@ vi.mock('./MessageInputAIControls', () => ({
       settings
     </button>
   ),
-  MessageInputAIControls: ({ onAskAI, onSend, isAiProcessing, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentAvailableModes }: any) => (
+  MessageInputAIControls: ({ onAskAI, onSend, isAiProcessing, isAgentRunning, currentInputText, imageCount, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentAvailableModes }: any) => (
     <div
       data-testid="message-input-ai-controls"
       data-ai-processing={String(Boolean(isAiProcessing))}
@@ -113,7 +113,10 @@ vi.mock('./MessageInputAIControls', () => ({
       data-code-agent-mode={codeAgentMode || ''}
       data-code-agent-available-modes={(codeAgentAvailableModes || []).join(',')}
     >
-      <button type="button" onClick={onAskAI}>ask-ai</button>
+      <button
+        type="button"
+        onClick={() => onAskAI(isAgentRunning ? ((currentInputText?.trim() || imageCount) ? 'queue' : 'stop') : 'run')}
+      >ask-ai</button>
       <button type="button" onClick={onSend}>send-message</button>
     </div>
   ),

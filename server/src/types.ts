@@ -67,12 +67,13 @@ export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexPermissionMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess';
 export type CodexServiceTier = 'default' | 'priority';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
-export type CodeAgentQueueState = 'queued' | 'steering' | 'starting';
+export type CodeAgentQueueState = 'queued' | 'steering' | 'starting' | 'started';
 
 export interface CodeAgentQueuedInput {
   state: CodeAgentQueueState;
   queuedAt: string;
   updatedAt: string;
+  turnId?: string;
   selectedModel: AIModelOption;
   codexModel?: string;
   codexReasoningEffort?: CodexReasoningEffort;

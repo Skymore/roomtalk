@@ -84,12 +84,13 @@ export interface AudioTranscription {
   completedAt?: string;
 }
 
-export type CodeAgentQueueState = 'queued' | 'steering' | 'starting';
+export type CodeAgentQueueState = 'queued' | 'steering' | 'starting' | 'started';
 
 export interface CodeAgentQueuedInput {
   state: CodeAgentQueueState;
   queuedAt: string;
   updatedAt: string;
+  turnId?: string;
   lastError?: string;
 }
 

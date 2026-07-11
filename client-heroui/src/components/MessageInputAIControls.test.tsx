@@ -265,7 +265,7 @@ describe('MessageInputAIControls', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'codeAgentStop' }));
-    expect(onAskAI).toHaveBeenCalledTimes(1);
+    expect(onAskAI).toHaveBeenNthCalledWith(1, 'stop');
     expect((screen.getByRole('button', { name: 'send' }) as HTMLButtonElement).disabled).toBe(true);
 
     rerender(
@@ -281,7 +281,7 @@ describe('MessageInputAIControls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'codeAgentQueue' }));
     fireEvent.click(screen.getByRole('button', { name: 'send' }));
-    expect(onAskAI).toHaveBeenCalledTimes(2);
+    expect(onAskAI).toHaveBeenNthCalledWith(2, 'queue');
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
