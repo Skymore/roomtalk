@@ -186,4 +186,28 @@ describe('MarkdownContent math rendering', () => {
 
     expect(onOpenWorkspaceFile).not.toHaveBeenCalled();
   });
+
+  it('turns bare URLs after surrounding text into clickable links', () => {
+    const url = 'https://room.ruit.me/p/coffee/';
+    const { getByText } = render(
+      <MarkdownContent content={`地址：${url}。`} />,
+    );
+
+    const link = getByText(url).closest('a');
+    expect(link?.getAttribute('href')).toBe(url);
+    expect(link?.textContent).toBe(url);
+  });
+
+  it('does not auto-link URLs inside inline code or existing markdown links', () => {
+    const { container, getByText } = render(
+      <MarkdownContent
+        content={'[docs](https://example.com/docs) and `https://example.com/code`'}
+      />,
+    );
+
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+    expect(getByText('docs').closest('a')?.getAttribute('href')).toBe('https://example.com/docs');
+    expect(getByText('https://example.com/code').closest('code')).toBeTruthy();
+    expect(getByText('https://example.com/code').closest('a')).toBeNull();
+  });
 });

@@ -3,7 +3,7 @@
    ------------------------------------------------------------------ */
 
 import React, { memo, useState, useEffect, useRef, ReactNode } from "react";
-import Markdown from "markdown-to-jsx";
+import Markdown, { RuleType, type MarkdownToJSX } from "markdown-to-jsx";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Image, Tooltip } from "@heroui/react";
@@ -72,6 +72,47 @@ const FENCE_TITLE_ATTR_REGEX = /(?:^|\s)(?:title|file(?:name)?)=(?:"([^"]+)"|'([
 const FENCE_FILENAME_TOKEN_REGEX = /^[\w@][\w@./-]*\.[A-Za-z0-9]+$/;
 const CODE_FENCE_OPENING_LINE_REGEX = /^([ \t]{0,3})(`{3,}|~{3,})(.*)$/;
 const CODE_FENCE_TITLE_ATTRIBUTE_NAME = 'title';
+const BARE_URL_PATTERN = /https?:\/\/[^\s<]+/g;
+const TRAILING_URL_PUNCTUATION_PATTERN = /[.,;:!?"'\u2019\u201d\u3001\u3002\uff0c\uff1b\uff1a\uff01\uff1f]+$/;
+
+function trimBareUrlCandidate(candidate: string): string {
+  let url = candidate.replace(TRAILING_URL_PUNCTUATION_PATTERN, '');
+  for (const [opening, closing] of [['(', ')'], ['[', ']'], ['{', '}']] as const) {
+    while (
+      url.endsWith(closing) &&
+      url.split(closing).length > url.split(opening).length
+    ) {
+      url = url.slice(0, -1);
+    }
+  }
+  return url;
+}
+
+function renderTextWithBareUrlLinks(text: string, stateKey: React.Key | undefined): ReactNode {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+
+  for (const match of text.matchAll(BARE_URL_PATTERN)) {
+    const start = match.index ?? 0;
+    const url = trimBareUrlCandidate(match[0]);
+    if (!url) continue;
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+    parts.push(
+      <a key={`${String(stateKey)}-url-${start}`} href={url}>
+        {url}
+      </a>,
+    );
+    cursor = start + url.length;
+  }
+
+  if (parts.length === 0) return text;
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
+}
 
 function readResolvedTheme() {
   return typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
@@ -530,12 +571,32 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
   }, [markdownFileLinkMetaByHref]);
   const taskMarkerOffsets = React.useMemo(() => markdownTaskMarkerOffsets(content), [content]);
   let taskInputIndex = 0;
+  let markdownLinkRenderDepth = 0;
 
   const mdOptions = {
     forceBlock: true,
     // User-authored raw HTML is escaped before this point. Raw parsing remains
     // enabled only so our internal MathInline/MathBlock bridge can render.
     disableParsingRawHTML: false,
+    renderRule(
+      next: () => React.ReactNode,
+      node: MarkdownToJSX.ParserResult,
+      _renderChildren: MarkdownToJSX.RuleOutput,
+      state: MarkdownToJSX.State,
+    ) {
+      if (node.type === RuleType.link || node.type === RuleType.refLink) {
+        markdownLinkRenderDepth += 1;
+        try {
+          return next();
+        } finally {
+          markdownLinkRenderDepth -= 1;
+        }
+      }
+      if (node.type === RuleType.text && markdownLinkRenderDepth === 0) {
+        return renderTextWithBareUrlLinks(node.text, state.key);
+      }
+      return next();
+    },
     overrides: {
       p: { component: ({ children }: { children: ReactNode }) => <div>{children}</div> },
       MathBlock: { component: ({ children }: any) => <Math inline={false}>{children}</Math> },
