@@ -93,13 +93,19 @@ Client sends `ask_ai` socket event with role/model/context. Server selects the c
 
 ## Deployment
 
-Push to `master` triggers CI (`.github/workflows/fly-deploy.yml`): builds server + client, checks translations, verifies Fly secrets, deploys to Fly.io. Never run `fly deploy` manually.
+`master` is the release branch. CI/CD (`.github/workflows/fly-deploy.yml`) runs on its schedule or through manual dispatch; it builds server + client, checks translations, verifies Fly secrets, and deploys to Fly.io. A push alone does not immediately trigger this workflow. When an immediate production rollout is required, dispatch the workflow after pushing and verify both the workflow result and Fly health. Never run `fly deploy` manually.
 
 Production: Fly.io app `message-system` in `dfw` region, Node 22 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible).
 
 ### Code Agent / E2B Artifact Rule
 
 Production code-agent rooms run from a pinned E2B sandbox artifact, not directly from the deployed Node app source or a local code-agent engine checkout. Any change to `server/roomtalk_code_agent_runner`, runner tools, runner system prompts, the sandbox Dockerfile, or files copied by `scripts/code-agent/prepare-sandbox-context.mjs` must bump `ops/code-agent-sandbox/artifact.lock.json` and `ops/code-agent-sandbox/Dockerfile`, rebuild the E2B template, update `CODE_AGENT_E2B_TEMPLATE_ID` / `CODE_AGENT_ARTIFACT_VERSION`, and verify with an E2B smoke or direct runner check. Any code-agent engine change in `/Users/sky/projects/code-agent-engine` must first be committed and pushed there, then RoomTalk must update `ops/code-agent-sandbox/artifact.lock.json` `codeAgentEngine.sourceRef` and production `CODE_AGENT_SOURCE_REF`, rebuild the E2B template, and verify it. Otherwise production sandboxes will keep using the old runner or old code-agent engine even after app deploys.
+
+### Task Completion and Push Rule
+
+After completing any task, run both production builds (`cd server && npm run build` and `cd client-heroui && npm run build`) plus any focused tests needed for the change. Then commit the completed work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree.
+
+Before the final push, check whether the change falls under the E2B artifact rule above. If it does, the task is not complete until the E2B template and artifact pins are updated, the new template is built and verified, and production is pointed at the matching E2B version. Finish with all source, lockfile, Dockerfile, and production pin changes committed and pushed to `origin/master`.
 
 ## Coding Conventions
 
