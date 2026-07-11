@@ -17,7 +17,7 @@ The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plan
 
 ### Sandboxed code-agent rooms
 
-- One shared E2B workspace per code-agent room, with Coco, Codex CLI, and Codex app-server backends behind one RoomTalk turn protocol.
+- One shared E2B workspace per code-agent room, supporting Coco (RoomTalk's self-built CLI coding agent) and Codex. Users can connect their own Codex subscription and run it in the shared room through Codex CLI/app-server adapters.
 - A reusable sandbox-local JSONL daemon that executes sequential turns, streams text/tool/model-step events, accepts interrupt and steer controls, and is reclaimed during sandbox or server shutdown.
 - Four permission modes: Plan, Edit, Approve for me, and Full access. Plan uses an OS-enforced read-only shell; writable modes can modify the workspace and run background jobs.
 - Turn-scoped model-gateway, room-context, and static-publish credentials. Provider keys and RoomTalk service secrets stay outside the browser and agent prompt.

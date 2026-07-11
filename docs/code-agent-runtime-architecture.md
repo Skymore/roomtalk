@@ -17,7 +17,8 @@ A code-agent room is not a chat prompt wrapped around remote shell commands. It 
 
 - The room is the shared source of truth for membership, prompts, turns, tool events, permissions, and artifacts.
 - The sandbox is mutable runtime state for files, Git, processes, terminals, and dev servers.
-- Coco and Codex remain agent backends. RoomTalk does not reimplement their reasoning loops.
+- Coco is RoomTalk's in-house CLI coding agent and engine; its reasoning/tool loop remains behind the runner contract.
+- Codex is user-owned: a member connects their own Codex subscription through device authorization, and RoomTalk brokers that encrypted connection into E2B only for their Codex runs.
 - The browser never receives E2B credentials, provider keys, database credentials, or raw RoomTalk service tokens.
 
 ## High-Level Architecture
@@ -146,13 +147,15 @@ The default E2B policy pauses an idle sandbox after five minutes, keeps memory, 
 
 RoomTalk starts one `roomtalk_code_agent_runner.daemon` per sandbox and reuses it for sequential turns. It supports:
 
-- `code-agent` (Coco engine);
-- `codex` (Codex CLI JSON events);
-- `codex-app-server` (Codex app-server thread/session protocol);
+- `code-agent` (Coco, RoomTalk's self-built CLI agent and engine);
+- `codex` (Codex CLI JSON events using the requesting user's connected Codex subscription);
+- `codex-app-server` (Codex app-server thread/session protocol using the same user-owned connection);
 - health, run, interrupt, steer, approval, thread list/read, and shutdown requests;
 - `daemon_ready`, structured runner events, `turn_released`, and shutdown events.
 
 The Fly process keeps an in-memory registry of daemon handles, but the daemon itself lives in E2B. Startup therefore serializes daemon creation and removes stale daemon/Codex child processes before launching a replacement. SIGTERM/SIGINT shutdown reclaims all daemons owned by the process. A bounded turn-release timeout prevents a lost release signal from leaving a room permanently `running`.
+
+Codex connection ownership is per RoomTalk client, not per room. Settings starts OpenAI/Codex device authorization; RoomTalk encrypts the resulting auth material at rest, writes it to the E2B secret directory for a Codex run, and persists refreshed credentials without exposing them to other room members or the browser runtime. This lets collaborators share the room and workspace while each person uses their own Codex subscription.
 
 ## Permissions and Scoped Capabilities
 
@@ -305,4 +308,4 @@ App-only UI, store, or socket changes still require server/client builds and foc
 
 The strongest way to describe this subsystem is:
 
-> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, durable turns, scoped model/context/publish access, and sandbox lifecycle. Each room gets an isolated E2B execution plane with a reusable daemon that can run Coco or Codex. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while the server preserves event ordering and recovers queued turns, paused sandboxes, stale daemons, and artifact upgrades.
+> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, durable turns, scoped model/context/publish access, and sandbox lifecycle. Each room gets an isolated E2B execution plane with a reusable daemon that can run Coco, our self-built CLI agent, or Codex through the requesting user's own subscription. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while the server preserves event ordering and recovers queued turns, paused sandboxes, stale daemons, and artifact upgrades.

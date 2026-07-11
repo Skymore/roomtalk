@@ -101,6 +101,7 @@ Code-agent rooms are a separate request path from ordinary chat. RoomTalk is the
 - `codeAgentDaemonRegistry.ts` serializes one reusable JSONL daemon per sandbox and reclaims daemons on shutdown.
 - `codeAgentRoomContext.ts` + `codeAgentRoomContextRoutes.ts` expose bounded room history/search/message/site reads through a turn-scoped sandbox broker and `roomtalk` CLI.
 - `codeAgentModelGateway.ts` proxies only the selected provider/model with turn-scoped tokens, budgets, and usage accounting; provider keys never reach the browser.
+- `codexConnection.ts` + `codexConnectionRoutes.ts` let each client connect their own Codex subscription through device authorization; RoomTalk encrypts the auth material and injects it as a per-run sandbox secret. Coco remains the in-house CLI coding agent/engine.
 - `publishedStaticSite.ts` stores room-owned versioned static artifacts in local/S3-compatible object storage and serves stable `/p/:slug/` URLs.
 - `e2bCodeAgentSandboxService.ts` owns workspace files, Git changes/diffs/refs, PTY sessions, preview targets, archive migration, and sandbox SDK operations.
 

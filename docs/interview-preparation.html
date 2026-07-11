@@ -372,10 +372,10 @@
 <h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
 
 <blockquote data-lang="zh">
-RoomTalk 是一个实时 AI 协作平台，核心是共享房间和沙盒化 Code Agent workspace。RoomTalk 在 Fly.io 上作为 control plane，负责身份、权限、持久化 turn、usage/cost、对象存储和 sandbox lifecycle；每个 Code Agent 房间在 E2B 中拥有隔离的 execution plane，通过可复用 JSONL daemon 运行 Coco、Codex CLI 或 Codex app-server。浏览器里可以直接查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。普通聊天仍支持多 Provider AI streaming、私有媒体、Redis/PostgreSQL 组合存储和移动端恢复。
+RoomTalk 是一个实时 AI 协作平台，核心是共享房间和沙盒化 Code Agent workspace。RoomTalk 在 Fly.io 上作为 control plane，负责身份、权限、持久化 turn、usage/cost、对象存储和 sandbox lifecycle；每个 Code Agent 房间在 E2B 中拥有隔离的 execution plane，通过可复用 JSONL daemon 运行 Coco（自研 CLI coding agent），也支持用户连接自己的 Codex 订阅后通过 Codex CLI 或 app-server 在房间里工作。浏览器里可以直接查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。普通聊天仍支持多 Provider AI streaming、私有媒体、Redis/PostgreSQL 组合存储和移动端恢复。
 </blockquote>
 <blockquote data-lang="en">
-RoomTalk is a realtime AI collaboration platform centered on shared rooms and sandboxed code-agent workspaces. A Fly.io control plane owns identity, permissions, durable turns, usage/cost, object storage, and sandbox lifecycle; each code-agent room gets an isolated E2B execution plane whose reusable JSONL daemon can run Coco, Codex CLI, or Codex app-server. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. Regular chat still includes multi-provider AI streaming, private media, Redis/PostgreSQL composite storage, and mobile recovery.
+RoomTalk is a realtime AI collaboration platform centered on shared rooms and sandboxed code-agent workspaces. A Fly.io control plane owns identity, permissions, durable turns, usage/cost, object storage, and sandbox lifecycle; each code-agent room gets an isolated E2B execution plane whose reusable JSONL daemon can run Coco, our self-built CLI coding agent, or Codex through a user's connected Codex subscription via CLI/app-server adapters. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. Regular chat still includes multi-provider AI streaming, private media, Redis/PostgreSQL composite storage, and mobile recovery.
 </blockquote>
 
 <p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
@@ -403,7 +403,7 @@ RoomTalk is a realtime AI collaboration platform centered on shared rooms and sa
                                    │ lifecycle + JSONL protocol
 ┌──────────────────────────────────▼──────────────────────────────────┐
 │ Per-room E2B execution plane                                       │
-│ reusable daemon → Coco | Codex CLI | Codex app-server              │
+│ reusable daemon → Coco (in-house CLI) | Codex (user subscription)  │
 │ /workspace → Git · files · PTY · processes · dev-server previews   │
 │ roomtalk CLI → context broker · model gateway · site publishing    │
 └─────────────────────────────────────────────────────────────────────┘</div>
@@ -511,7 +511,8 @@ Files never pass through our server. The client requests a temporary upload URL 
     <tr><td>Browser</td><td>聊天、workspace UI、流式渲染、review draft</td><td>E2B/provider secret、持久化顺序</td></tr>
     <tr><td>RoomTalk</td><td>身份、房间权限、turn 编排、message position、usage/cost、scoped token、lifecycle</td><td>在 Fly 进程执行用户命令</td></tr>
     <tr><td>E2B</td><td><code>/workspace</code>、Git、PTY、进程、dev server、Agent daemon</td><td>成员权限、持久消息、公开 URL 所有权</td></tr>
-    <tr><td>Coco / Codex</td><td>推理、原生工具循环、session/thread</td><td>RoomTalk 数据库和基础设施凭据</td></tr>
+    <tr><td>Coco</td><td>自研 CLI coding agent；推理与原生工具循环</td><td>RoomTalk 数据库和基础设施凭据</td></tr>
+    <tr><td>Codex</td><td>用户自己的 Codex 订阅；CLI/app-server session/thread</td><td>其他成员的订阅凭据和 RoomTalk secret</td></tr>
   </tbody>
 </table>
 <table data-lang="en">
@@ -520,15 +521,16 @@ Files never pass through our server. The client requests a temporary upload URL 
     <tr><td>Browser</td><td>Chat, workspace UI, streamed rendering, review drafts</td><td>E2B/provider secrets, persistence ordering</td></tr>
     <tr><td>RoomTalk</td><td>Identity, room access, turn orchestration, message positions, usage/cost, scoped tokens, lifecycle</td><td>Executing user commands inside the Fly process</td></tr>
     <tr><td>E2B</td><td><code>/workspace</code>, Git, PTY, processes, dev servers, agent daemon</td><td>Membership, durable messages, public URL ownership</td></tr>
-    <tr><td>Coco / Codex</td><td>Reasoning, native tool loop, session/thread state</td><td>RoomTalk database and infrastructure credentials</td></tr>
+    <tr><td>Coco</td><td>In-house CLI coding agent; reasoning and native tool loop</td><td>RoomTalk database and infrastructure credentials</td></tr>
+    <tr><td>Codex</td><td>The user's own Codex subscription; CLI/app-server session/thread state</td><td>Other members' subscription credentials and RoomTalk secrets</td></tr>
   </tbody>
 </table>
 
 <blockquote data-lang="zh">
-我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。RoomTalk 控制身份、权限、持久 turn 和 sandbox；E2B 执行不可信代码；Coco 和 Codex 只负责推理与工具循环。三个层之间通过版本化 JSONL 协议和 scoped capability 连接，所以每层可以独立替换和测试。
+我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。RoomTalk 控制身份、权限、持久 turn 和 sandbox；E2B 执行不可信代码；自研 Coco CLI agent 和使用成员个人订阅的 Codex 负责推理与工具循环。三个层之间通过版本化 JSONL 协议和 scoped capability 连接，所以每层可以独立替换和测试。
 </blockquote>
 <blockquote data-lang="en">
-I designed it as a shared cloud code-agent room, not a remote-shell widget. RoomTalk controls identity, permissions, durable turns, and sandbox lifecycle; E2B executes untrusted code; Coco and Codex own reasoning and tool loops. The layers communicate through a versioned JSONL protocol and scoped capabilities, so each layer can be replaced and tested independently.
+I designed it as a shared cloud code-agent room, not a remote-shell widget. RoomTalk controls identity, permissions, durable turns, and sandbox lifecycle; E2B executes untrusted code; our self-built Coco CLI agent and Codex running on each member's connected subscription own reasoning and tool loops. The layers communicate through a versioned JSONL protocol and scoped capabilities, so each layer can be replaced and tested independently.
 </blockquote>
 
 <h3 id="arch-security"><span data-lang="zh">6. 权限、Context 与 Scoped Token</span><span data-lang="en">6. Permissions, Context, and Scoped Tokens</span></h3>
@@ -588,17 +590,16 @@ I designed it as a shared cloud code-agent room, not a remote-shell widget. Room
 <p data-lang="zh"><strong>问题</strong>：Agent 要读写文件、安装依赖、运行测试和启动服务，但这些命令不能进入 Fly 应用进程；同时房间成员、消息、权限、计费和恢复又必须由 RoomTalk 统一管理。</p>
 <p data-lang="en"><strong>Problem</strong>: The agent must edit files, install dependencies, run tests, and start services, but none of that can execute in the Fly application process. Room membership, messages, permissions, billing, and recovery still need one RoomTalk source of truth.</p>
 
-<p data-lang="zh"><strong>方案</strong>：拆成 control plane 与 execution plane。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给沙盒 daemon。daemon 根据 backend 路由到 Coco、Codex CLI 或 Codex app-server。</p>
-<p data-lang="en"><strong>Solution</strong>: Split control and execution planes. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon, which dispatches to Coco, Codex CLI, or Codex app-server.</p>
+<p data-lang="zh"><strong>方案</strong>：拆成 control plane 与 execution plane。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给沙盒 daemon。daemon 可以路由到自研 Coco CLI agent，也可以使用当前成员通过 device authorization 连接的 Codex 订阅启动 Codex CLI 或 app-server。</p>
+<p data-lang="en"><strong>Solution</strong>: Split control and execution planes. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon. The daemon can dispatch to the self-built Coco CLI agent or launch Codex CLI/app-server with the current member's subscription connected through device authorization.</p>
 
 <div class="diagram">Browser ──authenticated socket──▶ RoomTalk control plane
                                       │
                                       │ room + turn + scoped env
                                       ▼
                                 E2B JSONL daemon
-                                ├─ Coco engine
-                                ├─ Codex CLI
-                                └─ Codex app-server
+                                ├─ Coco: self-built CLI agent
+                                └─ Codex: user's subscription via CLI/app-server
                                       │
                                       ▼
                               /workspace + Git + PTY</div>
@@ -1657,7 +1658,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk 已支持 AI chat，但模型不能安全地读写项目、运行命令，也没有多人可检查的 workspace 或可靠的长任务生命周期。</div>
     <div class="star-label t">Task</div><div class="star-val">在不把不可信执行放进 Fly 服务、也不重写 Coco/Codex 工具循环的前提下，构建生产可用的共享 cloud code-agent room。</div>
-    <div class="star-label a">Action</div><div class="star-val">设计 RoomTalk control plane + E2B execution plane；实现版本化 JSONL daemon 和三种 backend adapter、四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt；在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计 RoomTalk control plane + E2B execution plane；实现版本化 JSONL daemon，接入自研 Coco CLI agent 和用户自己的 Codex 订阅，加入四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt；在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
     <div class="star-label r">Result</div><div class="star-val">同一房间可以持续完成代码任务并在刷新后保留可审计 transcript；sandbox 可 pause/autoResume，artifact URL 独立于 sandbox 存活；Node/Vitest/Playwright/E2B smoke 覆盖关键边界。</div>
   </div>
 </div>
@@ -1666,7 +1667,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk supported AI chat, but models could not safely edit projects or run commands, and users had no shared inspectable workspace or reliable long-task lifecycle.</div>
     <div class="star-label t">Task</div><div class="star-val">Build a production-ready shared cloud code-agent room without executing untrusted work on Fly or reimplementing Coco/Codex tool loops.</div>
-    <div class="star-label a">Action</div><div class="star-val">Designed a RoomTalk control plane and E2B execution plane; implemented a versioned JSONL daemon with three backend adapters, four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed a RoomTalk control plane and E2B execution plane; implemented a versioned JSONL daemon integrating our self-built Coco CLI agent and users' own Codex subscriptions, four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
     <div class="star-label r">Result</div><div class="star-val">A room can carry out sustained coding tasks with an auditable transcript that survives refresh. Sandboxes pause/auto-resume, artifact URLs outlive sandboxes, and Node/Vitest/Playwright/E2B smoke tests cover the critical boundaries.</div>
   </div>
 </div>
