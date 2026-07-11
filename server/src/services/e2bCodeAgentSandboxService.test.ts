@@ -390,7 +390,7 @@ describe('E2BCodeAgentSandboxService', () => {
       assert.equal(driver.fileWriteRequests[0].path, '/tmp/roomtalk-codex/workspace-import-1.tar.gz');
       assert.equal(Buffer.from(driver.fileWriteRequests[0].data as Uint8Array).toString('utf8'), 'workspace-archive');
       assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "w:gz"')), true);
-      assert.equal(driver.commands.some(command => command.includes('skip_dir_names = {".git", "node_modules", ".npm", ".pnpm-store"}')), true);
+      assert.equal(driver.commands.some(command => command.includes('skip_dir_names = {".git", "node_modules", ".npm", ".npm-cache", ".pnpm-store"}')), true);
       assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "r:gz"')), true);
       for (const command of driver.commands.filter(command => command.includes('ROOMTALK_ARCHIVE'))) {
         const syntaxCheck = spawnSync('bash', ['-n'], { input: command, encoding: 'utf8' });
