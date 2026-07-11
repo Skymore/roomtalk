@@ -1,8 +1,8 @@
 import React from 'react';
-import { Avatar } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { Message, RoomAgentTurn } from '../utils/types';
+import { AgentBackendAvatar } from './AgentBackendAvatar';
 
 interface AgentTurnItemProps {
   turn: RoomAgentTurn;
@@ -61,15 +61,7 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
 
   return (
     <div data-testid="agent-turn" data-turn-id={turn.id} data-turn-status={turn.status} className="relative w-full">
-      <Avatar
-        icon={<Icon icon="lucide:bot" />}
-        color="secondary"
-        size="sm"
-        aria-label={turn.assistantName}
-        classNames={{
-          base: 'absolute left-0 top-0 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]',
-        }}
-      />
+      <AgentBackendAvatar backend={turn.backend} label={turn.assistantName} />
 
       {turn.status === 'running' ? (
         <div className="ml-10 max-w-[82%] sm:max-w-[70%]">

@@ -23,7 +23,7 @@ import {
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
-import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode, getCodeAgentAssistantDisplayName } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
@@ -66,6 +66,7 @@ export const buildMessageTimeline = (
     const lastAIMessage = [...ownMessages].reverse().find(item => item.messageType === 'ai');
     const persisted = turnById.get(message.turnId);
     const isRunning = persisted?.status === 'running' || (!persisted && activeTurnId === message.turnId);
+    const assistantName = getCodeAgentAssistantDisplayName(message.username) || 'Coco';
     timeline.push({
       kind: 'agent-turn',
       messages: groupedMessages,
@@ -76,8 +77,8 @@ export const buildMessageTimeline = (
         startedAt: firstTimestamp,
         ...(!isRunning ? { completedAt: lastTimestamp } : {}),
         ...(lastAIMessage ? { finalMessageId: lastAIMessage.id } : {}),
-        backend: 'code-agent',
-        assistantName: message.username || 'Coco',
+        backend: assistantName === 'Codex' ? 'codex-app-server' : 'code-agent',
+        assistantName,
         updatedAt: lastTimestamp,
       },
     });

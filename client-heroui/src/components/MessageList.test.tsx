@@ -55,6 +55,21 @@ describe('buildMessageTimeline', () => {
       'turn-ai-2',
     ]);
   });
+
+  it('infers the Codex backend for legacy turns without persisted metadata', () => {
+    const timeline = buildMessageTimeline([
+      message({
+        id: 'codex-ai',
+        clientId: 'ai_assistant',
+        messageType: 'ai',
+        turnId: 'turn-codex',
+        username: 'CodexApp',
+      }),
+    ], []);
+
+    expect(timeline[0].kind === 'agent-turn' ? timeline[0].turn.backend : null).toBe('codex-app-server');
+    expect(timeline[0].kind === 'agent-turn' ? timeline[0].turn.assistantName : null).toBe('Codex');
+  });
 });
 
 vi.mock('../utils/socket', () => ({

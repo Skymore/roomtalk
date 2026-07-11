@@ -15,10 +15,6 @@ vi.mock('@iconify/react', () => ({
   Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 
-vi.mock('@heroui/react', () => ({
-  Avatar: ({ 'aria-label': ariaLabel }: { 'aria-label'?: string }) => <div data-testid="turn-avatar" aria-label={ariaLabel} />,
-}));
-
 const message = (overrides: Partial<Message>): Message => ({
   id: 'message-1',
   clientId: 'ai_assistant',
@@ -63,10 +59,25 @@ describe('AgentTurnItem', () => {
     );
 
     expect(screen.getAllByTestId('turn-avatar')).toHaveLength(1);
+    expect(screen.getByTestId('turn-avatar').getAttribute('data-agent-brand')).toBe('coco');
     expect(screen.getAllByText(/agentWorkingFor/)).toHaveLength(1);
     expect(screen.getByText('first update')).toBeTruthy();
     expect(screen.getByText('Reading file')).toBeTruthy();
     expect(screen.getByText('latest update')).toBeTruthy();
+  });
+
+  it('uses the Codex brand avatar for Codex turns', () => {
+    render(
+      <AgentTurnItem
+        turn={turn({ backend: 'codex-app-server', assistantName: 'Codex' })}
+        messages={[message({ id: 'ai-final', content: 'done' })]}
+        renderAgentMessage={item => <div>{item.content}</div>}
+        renderStandaloneMessage={item => <div>{item.content}</div>}
+      />,
+    );
+
+    expect(screen.getByTestId('turn-avatar').getAttribute('data-agent-brand')).toBe('codex');
+    expect(screen.getByTestId('turn-avatar').getAttribute('aria-label')).toBe('Codex');
   });
 
   it('collapses earlier work after completion and keeps the final message visible', () => {
