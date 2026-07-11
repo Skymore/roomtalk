@@ -78,6 +78,7 @@ type MessageRow = {
   ai_stream_owner_id?: string | null;
   code_agent_mode?: string | null;
   code_agent_queued_input?: unknown;
+  code_agent_image_message_ids?: unknown;
   position?: number | string;
 };
 
@@ -213,7 +214,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -513,6 +514,7 @@ const mapMessage = (row: MessageRow): Message => {
   const replyTo = parseJsonValue<Message['replyTo']>(row.reply_to);
   const uiPayload = parseJsonValue<Message['uiPayload']>(row.ui_payload);
   const codeAgentQueuedInput = parseJsonValue<Message['codeAgentQueuedInput']>(row.code_agent_queued_input);
+  const codeAgentImageMessageIds = parseJsonValue<Message['codeAgentImageMessageIds']>(row.code_agent_image_message_ids);
 
   const message: Message = {
     id: row.id,
@@ -545,6 +547,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (cost) message.cost = cost;
   if (row.code_agent_mode) message.codeAgentMode = row.code_agent_mode as Message['codeAgentMode'];
   if (codeAgentQueuedInput) message.codeAgentQueuedInput = codeAgentQueuedInput;
+  if (codeAgentImageMessageIds?.length) message.codeAgentImageMessageIds = codeAgentImageMessageIds;
   if (replyTo) message.replyTo = replyTo;
   if (uiPayload) message.uiPayload = uiPayload;
 
@@ -578,6 +581,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   getAIStreamOwnerId(message) || null,
   message.codeAgentMode || null,
   toJsonb(message.codeAgentQueuedInput),
+  toJsonb(message.codeAgentImageMessageIds),
   position,
   message.modelStepId || null,
   message.modelStepSequence ?? null,
@@ -652,11 +656,12 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ai_stream_owner_id,
   code_agent_mode,
   code_agent_queued_input,
+  code_agent_image_message_ids,
   position,
   model_step_id,
   model_step_sequence
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27, $28, $29
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -685,6 +690,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
   code_agent_mode = EXCLUDED.code_agent_mode,
   code_agent_queued_input = EXCLUDED.code_agent_queued_input,
+  code_agent_image_message_ids = EXCLUDED.code_agent_image_message_ids,
   position = room_messages.position`;
 
 const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (

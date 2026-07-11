@@ -14,6 +14,10 @@ export interface CodeAgentRunnerPriorMessage {
   content: string | CodeAgentRunnerPriorContentBlock[];
 }
 
+export interface CodeAgentRunnerImageInput {
+  url: string;
+}
+
 export interface CodeAgentRunnerRunRequest {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'run';
@@ -32,6 +36,7 @@ export interface CodeAgentRunnerRunRequest {
   codexServiceTier?: CodexServiceTier;
   workspace: string;
   allowedPaths: string[];
+  images?: CodeAgentRunnerImageInput[];
   priorMessages?: CodeAgentRunnerPriorMessage[];
 }
 

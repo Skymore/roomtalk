@@ -23,6 +23,7 @@ from roomtalk_code_agent_runner.runner import (
     _base_url_for,
     _coco_step_limits,
     _collect_static_publish_files,
+    _partial_history_for_steer,
     _read_only_shell_argv,
     _model_step_event_from_response,
     canonical_allowed_paths_for_engine,
@@ -81,6 +82,7 @@ def test_parse_request_validates_schema_and_required_fields():
     assert parsed.mode == "plan"
     assert parsed.allowed_paths == (".",)
     assert parsed.prior_messages == []
+    assert parsed.images == ()
     assert parsed.codex_model is None
     assert parsed.codex_reasoning_effort is None
     assert parsed.codex_permission_mode is None
@@ -116,6 +118,11 @@ def test_parse_request_validates_schema_and_required_fields():
     parsed_with_prior = parse_request(json.dumps(request(priorMessages=prior_messages)))
     assert parsed_with_prior.prior_messages == prior_messages
 
+    parsed_with_image = parse_request(json.dumps(request(images=[{
+        "url": "https://media.example/signed/input.png?token=secret",
+    }])))
+    assert parsed_with_image.images[0].url == "https://media.example/signed/input.png?token=secret"
+
     with pytest.raises(RunnerError, match="Unsupported schemaVersion"):
         parse_request(json.dumps(request(schemaVersion=2)))
 
@@ -127,6 +134,32 @@ def test_parse_request_validates_schema_and_required_fields():
             "role": "assistant",
             "content": [{"type": "tool_use", "id": "tool-1", "name": "Glob", "input": "bad"}],
         }])))
+
+    with pytest.raises(RunnerError, match="must be an absolute HTTPS URL"):
+        parse_request(json.dumps(request(images=[{
+            "url": "/api/media/private.png",
+        }])))
+
+    with pytest.raises(RunnerError, match="must be an absolute HTTPS URL"):
+        parse_request(json.dumps(request(images=[{
+            "url": "file:///tmp/private.png",
+        }])))
+
+
+def test_partial_steer_history_preserves_current_image_urls():
+    image_url = "https://media.example/signed/input.png?token=secret"
+    history = _partial_history_for_steer([], "describe this", "partial", [image_url])
+
+    assert history == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "url", "url": image_url}},
+                {"type": "text", "text": "describe this"},
+            ],
+        },
+        {"role": "assistant", "content": "partial"},
+    ]
 
 
 def test_allowed_paths_are_workspace_relative_and_cannot_escape(tmp_path: Path):
@@ -576,6 +609,14 @@ class PriorAwareEngine:
         return EngineResult(answer="ok", messages=[], usage=None)
 
 
+class ImageUrlAwareEngine:
+    def run(self, prompt, prior_messages=None, image_urls=None, on_text_chunk=None):
+        assert prompt == "inspect the project"
+        assert prior_messages is None
+        assert image_urls == ["https://media.example/signed/input.png?token=secret"]
+        return EngineResult(answer="image inspected", messages=[], usage=Usage())
+
+
 def test_run_request_falls_back_to_replay_for_kwargs_only_engine(monkeypatch):
     output = io.StringIO()
     parsed = parse_request(json.dumps(request()))
@@ -663,6 +704,24 @@ def test_run_request_passes_prior_messages_to_code_agent_engine(monkeypatch):
     events = event_lines(output)
     assert events[-1]["type"] == "final"
     assert events[-1]["answer"] == "ok"
+
+
+def test_run_request_passes_remote_image_urls_to_coco_engine(monkeypatch):
+    output = io.StringIO()
+    parsed = parse_request(json.dumps(request(images=[{
+        "url": "https://media.example/signed/input.png?token=secret",
+    }])))
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", "/tmp")
+
+    run_request(
+        parsed,
+        emitter=EventEmitter(output),
+        engine_factory=lambda _request: ImageUrlAwareEngine(),
+    )
+
+    events = event_lines(output)
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "image inspected"
 
 
 def test_run_request_emits_tool_events_before_terminal_final(monkeypatch):

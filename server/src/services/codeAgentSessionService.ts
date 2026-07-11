@@ -32,6 +32,7 @@ import {
 import { createAIPlaceholderMessage } from './messageDomain';
 import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
+import type { MediaObjectStorage } from './mediaObjectStorage';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { CODE_AGENT_ROOM_CONTEXT_API_PREFIX, CodeAgentRoomContextService } from './codeAgentRoomContext';
@@ -88,6 +89,7 @@ export interface CodeAgentSessionServiceOptions {
   staticSitePublisher?: PublishedStaticSiteService;
   roomContext?: CodeAgentRoomContextService;
   observability?: ObservabilityEventRecorder;
+  mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
   aiStreamOwnerId?: string;
   now?: () => Date;
   createId?: () => string;
@@ -161,6 +163,15 @@ export class CodeAgentSessionService {
   private readonly queueDrains = new Set<string>();
   private readonly now: () => Date;
   private readonly createId: () => string;
+
+  private static readonly MAX_TURN_IMAGE_BYTES = 5 * 1024 * 1024;
+  private static readonly TURN_IMAGE_URL_TTL_SECONDS = 2 * 60 * 60;
+  private static readonly TURN_IMAGE_EXTENSION: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
 
   constructor(
     private readonly store: RoomStore,
@@ -277,12 +288,21 @@ export class CodeAgentSessionService {
         });
         return ack({ success: false, error: 'Workspace requires a text prompt in the room history' });
       }
+      if (turnBackend === 'codex' && promptContext.imageMessageIds.length > 0) {
+        const error = 'Image input requires Codex app-server or Coco';
+        await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
+          errorMessage: error,
+          payload: { reason: 'legacy_codex_image_unsupported', backend: turnBackend },
+        });
+        return ack({ success: false, error });
+      }
 
       await this.recordTurnEvent('info', 'code_agent.turn.started', input, turnId, turnStartedAtMs, {
         payload: {
           backend: turnBackend,
           mode: turnMode.mode,
           promptLength: promptContext.prompt.length,
+          imageCount: promptContext.imageMessageIds.length,
           priorMessageCount: promptContext.priorMessages.length,
           maxContextMessages: input.maxContextMessages,
           usesModelGateway: Boolean(this.options.modelGateway),
@@ -319,6 +339,10 @@ export class CodeAgentSessionService {
       if (activeTurn) {
         activeTurn.sandbox = turnSandbox;
       }
+      const turnImages = await this.createTurnImageUrls(
+        input.roomId,
+        promptContext.imageMessageIds,
+      );
 
       const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
       if (!runningRoom) {
@@ -407,6 +431,7 @@ export class CodeAgentSessionService {
           : {}),
         workspace: turnSandbox.workspace,
         allowedPaths: this.options.allowedPaths || ['.'],
+        ...(turnImages.length > 0 ? { images: turnImages } : {}),
       };
       const startRunnerProcess = async (env: Record<string, string>) => {
         const command = this.runnerCommandForBackend(turnBackend);
@@ -735,6 +760,9 @@ export class CodeAgentSessionService {
     const message = await this.readOwnedQueuedMessage(roomId, clientId, messageId, 'queued');
     if (!message?.codeAgentQueuedInput) {
       return { success: false, error: 'Queued agent input is no longer available to steer' };
+    }
+    if (message.codeAgentImageMessageIds?.length) {
+      return { success: false, error: 'Queued image inputs must run as the next turn' };
     }
     const steeringAt = this.now().toISOString();
     const steering = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
@@ -1357,6 +1385,7 @@ export class CodeAgentSessionService {
         : prior;
       return {
         prompt: message.content.trim(),
+        imageMessageIds: this.normalizePromptImageMessageIds(message.codeAgentImageMessageIds),
         priorMessages: buildCodeAgentPriorMessages(limited),
       };
     }
@@ -1374,11 +1403,62 @@ export class CodeAgentSessionService {
           : prior;
         return {
           prompt: message.content.trim(),
+          imageMessageIds: this.normalizePromptImageMessageIds(message.codeAgentImageMessageIds),
           priorMessages: buildCodeAgentPriorMessages(limited),
         };
       }
     }
     return null;
+  }
+
+  private normalizePromptImageMessageIds(value: string[] | undefined): string[] {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))].slice(0, 9);
+  }
+
+  private async createTurnImageUrls(roomId: string, imageMessageIds: string[]) {
+    if (imageMessageIds.length === 0) return [];
+    const mediaObjectStorage = this.options.mediaObjectStorage;
+    if (!mediaObjectStorage) {
+      throw new Error('Workspace image inputs are unavailable');
+    }
+
+    const images: Array<{ url: string }> = [];
+    for (const messageId of imageMessageIds) {
+      const asset = await this.store.getMediaAssetByMessageId(messageId);
+      const extension = asset && CodeAgentSessionService.TURN_IMAGE_EXTENSION[asset.mimeType];
+      if (!asset || asset.roomId !== roomId || asset.kind !== 'image' || !extension) {
+        throw new Error('An attached image is unavailable or unsupported');
+      }
+      if (asset.byteSize > CodeAgentSessionService.MAX_TURN_IMAGE_BYTES) {
+        throw new Error('An attached image is too large for an agent turn');
+      }
+      const object = await mediaObjectStorage.headObject({ objectKey: asset.objectKey });
+      if (!object.exists) {
+        throw new Error('An attached image is unavailable or unsupported');
+      }
+      if (typeof object.byteSize === 'number' && object.byteSize > CodeAgentSessionService.MAX_TURN_IMAGE_BYTES) {
+        throw new Error('An attached image is too large for an agent turn');
+      }
+      if (object.mimeType && object.mimeType !== asset.mimeType) {
+        throw new Error('An attached image has inconsistent media metadata');
+      }
+      const signed = await mediaObjectStorage.createReadUrl({
+        objectKey: asset.objectKey,
+        expiresInSeconds: CodeAgentSessionService.TURN_IMAGE_URL_TTL_SECONDS,
+      });
+      let url: URL;
+      try {
+        url = new URL(signed.url);
+      } catch {
+        throw new Error('Workspace image storage did not return an absolute URL');
+      }
+      if (url.protocol !== 'https:') {
+        throw new Error('Workspace image storage returned an unsupported URL');
+      }
+      images.push({ url: signed.url });
+    }
+    return images;
   }
 
   private async readOwnedQueuedMessage(

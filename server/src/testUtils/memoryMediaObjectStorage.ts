@@ -12,6 +12,7 @@ export class MemoryMediaObjectStorage implements MediaObjectStorage {
   uploaded = this.objects;
   deletedObjectKeys: string[] = [];
   deleted = this.deletedObjectKeys;
+  readUrlRequests: Array<{ objectKey: string; expiresInSeconds?: number }> = [];
   failUpload = false;
 
   isConfigured() {
@@ -36,7 +37,8 @@ export class MemoryMediaObjectStorage implements MediaObjectStorage {
     };
   }
 
-  async createReadUrl(input: { objectKey: string }) {
+  async createReadUrl(input: { objectKey: string; expiresInSeconds?: number }) {
+    this.readUrlRequests.push(input);
     return {
       url: `${this.options.downloadBaseUrl || 'https://download.example'}/${encodeURIComponent(input.objectKey)}`,
       expiresAt: this.options.expiresAt || '2026-06-30T00:15:00.000Z',

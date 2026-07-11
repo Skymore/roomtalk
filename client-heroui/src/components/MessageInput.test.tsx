@@ -520,6 +520,79 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
   });
 
+  it('uploads attached images and links them to a code-agent run', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:agent-image'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({
+      id: 'image-message-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: { id: 'asset-image-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    }));
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+    setEditorText(editor, 'inspect this screenshot');
+    const file = new File([new Uint8Array([1, 2, 3])], 'screen.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
+    await waitFor(() => expect(editor.querySelectorAll('img')).toHaveLength(1));
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      kind: 'image',
+      mimeType: 'image/png',
+      filename: 'screen.png',
+    }));
+    expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'inspect this screenshot',
+      imageMessageIds: ['image-message-1'],
+    }));
+  });
+
+  it('queues an image-only code-agent turn with a durable image link', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:queued-agent-image'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({
+      id: 'image-message-queued',
+      content: '',
+      messageType: 'media',
+      mediaAsset: { id: 'asset-image-queued', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    }));
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+    const file = new File([new Uint8Array([1, 2, 3])], 'queued.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
+    await waitFor(() => expect(editor.querySelectorAll('img')).toHaveLength(1));
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledTimes(1));
+    expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'codeAgentInspectAttachedImages',
+      imageMessageIds: ['image-message-queued'],
+    }));
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps Send as a chat-only action while an agent turn is running', async () => {
     const { editor } = renderMessageInput({
       isCodeAgentRoom: true,

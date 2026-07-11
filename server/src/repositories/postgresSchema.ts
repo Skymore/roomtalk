@@ -102,6 +102,7 @@ export const POSTGRES_SCHEMA_SQL = [
     reply_to JSONB,
     ui_payload JSONB,
     ai_stream_owner_id TEXT,
+    code_agent_image_message_ids JSONB,
     updated_at TIMESTAMPTZ,
     position INTEGER NOT NULL
   )`,
@@ -120,6 +121,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS is_error BOOLEAN`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_queued_input JSONB`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_image_message_ids JSONB`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_code_agent_queue
     ON room_messages (room_id, position)
     WHERE code_agent_queued_input->>'state' = 'queued'`,

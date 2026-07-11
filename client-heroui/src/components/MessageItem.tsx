@@ -305,6 +305,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const queuedInput = message.codeAgentQueuedInput;
   const isQueuedInput = Boolean(queuedInput && queuedInput.state !== 'started');
   const canControlQueuedInput = isMine && queuedInput?.state === 'queued';
+  const canSteerQueuedInput = canControlQueuedInput && !message.codeAgentImageMessageIds?.length;
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const canEditMessage = !isQueuedInput && canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
   const canDeleteMessage = !isQueuedInput && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
@@ -1085,7 +1086,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                       key="steer-queued"
                       startContent={<Icon icon="lucide:corner-down-right" />}
                       onPress={() => onSteerQueuedMessage?.(message.id)}
-                      isDisabled={!canControlQueuedInput}
+                      isDisabled={!canSteerQueuedInput}
                     >
                       {t('codeAgentSteerInstead')}
                     </DropdownItem>

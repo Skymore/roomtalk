@@ -708,7 +708,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
           assert.equal(call.params?.[25], null);
-          assert.equal(call.params?.[26], 2);
+          assert.equal(call.params?.[26], null);
+          assert.equal(call.params?.[27], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -791,7 +792,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
           assert.equal(call.params?.[25], null);
-          assert.equal(call.params?.[26], 4);
+          assert.equal(call.params?.[26], null);
+          assert.equal(call.params?.[27], 4);
         },
       },
       {
@@ -910,7 +912,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
           assert.equal(call.params?.[25], null);
-          assert.equal(call.params?.[26], 3);
+          assert.equal(call.params?.[26], null);
+          assert.equal(call.params?.[27], 3);
         },
       },
       {
@@ -1079,7 +1082,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[22], JSON.stringify(aiMessage.uiPayload));
           assert.equal(call.params?.[23], null);
           assert.equal(call.params?.[25], null);
-          assert.equal(call.params?.[26], 0);
+          assert.equal(call.params?.[26], null);
+          assert.equal(call.params?.[27], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },

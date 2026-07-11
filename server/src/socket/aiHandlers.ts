@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import type { RoomStore } from '../repositories/store';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import { A2UI_BASIC_CATALOG_ID, mergeA2UIPayloads, normalizeA2UIPayload } from '../services/a2uiPayload';
@@ -434,6 +435,38 @@ type SendMessageAndAskAIData = AIRequestData & {
   };
   replyToMessageId?: string;
   clientMessageId?: string;
+  imageMessageIds?: string[];
+};
+
+const readCodeAgentImageMessageIds = async (
+  store: RoomStore,
+  roomId: string,
+  clientId: string,
+  value: unknown,
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> => {
+  if (value === undefined) return { ok: true, ids: [] };
+  if (!Array.isArray(value) || value.length > 9 || value.some(id => typeof id !== 'string' || !id.trim())) {
+    return { ok: false, error: 'Agent image attachments must contain at most 9 message IDs' };
+  }
+  const ids = [...new Set(value.map(id => id.trim()))];
+  if (ids.length !== value.length) {
+    return { ok: false, error: 'Agent image attachments must be unique' };
+  }
+  const messagesById = new Map(
+    (await store.readMessagesByRoom(roomId)).map(message => [message.id, message]),
+  );
+  for (const id of ids) {
+    const message = messagesById.get(id);
+    if (
+      !message ||
+      message.clientId !== clientId ||
+      message.messageType !== 'media' ||
+      message.mediaAsset?.kind !== 'image'
+    ) {
+      return { ok: false, error: 'Agent image attachment is unavailable' };
+    }
+  }
+  return { ok: true, ids };
 };
 
 const findNextCodeAgentTurnMode = (messages: Message[], messageId: string): CodeAgentRunnerMode | undefined => {
@@ -1852,6 +1885,11 @@ export function registerAIHandlers({
       callback?.({ success: false, error: codeAgentSessionService ? CODE_AGENT_ACCESS_DENIED_MESSAGE : 'Workspace is unavailable' });
       return;
     }
+    const imageMessageIds = await readCodeAgentImageMessageIds(store, data.roomId, clientId, data.imageMessageIds);
+    if (!imageMessageIds.ok) {
+      callback?.({ success: false, error: imageMessageIds.error });
+      return;
+    }
 
     let replyTo;
     if (data.replyToMessageId) {
@@ -1872,6 +1910,7 @@ export function registerAIHandlers({
       replyTo,
       clientMessageId: data.clientMessageId,
     });
+    if (imageMessageIds.ids.length > 0) message.codeAgentImageMessageIds = imageMessageIds.ids;
     const codexRunSettings = normalizeCodexRunSettings(
       data.codexModel,
       data.codexReasoningEffort,
@@ -2045,6 +2084,13 @@ export function registerAIHandlers({
         return;
       }
     }
+    const imageMessageIds = roomForAIRequest.type === 'codeAgent'
+      ? await readCodeAgentImageMessageIds(store, data.roomId, clientId, data.imageMessageIds)
+      : { ok: true as const, ids: [] };
+    if (!imageMessageIds.ok) {
+      callback?.({ success: false, error: imageMessageIds.error });
+      return;
+    }
 
     let roomMessages: Message[] = [];
     let replyTo;
@@ -2068,6 +2114,7 @@ export function registerAIHandlers({
       replyTo,
       clientMessageId: data.clientMessageId,
     });
+    if (imageMessageIds.ids.length > 0) userMessage.codeAgentImageMessageIds = imageMessageIds.ids;
 
     const updatedRoom = await store.appendMessage(userMessage);
     if (!updatedRoom) {

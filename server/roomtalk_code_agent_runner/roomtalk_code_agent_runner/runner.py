@@ -45,6 +45,11 @@ class RunnerError(Exception):
 
 
 @dataclass(frozen=True)
+class RunnerImageInput:
+    url: str
+
+
+@dataclass(frozen=True)
 class RunnerRequest:
     room_id: str
     turn_id: str
@@ -61,6 +66,7 @@ class RunnerRequest:
     codex_service_tier: str | None
     workspace: Path
     allowed_paths: tuple[str, ...]
+    images: tuple[RunnerImageInput, ...] = ()
 
 
 class EventEmitter:
@@ -105,6 +111,7 @@ def parse_request(line: str) -> RunnerRequest:
     session_id_raw = raw.get("sessionId")
     session_id = session_id_raw if isinstance(session_id_raw, str) and session_id_raw else None
     prior_messages = _parse_prior_messages(raw.get("priorMessages"), turn_id=raw.get("turnId"))
+    images = _parse_image_inputs(raw.get("images"), turn_id=raw.get("turnId"))
 
     return RunnerRequest(
         room_id=string_field("roomId"),
@@ -122,6 +129,7 @@ def parse_request(line: str) -> RunnerRequest:
         codex_service_tier=_optional_string(raw.get("codexServiceTier"), "codexServiceTier", turn_id=raw.get("turnId")),
         workspace=Path(string_field("workspace")),
         allowed_paths=tuple(allowed_paths_raw),
+        images=images,
     )
 
 
@@ -131,6 +139,26 @@ def _optional_string(value: Any, key: str, *, turn_id: str | None = None) -> str
     if not isinstance(value, str) or not value.strip():
         raise RunnerError(f"Expected non-empty string field {key!r}", code="invalid_request", turn_id=turn_id)
     return value.strip()
+
+
+def _parse_image_inputs(value: Any, *, turn_id: str | None = None) -> tuple[RunnerImageInput, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > 9:
+        raise RunnerError("Expected images to be an array with at most 9 items", code="invalid_request", turn_id=turn_id)
+
+    images: list[RunnerImageInput] = []
+    for index, image in enumerate(value):
+        if not isinstance(image, dict):
+            raise RunnerError(f"Expected images[{index}] to be an object", code="invalid_request", turn_id=turn_id)
+        url = image.get("url")
+        if not isinstance(url, str) or not url or len(url) > 16_384:
+            raise RunnerError(f"Expected non-empty images[{index}].url", code="invalid_request", turn_id=turn_id)
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise RunnerError(f"images[{index}].url must be an absolute HTTPS URL", code="invalid_request", turn_id=turn_id)
+        images.append(RunnerImageInput(url=url))
+    return tuple(images)
 
 
 def _parse_prior_messages(value: Any, *, turn_id: str | None = None) -> list[dict[str, Any]]:
@@ -968,6 +996,14 @@ def _engine_supports_prior_messages(engine: Any) -> bool:
     return "prior_messages" in parameters
 
 
+def _engine_supports_image_urls(engine: Any) -> bool:
+    try:
+        parameters = inspect.signature(engine.run).parameters
+    except (TypeError, ValueError):
+        return False
+    return "image_urls" in parameters
+
+
 def _live_tool_event_to_runner_event(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
     if not isinstance(event, dict):
         raise RunnerError("Code agent tool event must be a JSON object", code="invalid_tool_event", turn_id=turn_id)
@@ -1277,9 +1313,17 @@ def _partial_history_for_steer(
     prior_messages: list[dict[str, Any]],
     prompt: str,
     partial_answer: str,
+    image_urls: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     history = list(prior_messages)
-    history.append({"role": "user", "content": prompt})
+    content: str | list[dict[str, Any]] = prompt
+    if image_urls:
+        content = [
+            {"type": "image", "source": {"type": "url", "url": url}}
+            for url in image_urls
+        ]
+        content.append({"type": "text", "text": prompt})
+    history.append({"role": "user", "content": content})
     if partial_answer.strip():
         history.append({"role": "assistant", "content": partial_answer})
     return history
@@ -1343,6 +1387,13 @@ def run_request(
 
         live_tool_events_enabled = _engine_supports_tool_events(engine)
         supports_prior_messages = _engine_supports_prior_messages(engine)
+        supports_image_urls = _engine_supports_image_urls(engine)
+        if request.images and not supports_image_urls:
+            raise RunnerError(
+                "Installed Coco engine does not support remote image URLs",
+                code="coco_image_urls_unsupported",
+                turn_id=request.turn_id,
+            )
         controls = _CodeAgentControlState()
         control_thread = (
             _start_code_agent_control_dispatcher(control_queue, engine, controls, emitter, request.turn_id)
@@ -1351,6 +1402,7 @@ def run_request(
         )
         current_prompt = request.prompt
         prior_messages = list(request.prior_messages)
+        current_image_urls = [image.url for image in request.images]
         all_answer_parts: list[str] = []
         usage: dict[str, Any] | None = None
         final_answer = ""
@@ -1363,8 +1415,14 @@ def run_request(
                     interrupted = True
                     break
                 if queued_action == "steer" and queued_prompt:
-                    prior_messages = _partial_history_for_steer(prior_messages, current_prompt, "")
+                    prior_messages = _partial_history_for_steer(
+                        prior_messages,
+                        current_prompt,
+                        "",
+                        current_image_urls,
+                    )
                     current_prompt = queued_prompt
+                    current_image_urls = []
                     continue
 
                 attempt_answer_parts: list[str] = []
@@ -1380,6 +1438,8 @@ def run_request(
                 run_kwargs: dict[str, Any] = {"on_text_chunk": on_text_chunk}
                 if supports_prior_messages:
                     run_kwargs["prior_messages"] = prior_messages or None
+                if current_image_urls:
+                    run_kwargs["image_urls"] = current_image_urls
                 if live_tool_events_enabled:
                     run_kwargs["on_tool_event"] = on_tool_event
 
@@ -1396,8 +1456,10 @@ def run_request(
                             prior_messages,
                             current_prompt,
                             "".join(attempt_answer_parts),
+                            current_image_urls,
                         )
                         current_prompt = steer_prompt
+                        current_image_urls = []
                         emitter.emit({
                             "type": "status",
                             "turnId": request.turn_id,
@@ -1410,6 +1472,8 @@ def run_request(
                     controls.run_active.clear()
 
                 result_messages = getattr(result, "messages", []) or []
+                completed_image_urls = current_image_urls
+                current_image_urls = []
                 if not live_tool_events_enabled:
                     for event in replay_tool_events(result_messages, turn_id=request.turn_id):
                         emitter.emit(event)
@@ -1424,6 +1488,7 @@ def run_request(
                         prior_messages,
                         current_prompt,
                         "".join(attempt_answer_parts),
+                        completed_image_urls,
                     )
                     current_prompt = steer_prompt
                     emitter.emit({

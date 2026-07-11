@@ -42,12 +42,13 @@ class FakeCodexPopenFactory:
         return FakeCodexProcess(self.stdout, stderr=self.stderr, exit_code=self.exit_code)
 
 
-def codex_request(workspace: Path):
+def codex_request(workspace: Path, **overrides: Any):
     return parse_request(json.dumps(request(
         turnId="turn-codex",
         sessionId="session-prev",
         prompt="inspect with codex",
         workspace=str(workspace),
+        **overrides,
     )))
 
 
@@ -152,6 +153,7 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path, monk
     assert 'service_tier="default"' in call_args
     assert "sandbox_workspace_write.network_access=true" not in call_args
     assert call_args[call_args.index("--sandbox") + 1] == "read-only"
+    assert "--image" not in call_args
     assert call_args[call_args.index("--cd") + 1] == str(workspace)
     assert call_args[call_args.index("--output-last-message") + 1].endswith("last-message.txt")
     assert call["args"][-1].endswith("inspect with codex")
@@ -165,6 +167,18 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path, monk
     assert "ROOMTALK_CODEX_AUTH_JSON_PATH" not in child_env
     assert refreshed_auth_json.read_text(encoding="utf-8") == '{"accessToken":"refreshed"}'
     assert not Path(child_env["CODEX_HOME"]).exists()
+
+
+def test_codex_cli_rejects_image_inputs_on_deprecated_backend(tmp_path: Path):
+    with pytest.raises(RunnerError, match="deprecated Codex CLI backend") as error:
+        codex_cli.run_request(
+            codex_request(tmp_path, images=[{
+                "url": "https://media.example/signed/input.png?token=secret",
+            }]),
+            emitter=EventEmitter(io.StringIO()),
+        )
+
+    assert error.value.code == "codex_cli_image_unsupported"
 
 
 def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: Path):

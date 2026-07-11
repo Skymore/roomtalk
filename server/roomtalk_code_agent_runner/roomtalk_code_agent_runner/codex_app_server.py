@@ -869,9 +869,11 @@ def _thread_resume_params(request: RunnerRequest, env: dict[str, str], workspace
 
 def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: Path, thread_id: str) -> dict[str, Any]:
     permission = _codex_app_server_permissions(request)
+    turn_input = [{"type": "text", "text": _prompt_with_app_server_tools(request, env)}]
+    turn_input.extend({"type": "image", "url": image.url} for image in request.images)
     params = {
         "threadId": thread_id,
-        "input": [{"type": "text", "text": _prompt_with_app_server_tools(request, env)}],
+        "input": turn_input,
         "cwd": str(workspace),
         "model": _normalize_codex_model(request.codex_model),
         "effort": _normalize_codex_reasoning_effort(request.codex_reasoning_effort),

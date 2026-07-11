@@ -507,10 +507,18 @@ describe('AI socket handlers', () => {
         return { success: true, message: args[1] };
       },
     };
+    const imageMessage = message({
+      id: 'image-message-1',
+      clientId: 'client-1',
+      messageType: 'media',
+      content: '',
+      mediaAsset: { id: 'asset-image-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    });
     const { socket } = createHarness({
       currentRoom: room({ type: 'codeAgent', codeAgentStatus: 'running' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
+      messages: [imageMessage],
     });
 
     let response: unknown;
@@ -524,6 +532,7 @@ describe('AI socket handlers', () => {
       codexServiceTier: 'priority',
       codeAgentMode: 'fullAccess',
       clientMessageId: 'client-message-1',
+      imageMessageIds: [imageMessage.id],
     }, (ack: unknown) => {
       response = ack;
     });
@@ -547,7 +556,44 @@ describe('AI socket handlers', () => {
     });
     assert.equal((calls[0][1] as Message).content, 'use Bing for the next pass');
     assert.equal((calls[0][1] as Message).clientMessageId, 'client-message-1');
+    assert.deepEqual((calls[0][1] as Message).codeAgentImageMessageIds, [imageMessage.id]);
     assert.deepEqual(response, { success: true, message: calls[0][1] });
+  });
+
+  it('rejects code-agent image links that are not owned by the requesting client', async () => {
+    let queueCalls = 0;
+    const codeAgentSessionService = {
+      async queueTurn() {
+        queueCalls++;
+        return { success: true };
+      },
+    };
+    const foreignImage = message({
+      id: 'foreign-image-message',
+      clientId: 'client-2',
+      messageType: 'media',
+      content: '',
+      mediaAsset: { id: 'foreign-asset', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    });
+    const { socket } = createHarness({
+      currentRoom: room({ type: 'codeAgent', codeAgentStatus: 'running' }),
+      codeAgentSessionService,
+      headers: roomtalkOriginHeaders,
+      messages: [foreignImage],
+    });
+
+    let response: unknown;
+    await socket.invoke('queue_code_agent_input', {
+      roomId: 'room-1',
+      content: 'inspect this',
+      model: selectedModel.id,
+      imageMessageIds: [foreignImage.id],
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Agent image attachment is unavailable' });
+    assert.equal(queueCalls, 0);
   });
 
   it('passes Codex model and reasoning settings to code-agent session service for Codex-backed rooms', async () => {
@@ -1282,10 +1328,18 @@ describe('AI socket handlers', () => {
         return { success: true, messageId: 'code-agent-ai-2' };
       },
     };
+    const imageMessage = message({
+      id: 'image-message-1',
+      clientId: 'client-1',
+      messageType: 'media',
+      content: '',
+      mediaAsset: { id: 'asset-image-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    });
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'codeAgent' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
+      messages: [imageMessage],
     });
 
     let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
@@ -1296,11 +1350,13 @@ describe('AI socket handlers', () => {
       model: selectedModel.id,
       roleName: 'Assistant',
       codeAgentMode: 'acceptEdits',
+      imageMessageIds: [imageMessage.id],
     }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
       response = ack;
     });
 
     assert.equal(store.appendedMessages.length, 1);
+    assert.deepEqual(store.appendedMessages[0].codeAgentImageMessageIds, [imageMessage.id]);
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0][0], {

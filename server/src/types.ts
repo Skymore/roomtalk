@@ -157,6 +157,7 @@ export interface Message {
   cost?: AICost;
   codeAgentMode?: CodeAgentMode;
   codeAgentQueuedInput?: CodeAgentQueuedInput;
+  codeAgentImageMessageIds?: string[];
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;

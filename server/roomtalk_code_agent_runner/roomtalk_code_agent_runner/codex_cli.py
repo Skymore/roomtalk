@@ -207,6 +207,12 @@ def run_request(
     popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
     env: dict[str, str] | None = None,
 ) -> None:
+    if request.images:
+        raise RunnerError(
+            "Image input is not supported by the deprecated Codex CLI backend; use codex-app-server",
+            code="codex_cli_image_unsupported",
+            turn_id=request.turn_id,
+        )
     env = dict(env or os.environ)
     config = config or config_from_env(env)
     workspace = validate_workspace_path(request.workspace, env)

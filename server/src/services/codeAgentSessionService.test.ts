@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Writable } from 'node:stream';
 import { Logger } from '../logger';
-import { AIModelOption, CodeAgentMode, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentMode, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
@@ -61,6 +61,7 @@ class MemoryCodeAgentStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
   agentTurns = new Map<string, RoomAgentTurn>();
+  mediaAssetsByMessageId = new Map<string, MediaAsset>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
   upsertFailures = 0;
@@ -91,6 +92,10 @@ class MemoryCodeAgentStore {
 
   async readMessagesByRoom(roomId: string) {
     return this.messages.get(roomId) || [];
+  }
+
+  async getMediaAssetByMessageId(messageId: string) {
+    return this.mediaAssetsByMessageId.get(messageId) || null;
   }
 
   async saveRoom(room: Room) {
@@ -465,6 +470,7 @@ const createService = (options: {
   staticSitePublisher?: PublishedStaticSiteService;
   roomContext?: CodeAgentRoomContextService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
+  mediaObjectStorage?: MemoryMediaObjectStorage;
   aiStreamOwnerId?: string;
   activeSandboxTtlMs?: number;
   idleSandboxTtlMs?: number;
@@ -511,6 +517,7 @@ const createService = (options: {
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
       observability: options.observability,
+      mediaObjectStorage: options.mediaObjectStorage,
       aiStreamOwnerId: options.aiStreamOwnerId,
     }
   );
@@ -518,6 +525,89 @@ const createService = (options: {
 };
 
 describe('CodeAgentSessionService', () => {
+  it('signs linked object-storage images for the runner without writing sandbox files', async () => {
+    const imageMessage: Message = {
+      id: 'image-message-1',
+      roomId: 'room-1',
+      clientId: 'client-1',
+      content: '',
+      timestamp: '2026-05-03T00:00:00.000Z',
+      messageType: 'media',
+      mediaAsset: { id: 'asset-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    };
+    const promptMessage: Message = {
+      ...userMessage('inspect this screenshot'),
+      id: 'prompt-with-image',
+      codeAgentImageMessageIds: [imageMessage.id],
+    };
+    const store = new MemoryCodeAgentStore(room(), [imageMessage, promptMessage]);
+    store.mediaAssetsByMessageId.set(imageMessage.id, {
+      ...imageMessage.mediaAsset!,
+      roomId: 'room-1',
+      messageId: imageMessage.id,
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      createdAt: imageMessage.timestamp,
+    });
+    const mediaObjectStorage = new MemoryMediaObjectStorage();
+    await mediaObjectStorage.putMediaObject({
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      body: Buffer.from('png'),
+      mimeType: 'image/png',
+      byteSize: 3,
+    });
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { sandboxService, service } = createService({ store, runner, mediaObjectStorage });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(runner.requests[0].images, [{
+      url: 'https://download.example/rooms%2Froom-1%2Fmedia%2Fimage%2Fasset-1',
+    }]);
+    assert.deepEqual(mediaObjectStorage.readUrlRequests, [{
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      expiresInSeconds: 2 * 60 * 60,
+    }]);
+    assert.deepEqual(sandboxService.deletedSecretFilePaths, []);
+  });
+
+  it('rejects image input on the deprecated Codex CLI backend', async () => {
+    const imageMessage: Message = {
+      id: 'legacy-image-message',
+      roomId: 'room-1',
+      clientId: 'client-1',
+      content: '',
+      timestamp: '2026-05-03T00:00:00.000Z',
+      messageType: 'media',
+      mediaAsset: { id: 'legacy-asset', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    };
+    const promptMessage: Message = {
+      ...userMessage('inspect this screenshot'),
+      id: 'legacy-prompt-with-image',
+      codeAgentImageMessageIds: [imageMessage.id],
+    };
+    const store = new MemoryCodeAgentStore(
+      room({ codeAgentBackend: 'codex' }),
+      [imageMessage, promptMessage],
+    );
+    const runner = new FakeCodeAgentRunnerClient([]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'codex',
+      codexBackendEnabled: true,
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(result, {
+      success: false,
+      error: 'Image input requires Codex app-server or Coco',
+    });
+    assert.equal(runner.requests.length, 0);
+  });
+
   it('runs a full fake code-agent turn and persists runner events', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },

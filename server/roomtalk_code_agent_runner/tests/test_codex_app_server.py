@@ -123,6 +123,9 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
             codexModel="gpt-5.6-sol",
             codexReasoningEffort="high",
             codexServiceTier="priority",
+            images=[{
+                "url": "https://media.example/signed/input.png?token=secret",
+            }],
         ),
         emitter=EventEmitter(stdout),
         config=codex_app_server.CodexCliRunConfig(
@@ -192,6 +195,10 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
     assert sent[3]["params"]["sandboxPolicy"]["type"] == "readOnly"
     assert sent[3]["params"]["sandboxPolicy"]["networkAccess"] is False
     assert "roomtalk publish-static-site" not in sent[3]["params"]["input"][0]["text"]
+    assert sent[3]["params"]["input"][1] == {
+        "type": "image",
+        "url": "https://media.example/signed/input.png?token=secret",
+    }
     assert not (Path(call["env"]["CODEX_HOME"]) / "auth.json").exists()
     assert not (Path(call["env"]["CODEX_HOME"]) / "config.toml").exists()
 

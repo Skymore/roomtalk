@@ -535,6 +535,7 @@ type MessageRow = {
   ai_stream_owner_id: string | null;
   code_agent_mode?: string | null;
   code_agent_queued_input?: unknown;
+  code_agent_image_message_ids?: unknown;
   position: number;
 };
 
@@ -769,6 +770,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         aiStreamOwnerId,
         codeAgentMode,
         codeAgentQueuedInput,
+        codeAgentImageMessageIds,
         position,
         modelStepId,
         modelStepSequence,
@@ -803,6 +805,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
         code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : String(codeAgentMode),
         code_agent_queued_input: jsonValue(codeAgentQueuedInput),
+        code_agent_image_message_ids: jsonValue(codeAgentImageMessageIds),
         model_step_id: modelStepId === null || modelStepId === undefined ? null : String(modelStepId),
         model_step_sequence: modelStepSequence === null || modelStepSequence === undefined ? null : Number(modelStepSequence),
         position: existingPosition,
@@ -1412,6 +1415,7 @@ for (const [storeName, createFixture] of storeFactories) {
         timestamp: '2026-05-03T00:00:01.000Z',
         username: 'User',
         avatar: { text: 'U', color: '#123456' },
+        codeAgentImageMessageIds: ['image-message-1'],
       });
       const second = message({
         id: 'm2',

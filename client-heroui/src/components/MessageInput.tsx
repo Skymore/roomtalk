@@ -538,6 +538,42 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     };
   }, [parseEditorContent]);
 
+  const uploadCodeAgentImageMessages = async (
+    items: MessageContentItem[],
+    avatar: { text: string; color: string },
+  ): Promise<string[]> => {
+    const imageItems = buildOutgoingMessageItems(items).filter(
+      (item): item is Extract<ReturnType<typeof buildOutgoingMessageItems>[number], { type: 'image' }> => item.type === 'image'
+    );
+    if (imageItems.length !== imageCountRef.current) {
+      throw new Error('One or more attached images are unavailable');
+    }
+
+    const imageMessageIds: string[] = [];
+    for (const item of imageItems) {
+      const supportedMimeType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(item.file.type)
+        ? item.file.type
+        : 'image/webp';
+      const compressedFile = await imageCompression(item.file, {
+        maxSizeMB: 2,
+        useWebWorker: true,
+        fileType: supportedMimeType,
+      });
+      const savedMessage = await uploadMediaMessage({
+        file: compressedFile,
+        roomId,
+        kind: 'image',
+        mimeType: compressedFile.type || supportedMimeType,
+        filename: item.file.name,
+        username,
+        avatar,
+        replyToMessageId: replyToMessage?.id,
+      });
+      imageMessageIds.push(savedMessage.id);
+    }
+    return imageMessageIds;
+  };
+
   // 发送AI消息的新方法
   const handleAskAI = async (requestedAction?: MessageInputAIAction) => {
     const latestContentItems = parseEditorContent();
@@ -560,10 +596,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
 
-      if (agentAction === 'queue' && imageCountRef.current > 0) {
-        setErrorMessage(t('codeAgentQueueTextOnly'));
-        return;
-      }
       if (agentAction === 'stop') {
         setIsInterruptingCodeAgent(true);
         try {
@@ -574,7 +606,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         }
         return;
       }
-      const promptForSend = isCodeAgentRoom
+      const basePromptForSend = isCodeAgentRoom
         ? appendReviewCommentsToPrompt(prompt, reviewComments)
         : prompt;
       const aiRequestSettings = selectRoomAIRequestSettings({
@@ -591,6 +623,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             codexServiceTier: codexRunSettings.serviceTier,
           }
         : {};
+      const imageMessageIds = isCodeAgentRoom && imageCountRef.current > 0
+        ? await uploadCodeAgentImageMessages(latestContentItems, avatar)
+        : [];
+      const promptForSend = basePromptForSend || (imageMessageIds.length > 0 ? t('codeAgentInspectAttachedImages') : '');
 
       if (agentAction === 'queue') {
         if (!promptForSend) {
@@ -599,6 +635,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         const clientMessageId = createClientMessageId();
         optimisticClientMessageId = clientMessageId;
         const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+        if (imageMessageIds.length > 0) optimisticMessage.codeAgentImageMessageIds = imageMessageIds;
         const queuedAt = new Date().toISOString();
         optimisticMessage.codeAgentQueuedInput = {
           state: 'queued',
@@ -614,6 +651,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           avatar,
           replyToMessageId: replyToMessage?.id,
           clientMessageId,
+          ...(imageMessageIds.length > 0 ? { imageMessageIds } : {}),
           ...aiRequestSettings,
           ...codeAgentRunSettings,
           codeAgentMode,
@@ -638,6 +676,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const clientMessageId = createClientMessageId();
       optimisticClientMessageId = clientMessageId;
       const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+      if (imageMessageIds.length > 0) optimisticMessage.codeAgentImageMessageIds = imageMessageIds;
       onOptimisticMessage?.(optimisticMessage);
       clearEditorImmediately({ blur: true });
 
@@ -648,6 +687,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         avatar,
         replyToMessageId: replyToMessage?.id,
         clientMessageId,
+        ...(imageMessageIds.length > 0 ? { imageMessageIds } : {}),
         ...aiRequestSettings,
         ...codeAgentRunSettings,
       });

@@ -1523,6 +1523,7 @@ export const queueCodeAgentInput = (params: {
   avatar?: { text: string; color: string };
   replyToMessageId?: string;
   clientMessageId?: string;
+  imageMessageIds?: string[];
   model?: string;
   codexModel?: string;
   codexReasoningEffort?: CodexReasoningEffort;
@@ -1620,6 +1621,7 @@ export const sendMessageAndAskAI = (params: {
   avatar?: { text: string; color: string };
   replyToMessageId?: string;
   clientMessageId?: string;
+  imageMessageIds?: string[];
   systemPrompt?: string;
   roleName?: string;
   model?: string;

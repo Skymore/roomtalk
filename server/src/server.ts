@@ -391,6 +391,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     staticSitePublisher: publishedStaticSiteService,
     roomContext: codeAgentRoomContextService,
     observability: observabilityRecorder,
+    mediaObjectStorage,
     aiStreamOwnerId,
   }
 );
