@@ -120,8 +120,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentTools')).toBeTruthy();
     expect(screen.getByText('codeAgentResults')).toBeTruthy();
     expect(screen.getByText('codeAgentErrors')).toBeTruthy();
-    fireEvent.click(screen.getByText('codeAgentActivity'));
-    expect(screen.getByText('codeAgentNoActivity')).toBeTruthy();
+    expect(screen.queryByText('codeAgentActivity')).toBeNull();
+    expect(screen.queryByText('codeAgentThreads')).toBeNull();
+    expect(screen.getByText('codeAgentChanges')).toBeTruthy();
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     expect(screen.getByText('codeAgentNoArtifacts')).toBeTruthy();
   });
@@ -250,7 +251,7 @@ describe('CodeAgentWorkspacePanel', () => {
     });
   });
 
-  it('renders edit mode and derived tool activity', () => {
+  it('renders edit mode with the activity tab hidden', () => {
     const onRefreshWorkspace = vi.fn();
     render(
       <CodeAgentWorkspacePanel
@@ -265,8 +266,8 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('Edit')).toBeTruthy();
     expect(screen.getByText('codexPermissionEditDescription')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('codeAgentActivity'));
-    expect(screen.getByText('Read')).toBeTruthy();
+    expect(screen.queryByText('codeAgentActivity')).toBeNull();
+    expect(screen.queryByText('codeAgentThreads')).toBeNull();
     expect(screen.getByLabelText('codeAgentRefreshWorkspace')).toBeTruthy();
     expect(screen.queryByText('codeAgentRefreshWorkspace')).toBeNull();
   });
@@ -381,13 +382,8 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('codeAgentActivity'));
-    expect(screen.getAllByText('Shell').length).toBeGreaterThan(0);
-    expect(screen.getByText('npm test')).toBeTruthy();
-    expect(screen.getByText('codeAgentCommandStarted')).toBeTruthy();
-    expect(screen.getByText('codeAgentCommandSucceeded')).toBeTruthy();
-    expect(screen.getByText('codeAgentCommandFailed')).toBeTruthy();
-    expect(screen.getByText('permission denied')).toBeTruthy();
+    expect(screen.queryByText('codeAgentActivity')).toBeNull();
+    expect(screen.queryByText('codeAgentThreads')).toBeNull();
 
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     const link = screen.getByText('RoomTalk Demo').closest('a');

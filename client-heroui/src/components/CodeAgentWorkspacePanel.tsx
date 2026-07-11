@@ -74,6 +74,7 @@ const EMPTY_CHANGED_FILES: string[] = [];
 const EMPTY_CHANGED_FILE_STATS: CodeAgentWorkspaceSnapshot['changes']['changedFileStats'] = [];
 const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
 const MOBILE_WORKSPACE_QUERY = '(max-width: 1023px)';
+const SHOW_AGENT_ACTIVITY_AND_THREADS = false;
 
 type ScopedDiffFileSummaries = {
   scopeKey: string;
@@ -715,8 +716,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             </div>
           </Tab>
 
-          <Tab
-            key="activity"
+          {SHOW_AGENT_ACTIVITY_AND_THREADS ? (
+            <>
+              <Tab
+                key="activity"
             title={
               <span className="inline-flex items-center gap-1.5">
                 <Icon icon="lucide:activity" className="h-3.5 w-3.5" />
@@ -762,10 +765,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
               )}
             </div>
-          </Tab>
+              </Tab>
 
-          <Tab
-            key="threads"
+              <Tab
+                key="threads"
             title={
               <span className="inline-flex items-center gap-1.5">
                 <Icon icon="lucide:messages-square" className="h-3.5 w-3.5" />
@@ -849,7 +852,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 )}
               </div>
             </div>
-          </Tab>
+              </Tab>
+            </>
+          ) : null}
 
           <Tab
             key="changes"
