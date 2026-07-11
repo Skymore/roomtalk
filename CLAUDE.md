@@ -121,9 +121,18 @@ Production code-agent rooms run from a pinned E2B sandbox artifact, not directly
 
 `codex-app-server` is the supported Codex backend and the target for all new features, fixes, protocol work, and production behavior. The `codex` backend and `roomtalk_code_agent_runner.codex_cli` are deprecated legacy compatibility paths. Keep them only while existing data or explicit migration work still requires them; do not add new product capabilities, UI behavior, or architecture to the Codex CLI path. Shared code must follow app-server semantics and must not reintroduce CLI-era constraints such as a client-wide turn lock.
 
-### Task Completion and Push Rule
+### Task Completion, Validation, and Push Rule
 
-After completing any task, run both production builds (`cd server && npm run build` and `cd client-heroui && npm run build`) plus any focused tests needed for the change. Then commit the completed work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree.
+Choose validation from the actual diff, affected behavior, and blast radius. Do not mechanically run every test suite or both production builds for every task. Before validating, classify the change and select checks that can catch its plausible failures:
+
+- Documentation, comments, copy-only changes, and other low-risk changes that do not affect runtime or build inputs: run only relevant structural/content checks such as `git diff --check`, parsing, or link validation. Do not run application tests or production builds without a specific risk that they would detect.
+- Narrow implementation changes: run the closest focused tests and the affected package's typecheck or build when compilation is a relevant failure mode.
+- Shared contracts, persistence, auth/permissions, realtime ordering, cross-package APIs, dependencies/configuration, or broad frontend/backend changes: expand validation to the relevant suites and affected production builds. Run both production builds only when both sides can be affected or the release risk justifies it.
+- E2E, external-service smoke tests, and E2B artifact rebuilds: run them when behavior crosses those boundaries or when the artifact rule below requires them.
+
+Use engineering judgment rather than change size alone: a one-line auth or schema change can require broad validation, while a larger documentation edit may require none. In the final report, state which checks ran; when tests or builds were intentionally skipped, briefly state why.
+
+After completing and appropriately validating a task, commit the work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree.
 
 Before the final push, check whether the change falls under the E2B artifact rule above. If it does, the task is not complete until the E2B template and artifact pins are updated, the new template is built and verified, and production is pointed at the matching E2B version. Finish with all source, lockfile, Dockerfile, and production pin changes committed and pushed to `origin/master`.
 
