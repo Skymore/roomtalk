@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-11-queued-input-controls-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-11-codex-5-6-sol-default-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.21",
+    "packageVersion": "0.1.22",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {

@@ -15,8 +15,8 @@ describe('codexRunSettings', () => {
     });
     assert.equal(normalizeCodexRunSettings('gpt-5.3-codex-spark', 'high', 'fullAccess', 'priority').serviceTier, 'default');
     assert.deepEqual(normalizeCodexRunSettings('unknown', 'invalid', 'invalid'), {
-      model: 'gpt-5.5',
-      reasoningEffort: 'xhigh',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
       permissionMode: 'approveForMe',
       serviceTier: 'default',
     });

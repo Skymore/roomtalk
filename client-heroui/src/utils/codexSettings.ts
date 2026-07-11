@@ -34,9 +34,12 @@ export interface CodexSpeedOption {
 }
 
 const ROOM_CODEX_SETTINGS_PREFIX = 'roomtalk:codex-settings:';
+const CODEX_SETTINGS_SCHEMA_VERSION = 2;
+const LEGACY_DEFAULT_CODEX_MODEL = 'gpt-5.5';
+const LEGACY_DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'xhigh';
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
-export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'xhigh';
+export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'high';
 export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'approveForMe';
 export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
@@ -181,7 +184,25 @@ export const getStoredRoomCodexSettings = (
     if (!raw) {
       return fallback;
     }
-    return normalizeCodexRunSettings(JSON.parse(raw), fallback);
+    const parsed = JSON.parse(raw);
+    const storedSchemaVersion = isRecord(parsed) && typeof parsed.schemaVersion === 'number'
+      ? parsed.schemaVersion
+      : 1;
+    if (
+      isRecord(parsed)
+      && storedSchemaVersion < CODEX_SETTINGS_SCHEMA_VERSION
+      && parsed.model === LEGACY_DEFAULT_CODEX_MODEL
+      && parsed.reasoningEffort === LEGACY_DEFAULT_CODEX_REASONING_EFFORT
+    ) {
+      const migrated = normalizeCodexRunSettings({
+        ...parsed,
+        model: DEFAULT_CODEX_MODEL,
+        reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
+      }, fallback);
+      saveRoomCodexSettings(roomId, migrated);
+      return migrated;
+    }
+    return normalizeCodexRunSettings(parsed, fallback);
   } catch {
     return fallback;
   }
@@ -189,7 +210,10 @@ export const getStoredRoomCodexSettings = (
 
 export const saveRoomCodexSettings = (roomId: string, settings: CodexRunSettings): void => {
   try {
-    localStorage.setItem(storageKeyForRoom(roomId), JSON.stringify(normalizeCodexRunSettings(settings)));
+    localStorage.setItem(storageKeyForRoom(roomId), JSON.stringify({
+      schemaVersion: CODEX_SETTINGS_SCHEMA_VERSION,
+      ...normalizeCodexRunSettings(settings),
+    }));
   } catch {
     // Storage can fail in private browsing or restricted contexts.
   }

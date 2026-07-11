@@ -145,10 +145,10 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path, monk
     call = popen.calls[0]
     call_args = call["args"]
     assert call_args[:4] == ["codex", "exec", "--json", "--ephemeral"]
-    assert call_args[call_args.index("--model") + 1] == "gpt-5.5"
+    assert call_args[call_args.index("--model") + 1] == "gpt-5.6-sol"
     assert "--ask-for-approval" not in call_args
     assert 'approval_policy="never"' in call_args
-    assert 'model_reasoning_effort="xhigh"' in call_args
+    assert 'model_reasoning_effort="high"' in call_args
     assert 'service_tier="default"' in call_args
     assert "sandbox_workspace_write.network_access=true" not in call_args
     assert call_args[call_args.index("--sandbox") + 1] == "read-only"
