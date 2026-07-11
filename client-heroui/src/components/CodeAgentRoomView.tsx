@@ -28,7 +28,10 @@ import {
   removeCodeAgentReviewCommentDraft,
   useCodeAgentReviewCommentDraft,
 } from '../utils/codeAgentReviewCommentDraftStore';
-import { openCodeAgentRightPanel } from '../utils/codeAgentRightPanelStore';
+import {
+  openCodeAgentRightPanel,
+  openCodeAgentRightPanelPreviewUrl,
+} from '../utils/codeAgentRightPanelStore';
 import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
@@ -264,6 +267,21 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     });
   }, [setFileManagerCollapsed, workspaceRoot]);
 
+  const handleOpenWorkspaceArtifact = React.useCallback((url: string) => {
+    if (!openCodeAgentRightPanelPreviewUrl(currentRoom.id, url)) {
+      return false;
+    }
+    setFileManagerCollapsed(false);
+    if (
+      typeof window.matchMedia === 'function' &&
+      !window.matchMedia('(min-width: 1024px)').matches
+    ) {
+      setHasMobileFileManagerMounted(true);
+      setIsMobileFileManagerOpen(true);
+    }
+    return true;
+  }, [currentRoom.id, setFileManagerCollapsed]);
+
   React.useLayoutEffect(() => {
     if (isFileManagerCollapsed) return undefined;
     const layout = workspaceLayoutRef.current;
@@ -497,6 +515,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onCodeAgentModeChange={handleCodeAgentModeChange}
               onCodeAgentBackendChange={handleCodeAgentBackendChange}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              onOpenWorkspaceArtifact={handleOpenWorkspaceArtifact}
               onWorkspaceRootChange={setWorkspaceRoot}
               onWorkspaceChangesChange={setWorkspaceChanges}
               reviewComments={reviewComments}

@@ -128,6 +128,7 @@ interface MessageListProps {
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   onCodeAgentBackendChange?: (backend: CodeAgentBackend) => void;
   onOpenWorkspaceFile?: (path: string) => void;
+  onOpenWorkspaceArtifact?: (url: string) => boolean;
   onWorkspaceRootChange?: (workspaceRoot: string | null) => void;
   onWorkspaceChangesChange?: (changes: CodeAgentWorkspaceSnapshot['changes'] | null) => void;
   reviewComments?: readonly ReviewCommentContext[];
@@ -157,6 +158,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onCodeAgentModeChange,
   onCodeAgentBackendChange,
   onOpenWorkspaceFile,
+  onOpenWorkspaceArtifact,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
   reviewComments = [],
@@ -809,6 +811,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             workspaceRefreshError={workspaceRefreshError}
             onRefreshWorkspace={refreshWorkspaceSnapshot}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onOpenWorkspaceArtifact={onOpenWorkspaceArtifact}
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}

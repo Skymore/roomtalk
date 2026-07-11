@@ -63,6 +63,7 @@ interface CodeAgentWorkspacePanelProps {
   workspaceRefreshError?: string | null;
   onRefreshWorkspace?: () => void;
   onOpenWorkspaceFile?: (path: string) => void;
+  onOpenWorkspaceArtifact?: (url: string) => boolean;
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
@@ -235,6 +236,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   workspaceRefreshError,
   onRefreshWorkspace,
   onOpenWorkspaceFile,
+  onOpenWorkspaceArtifact,
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
@@ -692,7 +694,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                       target="_blank"
                       rel="noreferrer"
                       onClick={(event) => {
-                        if (openCodeAgentRightPanelPreviewUrl(room.id, artifact.url)) {
+                        const handled = onOpenWorkspaceArtifact
+                          ? onOpenWorkspaceArtifact(artifact.url)
+                          : openCodeAgentRightPanelPreviewUrl(room.id, artifact.url);
+                        if (handled) {
                           event.preventDefault();
                         }
                       }}

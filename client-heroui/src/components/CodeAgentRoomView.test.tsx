@@ -34,12 +34,14 @@ vi.mock('./MessageList', async () => {
       codeAgentBackend,
       bottomInsetPx,
       onOpenWorkspaceFile,
+      onOpenWorkspaceArtifact,
       onCodeAgentBackendChange,
     }: {
       codeAgentMode: string;
       codeAgentBackend?: string;
       bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
+      onOpenWorkspaceArtifact?: (url: string) => boolean;
       onCodeAgentBackendChange?: (backend: 'code-agent' | 'codex' | 'codex-app-server') => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
@@ -54,6 +56,13 @@ vi.mock('./MessageList', async () => {
         onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx')}
       >
         open-file
+      </button>
+      <button
+        type="button"
+        data-testid="message-list-open-artifact"
+        onClick={() => onOpenWorkspaceArtifact?.('https://room.example/p/mobile-demo/')}
+      >
+        open-artifact
       </button>
       <button
         type="button"
@@ -821,6 +830,36 @@ describe('CodeAgentRoomView', () => {
 
     expect(screen.getByTestId('code-agent-mobile-file-manager-sheet').dataset.open).toBe('true');
     expect(readCodeAgentRightPanelState('code-agent-room').activeSurfaceId).toBe('files');
+  });
+
+  it('opens workspace artifacts in the mobile browser sheet', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
+    renderCodeAgentRoom(codeAgentRoom);
+    fireEvent.click(screen.getByTestId('message-list-open-artifact'));
+
+    expect(screen.getByTestId('code-agent-mobile-file-manager-sheet').dataset.open).toBe('true');
+    expect(readCodeAgentRightPanelState('code-agent-room')).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Froom.example%2Fp%2Fmobile-demo%2F',
+      surfaces: [{
+        kind: 'preview',
+        url: 'https://room.example/p/mobile-demo/',
+      }],
+    });
   });
 
   it('persists review comment drafts by room', () => {
