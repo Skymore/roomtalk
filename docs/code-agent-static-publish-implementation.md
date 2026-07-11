@@ -92,9 +92,17 @@ New route module under `server/src/routes/publishedStaticSiteRoutes.ts`.
 
 Routes:
 
+- `POST /api/code-agent/publish-static-site/prepare`
+  - Accepts only file paths and byte sizes, validates the 100-file / 100 MB limits, and returns short-lived presigned upload URLs.
+  - Production sandboxes upload file bytes directly to Tigris; static file bodies do not pass through Fly.
+
+- `POST /api/code-agent/publish-static-site/finalize`
+  - Accepts the signed upload token returned by `prepare`.
+  - Verifies every object exists in Tigris with the declared byte size before atomically publishing the new manifest.
+
 - `POST /api/code-agent/publish-static-site`
   - Protected by `Authorization: Bearer <scoped token>`.
-  - Uses a larger JSON body limit for small static artifacts.
+  - Retained as a compatibility route for older sandbox artifacts that send Base64 JSON payloads.
   - Returns `{ url, slug, entry, versionId, fileCount, totalBytes }`.
 
 - `DELETE /api/code-agent/publish-static-site`
@@ -165,9 +173,12 @@ The publish command:
 2. Walks files recursively.
 3. Filters unsafe directories and file names.
 4. Enforces file count and byte limits.
-5. Base64-encodes file contents.
-6. POSTs the payload to RoomTalk.
-7. Returns a concise JSON or human-readable result with the durable URL.
+5. Sends file metadata to the `prepare` control-plane endpoint.
+6. Streams each file directly from the sandbox to its Tigris presigned PUT URL.
+7. Calls `finalize`; Fly verifies object sizes and writes the durable manifest.
+8. Returns a concise JSON or human-readable result with the durable URL.
+
+The current limits are 100 files, 100 MB per file, and 100 MB total per published version. Because the total cap is also 100 MB, a single file may consume the complete version budget.
 
 The unpublish command sends `DELETE /api/code-agent/publish-static-site` with the scoped token. The server verifies room ownership, removes every stored version for the slug, and updates or deletes the room index. It never deletes workspace files.
 

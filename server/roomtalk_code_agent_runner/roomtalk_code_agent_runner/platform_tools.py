@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import socket
@@ -215,14 +216,43 @@ def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[
         "roomId": room_id,
         "turnId": turn_id,
         "entry": entry,
-        "files": files,
+        "files": [
+            {"path": item["path"], "byteSize": item["byteSize"]}
+            for item in files
+        ],
     }
     if args.slug:
         payload["slug"] = str(args.slug).strip()
     if args.title:
         payload["title"] = str(args.title).strip()
 
-    response = _post_static_publish_payload(publish_url, publish_token, payload)
+    prepare = _post_static_publish_payload(f"{publish_url.rstrip('/')}/prepare", publish_token, payload)
+    uploads = prepare.get("files")
+    upload_token = prepare.get("uploadToken")
+    if not isinstance(uploads, list) or not isinstance(upload_token, str) or not upload_token:
+        raise RunnerError("PublishStaticSite prepare response was incomplete", code="invalid_publish_prepare_response")
+    source_by_path = {str(item["path"]): Path(str(item["sourcePath"])) for item in files}
+    for upload in uploads:
+        if not isinstance(upload, dict):
+            raise RunnerError("PublishStaticSite prepare response included an invalid file", code="invalid_publish_prepare_response")
+        site_path = str(upload.get("path") or "")
+        source_path = source_by_path.get(site_path)
+        upload_url = str(upload.get("uploadUrl") or "")
+        mime_type = str(upload.get("mimeType") or "")
+        byte_size = upload.get("byteSize")
+        if source_path is None or not upload_url or not mime_type or not isinstance(byte_size, int):
+            raise RunnerError("PublishStaticSite prepare response included an invalid file", code="invalid_publish_prepare_response")
+        _put_static_publish_file(
+            urllib_parse.urljoin(publish_url, upload_url),
+            source_path,
+            mime_type,
+            byte_size,
+        )
+    response = _post_static_publish_payload(
+        f"{publish_url.rstrip('/')}/finalize",
+        publish_token,
+        {"uploadToken": upload_token},
+    )
     url = response.get("url")
     if not isinstance(url, str) or not url:
         raise RunnerError("PublishStaticSite response did not include a URL", code="invalid_publish_response")
@@ -236,6 +266,41 @@ def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[
         "fileCount": response.get("fileCount", len(files)),
         "totalBytes": response.get("totalBytes", total_bytes),
     }
+
+
+def _put_static_publish_file(url: str, source_path: Path, mime_type: str, byte_size: int) -> None:
+    parsed = urllib_parse.urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RunnerError("PublishStaticSite direct upload URL was invalid", code="invalid_publish_upload_url")
+    connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = connection_type(parsed.hostname, parsed.port, timeout=120)
+    request_path = urllib_parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    try:
+        with source_path.open("rb") as source:
+            connection.putrequest("PUT", request_path)
+            connection.putheader("Content-Type", mime_type)
+            connection.putheader("Content-Length", str(byte_size))
+            connection.putheader("User-Agent", "roomtalk-code-agent-runner/1")
+            connection.endheaders()
+            while chunk := source.read(1024 * 1024):
+                connection.send(chunk)
+            response = connection.getresponse()
+            response_body = response.read()
+            if response.status < 200 or response.status >= 300:
+                message = response_body.decode("utf-8", errors="replace")
+                raise RunnerError(
+                    f"PublishStaticSite direct upload failed with HTTP {response.status}: {message or response.reason}",
+                    code="publish_upload_http_error",
+                )
+    except RunnerError:
+        raise
+    except OSError as exc:
+        raise RunnerError(
+            f"PublishStaticSite direct upload failed: {exc}",
+            code="publish_upload_failed",
+        ) from exc
+    finally:
+        connection.close()
 
 
 def _unpublish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:

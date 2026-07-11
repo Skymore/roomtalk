@@ -4,6 +4,8 @@ import {
   CODE_AGENT_STATIC_PUBLISH_API_PATH,
   CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX,
   PublishedStaticSiteError,
+  PublishedStaticSiteFinalizeInput,
+  PublishedStaticSitePrepareInput,
   PublishedStaticSitePublishInput,
   PublishedStaticSiteService,
   PublishedStaticSiteUnpublishInput,
@@ -63,6 +65,44 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
       return res.status(201).json(result);
     } catch (error) {
       return sendPublishError(res, error, logger, { endpoint: CODE_AGENT_STATIC_PUBLISH_API_PATH, roomId: claims.roomId, turnId: claims.turnId });
+    }
+  });
+
+  app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/prepare`, jsonParser, async (req: Request, res: Response) => {
+    const token = readBearerToken(req);
+    const claims = token ? service.verifyTurnToken(token) : null;
+    if (!claims) {
+      return res.status(401).json({ error: 'Invalid or expired publish token' });
+    }
+    try {
+      return res.status(201).json(await service.prepareDirectUpload(req.body as PublishedStaticSitePrepareInput, claims));
+    } catch (error) {
+      return sendPublishError(res, error, logger, {
+        endpoint: `${CODE_AGENT_STATIC_PUBLISH_API_PATH}/prepare`,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
+    }
+  });
+
+  app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/finalize`, jsonParser, async (req: Request, res: Response) => {
+    const token = readBearerToken(req);
+    const claims = token ? service.verifyTurnToken(token) : null;
+    if (!claims) {
+      return res.status(401).json({ error: 'Invalid or expired publish token' });
+    }
+    try {
+      return res.status(201).json(await service.finalizeDirectUpload(
+        req.body as PublishedStaticSiteFinalizeInput,
+        claims,
+        requestBaseUrl(req)
+      ));
+    } catch (error) {
+      return sendPublishError(res, error, logger, {
+        endpoint: `${CODE_AGENT_STATIC_PUBLISH_API_PATH}/finalize`,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
     }
   });
 

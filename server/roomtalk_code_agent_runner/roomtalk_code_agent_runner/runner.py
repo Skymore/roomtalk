@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import base64
 import json
 import os
 import posixpath
@@ -29,8 +28,8 @@ BACKGROUND_SHELL_TOOL = "BackgroundShell"
 MAX_TOOL_OUTPUT_CHARS = 20_000
 DEFAULT_WORKSPACE_ROOT = "/workspace"
 MAX_STATIC_PUBLISH_FILES = 100
-MAX_STATIC_PUBLISH_TOTAL_BYTES = 5 * 1024 * 1024
-MAX_STATIC_PUBLISH_FILE_BYTES = 2 * 1024 * 1024
+MAX_STATIC_PUBLISH_TOTAL_BYTES = 100 * 1024 * 1024
+MAX_STATIC_PUBLISH_FILE_BYTES = 100 * 1024 * 1024
 # Coco's engine requires integer loop bounds. Python's platform maximum is the
 # default, while deployments can opt into explicit simple/complex safety caps.
 UNBOUNDED_MODEL_STEPS = sys.maxsize
@@ -560,19 +559,19 @@ def _collect_static_publish_files(workspace: Path, arguments: dict[str, Any]) ->
         mime_type = _static_publish_mime_type(site_path)
         if not mime_type:
             continue
-        data = path_item.read_bytes()
-        if not data:
+        byte_size = path_item.stat().st_size
+        if byte_size <= 0:
             continue
-        if len(data) > MAX_STATIC_PUBLISH_FILE_BYTES:
+        if byte_size > MAX_STATIC_PUBLISH_FILE_BYTES:
             raise RunnerError(f"PublishStaticSite file is too large: {site_path}", code="publish_file_too_large")
-        total_bytes += len(data)
+        total_bytes += byte_size
         if total_bytes > MAX_STATIC_PUBLISH_TOTAL_BYTES:
             raise RunnerError("PublishStaticSite payload is too large", code="publish_too_large")
         files.append({
             "path": site_path,
             "mimeType": mime_type,
-            "byteSize": len(data),
-            "contentBase64": base64.b64encode(data).decode("ascii"),
+            "byteSize": byte_size,
+            "sourcePath": str(path_item),
         })
         if len(files) > MAX_STATIC_PUBLISH_FILES:
             raise RunnerError("PublishStaticSite has too many files", code="publish_too_many_files")

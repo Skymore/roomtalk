@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -9,17 +11,63 @@ import pytest
 from roomtalk_code_agent_runner import platform_tools
 
 
+def test_direct_publish_upload_streams_file_body(tmp_path: Path):
+    received: dict[str, Any] = {}
+
+    class UploadHandler(BaseHTTPRequestHandler):
+        def do_PUT(self):  # noqa: N802 - stdlib handler API
+            byte_size = int(self.headers["Content-Length"])
+            received["body"] = self.rfile.read(byte_size)
+            received["contentType"] = self.headers["Content-Type"]
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), UploadHandler)
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    source = tmp_path / "asset.bin"
+    source.write_bytes(b"x" * 131_071)
+    try:
+        platform_tools._put_static_publish_file(
+            f"http://127.0.0.1:{server.server_port}/upload?signature=test",
+            source,
+            "application/octet-stream",
+            source.stat().st_size,
+        )
+    finally:
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert received == {
+        "body": b"x" * 131_071,
+        "contentType": "application/octet-stream",
+    }
+
+
 def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monkeypatch, capsys):
     workspace = tmp_path / "workspace"
     site = workspace / "site"
     site.mkdir(parents=True)
     (site / "index.html").write_text("<!doctype html><h1>Codex</h1>", encoding="utf-8")
-    posted: dict[str, Any] = {}
+    posted: list[dict[str, Any]] = []
+    uploaded: list[dict[str, Any]] = []
 
     def fake_post(url: str, token: str, payload: dict[str, Any]):
-        posted["url"] = url
-        posted["token"] = token
-        posted["payload"] = payload
+        posted.append({"url": url, "token": token, "payload": payload})
+        if url.endswith("/prepare"):
+            return {
+                "uploadToken": "upload-token",
+                "files": [{
+                    "path": "index.html",
+                    "mimeType": "text/html; charset=utf-8",
+                    "byteSize": 29,
+                    "uploadUrl": "https://uploads.example/index.html",
+                }],
+            }
         return {
             "url": "https://room.example/p/codex-demo/",
             "slug": "codex-demo",
@@ -29,7 +77,16 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
             "totalBytes": 29,
         }
 
+    def fake_put(url: str, source_path: Path, mime_type: str, byte_size: int):
+        uploaded.append({
+            "url": url,
+            "sourcePath": source_path,
+            "mimeType": mime_type,
+            "byteSize": byte_size,
+        })
+
     monkeypatch.setattr(platform_tools, "_post_static_publish_payload", fake_post)
+    monkeypatch.setattr(platform_tools, "_put_static_publish_file", fake_put)
     monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("ROOMTALK_WORKSPACE", str(workspace))
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_ROOM_ID", "room-1")
@@ -51,13 +108,23 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["url"] == "https://room.example/p/codex-demo/"
-    assert posted["url"] == "https://room.example/api/code-agent/publish-static-site"
-    assert posted["token"] == "turn-token"
-    assert posted["payload"]["roomId"] == "room-1"
-    assert posted["payload"]["turnId"] == "turn-1"
-    assert posted["payload"]["entry"] == "index.html"
-    assert posted["payload"]["title"] == "Codex demo"
-    assert [file["path"] for file in posted["payload"]["files"]] == ["index.html"]
+    assert [call["url"] for call in posted] == [
+        "https://room.example/api/code-agent/publish-static-site/prepare",
+        "https://room.example/api/code-agent/publish-static-site/finalize",
+    ]
+    assert all(call["token"] == "turn-token" for call in posted)
+    assert posted[0]["payload"]["roomId"] == "room-1"
+    assert posted[0]["payload"]["turnId"] == "turn-1"
+    assert posted[0]["payload"]["entry"] == "index.html"
+    assert posted[0]["payload"]["title"] == "Codex demo"
+    assert posted[0]["payload"]["files"] == [{"path": "index.html", "byteSize": 29}]
+    assert posted[1]["payload"] == {"uploadToken": "upload-token"}
+    assert uploaded == [{
+        "url": "https://uploads.example/index.html",
+        "sourcePath": site / "index.html",
+        "mimeType": "text/html; charset=utf-8",
+        "byteSize": 29,
+    }]
 
 
 def test_publish_static_site_is_rejected_by_read_only_cli_access(monkeypatch, capsys):

@@ -9,9 +9,10 @@ export const CODE_AGENT_STATIC_PUBLISH_API_PATH = '/api/code-agent/publish-stati
 export const CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX = '/p';
 
 export const DEFAULT_STATIC_PUBLISH_MAX_FILES = 100;
-export const DEFAULT_STATIC_PUBLISH_MAX_TOTAL_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_STATIC_PUBLISH_MAX_FILE_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_STATIC_PUBLISH_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+export const DEFAULT_STATIC_PUBLISH_MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_STATIC_PUBLISH_TOKEN_TTL_SECONDS = 15 * 60;
+export const DEFAULT_STATIC_PUBLISH_UPLOAD_TTL_SECONDS = 15 * 60;
 
 export interface PublishedStaticSiteFileInput {
   path: string;
@@ -27,6 +28,44 @@ export interface PublishedStaticSitePublishInput {
   slug?: string;
   entry?: string;
   files: PublishedStaticSiteFileInput[];
+}
+
+export interface PublishedStaticSiteDirectFileInput {
+  path: string;
+  byteSize: number;
+}
+
+export interface PublishedStaticSitePrepareInput {
+  roomId: string;
+  turnId: string;
+  title?: string;
+  slug?: string;
+  entry?: string;
+  files: PublishedStaticSiteDirectFileInput[];
+}
+
+export interface PublishedStaticSiteFinalizeInput {
+  uploadToken: string;
+}
+
+interface PublishedStaticSiteUploadClaims {
+  v: 1;
+  kind: 'static-site-upload';
+  roomId: string;
+  clientId: string;
+  turnId: string;
+  title?: string;
+  slug: string;
+  entry: string;
+  versionId: string;
+  files: Array<{ path: string; mimeType: string; byteSize: number; objectKey: string }>;
+  exp: number;
+}
+
+export interface PublishedStaticSitePrepareResult {
+  uploadToken: string;
+  versionId: string;
+  files: Array<{ path: string; mimeType: string; byteSize: number; uploadUrl: string; expiresAt: string }>;
 }
 
 export interface PublishedStaticSiteFileManifest {
@@ -565,6 +604,189 @@ export class PublishedStaticSiteService {
       fileCount: files.length,
       totalBytes,
     };
+  }
+
+  async prepareDirectUpload(
+    input: PublishedStaticSitePrepareInput,
+    claims: PublishedStaticSiteTokenClaims
+  ): Promise<PublishedStaticSitePrepareResult> {
+    if (!this.isConfigured()) {
+      throw new PublishedStaticSiteError('Static site publishing is not configured', 503);
+    }
+    if (!codeAgentModeAllowsStaticPublish(claims.mode)) {
+      throw new PublishedStaticSiteError('Static site publishing requires a writable agent mode', 403);
+    }
+    if (input.roomId !== claims.roomId || input.turnId !== claims.turnId) {
+      throw new PublishedStaticSiteError('Publish token does not match this agent turn', 403);
+    }
+    if (!Array.isArray(input.files) || input.files.length === 0) {
+      throw new PublishedStaticSiteError('At least one static file is required');
+    }
+    if (input.files.length > this.maxFiles) {
+      throw new PublishedStaticSiteError(`Static site contains too many files; max ${this.maxFiles}`, 413);
+    }
+
+    const title = sanitizeTitle(input.title);
+    const fallbackSlug = `${title || 'static-site'}-${input.roomId.slice(0, 8)}`;
+    const slug = normalizePublishedSiteSlug(input.slug, fallbackSlug);
+    const entry = normalizePublishedSitePath(input.entry || 'index.html');
+    if (!entry || !isSupportedPublishedSitePath(entry)) {
+      throw new PublishedStaticSiteError('entry must be a supported relative static file path');
+    }
+    const existingManifest = await this.readManifest(slug);
+    if (existingManifest && existingManifest.roomId !== input.roomId) {
+      throw new PublishedStaticSiteError('This publish slug is already owned by another room', 409);
+    }
+
+    const seenPaths = new Set<string>();
+    let totalBytes = 0;
+    const now = new Date(this.nowMs());
+    const versionId = versionIdFromDate(now, this.createId());
+    const files = input.files.map(file => {
+      const normalizedPath = normalizePublishedSitePath(file.path);
+      if (!normalizedPath) {
+        throw new PublishedStaticSiteError(`Invalid static file path: ${file.path}`);
+      }
+      if (seenPaths.has(normalizedPath)) {
+        throw new PublishedStaticSiteError(`Duplicate static file path: ${normalizedPath}`);
+      }
+      seenPaths.add(normalizedPath);
+      const mimeType = guessPublishedSiteMimeType(normalizedPath);
+      if (!mimeType) {
+        throw new PublishedStaticSiteError(`Unsupported static file type: ${normalizedPath}`);
+      }
+      if (!Number.isSafeInteger(file.byteSize) || file.byteSize <= 0) {
+        throw new PublishedStaticSiteError(`Invalid static file byteSize: ${normalizedPath}`);
+      }
+      if (file.byteSize > this.maxFileBytes) {
+        throw new PublishedStaticSiteError(`Static file is too large: ${normalizedPath}`, 413);
+      }
+      totalBytes += file.byteSize;
+      return {
+        path: normalizedPath,
+        mimeType,
+        byteSize: file.byteSize,
+        objectKey: fileObjectKey(slug, versionId, normalizedPath),
+      };
+    });
+    if (!seenPaths.has(entry)) {
+      throw new PublishedStaticSiteError(`Entry file was not included: ${entry}`);
+    }
+    if (totalBytes > this.maxTotalBytes) {
+      throw new PublishedStaticSiteError(`Static site is too large; max ${this.maxTotalBytes} bytes`, 413);
+    }
+
+    const uploadClaims: PublishedStaticSiteUploadClaims = {
+      v: 1,
+      kind: 'static-site-upload',
+      roomId: claims.roomId,
+      clientId: claims.clientId,
+      turnId: claims.turnId,
+      ...(title ? { title } : {}),
+      slug,
+      entry,
+      versionId,
+      files,
+      exp: Math.floor(this.nowMs() / 1000) + DEFAULT_STATIC_PUBLISH_UPLOAD_TTL_SECONDS,
+    };
+    const encodedClaims = base64UrlEncode(stableJson(uploadClaims));
+    const uploadToken = `${encodedClaims}.${signPayload(encodedClaims, this.options.tokenSecret)}`;
+    const uploads = await Promise.all(files.map(async file => {
+      const signed = await this.options.mediaObjectStorage.createWriteUrl({
+        objectKey: file.objectKey,
+        mimeType: file.mimeType,
+        byteSize: file.byteSize,
+        expiresInSeconds: DEFAULT_STATIC_PUBLISH_UPLOAD_TTL_SECONDS,
+      });
+      return {
+        path: file.path,
+        mimeType: file.mimeType,
+        byteSize: file.byteSize,
+        uploadUrl: signed.url,
+        expiresAt: signed.expiresAt,
+      };
+    }));
+    return { uploadToken, versionId, files: uploads };
+  }
+
+  async finalizeDirectUpload(
+    input: PublishedStaticSiteFinalizeInput,
+    claims: PublishedStaticSiteTokenClaims,
+    requestBaseUrl?: string
+  ): Promise<PublishedStaticSitePublishResult> {
+    const upload = this.verifyUploadToken(input.uploadToken);
+    if (!upload) {
+      throw new PublishedStaticSiteError('Invalid or expired static site upload token', 401);
+    }
+    if (upload.roomId !== claims.roomId || upload.clientId !== claims.clientId || upload.turnId !== claims.turnId) {
+      throw new PublishedStaticSiteError('Static site upload token does not match this agent turn', 403);
+    }
+    const existingManifest = await this.readManifest(upload.slug);
+    if (existingManifest && existingManifest.roomId !== claims.roomId) {
+      throw new PublishedStaticSiteError('This publish slug is already owned by another room', 409);
+    }
+    for (const file of upload.files) {
+      const object = await this.options.mediaObjectStorage.headObject({ objectKey: file.objectKey });
+      if (!object.exists) {
+        throw new PublishedStaticSiteError(`Static file upload is missing: ${file.path}`, 409);
+      }
+      if (object.byteSize !== file.byteSize) {
+        throw new PublishedStaticSiteError(`Static file upload size does not match: ${file.path}`, 409);
+      }
+    }
+
+    const now = new Date(this.nowMs());
+    const manifest: PublishedStaticSiteManifest = {
+      schemaVersion: 1,
+      slug: upload.slug,
+      roomId: upload.roomId,
+      clientId: upload.clientId,
+      turnId: upload.turnId,
+      ...(upload.title ? { title: upload.title } : {}),
+      entry: upload.entry,
+      versionId: upload.versionId,
+      fileCount: upload.files.length,
+      totalBytes: upload.files.reduce((sum, file) => sum + file.byteSize, 0),
+      createdAt: existingManifest?.createdAt || now.toISOString(),
+      updatedAt: now.toISOString(),
+      files: upload.files,
+    };
+    const manifestBody = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+    const manifestKey = manifestObjectKey(upload.slug);
+    await this.options.mediaObjectStorage.putMediaObject({
+      objectKey: manifestKey,
+      body: manifestBody,
+      mimeType: MANIFEST_MIME_TYPE,
+      byteSize: manifestBody.length,
+    });
+    await this.recordRoomPublish(upload.roomId, upload.slug, [
+      manifestKey,
+      ...upload.files.map(file => file.objectKey),
+    ], now);
+    return {
+      url: this.publicUrlForSlug(upload.slug, requestBaseUrl),
+      slug: upload.slug,
+      entry: upload.entry,
+      versionId: upload.versionId,
+      fileCount: manifest.fileCount,
+      totalBytes: manifest.totalBytes,
+    };
+  }
+
+  private verifyUploadToken(token: string): PublishedStaticSiteUploadClaims | null {
+    const [payload, signature, extra] = (token || '').split('.');
+    if (!payload || !signature || extra !== undefined || !safeEqual(signature, signPayload(payload, this.options.tokenSecret))) {
+      return null;
+    }
+    try {
+      const value = JSON.parse(base64UrlDecode(payload)) as PublishedStaticSiteUploadClaims;
+      if (value.v !== 1 || value.kind !== 'static-site-upload' || !Array.isArray(value.files) || value.exp <= Math.floor(this.nowMs() / 1000)) {
+        return null;
+      }
+      return value;
+    } catch {
+      return null;
+    }
   }
 
   async unpublish(

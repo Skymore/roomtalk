@@ -13,13 +13,15 @@ type TestServer = {
   close: () => Promise<void>;
   service: PublishedStaticSiteService;
   roomIds: Set<string>;
+  storage: MemoryMediaObjectStorage;
 };
 
 const createTestServer = async (): Promise<TestServer> => {
   const app = express();
   const roomIds = new Set(['room-1']);
+  const storage = new MemoryMediaObjectStorage();
   const service = new PublishedStaticSiteService({
-    mediaObjectStorage: new MemoryMediaObjectStorage(),
+    mediaObjectStorage: storage,
     logger: new Logger('PublishedStaticSiteRoutesTest'),
     tokenSecret: 'static-publish-secret',
     nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
@@ -39,6 +41,7 @@ const createTestServer = async (): Promise<TestServer> => {
     baseUrl: `http://127.0.0.1:${port}`,
     service,
     roomIds,
+    storage,
     close: () => new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
     }),
@@ -121,6 +124,55 @@ describe('published static site routes', () => {
 
     const unpublishedResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(unpublishedResponse.status, 404);
+  });
+
+  it('prepares direct uploads and finalizes after object storage receives the files', async () => {
+    const token = server.service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    });
+    const prepareResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/prepare`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        roomId: 'room-1',
+        turnId: 'turn-1',
+        slug: 'direct-demo',
+        entry: 'index.html',
+        files: [{ path: 'index.html', byteSize: 24 }],
+      }),
+    });
+    assert.equal(prepareResponse.status, 201);
+    const prepared = await prepareResponse.json() as {
+      uploadToken: string;
+      files: Array<{ uploadUrl: string; mimeType: string; byteSize: number }>;
+    };
+    const objectKey = decodeURIComponent(new URL(prepared.files[0].uploadUrl).pathname.slice(1));
+    await server.storage.putMediaObject({
+      objectKey,
+      body: Buffer.alloc(24),
+      mimeType: prepared.files[0].mimeType,
+      byteSize: 24,
+    });
+
+    const finalizeResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/finalize`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ uploadToken: prepared.uploadToken }),
+    });
+    assert.equal(finalizeResponse.status, 201);
+    const published = await finalizeResponse.json() as { slug: string; totalBytes: number; url: string };
+    assert.equal(published.slug, 'direct-demo');
+    assert.equal(published.totalBytes, 24);
+    assert.equal(published.url, `${server.baseUrl}/p/direct-demo/`);
   });
 
   it('does not serve a published site after its room is deleted', async () => {

@@ -131,7 +131,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
     return;
   }
-  if (req.path === CODE_AGENT_STATIC_PUBLISH_API_PATH) {
+  if (req.path === CODE_AGENT_STATIC_PUBLISH_API_PATH || req.path.startsWith(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/`)) {
     next();
     return;
   }

@@ -108,6 +108,92 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(spaFallback?.file.path, 'index.html');
   });
 
+  it('prepares direct object-storage uploads up to 100 MB and finalizes only verified objects', async () => {
+    const { service, storage } = createService();
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    }))!;
+
+    const maximum = await service.prepareDirectUpload({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'maximum-site',
+      entry: 'index.html',
+      files: [{ path: 'index.html', byteSize: 100 * 1024 * 1024 }],
+    }, claims);
+    assert.equal(maximum.files[0].byteSize, 100 * 1024 * 1024);
+
+    await assert.rejects(() => service.prepareDirectUpload({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'too-large',
+      entry: 'index.html',
+      files: [{ path: 'index.html', byteSize: (100 * 1024 * 1024) + 1 }],
+    }, claims), /too large/);
+
+    const prepared = await service.prepareDirectUpload({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'direct-site',
+      title: 'Direct site',
+      entry: 'index.html',
+      files: [
+        { path: 'index.html', byteSize: 15 },
+        { path: 'assets/app.js', byteSize: 17 },
+      ],
+    }, claims);
+    for (const file of prepared.files) {
+      const objectKey = decodeURIComponent(new URL(file.uploadUrl).pathname.slice(1));
+      await storage.putMediaObject({
+        objectKey,
+        body: Buffer.alloc(file.byteSize),
+        mimeType: file.mimeType,
+        byteSize: file.byteSize,
+      });
+    }
+
+    const result = await service.finalizeDirectUpload({ uploadToken: prepared.uploadToken }, claims);
+    assert.equal(result.slug, 'direct-site');
+    assert.equal(result.fileCount, 2);
+    assert.equal(result.totalBytes, 32);
+    assert.equal((await service.readManifest('direct-site'))?.versionId, prepared.versionId);
+  });
+
+  it('refuses to finalize a direct upload when an object is missing or has the wrong size', async () => {
+    const { service, storage } = createService();
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    }))!;
+    const prepared = await service.prepareDirectUpload({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'incomplete-site',
+      files: [{ path: 'index.html', byteSize: 10 }],
+    }, claims);
+
+    await assert.rejects(
+      () => service.finalizeDirectUpload({ uploadToken: prepared.uploadToken }, claims),
+      /upload is missing/
+    );
+    const objectKey = decodeURIComponent(new URL(prepared.files[0].uploadUrl).pathname.slice(1));
+    await storage.putMediaObject({
+      objectKey,
+      body: Buffer.alloc(9),
+      mimeType: prepared.files[0].mimeType,
+      byteSize: 9,
+    });
+    await assert.rejects(
+      () => service.finalizeDirectUpload({ uploadToken: prepared.uploadToken }, claims),
+      /size does not match/
+    );
+  });
+
   it('lists published artifacts for a room from stored manifests', async () => {
     const ids = [
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
