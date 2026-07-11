@@ -527,6 +527,9 @@ def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: P
     read_only_keys = (
         "PYTHONPATH",
         "CODE_AGENT_WORKSPACE_ROOT",
+        "ROOMTALK_GITHUB_TOKEN_PATH",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_TERMINAL_PROMPT",
     ) + room_context_keys
     write_keys = (
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH",

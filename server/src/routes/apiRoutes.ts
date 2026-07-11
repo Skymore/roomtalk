@@ -30,6 +30,8 @@ import { normalizeCodeAgentMode, normalizeCodeAgentModeSet } from '../services/c
 import { CodexConnectionService } from '../services/codexConnection';
 import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSession';
 import { registerCodexConnectionRoutes } from './codexConnectionRoutes';
+import { GitHubConnectionService } from '../services/githubConnection';
+import { registerGitHubConnectionRoutes } from './githubConnectionRoutes';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -51,6 +53,10 @@ interface ApiRouteOptions {
     enabled: boolean;
     service?: CodexConnectionService;
     deviceAuthSessions?: CodexDeviceAuthSessionManager;
+  };
+  githubConnections?: {
+    enabled: boolean;
+    service?: GitHubConnectionService;
   };
   mediaUploadCleanup?: {
     disabled?: boolean;
@@ -309,6 +315,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const googleClientIds = options.googleClientIds ?? resolveGoogleClientIds();
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
   const codexConnections = options.codexConnections || { enabled: false };
+  const githubConnections = options.githubConnections || { enabled: false };
 
   // AI role drafts are a global per-client feature, not room-gated. Abuse (burning
   // OpenRouter credits) is bounded purely by source IP — keyed by IP so rotating the
@@ -506,6 +513,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     enabled: codexConnections.enabled,
     service: codexConnections.service,
     deviceAuthSessions: codexConnections.deviceAuthSessions,
+    routeLogger,
+    getQueryClientId,
+    getBodyClientId,
+    authorizeClientRequest,
+  });
+  registerGitHubConnectionRoutes(app, {
+    enabled: githubConnections.enabled,
+    service: githubConnections.service,
     routeLogger,
     getQueryClientId,
     getBodyClientId,
@@ -1334,6 +1349,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           enabled: codexConnections.enabled,
         },
       },
+      github: {
+        connections: {
+          enabled: githubConnections.enabled,
+        },
+      },
     });
   });
 
@@ -1482,6 +1502,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           codex: {
             connections: {
               enabled: codexConnections.enabled,
+            },
+          },
+          github: {
+            connections: {
+              enabled: githubConnections.enabled,
             },
           },
         },

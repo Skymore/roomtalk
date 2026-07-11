@@ -39,6 +39,7 @@ import { CODE_AGENT_ROOM_CONTEXT_API_PREFIX, CodeAgentRoomContextService } from 
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAgentRoomAccess';
 import { CodexConnectionService } from './codexConnection';
+import { GitHubConnectionService } from './githubConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
 import { JsonlCodeAgentDaemonRunnerClient } from './jsonlCodeAgentDaemonRunner';
@@ -59,6 +60,16 @@ import {
 const isCodexBackend = (backend: CodeAgentBackend) => (
   backend === 'codex' || backend === 'codex-app-server'
 );
+
+const githubGitConfig = () => [
+  '[credential "https://github.com"]',
+  '  helper =',
+  '  helper = !gh auth git-credential',
+  '[url "https://github.com/"]',
+  '  insteadOf = git@github.com:',
+  '  insteadOf = ssh://git@github.com/',
+  '',
+].join('\n');
 
 export interface CodeAgentRoomEmitter {
   to(roomId: string): {
@@ -86,6 +97,7 @@ export interface CodeAgentSessionServiceOptions {
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   codexBackendEnabled?: boolean;
   codexConnectionService?: Pick<CodexConnectionService, 'withCodexAuth'>;
+  githubConnectionService?: Pick<GitHubConnectionService, 'getAccessToken'>;
   staticSitePublisher?: PublishedStaticSiteService;
   roomContext?: CodeAgentRoomContextService;
   observability?: ObservabilityEventRecorder;
@@ -466,7 +478,7 @@ export class CodeAgentSessionService {
           await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
-      const runResult = await this.runRunnerWithBackendAuth({
+      const runResult = await this.runRunnerWithConnections({
         backend: turnBackend,
         clientId: input.clientId,
         turnId,
@@ -1209,6 +1221,48 @@ export class CodeAgentSessionService {
     });
   }
 
+  private async runRunnerWithConnections(input: {
+    backend: CodeAgentBackend;
+    clientId: string;
+    turnId: string;
+    runnerEnv: Record<string, string>;
+    request: CodeAgentRunnerRunRequest;
+    handlers: CodeAgentRunnerHandlers;
+    sandbox: CodeAgentSandboxHandle;
+    startRunnerProcess: (env: Record<string, string>) => Promise<CodeAgentRunnerProcess>;
+  }): Promise<CodeAgentRunnerRunResult> {
+    const token = await this.options.githubConnectionService?.getAccessToken(input.clientId);
+    if (!token) {
+      return this.runRunnerWithBackendAuth(input);
+    }
+    if (!this.sandboxService.writeSecretFile || !this.sandboxService.deleteSecretFile) {
+      throw new Error('GitHub connection requires sandbox secret file support');
+    }
+
+    const tokenPath = this.connectionSecretFilePath(input.turnId, 'github-token');
+    const gitConfigPath = this.connectionSecretFilePath(input.turnId, 'github-gitconfig');
+    try {
+      await Promise.all([
+        this.sandboxService.writeSecretFile(input.sandbox, { path: tokenPath, content: token }),
+        this.sandboxService.writeSecretFile(input.sandbox, { path: gitConfigPath, content: githubGitConfig() }),
+      ]);
+      return await this.runRunnerWithBackendAuth({
+        ...input,
+        runnerEnv: {
+          ...input.runnerEnv,
+          ROOMTALK_GITHUB_TOKEN_PATH: tokenPath,
+          GIT_CONFIG_GLOBAL: gitConfigPath,
+          GIT_TERMINAL_PROMPT: '0',
+        },
+      });
+    } finally {
+      await Promise.all([
+        this.deleteConnectionSecretFile(input.sandbox, tokenPath, 'GitHub token'),
+        this.deleteConnectionSecretFile(input.sandbox, gitConfigPath, 'GitHub Git config'),
+      ]);
+    }
+  }
+
   private async readOptionalCodexRefreshedAuth(sandbox: CodeAgentSandboxHandle, path: string): Promise<string | undefined> {
     if (!this.sandboxService.readSecretFile) {
       return undefined;
@@ -1238,6 +1292,23 @@ export class CodeAgentSessionService {
     const safeTurnId = turnId.replace(/[^a-zA-Z0-9_.-]/g, '_');
     const safeSuffix = suffix.replace(/[^a-zA-Z0-9_.-]/g, '_');
     return `/tmp/roomtalk-codex/${safeTurnId}-${safeSuffix}`;
+  }
+
+  private connectionSecretFilePath(turnId: string, suffix: string): string {
+    return this.codexSecretFilePath(turnId, suffix);
+  }
+
+  private async deleteConnectionSecretFile(
+    sandbox: CodeAgentSandboxHandle,
+    path: string,
+    label: string
+  ): Promise<void> {
+    await this.sandboxService.deleteSecretFile?.(sandbox, path).catch(error => {
+      this.logger.warn(`Failed to delete ${label} sandbox secret file`, {
+        error,
+        sandboxId: sandbox.id,
+      });
+    });
   }
 
   private validateRoom(room: Room | null, clientId: string, memberRole?: RoomMemberRole): CodeAgentTurnAck {

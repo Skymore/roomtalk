@@ -15,11 +15,17 @@ export interface FeatureFlags {
       enabled: boolean;
     };
   };
+  github: {
+    connections: {
+      enabled: boolean;
+    };
+  };
 }
 
 export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
   codeAgent: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
   codex: { connections: { enabled: false } },
+  github: { connections: { enabled: false } },
 };
 
 const getApiBaseUrl = () => {
@@ -62,6 +68,11 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
     codex: {
       connections: {
         enabled: data?.codex?.connections?.enabled === true,
+      },
+    },
+    github: {
+      connections: {
+        enabled: data?.github?.connections?.enabled === true,
       },
     },
   };

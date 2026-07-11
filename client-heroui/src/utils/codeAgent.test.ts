@@ -63,6 +63,11 @@ describe('codeAgent room adapters', () => {
           enabled: false,
         },
       },
+      github: {
+        connections: {
+          enabled: false,
+        },
+      },
     };
     expect(getCodeAgentMode(editCapableFlags)).toBe('edit');
     expect(getCodeAgentAvailableModes(editCapableFlags)).toEqual(['plan', 'edit']);

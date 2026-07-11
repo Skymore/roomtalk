@@ -217,6 +217,9 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
             "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
             "ROOMTALK_ROOM_CONTEXT_TOKEN": "room-context-token",
             "ROOMTALK_E2B_PORT_HOST_TEMPLATE": "{port}.sandbox.e2b.dev",
+            "ROOMTALK_GITHUB_TOKEN_PATH": "/tmp/roomtalk-codex/turn-github-token",
+            "GIT_CONFIG_GLOBAL": "/tmp/roomtalk-codex/turn-github-gitconfig",
+            "GIT_TERMINAL_PROMPT": "0",
         },
     )
 
@@ -251,6 +254,9 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
     assert 'ROOMTALK_ROOM_CONTEXT_URL = ' not in config_toml
     assert 'ROOMTALK_ROOM_CONTEXT_TOKEN = ' not in config_toml
     assert 'ROOMTALK_E2B_PORT_HOST_TEMPLATE = "{port}.sandbox.e2b.dev"' in config_toml
+    assert 'ROOMTALK_GITHUB_TOKEN_PATH = "/tmp/roomtalk-codex/turn-github-token"' in config_toml
+    assert 'GIT_CONFIG_GLOBAL = "/tmp/roomtalk-codex/turn-github-gitconfig"' in config_toml
+    assert 'GIT_TERMINAL_PROMPT = "0"' in config_toml
     assert f'[projects."{tmp_path}"]' in config_toml
     assert f'[projects."{workspace}"]' in config_toml
     assert 'trust_level = "trusted"' in config_toml

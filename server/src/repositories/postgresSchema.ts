@@ -424,6 +424,22 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_codex_connections_locked_until
     ON codex_connections (locked_until)
     WHERE locked_until IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS github_connections (
+    client_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'github' CHECK (provider = 'github'),
+    status TEXT NOT NULL CHECK (status IN ('connected', 'reauth_required')),
+    encrypted_token JSONB NOT NULL,
+    auth_version INTEGER NOT NULL DEFAULT 0,
+    key_version TEXT NOT NULL,
+    account_summary JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    last_validated_at TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ,
+    last_error TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_github_connections_status_updated
+    ON github_connections (status, updated_at DESC)`,
 ];
 
 // One-time data migrations, applied at most once and recorded in the

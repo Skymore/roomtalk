@@ -1,12 +1,24 @@
 # GitHub Connector 调研与实现建议
 
 > 日期：2026-07-11
-> 状态：调研完成，待拆分实现任务
+> 状态：PAT + agent shell MVP 已实现；GitHub App 方案保留为长期方向
 > 范围：让 RoomTalk 的 sandbox-based cloud code agent 安全地读取 GitHub，并在明确授权后创建分支、提交和 PR。
 
-## 结论
+## 当前产品决策：先做 PAT + agent shell
 
-第一版应注册 RoomTalk 自己的 **GitHub App**，而不是要求用户粘贴 PAT，也不应把 GitHub token 直接交给 sandbox。
+根据实际使用目标，第一版不做 MCP 工具层，也不等待 GitHub App 注册：用户在 Settings 保存 fine-grained PAT，RoomTalk 用 AES-256-GCM 加密持久化；每次该用户启动 agent turn 时，控制面把 PAT 和临时 Git config 写进 sandbox 的 `0600` secret 文件，并在 turn 结束后删除。
+
+sandbox 固定安装官方 `gh` CLI。`gh` wrapper 只在进程启动时从 `ROOMTALK_GITHUB_TOKEN_PATH` 读取 PAT；Git 使用 `gh auth git-credential`，并把 `git@github.com:` / `ssh://git@github.com/` remote 映射到 HTTPS。因此 agent shell 同时支持：
+
+- `gh repo/pr/issue/api/...`
+- `git clone/fetch/pull/push`
+- Git LFS 通过同一 credential helper 认证
+
+PAT 不进入普通 runner env、prompt、Codex config、Git remote URL 或 workspace 文件。但 agent shell 与 token 文件属于同一个 sandbox 用户，所以 agent 可以主动读取或用 `gh auth token` 打印 PAT；这是用户选择“把自己的 GitHub 权限交给 agent shell”后的明确安全边界。建议使用只授权必要仓库和权限的 fine-grained PAT。
+
+## 长期方向：GitHub App
+
+如果以后需要组织级安装、仓库 grant、短期 token、webhook 和服务端审计，应注册 RoomTalk 自己的 **GitHub App**，取代 PAT MVP。
 
 建议组合：
 

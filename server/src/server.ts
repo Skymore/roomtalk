@@ -71,6 +71,9 @@ import { CodexCliDeviceAuthDriver } from './services/codexCliDeviceAuthDriver';
 import { assertCodexBackendStartupGate, resolveCodexCliRunnerConfig } from './services/codexCliRunnerConfig';
 import { CodexDeviceAuthSessionManager } from './services/codexDeviceAuthSession';
 import { PostgresCodexConnectionStore, RedisCodexConnectionStore } from './services/codexConnectionStore';
+import { GitHubConnectionService, GitHubTokenCipher } from './services/githubConnection';
+import { resolveGitHubConnectionConfig } from './services/githubConnectionConfig';
+import { PostgresGitHubConnectionStore, RedisGitHubConnectionStore } from './services/githubConnectionStore';
 
 dotenv.config();
 
@@ -182,6 +185,7 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
 };
 
 const codexConnectionConfig = resolveCodexConnectionConfig(process.env);
+const githubConnectionConfig = resolveGitHubConnectionConfig(process.env);
 const codexCliRunnerConfig = resolveCodexCliRunnerConfig(process.env);
 let codexConnectionService: CodexConnectionService | undefined;
 let codexDeviceAuthSessions: CodexDeviceAuthSessionManager | undefined;
@@ -210,6 +214,17 @@ if (codexConnectionConfig.enabled) {
       });
     },
   });
+}
+
+let githubConnectionService: GitHubConnectionService | undefined;
+if (githubConnectionConfig.enabled) {
+  const githubConnectionStore = postgresPool
+    ? new PostgresGitHubConnectionStore(postgresPool)
+    : new RedisGitHubConnectionStore(redisClient);
+  githubConnectionService = new GitHubConnectionService(
+    githubConnectionStore,
+    new GitHubTokenCipher(githubConnectionConfig.authEncryptionKey, 'v1')
+  );
 }
 
 const codeAgentRuntimeConfig = resolveCodeAgentRuntimeConfig(process.env);
@@ -388,6 +403,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     runnerProviderEnvByProvider: codeAgentRuntimeConfig.runnerProviderEnvByProvider,
     codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),
     codexConnectionService,
+    githubConnectionService,
     staticSitePublisher: publishedStaticSiteService,
     roomContext: codeAgentRoomContextService,
     observability: observabilityRecorder,
@@ -525,6 +541,10 @@ registerApiRoutes(app, {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,
     deviceAuthSessions: codexDeviceAuthSessions,
+  },
+  githubConnections: {
+    enabled: githubConnectionConfig.enabled,
+    service: githubConnectionService,
   },
 });
 

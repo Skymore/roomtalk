@@ -30,6 +30,7 @@ const options = {
     'fd --version >/dev/null',
     'git --version >/dev/null',
     'git lfs version >/dev/null',
+    'gh --version >/dev/null',
     'python --version >/dev/null',
     'pip --version >/dev/null',
     'node --version >/dev/null',

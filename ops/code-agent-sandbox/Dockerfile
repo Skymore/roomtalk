@@ -6,12 +6,15 @@ ARG PNPM_NPM_VERSION=11.10.0
 ARG YARN_NPM_VERSION=1.22.22
 ARG TYPESCRIPT_NPM_VERSION=6.0.3
 ARG TSX_NPM_VERSION=4.23.0
+ARG GH_CLI_VERSION=2.94.0
+ARG GH_CLI_AMD64_SHA256=a757f1ba6db18f4de8cbadb244843a5f89bc75b5e7c6fc127d2bd77fbd12ed62
+ARG GH_CLI_ARM64_SHA256=705a23b70b0f1b7ba4c302fdcef392ce3edaacfa7ce8e85e4d93d72ea800a538
 ARG OH_MY_ZSH_REF=677a4592b18c08ddea737f8aca70bac0e9fc9313
 ARG POWERLEVEL10K_REF=9253fb1c5034410c43a0c681ff8294181c54016c
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-11-image-url-input-v2
+ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-11-github-pat-v1
 ENV ROOMTALK_CODE_AGENT_SOURCE_REF=d2335368c88329daf24bcf84970cd1d710b950fe
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
 ENV ROOMTALK_PLAYWRIGHT_VERSION=${PLAYWRIGHT_NPM_VERSION}
@@ -76,6 +79,27 @@ RUN apt-get update \
   && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
+  && GH_ARCH="$(dpkg --print-architecture)" \
+  && case "${GH_ARCH}" in \
+    amd64) GH_SHA256="${GH_CLI_AMD64_SHA256}" ;; \
+    arm64) GH_SHA256="${GH_CLI_ARM64_SHA256}" ;; \
+    *) echo "unsupported GitHub CLI architecture: ${GH_ARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSLo /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${GH_ARCH}.tar.gz" \
+  && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+  && tar -xzf /tmp/gh.tar.gz -C /tmp \
+  && install -D -m 755 "/tmp/gh_${GH_CLI_VERSION}_linux_${GH_ARCH}/bin/gh" /usr/local/lib/roomtalk/gh-real \
+  && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_CLI_VERSION}_linux_${GH_ARCH}" \
+  && { \
+    echo '#!/bin/sh'; \
+    echo 'token_path=${ROOMTALK_GITHUB_TOKEN_PATH:-}'; \
+    echo 'if [ -n "$token_path" ] && [ -r "$token_path" ]; then'; \
+    echo '  GH_TOKEN="$(cat "$token_path")"'; \
+    echo '  export GH_TOKEN'; \
+    echo 'fi'; \
+    echo 'exec /usr/local/lib/roomtalk/gh-real "$@"'; \
+  } > /usr/local/bin/gh \
+  && chmod 755 /usr/local/bin/gh \
   && npm install -g \
     @openai/codex@${CODEX_CLI_NPM_VERSION} \
     playwright@${PLAYWRIGHT_NPM_VERSION} \
@@ -104,6 +128,7 @@ RUN apt-get update \
   && fd --version >/dev/null \
   && git --version >/dev/null \
   && git lfs version >/dev/null \
+  && gh --version >/dev/null \
   && python --version >/dev/null \
   && pip --version >/dev/null \
   && node --version >/dev/null \

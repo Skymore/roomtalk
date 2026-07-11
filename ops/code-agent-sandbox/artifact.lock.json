@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-11-image-url-input-v2",
+  "artifactVersion": "roomtalk-code-agent-2026-07-11-github-pat-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.25",
+    "packageVersion": "0.1.26",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -57,6 +57,7 @@
       "wget",
       "git",
       "git-lfs",
+      "gh@2.94.0",
       "openssh-client",
       "jq",
       "ripgrep",

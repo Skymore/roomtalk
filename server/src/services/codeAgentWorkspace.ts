@@ -74,7 +74,7 @@ const truncatePreview = (value: string | undefined) => {
 export const redactSecretLikeText = (value: string): string => value
   .replace(/(".*?(?:api[_-]?key|token|secret|password).*?"\s*:\s*)("[^"]*"|[^,}\s]+)/gi, `$1"${SECRET_VALUE}"`)
   .replace(/\b(api[_-]?key|token|secret|password)\s*[:=]\s*["']?[^"'\s]+["']?/gi, `$1=${SECRET_VALUE}`)
-  .replace(/\b(sk-[A-Za-z0-9_-]{16,}|e2b_[A-Za-z0-9_-]{16,})\b/g, SECRET_VALUE);
+  .replace(/\b(sk-[A-Za-z0-9_-]{16,}|e2b_[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9]{16,})\b/g, SECRET_VALUE);
 
 const buildCommandHistory = (messages: Message[]): CodeAgentWorkspaceCommand[] => {
   const commands = new Map<string, CodeAgentWorkspaceCommand>();

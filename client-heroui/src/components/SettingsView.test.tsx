@@ -10,6 +10,11 @@ const codexApiMock = vi.hoisted(() => ({
   cancelCodexDeviceAuth: vi.fn(),
   disconnectCodexConnection: vi.fn(),
 }));
+const githubApiMock = vi.hoisted(() => ({
+  getGitHubConnectionStatus: vi.fn(),
+  connectGitHub: vi.fn(),
+  disconnectGitHub: vi.fn(),
+}));
 const i18nMock = vi.hoisted(() => ({
   t: (key: string) => key,
 }));
@@ -40,6 +45,7 @@ vi.mock('../utils/pushNotifications', () => ({
 }));
 
 vi.mock('../utils/codexConnection', () => codexApiMock);
+vi.mock('../utils/githubConnection', () => githubApiMock);
 
 const baseProps = {
   clientId: 'client-1',
@@ -93,6 +99,23 @@ describe('SettingsView Codex connection controls', () => {
         locked: false,
       },
     });
+    githubApiMock.getGitHubConnectionStatus.mockResolvedValue({
+      clientId: 'client-1',
+      provider: 'github',
+      status: 'disconnected',
+      authVersion: 0,
+      createdAt: '',
+      updatedAt: '',
+    });
+    githubApiMock.connectGitHub.mockResolvedValue({
+      clientId: 'client-1',
+      provider: 'github',
+      status: 'connected',
+      authVersion: 1,
+      createdAt: '2026-07-11T00:00:00.000Z',
+      updatedAt: '2026-07-11T00:00:00.000Z',
+      account: { id: 42, login: 'ada' },
+    });
   });
 
   afterEach(() => {
@@ -104,6 +127,21 @@ describe('SettingsView Codex connection controls', () => {
     render(<SettingsView {...baseProps} isCodexConnectionsEnabled={false} />);
 
     expect(screen.queryByText('codexConnection')).toBeNull();
+  });
+
+  it('connects GitHub with a PAT and clears the token field', async () => {
+    render(<SettingsView {...baseProps} isGitHubConnectionsEnabled />);
+
+    const tokenInput = await screen.findByLabelText('githubToken');
+    fireEvent.change(tokenInput, { target: { value: 'github_pat_test_secret_value' } });
+    fireEvent.click(screen.getByRole('button', { name: 'connectGitHub' }));
+
+    await waitFor(() => expect(githubApiMock.connectGitHub).toHaveBeenCalledWith(
+      'client-1',
+      'github_pat_test_secret_value'
+    ));
+    expect(await screen.findByText('@ada')).toBeTruthy();
+    expect(screen.queryByLabelText('githubToken')).toBeNull();
   });
 
   it('starts device auth and renders the login code', async () => {

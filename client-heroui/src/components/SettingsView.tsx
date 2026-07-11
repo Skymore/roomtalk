@@ -42,6 +42,12 @@ import {
   getCodexConnectionStatus,
   startCodexDeviceAuth,
 } from "../utils/codexConnection";
+import {
+  GitHubConnectionStatus,
+  connectGitHub,
+  disconnectGitHub,
+  getGitHubConnectionStatus,
+} from "../utils/githubConnection";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
 const GOOGLE_BUTTON_MAX_WIDTH = 320;
@@ -135,6 +141,7 @@ interface SettingsViewProps {
   i18n: any;
   changeLanguage: (lang: string) => void;
   isCodexConnectionsEnabled?: boolean;
+  isGitHubConnectionsEnabled?: boolean;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -149,7 +156,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   setTheme,
   i18n,
   changeLanguage,
-  isCodexConnectionsEnabled = false
+  isCodexConnectionsEnabled = false,
+  isGitHubConnectionsEnabled = false
 }) => {
   const { t } = useTranslation();
   const currentLanguage = getLanguageOption(i18n.language);
@@ -177,6 +185,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [codexMessage, setCodexMessage] = React.useState('');
   const [isCodexLoginModalOpen, setIsCodexLoginModalOpen] = React.useState(false);
   const [codexDeviceAuthSecondsRemaining, setCodexDeviceAuthSecondsRemaining] = React.useState<number | null>(null);
+  const [githubStatus, setGitHubStatus] = React.useState<GitHubConnectionStatus | null>(null);
+  const [githubToken, setGitHubToken] = React.useState('');
+  const [isLoadingGitHubStatus, setIsLoadingGitHubStatus] = React.useState(false);
+  const [isUpdatingGitHub, setIsUpdatingGitHub] = React.useState(false);
+  const [githubError, setGitHubError] = React.useState('');
+  const [githubMessage, setGitHubMessage] = React.useState('');
 
   const refreshPushStatus = React.useCallback(async () => {
     try {
@@ -248,6 +262,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => {
     void refreshCodexStatus();
   }, [refreshCodexStatus]);
+
+  const refreshGitHubStatus = React.useCallback(async () => {
+    if (!isGitHubConnectionsEnabled) {
+      setGitHubStatus(null);
+      return;
+    }
+    setIsLoadingGitHubStatus(true);
+    try {
+      setGitHubStatus(await getGitHubConnectionStatus(clientId));
+      setGitHubError('');
+    } catch (error) {
+      setGitHubError(error instanceof Error ? error.message : t('githubConnectionUnknownError'));
+    } finally {
+      setIsLoadingGitHubStatus(false);
+    }
+  }, [clientId, isGitHubConnectionsEnabled, t]);
+
+  React.useEffect(() => {
+    void refreshGitHubStatus();
+  }, [refreshGitHubStatus]);
 
   React.useEffect(() => {
     if (!isCodexConnectionsEnabled || (!codexDeviceAuth && codexStatus?.status !== 'pending')) {
@@ -422,6 +456,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setCodexMessage(t('codexDeviceCodeCopied'));
   };
 
+  const handleConnectGitHub = async () => {
+    setGitHubError('');
+    setGitHubMessage('');
+    if (!githubToken.trim()) {
+      setGitHubError(t('githubTokenRequired'));
+      return;
+    }
+    setIsUpdatingGitHub(true);
+    try {
+      setGitHubStatus(await connectGitHub(clientId, githubToken));
+      setGitHubToken('');
+      setGitHubMessage(t('githubConnectionConnected'));
+    } catch (error) {
+      setGitHubError(error instanceof Error ? error.message : t('githubConnectionUnknownError'));
+    } finally {
+      setIsUpdatingGitHub(false);
+    }
+  };
+
+  const handleDisconnectGitHub = async () => {
+    setGitHubError('');
+    setGitHubMessage('');
+    setIsUpdatingGitHub(true);
+    try {
+      setGitHubStatus(await disconnectGitHub(clientId));
+      setGitHubMessage(t('githubConnectionDisconnected'));
+    } catch (error) {
+      setGitHubError(error instanceof Error ? error.message : t('githubConnectionUnknownError'));
+    } finally {
+      setIsUpdatingGitHub(false);
+    }
+  };
+
   const handleGoogleCredential = React.useCallback(async (response: GoogleCredentialResponse) => {
     setGoogleAuthError('');
     setGoogleAuthMessage('');
@@ -569,6 +636,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (codexStatus?.status === 'reauth_required') return t('codexConnectionStatusReauthRequired');
     return t('codexConnectionStatusDisconnected');
   }, [codexStatus?.status, t]);
+
+  const githubStatusLabel = githubStatus?.status === 'connected'
+    ? t('githubConnectionStatusConnected')
+    : githubStatus?.status === 'reauth_required'
+      ? t('githubConnectionStatusReauthRequired')
+      : t('githubConnectionStatusDisconnected');
 
   const codexStatusColor = codexStatus?.status === 'connected'
     ? 'success'
@@ -836,6 +909,86 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         </section>
+
+        {isGitHubConnectionsEnabled && (
+          <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">
+            <div className="flex min-h-[72px] flex-col gap-3 py-4 sm:flex-row">
+              <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+                {t("githubConnection")}
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip
+                    size="sm"
+                    variant="flat"
+                    color={githubStatus?.status === 'connected' ? 'success' : githubStatus?.status === 'reauth_required' ? 'danger' : 'default'}
+                  >
+                    {githubStatusLabel}
+                  </Chip>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="flat"
+                    className="h-8 w-8 min-w-8"
+                    isLoading={isLoadingGitHubStatus}
+                    onPress={refreshGitHubStatus}
+                    aria-label={t("refreshGitHubConnection")}
+                  >
+                    <Icon icon="lucide:refresh-cw" className="text-sm" />
+                  </Button>
+                  {githubStatus?.status === 'connected' && (
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      isLoading={isUpdatingGitHub}
+                      startContent={!isUpdatingGitHub ? <Icon icon="lucide:unlink" /> : undefined}
+                      onPress={handleDisconnectGitHub}
+                    >
+                      {t("disconnectGitHub")}
+                    </Button>
+                  )}
+                </div>
+                {githubStatus?.status === 'connected' && githubStatus.account?.login ? (
+                  <p className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                    <Icon icon="lucide:github" className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{t("githubConnectedAs")}</span>
+                    <span className="truncate font-medium text-[#30302e] dark:text-[#faf9f5]">@{githubStatus.account.login}</span>
+                  </p>
+                ) : (
+                  <>
+                    <Input
+                      size="sm"
+                      type="password"
+                      value={githubToken}
+                      onValueChange={setGitHubToken}
+                      label={t("githubToken")}
+                      autoComplete="off"
+                    />
+                    <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                      {t("githubConnectionHelp")}
+                    </p>
+                    <Button
+                      size="sm"
+                      color="secondary"
+                      className="justify-self-start bg-[#c96442] text-[#faf9f5]"
+                      isLoading={isUpdatingGitHub}
+                      startContent={!isUpdatingGitHub ? <Icon icon="lucide:github" /> : undefined}
+                      onPress={handleConnectGitHub}
+                    >
+                      {t("connectGitHub")}
+                    </Button>
+                  </>
+                )}
+                {githubMessage && (
+                  <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{githubMessage}</p>
+                )}
+                {githubError && (
+                  <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{githubError}</p>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
 
         {isCodexConnectionsEnabled && (
           <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">

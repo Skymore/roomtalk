@@ -984,6 +984,7 @@ export const MessagePage: React.FC = () => {
             i18n={i18n}
             changeLanguage={changeLanguage}
             isCodexConnectionsEnabled={featureFlags.codex.connections.enabled}
+            isGitHubConnectionsEnabled={featureFlags.github.connections.enabled}
           />
         );
       case "chat": {

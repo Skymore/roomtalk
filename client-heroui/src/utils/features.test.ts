@@ -10,6 +10,7 @@ describe('feature flags', () => {
     expect(FALLBACK_FEATURE_FLAGS).toEqual({
       codeAgent: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
       codex: { connections: { enabled: false } },
+      github: { connections: { enabled: false } },
     });
   });
 
@@ -25,6 +26,11 @@ describe('feature flags', () => {
           rollout: 'allowlist',
         },
         codex: {
+          connections: {
+            enabled: true,
+          },
+        },
+        github: {
           connections: {
             enabled: true,
           },
@@ -46,6 +52,11 @@ describe('feature flags', () => {
           enabled: true,
         },
       },
+      github: {
+        connections: {
+          enabled: true,
+        },
+      },
     });
     expect(fetch).toHaveBeenCalledWith('/api/features?clientId=client-1');
   });
@@ -59,6 +70,7 @@ describe('feature flags', () => {
     await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
       codeAgent: { enabled: true, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan' },
       codex: { connections: { enabled: false } },
+      github: { connections: { enabled: false } },
     });
   });
 
