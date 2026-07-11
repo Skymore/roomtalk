@@ -8,6 +8,10 @@ import {
   selectCodeAgentDiffScope,
 } from '../utils/codeAgentDiffPanelStore';
 import { resetCodeAgentChangedFilesExpansionStoreForTests } from '../utils/codeAgentChangedFilesExpansionStore';
+import {
+  readCodeAgentRightPanelState,
+  resetCodeAgentRightPanelStoreForTests,
+} from '../utils/codeAgentRightPanelStore';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 vi.mock('react-i18next', () => ({
@@ -97,6 +101,7 @@ describe('CodeAgentWorkspacePanel', () => {
     localStorage.clear();
     resetCodeAgentChangedFilesExpansionStoreForTests();
     resetCodeAgentDiffPanelStoreForTests();
+    resetCodeAgentRightPanelStoreForTests();
     vi.unstubAllGlobals();
   });
 
@@ -387,6 +392,16 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     const link = screen.getByText('RoomTalk Demo').closest('a');
     expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/');
+    fireEvent.click(link!);
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Froom.ruit.me%2Fp%2Froomtalk-demo%2F',
+      surfaces: [{
+        kind: 'preview',
+        relativePath: null,
+        url: 'https://room.ruit.me/p/roomtalk-demo/',
+      }],
+    });
   });
 
   it('enables the diff viewer only when the changes tab is active', () => {

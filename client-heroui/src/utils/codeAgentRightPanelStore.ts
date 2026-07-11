@@ -1013,6 +1013,32 @@ export function openCodeAgentRightPanelPreview(roomId: string, relativePath?: st
   });
 }
 
+export function openCodeAgentRightPanelPreviewUrl(roomId: string, url: string): boolean {
+  const roomKey = normalizeRoomId(roomId);
+  const target = normalizePreviewNavigationTarget({ kind: 'url', url });
+  if (!roomKey || !target || target.kind !== 'url') {
+    return false;
+  }
+  updateStore((state) => withRecentPreviewTarget({
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const surface = browserUrlSurface(target.url);
+      if (!surface) {
+        return current;
+      }
+      const withoutPlaceholder = current.surfaces.filter((entry) => entry.id !== 'browser:new');
+      return {
+        isOpen: true,
+        surfaces: withoutPlaceholder.some((entry) => entry.id === surface.id)
+          ? withoutPlaceholder
+          : [...withoutPlaceholder, surface],
+        activeSurfaceId: surface.id,
+      };
+    }),
+  }, roomKey, target));
+  return true;
+}
+
 export function addCodeAgentRightPanelPreviewSurface(roomId: string) {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {

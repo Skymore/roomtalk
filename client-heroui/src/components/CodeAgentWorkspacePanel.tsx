@@ -45,6 +45,7 @@ import {
   useCodeAgentChangedFilesExpanded,
 } from '../utils/codeAgentChangedFilesExpansionStore';
 import { requestCodexThread, requestCodexThreads } from '../utils/socket';
+import { openCodeAgentRightPanelPreviewUrl } from '../utils/codeAgentRightPanelStore';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -690,6 +691,11 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                       href={artifact.url}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={(event) => {
+                        if (openCodeAgentRightPanelPreviewUrl(room.id, artifact.url)) {
+                          event.preventDefault();
+                        }
+                      }}
                       className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[#ead6cc] bg-[#fff7f2] px-2.5 py-2 text-xs text-[#4d4c48] transition-colors hover:border-[#d66a43] hover:text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#e8e6dc] dark:hover:border-[#ff9b78] dark:hover:text-[#ffb69e]"
                     >
                       <span className="flex min-w-0 items-center gap-2">

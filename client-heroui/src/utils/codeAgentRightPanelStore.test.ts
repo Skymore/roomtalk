@@ -16,6 +16,7 @@ import {
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
+  openCodeAgentRightPanelPreviewUrl,
   readCodeAgentPreviewRecentTargets,
   readCodeAgentRightPanelState,
   closeCodeAgentPreviewSessionSurface,
@@ -109,6 +110,26 @@ describe('codeAgentRightPanelStore', () => {
         },
       ],
     });
+  });
+
+  it('opens safe artifact URLs in a browser preview surface', () => {
+    openCodeAgentRightPanelPreview('room-1');
+
+    expect(openCodeAgentRightPanelPreviewUrl('room-1', ' https://example.com/demo ')).toBe(true);
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Fexample.com%2Fdemo',
+      surfaces: [{
+        id: 'browser:url:https%3A%2F%2Fexample.com%2Fdemo',
+        kind: 'preview',
+        relativePath: null,
+        url: 'https://example.com/demo',
+        navigationHistory: [{ kind: 'url', url: 'https://example.com/demo' }],
+        navigationIndex: 0,
+      }],
+    });
+
+    expect(openCodeAgentRightPanelPreviewUrl('room-1', 'javascript:alert(1)')).toBe(false);
   });
 
   it('adds another blank browser surface from the T3-style add browser action', () => {
