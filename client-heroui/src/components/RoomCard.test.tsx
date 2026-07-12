@@ -68,7 +68,16 @@ describe('RoomCard', () => {
     expect(props.onDelete).toHaveBeenCalledWith(room);
   });
 
-  it('shows code-agent room status without changing card shape', () => {
+  it('shows the complete room ID', () => {
+    renderRoomCard({
+      ...room,
+      id: 'nZDcDhQE1234567890',
+    });
+
+    expect(screen.getByText('nZDcDhQE1234567890')).toBeTruthy();
+  });
+
+  it('distinguishes code-agent rooms by icon without status badges', () => {
     renderRoomCard({
       ...room,
       type: 'codeAgent',
@@ -76,9 +85,10 @@ describe('RoomCard', () => {
       codeAgentStatus: 'running',
     });
 
-    expect(screen.getByText('codeAgentRoomType')).toBeTruthy();
-    expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
-    expect(screen.getByText('codeAgentStatusRunning')).toBeTruthy();
+    expect(screen.getByTitle('codeAgentRoomType')).toBeTruthy();
+    expect(screen.queryByText('codeAgentRoomType')).toBeNull();
+    expect(screen.queryByText('sandboxStatusReady')).toBeNull();
+    expect(screen.queryByText('codeAgentStatusRunning')).toBeNull();
     expect(screen.getByTestId('room-card').className).toContain('rounded-lg');
   });
 });

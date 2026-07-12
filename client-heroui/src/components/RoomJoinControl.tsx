@@ -28,7 +28,7 @@ export const RoomJoinControl: React.FC<RoomJoinControlProps> = ({
         value={value}
         onChange={(event) => onValueChange(event.target.value)}
         aria-label={t('enterRoomId')}
-        className="flex-grow"
+        className="min-w-0 flex-grow"
         classNames={{
           input: inputHeightClassName,
           inputWrapper: `${inputHeightClassName} rounded-r-none bg-[#faf9f5] border border-[#dedbd0] dark:bg-[#1d1d1b] dark:border-[#30302e]`,

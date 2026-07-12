@@ -221,37 +221,19 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           {t('noRoomsDescription')}
         </p>
 
-        <div className="hidden w-full max-w-md flex-row gap-3 sm:flex">
+        <div className="flex w-full max-w-md flex-row gap-2">
           <RoomJoinControl
             value={joinRoomId}
             onValueChange={setJoinRoomId}
             onJoin={handleJoinRoom}
-            containerClassName="flex flex-1"
+            containerClassName="flex min-w-0 flex-1"
             inputHeightClassName="h-12"
-            buttonClassName="h-12 min-w-[120px]"
+            buttonClassName="h-12 min-w-[88px]"
           />
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-12 min-w-[120px] bg-secondary px-4 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
-          >
-            {t('create')}
-          </Button>
-        </div>
-
-        <div className="flex w-full max-w-md flex-col gap-3 sm:hidden">
-          <RoomJoinControl
-            value={joinRoomId}
-            onValueChange={setJoinRoomId}
-            onJoin={handleJoinRoom}
-            containerClassName="flex w-full"
-            inputHeightClassName="h-12"
-            buttonClassName="h-12 min-w-[120px]"
-          />
-          <Button
-            color="secondary"
-            onPress={handleOpenCreateModal}
-            className="h-12 w-full bg-secondary text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
+            className="h-12 min-w-[88px] bg-secondary px-3 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
@@ -266,16 +248,18 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     <div className="p-4 md:p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-nowrap items-center gap-2 md:w-auto">
           <RoomJoinControl
             value={joinRoomId}
             onValueChange={setJoinRoomId}
             onJoin={handleJoinRoom}
+            containerClassName="flex min-w-0 flex-1 md:flex-none"
+            buttonClassName="h-10 min-w-[88px]"
           />
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-10 min-w-[100px] bg-secondary px-4 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
+            className="h-10 min-w-[88px] bg-secondary px-3 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
