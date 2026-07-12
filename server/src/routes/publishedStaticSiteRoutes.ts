@@ -146,6 +146,11 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
 
       res.type(result.file.mimeType);
       res.setHeader('Content-Length', result.body.length);
+      // Published sites run in a sandboxed iframe without allow-same-origin, so
+      // module and fetch requests originate from the opaque `null` origin.
+      // These files are public and must remain credentialless to load there.
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.removeHeader('Access-Control-Allow-Credentials');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Cache-Control', result.file.mimeType.startsWith('text/html')

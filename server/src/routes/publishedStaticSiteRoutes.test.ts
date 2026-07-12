@@ -100,12 +100,18 @@ describe('published static site routes', () => {
     const indexResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(indexResponse.status, 200);
     assert.match(indexResponse.headers.get('content-type') || '', /^text\/html/);
+    assert.equal(indexResponse.headers.get('access-control-allow-origin'), '*');
+    assert.equal(indexResponse.headers.get('access-control-allow-credentials'), null);
     assert.equal(indexResponse.headers.get('x-content-type-options'), 'nosniff');
     assert.match(await indexResponse.text(), /doctype/);
 
-    const assetResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/assets/app.js`);
+    const assetResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/assets/app.js`, {
+      headers: { origin: 'null' },
+    });
     assert.equal(assetResponse.status, 200);
     assert.match(assetResponse.headers.get('content-type') || '', /^text\/javascript/);
+    assert.equal(assetResponse.headers.get('access-control-allow-origin'), '*');
+    assert.equal(assetResponse.headers.get('access-control-allow-credentials'), null);
     assert.equal(await assetResponse.text(), 'window.roomtalkDemo = true');
 
     const unpublishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
