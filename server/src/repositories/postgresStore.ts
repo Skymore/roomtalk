@@ -1122,6 +1122,57 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async materializeCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState,
+    turnId?: string,
+    insertedAt = new Date().toISOString()
+  ) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          return null;
+        }
+
+        const updated = await client.query<MessageRow>(
+          `WITH next_position AS (
+            SELECT COALESCE(MAX(position), -1) + 1 AS position
+            FROM room_messages
+            WHERE room_id = $1
+          )
+          UPDATE room_messages
+          SET position = next_position.position,
+            timestamp = $5,
+            updated_at = $5,
+            turn_id = $4,
+            code_agent_queued_input = NULL
+          FROM next_position
+          WHERE room_id = $1
+            AND id = $2
+            AND code_agent_queued_input->>'state' = $3
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, messageId, expectedState, turnId || null, insertedAt]
+        );
+        if (updated.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), found: false };
+        }
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        return updatedRoom
+          ? { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) }
+          : null;
+      });
+    } catch (error) {
+      this.logger.error('Error materializing PostgreSQL queued code-agent message', { error, roomId, messageId, expectedState, turnId });
+      return null;
+    }
+  }
+
   async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = new Date().toISOString()) {
     try {
       return await this.transaction(async client => {

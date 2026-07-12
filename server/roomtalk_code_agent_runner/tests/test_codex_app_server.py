@@ -124,6 +124,31 @@ def jsonrpc_lines(process: FakeAppServerProcess) -> list[dict[str, Any]]:
     return [json.loads(line) for line in process.stdin.lines]
 
 
+def test_codex_user_message_item_confirms_pending_steer_insertion(tmp_path: Path):
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-roomtalk",
+        message_id="ai-1",
+        workspace=tmp_path,
+    )
+
+    assert mapper.map_notification({
+        "method": "item/started",
+        "params": {
+            "item": {
+                "type": "userMessage",
+                "id": "item-1",
+                "clientId": "queued-steer-1",
+                "content": [{"type": "text", "text": "use Bing instead"}],
+            },
+        },
+    }) == [{
+        "schemaVersion": 1,
+        "type": "user_input_inserted",
+        "turnId": "turn-roomtalk",
+        "messageId": "queued-steer-1",
+    }]
+
+
 def test_codex_image_url_is_materialized_in_memory(monkeypatch: pytest.MonkeyPatch):
     image_url = "https://media.example/signed/input.png?token=secret"
     response = FakeImageResponse(b"png-bytes", content_type="image/png; charset=binary")

@@ -53,6 +53,7 @@ export interface CodeAgentRunnerSteerRequest {
   type: 'steer';
   turnId: string;
   controlId?: string;
+  messageId?: string;
   prompt: string;
 }
 
@@ -115,6 +116,13 @@ export interface CodeAgentRunnerControlResultEvent {
   controlType: 'interrupt' | 'steer' | 'approval_response';
   accepted: boolean;
   message?: string;
+}
+
+export interface CodeAgentRunnerUserInputInsertedEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'user_input_inserted';
+  turnId: string;
+  messageId: string;
 }
 
 export interface CodeAgentRunnerTextDeltaEvent {
@@ -213,6 +221,7 @@ export interface CodeAgentRunnerThreadReadResultEvent {
 export type CodeAgentRunnerEvent =
   | CodeAgentRunnerStatusEvent
   | CodeAgentRunnerControlResultEvent
+  | CodeAgentRunnerUserInputInsertedEvent
   | CodeAgentRunnerTextDeltaEvent
   | CodeAgentRunnerModelStepEvent
   | CodeAgentRunnerToolCallEvent
@@ -417,6 +426,13 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         message: readOptionalString(raw, 'message'),
       };
     }
+    case 'user_input_inserted':
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
+        messageId: readRequiredString(raw, 'messageId'),
+      };
     case 'text_delta':
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,

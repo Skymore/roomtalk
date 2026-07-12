@@ -848,6 +848,7 @@ def test_run_request_applies_coco_steer_without_ending_the_turn(tmp_path: Path, 
         "type": "steer",
         "turnId": parsed.turn_id,
         "controlId": "control-steer-1",
+        "messageId": "queued-steer-1",
         "prompt": "use Bing instead",
     })
     thread.join(timeout=3)
@@ -866,6 +867,12 @@ def test_run_request_applies_coco_steer_without_ending_the_turn(tmp_path: Path, 
         "controlId": "control-steer-1",
         "controlType": "steer",
         "accepted": True,
+    } for event in events)
+    assert any(event == {
+        "schemaVersion": 1,
+        "type": "user_input_inserted",
+        "turnId": parsed.turn_id,
+        "messageId": "queued-steer-1",
     } for event in events)
     assert [event["delta"] for event in events if event["type"] == "text_delta"] == ["before steer ", "after steer"]
     assert events[-1]["type"] == "final"

@@ -678,6 +678,55 @@ end
 return { 1, found, roomJson, updatedPayload }
 `;
 
+const MATERIALIZE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local remaining = {}
+local materializedPayload = ''
+local found = 0
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  local queued = ok and decoded['codeAgentQueuedInput'] or nil
+  if ok and decoded['id'] == ARGV[2] and queued and queued['state'] == ARGV[3] then
+    decoded['codeAgentQueuedInput'] = nil
+    if ARGV[4] == '' then
+      decoded['turnId'] = nil
+    else
+      decoded['turnId'] = ARGV[4]
+    end
+    decoded['timestamp'] = ARGV[5]
+    decoded['updatedAt'] = ARGV[5]
+    materializedPayload = cjson.encode(decoded)
+    found = 1
+  else
+    table.insert(remaining, existing[i])
+  end
+end
+
+if found == 1 then
+  redis.call('DEL', KEYS[2])
+  for i = 1, #remaining do
+    redis.call('RPUSH', KEYS[2], remaining[i])
+  end
+  redis.call('RPUSH', KEYS[2], materializedPayload)
+  room['lastActivityAt'] = ARGV[5]
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+  room['updatedAt'] = ARGV[5]
+  roomJson = cjson.encode(room)
+  redis.call('HSET', KEYS[1], ARGV[1], roomJson)
+end
+return { 1, found, roomJson, materializedPayload }
+`;
+
 const CLAIM_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -1395,6 +1444,33 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         : { room, found: false };
     } catch (error) {
       this.logger.error('Error transitioning Redis queued code-agent message', { error, roomId, messageId, expectedState: update.expectedState });
+      return null;
+    }
+  }
+
+  async materializeCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState,
+    turnId?: string,
+    insertedAt = new Date().toISOString()
+  ) {
+    try {
+      const result = await (this.redisClient as any).eval(MATERIALIZE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, expectedState, turnId || '', insertedAt],
+      });
+      const room = parseScriptRoom(result, 2);
+      if (!room) {
+        return null;
+      }
+      const found = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      const updatedMessage = found ? parseScriptMessage(result[3]) : null;
+      return found && updatedMessage
+        ? { room, found: true, updatedMessage }
+        : { room, found: false };
+    } catch (error) {
+      this.logger.error('Error materializing Redis queued code-agent message', { error, roomId, messageId, expectedState, turnId });
       return null;
     }
   }

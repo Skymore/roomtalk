@@ -1152,7 +1152,7 @@ class _CodeAgentControlState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stop_requested = False
-        self._pending_steers: list[str] = []
+        self._pending_steers: list[tuple[str, str | None]] = []
         self.run_active = threading.Event()
         self.done = threading.Event()
 
@@ -1164,30 +1164,31 @@ class _CodeAgentControlState:
             self._pending_steers.clear()
             return True
 
-    def request_steer(self, prompt: str) -> bool:
+    def request_steer(self, prompt: str, message_id: str | None = None) -> bool:
         with self._lock:
             if self.done.is_set() or self._stop_requested:
                 return False
-            self._pending_steers.append(prompt)
+            self._pending_steers.append((prompt, message_id))
             return True
 
-    def _consume_action_locked(self) -> tuple[str, str | None]:
+    def _consume_action_locked(self) -> tuple[str, str | None, list[str]]:
         if self._stop_requested:
-            return "interrupt", None
+            return "interrupt", None, []
         if self._pending_steers:
-            prompt = "\n\n".join(self._pending_steers)
+            prompt = "\n\n".join(prompt for prompt, _ in self._pending_steers)
+            message_ids = [message_id for _, message_id in self._pending_steers if message_id]
             self._pending_steers.clear()
-            return "steer", prompt
-        return "none", None
+            return "steer", prompt, message_ids
+        return "none", None, []
 
-    def begin_run(self) -> tuple[str, str | None]:
+    def begin_run(self) -> tuple[str, str | None, list[str]]:
         with self._lock:
             action = self._consume_action_locked()
             if action[0] == "none":
                 self.run_active.set()
             return action
 
-    def consume_action(self) -> tuple[str, str | None]:
+    def consume_action(self) -> tuple[str, str | None, list[str]]:
         with self._lock:
             return self._consume_action_locked()
 
@@ -1266,13 +1267,14 @@ def _start_code_agent_control_dispatcher(
                 abort_active_run()
             elif control_type == "steer":
                 prompt = control.get("prompt")
+                message_id = control.get("messageId")
                 if not isinstance(prompt, str) or not prompt.strip():
                     emit_control_result(control, control_type, False, "Steer prompt is required")
                     continue
                 if state.run_active.is_set() and not can_abort_active_run():
                     emit_control_result(control, control_type, False, "Coco engine does not support live steer")
                     continue
-                if not state.request_steer(prompt.strip()):
+                if not state.request_steer(prompt.strip(), message_id if isinstance(message_id, str) and message_id else None):
                     emit_control_result(control, control_type, False, "The target turn is no longer controllable")
                     continue
                 emit_control_result(control, control_type, True)
@@ -1410,7 +1412,7 @@ def run_request(
 
         try:
             while True:
-                queued_action, queued_prompt = controls.begin_run()
+                queued_action, queued_prompt, queued_message_ids = controls.begin_run()
                 if queued_action == "interrupt":
                     interrupted = True
                     break
@@ -1423,6 +1425,8 @@ def run_request(
                     )
                     current_prompt = queued_prompt
                     current_image_urls = []
+                    for queued_message_id in queued_message_ids:
+                        emitter.emit({"type": "user_input_inserted", "turnId": request.turn_id, "messageId": queued_message_id})
                     continue
 
                 attempt_answer_parts: list[str] = []
@@ -1447,7 +1451,7 @@ def run_request(
                     result = engine.run(prompt_with_background_jobs(current_prompt), **run_kwargs)
                 except Exception:
                     controls.run_active.clear()
-                    action, steer_prompt = controls.consume_action()
+                    action, steer_prompt, steer_message_ids = controls.consume_action()
                     if action == "interrupt":
                         interrupted = True
                         break
@@ -1466,6 +1470,8 @@ def run_request(
                             "status": "running",
                             "message": "Coco applying steer",
                         })
+                        for steer_message_id in steer_message_ids:
+                            emitter.emit({"type": "user_input_inserted", "turnId": request.turn_id, "messageId": steer_message_id})
                         continue
                     raise
                 finally:
@@ -1479,7 +1485,7 @@ def run_request(
                         emitter.emit(event)
                 usage = _merge_runner_usage(usage, _usage_to_event_usage(getattr(result, "usage", None)))
 
-                action, steer_prompt = controls.consume_action()
+                action, steer_prompt, steer_message_ids = controls.consume_action()
                 if action == "interrupt":
                     interrupted = True
                     break
@@ -1497,6 +1503,8 @@ def run_request(
                         "status": "running",
                         "message": "Coco applying steer",
                     })
+                    for steer_message_id in steer_message_ids:
+                        emitter.emit({"type": "user_input_inserted", "turnId": request.turn_id, "messageId": steer_message_id})
                     continue
 
                 final_answer = str(getattr(result, "answer", "") or "")

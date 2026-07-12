@@ -277,6 +277,7 @@ export interface DurableRoomStore {
   upsertMessage(message: Message): Promise<Room | null>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   updateCodeAgentQueuedMessage?(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate): Promise<MessageUpdateResult | null>;
+  materializeCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, turnId?: string, insertedAt?: string): Promise<MessageUpdateResult | null>;
   claimNextCodeAgentQueuedMessage?(roomId: string, updatedAt?: string): Promise<CodeAgentQueueClaimResult | null>;
   deleteCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState?: CodeAgentQueueState): Promise<MessageDeleteResult | null>;
   findRoomsWithQueuedCodeAgentMessages?(): Promise<string[]>;
@@ -479,6 +480,17 @@ export class CompositeRoomStore implements RoomStore {
       return null;
     }
     const result = await this.durableStore.updateCodeAgentQueuedMessage(roomId, messageId, update);
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async materializeCodeAgentQueuedMessage(roomId: string, messageId: string, expectedState: CodeAgentQueueState, turnId?: string, insertedAt?: string) {
+    if (!this.durableStore.materializeCodeAgentQueuedMessage) {
+      return null;
+    }
+    const result = await this.durableStore.materializeCodeAgentQueuedMessage(roomId, messageId, expectedState, turnId, insertedAt);
     if (result?.found) {
       await this.invalidateRoomMessagesCache(roomId);
     }

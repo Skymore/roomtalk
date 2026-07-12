@@ -282,6 +282,17 @@ class CodexAppServerJsonRpcMapper:
         item_type = str(item.get("type") or "")
         item_id = str(item.get("id") or "")
 
+        if item_type == "userMessage" and not completed:
+            client_id = item.get("clientId")
+            if isinstance(client_id, str) and client_id:
+                return [{
+                    "schemaVersion": SCHEMA_VERSION,
+                    "type": "user_input_inserted",
+                    "turnId": self.turn_id,
+                    "messageId": client_id,
+                }]
+            return []
+
         if item_type == "agentMessage" and completed:
             text = str(item.get("text") or "")
             if text and item_id not in self.completed_agent_message_ids:
@@ -1120,6 +1131,7 @@ def _start_control_dispatch_thread(
                     emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex interrupt sent"))
                 elif control_type == "steer":
                     prompt = control.get("prompt")
+                    message_id = control.get("messageId")
                     if not isinstance(prompt, str) or not prompt.strip():
                         if isinstance(control_id, str) and control_id:
                             emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "Steer prompt is required"))
@@ -1133,6 +1145,7 @@ def _start_control_dispatch_thread(
                     send("turn/steer", {
                         "threadId": thread_id,
                         "expectedTurnId": app_turn_id,
+                        **({"clientUserMessageId": message_id} if isinstance(message_id, str) and message_id else {}),
                         "input": [{"type": "text", "text": prompt.strip(), "text_elements": []}],
                     }, control=(control_id, control_type) if isinstance(control_id, str) and control_id else None)
                     emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex steer sent"))

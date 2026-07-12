@@ -78,17 +78,16 @@ describe('buildMessageTimeline', () => {
     expect(timeline[0].kind === 'agent-turn' ? timeline[0].turn.assistantName : null).toBe('Codex');
   });
 
-  it('moves a started queued prompt from the previous turn into the next turn boundary', () => {
+  it('keeps pending queued prompts out of the canonical history timeline', () => {
     const messages = [
       message({ id: 'turn-1-ai', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'working' }),
       message({
         id: 'queued-next',
         content: 'do this next',
         codeAgentQueuedInput: {
-          state: 'started',
+          state: 'queued',
           queuedAt: '2026-07-10T00:00:01.000Z',
           updatedAt: '2026-07-10T00:00:03.000Z',
-          turnId: 'turn-2',
         },
       }),
       message({ id: 'turn-1-final', clientId: 'ai_assistant', messageType: 'ai', turnId: 'turn-1', content: 'done' }),
@@ -97,13 +96,12 @@ describe('buildMessageTimeline', () => {
 
     const timeline = buildMessageTimeline(messages, []);
 
-    expect(timeline.map(item => item.kind)).toEqual(['agent-turn', 'message', 'agent-turn']);
+    expect(timeline.map(item => item.kind)).toEqual(['agent-turn', 'agent-turn']);
     expect(timeline[0].kind === 'agent-turn' ? timeline[0].messages.map(item => item.id) : []).toEqual([
       'turn-1-ai',
       'turn-1-final',
     ]);
-    expect(timeline[1].kind === 'message' ? timeline[1].message.id : null).toBe('queued-next');
-    expect(timeline[2].kind === 'agent-turn' ? timeline[2].turn.id : null).toBe('turn-2');
+    expect(timeline[1].kind === 'agent-turn' ? timeline[1].turn.id : null).toBe('turn-2');
   });
 });
 
@@ -352,7 +350,7 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('wires queued edit, steer, and cancel actions to their dedicated APIs', async () => {
-    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} presentation="code-agent" />);
     const queuedMessage = message({
       id: 'queued-1',
       codeAgentQueuedInput: {
@@ -371,6 +369,8 @@ describe('MessageList optimistic messages', () => {
         mode: 'replace',
       });
     });
+
+    expect((await screen.findByTestId('code-agent-pending-queue')).closest('[role="log"]')).toBeNull();
 
     fireEvent.click(await screen.findByText('steer-queued-queued-1'));
     await waitFor(() => expect(steerQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'queued-1'));
@@ -924,8 +924,23 @@ describe('MessageList optimistic messages', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
   });
 
-  it('locks export and message actions while a restored room shell is unverified', async () => {
-    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />);
+  it('locks queued message actions while a restored room shell is unverified', async () => {
+    render(<MessageList
+      roomId="room-1"
+      onReply={vi.fn()}
+      roomPermissions={null}
+      presentation="code-agent"
+      currentRoom={{
+        id: 'room-1',
+        name: 'Code Agent',
+        createdAt: '2026-05-26T00:00:00.000Z',
+        creatorId: 'client-1',
+        type: 'codeAgent',
+        sandboxStatus: 'ready',
+        codeAgentStatus: 'idle',
+      }}
+      isRoomSessionReady={false}
+    />);
     act(() => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
@@ -944,7 +959,6 @@ describe('MessageList optimistic messages', () => {
 
     const item = await screen.findByTestId('message-item');
     expect(item.getAttribute('data-interaction-disabled')).toBe('true');
-    expect((screen.getByRole('button', { name: 'exportChat' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText('edit-queued-m1'));
     fireEvent.click(screen.getByText('steer-queued-m1'));
     fireEvent.click(screen.getByText('cancel-queued-m1'));

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error The client tsconfig intentionally excludes Node typings, while Vitest runs in Node.
 import { readFileSync } from 'node:fs';
 
 const indexStyles = readFileSync('src/index.css', 'utf8');

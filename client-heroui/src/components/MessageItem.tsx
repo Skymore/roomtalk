@@ -1258,7 +1258,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             {isMine && isQueuedInput && (
               <span className="mr-1 inline-flex items-center gap-1 text-tiny font-medium text-[#87867f] dark:text-[#b0aea5]">
                 <Icon icon="lucide:list-end" width={12} height={12} />
-                {t('codeAgentQueued')}
+                {queuedInput?.state === 'steering' ? t('codeAgentSteeringConversation') : t('codeAgentQueued')}
               </span>
             )}
             {/* Timestamp */}

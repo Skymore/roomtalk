@@ -2,7 +2,6 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// @ts-expect-error The client tsconfig intentionally excludes Node typings, while Vitest runs in Node.
 import { readFileSync } from 'node:fs';
 import { A2UIPayload } from '../utils/types';
 import { A2UIRenderer } from './A2UIRenderer';

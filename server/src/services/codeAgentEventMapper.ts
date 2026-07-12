@@ -212,6 +212,7 @@ export const mapCodeAgentRunnerEvent = (
     case 'thread_list_result':
     case 'thread_read_result':
     case 'control_result':
+    case 'user_input_inserted':
     case 'model_step':
     case 'usage':
       return { kind: 'ignored' };

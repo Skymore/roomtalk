@@ -218,6 +218,24 @@ class MemoryCodeAgentStore {
     return { room, found: true, updatedMessage };
   }
 
+  async materializeCodeAgentQueuedMessage(roomId: string, messageId: string, expectedState: string, turnId?: string, insertedAt = '2026-05-03T00:00:00.000Z') {
+    const room = this.rooms.get(roomId);
+    const messages = this.messages.get(roomId);
+    if (!room || !messages) return null;
+    const index = messages.findIndex(item => item.id === messageId && item.codeAgentQueuedInput?.state === expectedState);
+    if (index === -1) return { room, found: false };
+    const updatedMessage: Message = {
+      ...messages[index],
+      timestamp: insertedAt,
+      updatedAt: insertedAt,
+      turnId,
+      codeAgentQueuedInput: undefined,
+    };
+    messages.splice(index, 1);
+    messages.push(updatedMessage);
+    return { room, found: true, updatedMessage };
+  }
+
   async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = '2026-05-03T00:00:00.000Z') {
     const room = this.rooms.get(roomId);
     const messages = this.messages.get(roomId);
@@ -456,6 +474,14 @@ class ControlBlockingRunner implements CodeAgentRunnerClient {
       accepted: this.acceptControls,
       message: this.acceptControls ? undefined : 'turn already completed',
     });
+    if (control.type === 'steer' && control.messageId && this.acceptControls) {
+      await this.handlers?.onEvent({
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'user_input_inserted',
+        turnId: control.turnId,
+        messageId: control.messageId,
+      });
+    }
     if (control.type === 'interrupt' && this.acceptControls) {
       this.releaseRun();
     }
@@ -2146,13 +2172,9 @@ describe('CodeAgentSessionService', () => {
     while (store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput?.state === 'starting' && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
-    assert.deepEqual(store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput, {
-      ...queued.message?.codeAgentQueuedInput,
-      state: 'started',
-      turnId: 'turn-2',
-      updatedAt: '2026-05-03T00:00:00.000Z',
-      lastError: undefined,
-    });
+    const startedPrompt = store.messages.get('room-1')?.find(item => item.id === 'queued-1');
+    assert.equal(startedPrompt?.codeAgentQueuedInput, undefined);
+    assert.equal(startedPrompt?.turnId, undefined);
 
     runner.release(1);
     await runner.waitForCompletions(2);
@@ -2226,8 +2248,8 @@ describe('CodeAgentSessionService', () => {
     while (store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.state === 'starting' && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
-    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.state, 'started');
-    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput?.turnId, 'turn-1');
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput, undefined);
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.turnId, undefined);
 
     runner.release(0);
     await runner.waitForCompletions(1);
@@ -2294,6 +2316,40 @@ describe('CodeAgentSessionService', () => {
     const queued = store.messages.get('room-1')?.find(item => item.id === 'queued-steer-1')?.codeAgentQueuedInput;
     assert.equal(queued?.state, 'queued');
     assert.equal(queued?.lastError, 'turn already completed');
+
+    runner.release();
+    await first;
+  });
+
+  it('keeps an accepted steer pending until the runner reports its user input insertion', async () => {
+    const runner = new ControlBlockingRunner(true);
+    const { service, store, sandboxService } = createService({ runner });
+    sandboxService.startRunner = async input => ({
+      command: input.command,
+      stdin: new Writable({
+        write(chunk, _encoding, callback) {
+          void runner.receiveControl(JSON.parse(String(chunk))).then(() => callback(), callback);
+        },
+      }),
+      stop: async () => {},
+    });
+
+    const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    await service.queueTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }, {
+      id: 'queued-steer-inserted',
+      clientId: 'client-1',
+      content: 'use Bing instead',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    });
+
+    const response = await service.steerQueuedTurn('room-1', 'client-1', 'queued-steer-inserted');
+    assert.deepEqual(response, { success: true });
+    const inserted = store.messages.get('room-1')?.find(item => item.id === 'queued-steer-inserted');
+    assert.equal(inserted?.codeAgentQueuedInput, undefined);
+    assert.equal(inserted?.turnId, 'turn-1');
 
     runner.release();
     await first;

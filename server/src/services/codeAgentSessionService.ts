@@ -148,6 +148,7 @@ interface ActiveCodeAgentTurn {
   sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
   interruptedByUser: boolean;
+  pendingSteerMessageIds: Set<string>;
   pendingControls: Map<string, {
     resolve: (result: CodeAgentControlAck) => void;
     timeout: NodeJS.Timeout;
@@ -329,6 +330,7 @@ export class CodeAgentSessionService {
         backend: turnBackend,
         leaseFence: roomLease.fence,
         interruptedByUser: false,
+        pendingSteerMessageIds: new Set(),
         pendingControls: new Map(),
       });
       const placeholderMessage = createAIPlaceholderMessage({
@@ -352,6 +354,22 @@ export class CodeAgentSessionService {
       }
       roomMarkedRunning = true;
       this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
+
+      if (input.promptMessageId && input.promptMessage?.codeAgentQueuedInput?.state === 'starting') {
+        const materialized = await this.store.materializeCodeAgentQueuedMessage?.(
+          input.roomId,
+          input.promptMessageId,
+          'starting',
+          undefined,
+          this.now().toISOString()
+        );
+        if (!materialized?.found || !materialized.updatedMessage) {
+          publicFailureMessage = 'Queued agent input changed before the turn started';
+          throw new Error(publicFailureMessage);
+        }
+        this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
+        this.emitter.to(input.roomId).emit('message_edited', materialized.updatedMessage);
+      }
 
       const placeholderRoom = await this.store.upsertMessage(aiMessage);
       if (!placeholderRoom) {
@@ -798,6 +816,7 @@ export class CodeAgentSessionService {
         await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox);
       }
       if (isCurrentTurn) {
+        await this.requeuePendingSteers(active);
         this.rejectPendingControls(active, 'The target turn is no longer active');
         this.activeTurns.delete(input.roomId);
       }
@@ -811,7 +830,7 @@ export class CodeAgentSessionService {
   }
 
   async queueTurn(input: CodeAgentTurnInput, message: Message): Promise<{ success: boolean; message?: Message; error?: string }> {
-    if (!this.store.updateCodeAgentQueuedMessage || !this.store.claimNextCodeAgentQueuedMessage) {
+    if (!this.store.updateCodeAgentQueuedMessage || !this.store.claimNextCodeAgentQueuedMessage || !this.store.materializeCodeAgentQueuedMessage) {
       return { success: false, error: 'Queued agent inputs are unavailable' };
     }
 
@@ -903,24 +922,24 @@ export class CodeAgentSessionService {
       return steeringAck;
     }
 
-    const response = await this.steerTurn(roomId, clientId, message.content);
+    const response = await this.steerTurn(roomId, clientId, message.content, messageId);
     const latest = steering?.updatedMessage?.codeAgentQueuedInput;
-    const updatedAt = this.now().toISOString();
-    const settled = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
-      expectedState: 'steering',
-      updatedAt,
-      queuedInput: response.success
-        ? null
-        : {
-            ...(latest || message.codeAgentQueuedInput),
-            state: 'queued',
-            updatedAt,
-            lastError: response.error,
-          },
-    });
-    this.emitQueuedMessageTransition(roomId, settled, response.error || 'Unable to settle queued steer input');
-    if (!response.success && !this.activeTurns.has(roomId)) {
-      this.scheduleQueuedTurn(roomId);
+    if (!response.success) {
+      const updatedAt = this.now().toISOString();
+      const settled = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
+        expectedState: 'steering',
+        updatedAt,
+        queuedInput: {
+          ...(latest || message.codeAgentQueuedInput),
+          state: 'queued',
+          updatedAt,
+          lastError: response.error,
+        },
+      });
+      this.emitQueuedMessageTransition(roomId, settled, response.error || 'Unable to settle queued steer input');
+      if (!this.activeTurns.has(roomId)) {
+        this.scheduleQueuedTurn(roomId);
+      }
     }
     return response;
   }
@@ -966,7 +985,7 @@ export class CodeAgentSessionService {
     return { success: false, error: 'The current engine does not support interactive interrupt yet' };
   }
 
-  async steerTurn(roomId: string, clientId: string, prompt: string): Promise<CodeAgentControlAck> {
+  async steerTurn(roomId: string, clientId: string, prompt: string, messageId?: string): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     if (!active) {
       return { success: false, error: 'No agent turn is running in this workspace' };
@@ -981,12 +1000,20 @@ export class CodeAgentSessionService {
     if (active.clientId !== clientId) {
       this.logger.info('Code agent steer requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
-    return this.writeActiveControl(roomId, {
+    if (messageId) {
+      active.pendingSteerMessageIds.add(messageId);
+    }
+    const response = await this.writeActiveControl(roomId, {
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'steer',
       turnId: active.turnId,
+      ...(messageId ? { messageId } : {}),
       prompt: trimmedPrompt,
     });
+    if (!response.success && messageId) {
+      active.pendingSteerMessageIds.delete(messageId);
+    }
+    return response;
   }
 
   async respondToApproval(
@@ -1784,24 +1811,19 @@ export class CodeAgentSessionService {
     if (!queuedInput) {
       return;
     }
+    if (response.success && startedTurnId) {
+      return;
+    }
     const updatedAt = this.now().toISOString();
     const result = await this.store.updateCodeAgentQueuedMessage?.(message.roomId, message.id, {
       expectedState: 'starting',
       updatedAt,
-      queuedInput: response.success && startedTurnId
-        ? {
-            ...queuedInput,
-            state: 'started',
-            turnId: startedTurnId,
-            updatedAt,
-            lastError: undefined,
-          }
-        : {
-            ...queuedInput,
-            state: 'queued',
-            updatedAt,
-            lastError: response.error || 'Unable to start queued agent turn',
-          },
+      queuedInput: {
+        ...queuedInput,
+        state: 'queued',
+        updatedAt,
+        lastError: response.error || 'Unable to start queued agent turn',
+      },
     });
     this.emitQueuedMessageTransition(message.roomId, result, 'Queued agent input changed before the turn started');
   }
@@ -1853,6 +1875,27 @@ export class CodeAgentSessionService {
       pending.resolve(event.accepted
         ? { success: true }
         : { success: false, error: event.message || 'Control input was rejected' });
+      return;
+    }
+    if (event.type === 'user_input_inserted') {
+      const active = this.activeTurns.get(roomId);
+      if (active?.turnId !== turnId || event.turnId !== turnId || !active.pendingSteerMessageIds.has(event.messageId)) {
+        return;
+      }
+      const materialized = await this.store.materializeCodeAgentQueuedMessage?.(
+        roomId,
+        event.messageId,
+        'steering',
+        turnId,
+        this.now().toISOString()
+      );
+      if (!materialized?.found || !materialized.updatedMessage) {
+        this.logger.warn('Unable to materialize inserted steer input', { roomId, turnId, messageId: event.messageId });
+        return;
+      }
+      active.pendingSteerMessageIds.delete(event.messageId);
+      this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
+      this.emitter.to(roomId).emit('message_edited', materialized.updatedMessage);
       return;
     }
     if (event.type === 'usage') {
@@ -2130,6 +2173,32 @@ export class CodeAgentSessionService {
     state.segmentHasUnsealedText = false;
   }
 
+  private async requeuePendingSteers(active: ActiveCodeAgentTurn) {
+    if (active.pendingSteerMessageIds.size === 0) {
+      return;
+    }
+    const messages = await this.store.readMessagesByRoom(active.roomId);
+    for (const messageId of active.pendingSteerMessageIds) {
+      const message = messages.find(item => item.id === messageId);
+      if (!message?.codeAgentQueuedInput || message.codeAgentQueuedInput.state !== 'steering') {
+        continue;
+      }
+      const updatedAt = this.now().toISOString();
+      const result = await this.store.updateCodeAgentQueuedMessage?.(active.roomId, messageId, {
+        expectedState: 'steering',
+        updatedAt,
+        queuedInput: {
+          ...message.codeAgentQueuedInput,
+          state: 'queued',
+          updatedAt,
+          lastError: 'The active turn ended before the steer input was inserted',
+        },
+      });
+      this.emitQueuedMessageTransition(active.roomId, result, 'Unable to restore pending steer input');
+    }
+    active.pendingSteerMessageIds.clear();
+  }
+
   private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
     const content = error instanceof Error ? error.message : 'Agent task failed';
     const errorMessage: Message = {
@@ -2242,6 +2311,8 @@ export class CodeAgentSessionService {
           accepted: event.accepted,
           message: event.message,
         };
+      case 'user_input_inserted':
+        return { messageId: event.messageId };
       case 'model_step':
         return {
           stepId: event.stepId,

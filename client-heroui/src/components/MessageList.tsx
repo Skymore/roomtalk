@@ -44,32 +44,16 @@ export const buildMessageTimeline = (
   turns: RoomAgentTurn[],
   activeTurnId?: string,
 ): MessageTimelineItem[] => {
+  const historyMessages = messages.filter(message => message.codeAgentQueuedInput?.state === 'started' || !message.codeAgentQueuedInput);
   const turnById = new Map(turns.map(turn => [turn.id, turn]));
   const lastIndexByTurn = new Map<string, number>();
-  messages.forEach((message, index) => {
+  historyMessages.forEach((message, index) => {
     if (message.turnId) lastIndexByTurn.set(message.turnId, index);
-  });
-  const visibleTurnIds = new Set(lastIndexByTurn.keys());
-  const startedPromptByTurn = new Map<string, Message[]>();
-  const relocatedPromptIds = new Set<string>();
-  messages.forEach(message => {
-    const queuedInput = message.codeAgentQueuedInput;
-    if (queuedInput?.state !== 'started' || !queuedInput.turnId || !visibleTurnIds.has(queuedInput.turnId)) {
-      return;
-    }
-    const prompts = startedPromptByTurn.get(queuedInput.turnId) || [];
-    prompts.push(message);
-    startedPromptByTurn.set(queuedInput.turnId, prompts);
-    relocatedPromptIds.add(message.id);
   });
 
   const timeline: MessageTimelineItem[] = [];
-  for (let index = 0; index < messages.length;) {
-    const message = messages[index];
-    if (relocatedPromptIds.has(message.id)) {
-      index++;
-      continue;
-    }
+  for (let index = 0; index < historyMessages.length;) {
+    const message = historyMessages[index];
     if (!message.turnId) {
       timeline.push({ kind: 'message', message });
       index++;
@@ -77,9 +61,7 @@ export const buildMessageTimeline = (
     }
 
     const lastIndex = lastIndexByTurn.get(message.turnId) ?? index;
-    const groupedMessages = messages
-      .slice(index, lastIndex + 1)
-      .filter(item => !relocatedPromptIds.has(item.id));
+    const groupedMessages = historyMessages.slice(index, lastIndex + 1);
     const ownMessages = groupedMessages.filter(item => item.turnId === message.turnId);
     const firstTimestamp = ownMessages[0]?.timestamp || message.timestamp;
     const lastTimestamp = ownMessages.at(-1)?.timestamp || firstTimestamp;
@@ -87,9 +69,6 @@ export const buildMessageTimeline = (
     const persisted = turnById.get(message.turnId);
     const isRunning = persisted?.status === 'running' || (!persisted && activeTurnId === message.turnId);
     const assistantName = getCodeAgentAssistantDisplayName(message.username) || 'Coco';
-    for (const prompt of startedPromptByTurn.get(message.turnId) || []) {
-      timeline.push({ kind: 'message', message: prompt });
-    }
     timeline.push({
       kind: 'agent-turn',
       messages: groupedMessages,
@@ -272,6 +251,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const displayMessages = React.useMemo(
     () => messages.filter(message => !(message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id))),
     [messages, toolResultPairing.consumed],
+  );
+  const pendingQueueMessages = React.useMemo(
+    () => displayMessages.filter(message => Boolean(message.codeAgentQueuedInput && message.codeAgentQueuedInput.state !== 'started')),
+    [displayMessages],
   );
   const activeTurnId = React.useMemo(() => {
     if (codeAgentRoom?.codeAgentStatus !== 'running') return undefined;
@@ -1140,6 +1123,37 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             <div ref={messagesEndRef} />
           </div>
         </div>
+        {presentation === 'code-agent' && pendingQueueMessages.length > 0 && (
+          <div
+            data-testid="code-agent-pending-queue"
+            className="z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto bg-[#f5f4ed]/95 px-4 pb-2 pt-2 backdrop-blur dark:bg-[#141413]/95"
+          >
+            {pendingQueueMessages.map(message => (
+              <MessageItem
+                key={`pending:${message.id}`}
+                message={message}
+                roomPermissions={roomPermissions}
+                senderRole={message.clientId === (codeAgentRoom || room)?.creatorId
+                  ? 'owner'
+                  : roleMemberByClientId.get(message.clientId)?.role ?? null}
+                senderDisplayId={roleMemberByClientId.get(message.clientId)?.displayId}
+                aiRequestRoomKind={aiRequestRoomKind}
+                onStartEdit={handleOpenEditModal}
+                onDeleteMessage={handleOpenDeleteModal}
+                onEditQueuedMessage={handleOpenEditModal}
+                onSteerQueuedMessage={handleSteerQueuedMessage}
+                onCancelQueuedMessage={handleCancelQueuedMessage}
+                onRefreshAI={handleRefreshAI}
+                onRetryDelivery={handleRetryDelivery}
+                onReply={onReply}
+                onUserAction={handleUserAction}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
+                workspaceRoot={workspaceRoot}
+                isInteractionDisabled={!isRoomSessionReady}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {statusAnnouncement && <span key={statusAnnouncement.id} className="sr-only" role="status" aria-atomic="true">{statusAnnouncement.text}</span>}
