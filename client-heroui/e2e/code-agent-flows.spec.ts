@@ -59,7 +59,7 @@ test('runs a fake code agent turn and restores tool history after refresh', asyn
   await expect(refreshWorkspace).toBeVisible();
   await refreshWorkspace.click();
   await expect(page.getByText('Workspace refresh failed')).toHaveCount(0);
-  await expect(page.getByTestId('code-agent-mode-toggle')).toContainText('Plan');
+  await expect(page.getByTestId('code-agent-mode-toggle')).toContainText('Read');
   await expect(page.getByText('Agent activity')).toHaveCount(0);
   await expect(page.getByText('Threads', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Artifacts', { exact: true })).toBeVisible();

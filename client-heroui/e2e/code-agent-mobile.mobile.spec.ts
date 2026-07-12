@@ -25,7 +25,7 @@ test('keeps code agent workspace and composer usable on mobile', async ({ page, 
 
   await expectChatRoom(page, roomName);
   await expect(page.getByTestId('code-agent-workspace')).toBeVisible();
-  await expect(page.getByTestId('code-agent-mode-toggle')).toContainText('Plan');
+  await expect(page.getByTestId('code-agent-mode-toggle')).toContainText('Read');
   await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeVisible();
 
   const layout = await page.evaluate(() => {
