@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { MessageUpdateResult, RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMemberRole } from '../types';
+import { AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
+import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from './aiHistory';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
 import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
@@ -118,6 +119,7 @@ export interface CodeAgentTurnInput {
   clientOrigin?: string;
   serverOrigin?: string;
   promptMessageId?: string;
+  promptMessage?: Message;
 }
 
 export type CodeAgentTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -148,6 +150,11 @@ interface ActiveCodeAgentTurn {
     timeout: NodeJS.Timeout;
   }>;
 }
+
+const CODE_AGENT_TURN_HEARTBEAT_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.CODE_AGENT_TURN_HEARTBEAT_MS || '15000', 10) || 15_000,
+);
 
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
@@ -267,6 +274,28 @@ export class CodeAgentSessionService {
     let roomMarkedRunning = false;
     let streamState: CodeAgentTurnStreamState | null = null;
     let turnRecord: RoomAgentTurn | null = null;
+    let publicFailureMessage: string | undefined;
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    let turnUpdateChain: Promise<void> = Promise.resolve();
+    const updateTurn = (patch: Partial<RoomAgentTurn>) => {
+      turnUpdateChain = turnUpdateChain.then(async () => {
+        if (!turnRecord) return;
+        const now = this.now().toISOString();
+        turnRecord = await this.publishRoomAgentTurn({
+          ...turnRecord,
+          ...patch,
+          updatedAt: patch.updatedAt || now,
+        });
+      }).catch(error => {
+        this.logger.error('Failed to update active room agent turn', { error, roomId: input.roomId, turnId });
+      });
+      return turnUpdateChain;
+    };
+    const updatePhase = (phase: RoomAgentTurnPhase, phaseMessage?: string) => updateTurn({
+      phase,
+      phaseMessage,
+      lastHeartbeatAt: this.now().toISOString(),
+    });
 
     try {
       aiMessageId = this.createId();
@@ -293,13 +322,56 @@ export class CodeAgentSessionService {
         codeAgentMode: turnMode.mode,
       }, this.options.aiStreamOwnerId);
 
-      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages, input.promptMessageId);
+      const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
+      if (!runningRoom) {
+        publicFailureMessage = 'Unable to mark Workspace room as preparing';
+        throw new Error('Unable to mark Workspace room as preparing');
+      }
+      roomMarkedRunning = true;
+      this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
+
+      const placeholderRoom = await this.store.upsertMessage(aiMessage);
+      if (!placeholderRoom) {
+        publicFailureMessage = 'Unable to start a durable agent response';
+        throw new Error('Unable to start a durable agent response');
+      }
+      this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
+      const turnStartedAt = new Date(turnStartedAtMs).toISOString();
+      turnRecord = await this.publishRoomAgentTurn({
+        id: turnId,
+        roomId: input.roomId,
+        status: 'running',
+        phase: 'preparing_context',
+        phaseMessage: 'Reading recent room context',
+        startedAt: turnStartedAt,
+        backend: turnBackend,
+        assistantName: this.displayBackendName(turnBackend),
+        lastHeartbeatAt: turnStartedAt,
+        updatedAt: turnStartedAt,
+      });
+      this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
+      placeholderAnnounced = true;
+      heartbeatTimer = setInterval(() => {
+        void updateTurn({ lastHeartbeatAt: this.now().toISOString() });
+      }, CODE_AGENT_TURN_HEARTBEAT_MS);
+      heartbeatTimer.unref?.();
+      ack({ success: true, messageId: aiMessageId });
+
+      const promptContext = await this.readLatestPromptContext(
+        input.roomId,
+        input.clientId,
+        input.maxContextMessages,
+        input.promptMessageId,
+        input.promptMessage,
+        aiMessageId,
+      );
       if (!promptContext) {
         await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
           errorMessage: 'Workspace requires a text prompt in the room history',
           payload: { reason: 'missing_prompt', mode: turnMode.mode },
         });
-        return ack({ success: false, error: 'Workspace requires a text prompt in the room history' });
+        publicFailureMessage = 'Workspace requires the saved text prompt';
+        throw new Error(publicFailureMessage);
       }
       if (turnBackend === 'codex' && promptContext.imageMessageIds.length > 0) {
         const error = 'Image input requires Codex app-server or Coco';
@@ -307,7 +379,8 @@ export class CodeAgentSessionService {
           errorMessage: error,
           payload: { reason: 'legacy_codex_image_unsupported', backend: turnBackend },
         });
-        return ack({ success: false, error });
+        publicFailureMessage = error;
+        throw new Error(error);
       }
 
       await this.recordTurnEvent('info', 'code_agent.turn.started', input, turnId, turnStartedAtMs, {
@@ -324,9 +397,12 @@ export class CodeAgentSessionService {
         },
       });
 
+      await updatePhase('preparing_sandbox', 'Connecting to the workspace');
+
       const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
       if (!sandbox.ok) {
         const error = this.describeSandboxFailure(sandbox);
+        publicFailureMessage = error;
         await this.recordTurnEvent('warn', 'code_agent.sandbox.ensure_failed', input, turnId, turnStartedAtMs, {
           errorCode: sandbox.reason,
           errorMessage: error,
@@ -336,7 +412,7 @@ export class CodeAgentSessionService {
             sandboxId: sandbox.room?.sandboxId,
           },
         });
-        return ack({ success: false, error });
+        throw new Error(error);
       }
       await this.recordTurnEvent('info', 'code_agent.sandbox.ensure', input, turnId, turnStartedAtMs, {
         payload: {
@@ -356,44 +432,7 @@ export class CodeAgentSessionService {
         input.roomId,
         promptContext.imageMessageIds,
       );
-
-      const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
-      if (!runningRoom) {
-        await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
-          errorCode: 'mark_running_failed',
-          errorMessage: 'Unable to mark Workspace room as running',
-        });
-        return ack({ success: false, error: 'Unable to mark Workspace room as running' });
-      }
-      roomMarkedRunning = true;
-      this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
-
-      const placeholderRoom = await this.store.upsertMessage(aiMessage);
-      if (!placeholderRoom) {
-        const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
-        if (errorRoom) {
-          this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
-        }
-        await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
-          errorCode: 'placeholder_persist_failed',
-          errorMessage: 'Unable to start a durable agent response',
-        });
-        return ack({ success: false, error: 'Unable to start a durable agent response' });
-      }
-      this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
-      const turnStartedAt = new Date(turnStartedAtMs).toISOString();
-      turnRecord = await this.publishRoomAgentTurn({
-        id: turnId,
-        roomId: input.roomId,
-        status: 'running',
-        startedAt: turnStartedAt,
-        backend: turnBackend,
-        assistantName: this.displayBackendName(turnBackend),
-        updatedAt: turnStartedAt,
-      });
-      this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
-      placeholderAnnounced = true;
-      ack({ success: true, messageId: aiMessageId });
+      await updatePhase('starting_agent', 'Starting the agent');
 
       streamState = {
         activeMessageId: aiMessageId,
@@ -472,10 +511,16 @@ export class CodeAgentSessionService {
             runnerClient: this.options.runnerClient || 'jsonl',
           },
         });
+        await updatePhase('running', 'Agent is working');
         return runnerProcess;
       };
       const runnerHandlers = {
         onEvent: async (event: CodeAgentRunnerEvent) => {
+          if (event.type === 'approval_request') {
+            await updatePhase('waiting_approval', event.title);
+          } else if (event.type === 'tool_result' && event.name === 'approval_request') {
+            await updatePhase('running', 'Agent is working');
+          }
           await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
@@ -582,6 +627,8 @@ export class CodeAgentSessionService {
         ? streamState.roomCostTotal || await this.store.readRoomAICost(input.roomId)
         : await this.store.incrementRoomAICost(input.roomId, turnCost || null);
 
+      await updatePhase('completing', 'Saving the result');
+
       const idleRoom = await this.patchRoom(input.roomId, {
         codeAgentStatus: 'idle',
         codeAgentSessionId: runResult.finalEvent.sessionId,
@@ -592,11 +639,13 @@ export class CodeAgentSessionService {
       }
       const turnCompletedAt = this.now().toISOString();
       if (turnRecord) {
-        turnRecord = await this.publishRoomAgentTurn({
-          ...turnRecord,
+        await updateTurn({
           status: 'complete',
+          phase: undefined,
+          phaseMessage: undefined,
           completedAt: turnCompletedAt,
           finalMessageId: finalMessage?.id || streamState.lastMessageId,
+          lastHeartbeatAt: turnCompletedAt,
           updatedAt: turnCompletedAt,
         });
       }
@@ -656,11 +705,13 @@ export class CodeAgentSessionService {
         await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
         if (turnRecord) {
           const turnCompletedAt = this.now().toISOString();
-          turnRecord = await this.publishRoomAgentTurn({
-            ...turnRecord,
+          await updateTurn({
             status: 'error',
+            phase: undefined,
+            phaseMessage: undefined,
             completedAt: turnCompletedAt,
             finalMessageId: errorTargetId,
+            lastHeartbeatAt: turnCompletedAt,
             updatedAt: turnCompletedAt,
           });
         }
@@ -671,10 +722,16 @@ export class CodeAgentSessionService {
         }
       }
       if (!callbackSent) {
-        ack({ success: false, error: `${this.displayBackendName(turnBackend)} task failed` });
+        ack({ success: false, error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed` });
       }
-      return { success: false, messageId: aiMessageId || undefined, error: `${this.displayBackendName(turnBackend)} task failed` };
+      return {
+        success: false,
+        ...(!publicFailureMessage && placeholderAnnounced && aiMessageId ? { messageId: aiMessageId } : {}),
+        error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed`,
+      };
     } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      await turnUpdateChain;
       const active = this.activeTurns.get(input.roomId);
       const isCurrentTurn = active?.turnId === turnId;
       const shouldDrainQueue = Boolean(
@@ -891,7 +948,11 @@ export class CodeAgentSessionService {
       return { success: false, error: 'Interactive approval requires the Codex engine' };
     }
     if (active.clientId !== clientId) {
-      this.logger.info('Code agent approval response from another room member', { roomId, startedBy: active.clientId, requestedBy: clientId, approvalId });
+      const member = await this.store.getRoomMember(roomId, clientId);
+      if (member?.role !== 'owner' && member?.role !== 'admin') {
+        return { success: false, error: 'Only the task starter, room owner, or room admin can respond to this approval' };
+      }
+      this.logger.info('Code agent approval response authorized for room manager', { roomId, startedBy: active.clientId, requestedBy: clientId, approvalId, role: member.role });
     }
     return this.writeActiveControl(roomId, {
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
@@ -1442,13 +1503,18 @@ export class CodeAgentSessionService {
     return 'plan';
   }
 
-  private async readLatestPromptContext(roomId: string, clientId: string, maxContextMessages?: number, promptMessageId?: string) {
-    const messages = await this.store.readMessagesByRoom(roomId);
-    if (promptMessageId) {
-      const index = messages.findIndex(message => message.id === promptMessageId);
-      const message = index >= 0 ? messages[index] : undefined;
+  private async readLatestPromptContext(
+    roomId: string,
+    clientId: string,
+    maxContextMessages?: number,
+    promptMessageId?: string,
+    promptMessage?: Message,
+    contextEndMessageId?: string,
+  ) {
+    const limit = normalizeAIContextMessageLimit(maxContextMessages, MAX_CONTEXT_MESSAGES);
+    if (promptMessageId && promptMessage?.id === promptMessageId) {
+      const message = promptMessage;
       if (
-        !message ||
         message.clientId !== clientId ||
         message.messageType !== 'text' ||
         typeof message.content !== 'string' ||
@@ -1456,16 +1522,20 @@ export class CodeAgentSessionService {
       ) {
         return null;
       }
-      const prior = messages.slice(0, index);
-      const limited = maxContextMessages && maxContextMessages > 0
-        ? prior.slice(-maxContextMessages)
-        : prior;
+      const prior = limit > 0 ? await this.readContextPage(roomId, limit, promptMessageId) : [];
+      const limited = limit > 0
+        ? selectAIHistory(prior, {
+            maxContextMessages: limit,
+            maxContextTokens: MAX_CONTEXT_TOKENS,
+          }).contextMessages
+        : [];
       return {
         prompt: message.content.trim(),
         imageMessageIds: this.normalizePromptImageMessageIds(message.codeAgentImageMessageIds),
         priorMessages: buildCodeAgentPriorMessages(limited),
       };
     }
+    const messages = await this.readContextPage(roomId, Math.max(1, limit), contextEndMessageId);
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
       if (
@@ -1475,9 +1545,12 @@ export class CodeAgentSessionService {
         message.content.trim().length > 0
       ) {
         const prior = messages.slice(0, index);
-        const limited = maxContextMessages && maxContextMessages > 0
-          ? prior.slice(-maxContextMessages)
-          : prior;
+        const limited = limit > 0
+          ? selectAIHistory(prior, {
+              maxContextMessages: limit,
+              maxContextTokens: MAX_CONTEXT_TOKENS,
+            }).contextMessages
+          : [];
         return {
           prompt: message.content.trim(),
           imageMessageIds: this.normalizePromptImageMessageIds(message.codeAgentImageMessageIds),
@@ -1486,6 +1559,17 @@ export class CodeAgentSessionService {
       }
     }
     return null;
+  }
+
+  private async readContextPage(roomId: string, limit: number, beforeMessageId?: string): Promise<Message[]> {
+    if (typeof this.store.readMessagePageByRoom === 'function') {
+      return (await this.store.readMessagePageByRoom(roomId, { limit, beforeMessageId })).messages;
+    }
+    const messages = await this.store.readMessagesByRoom(roomId);
+    const end = beforeMessageId
+      ? Math.max(0, messages.findIndex(message => message.id === beforeMessageId))
+      : messages.length;
+    return messages.slice(Math.max(0, end - limit), end);
   }
 
   private normalizePromptImageMessageIds(value: string[] | undefined): string[] {
@@ -1611,6 +1695,7 @@ export class CodeAgentSessionService {
       clientOrigin: queuedInput.clientOrigin,
       serverOrigin: queuedInput.serverOrigin,
       promptMessageId: claim.message.id,
+      promptMessage: claim.message,
     };
 
     await new Promise<void>(resolve => {

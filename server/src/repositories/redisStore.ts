@@ -1591,7 +1591,15 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         const turns = await this.readRoomAgentTurns(roomId);
         for (const turn of turns) {
           if (turn.status !== 'running') continue;
-          const next = { ...turn, status: 'error' as const, completedAt, updatedAt: completedAt };
+          const next = {
+            ...turn,
+            status: 'error' as const,
+            phase: undefined,
+            phaseMessage: undefined,
+            lastHeartbeatAt: completedAt,
+            completedAt,
+            updatedAt: completedAt,
+          };
           await this.redisClient.hSet(getRoomAgentTurnsKey(roomId), turn.id, JSON.stringify(next));
           updated++;
         }

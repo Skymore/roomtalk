@@ -17,7 +17,7 @@ describe('codexRunSettings', () => {
     assert.deepEqual(normalizeCodexRunSettings('unknown', 'invalid', 'invalid'), {
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
-      permissionMode: 'approveForMe',
+      permissionMode: 'edit',
       serviceTier: 'default',
     });
   });

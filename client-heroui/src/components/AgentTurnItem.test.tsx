@@ -60,7 +60,7 @@ describe('AgentTurnItem', () => {
 
     expect(screen.getAllByTestId('turn-avatar')).toHaveLength(1);
     expect(screen.getByTestId('turn-avatar').getAttribute('data-agent-brand')).toBe('coco');
-    expect(screen.getAllByText(/agentWorkingFor/)).toHaveLength(1);
+    expect(screen.getAllByText(/agentPhaseRunning/)).toHaveLength(1);
     expect(screen.getByText('first update')).toBeTruthy();
     expect(screen.getByText('Reading file')).toBeTruthy();
     expect(screen.getByText('latest update')).toBeTruthy();
@@ -78,6 +78,19 @@ describe('AgentTurnItem', () => {
 
     expect(screen.getByTestId('turn-avatar').getAttribute('data-agent-brand')).toBe('codex');
     expect(screen.getByTestId('turn-avatar').getAttribute('aria-label')).toBe('Codex');
+  });
+
+  it('shows the persisted preparation phase while a turn is starting', () => {
+    render(
+      <AgentTurnItem
+        turn={turn({ status: 'running', completedAt: undefined, phase: 'preparing_sandbox' })}
+        messages={[]}
+        renderAgentMessage={item => <div>{item.content}</div>}
+        renderStandaloneMessage={item => <div>{item.content}</div>}
+      />,
+    );
+
+    expect(screen.getByText(/agentPhasePreparingSandbox/)).toBeTruthy();
   });
 
   it('collapses earlier work after completion and keeps the final message visible', () => {

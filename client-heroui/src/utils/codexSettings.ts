@@ -34,13 +34,13 @@ export interface CodexSpeedOption {
 }
 
 const ROOM_CODEX_SETTINGS_PREFIX = 'roomtalk:codex-settings:';
-const CODEX_SETTINGS_SCHEMA_VERSION = 2;
+const CODEX_SETTINGS_SCHEMA_VERSION = 3;
 const LEGACY_DEFAULT_CODEX_MODEL = 'gpt-5.5';
 const LEGACY_DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'xhigh';
 
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'high';
-export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'approveForMe';
+export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'edit';
 export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
 export const CODEX_MODEL_OPTIONS: CodexModelOption[] = [
@@ -130,7 +130,7 @@ export const codexReasoningLabelKey = (effort: CodexReasoningEffort): string => 
 export const codexPermissionLabelKey = (mode: CodexPermissionMode): string => (
   CODEX_PERMISSION_OPTIONS.find(option => option.id === mode)?.labelKey
   || CODEX_PERMISSION_OPTIONS.find(option => option.id === DEFAULT_CODEX_PERMISSION_MODE)?.labelKey
-  || 'codexPermissionApproveForMe'
+  || 'codexPermissionEdit'
 );
 
 export const defaultCodexRunSettings = (): CodexRunSettings => ({
@@ -188,16 +188,16 @@ export const getStoredRoomCodexSettings = (
     const storedSchemaVersion = isRecord(parsed) && typeof parsed.schemaVersion === 'number'
       ? parsed.schemaVersion
       : 1;
-    if (
-      isRecord(parsed)
-      && storedSchemaVersion < CODEX_SETTINGS_SCHEMA_VERSION
-      && parsed.model === LEGACY_DEFAULT_CODEX_MODEL
-      && parsed.reasoningEffort === LEGACY_DEFAULT_CODEX_REASONING_EFFORT
-    ) {
+    if (isRecord(parsed) && storedSchemaVersion < CODEX_SETTINGS_SCHEMA_VERSION) {
+      const usesLegacyModelDefaults = parsed.model === LEGACY_DEFAULT_CODEX_MODEL
+        && parsed.reasoningEffort === LEGACY_DEFAULT_CODEX_REASONING_EFFORT;
       const migrated = normalizeCodexRunSettings({
         ...parsed,
-        model: DEFAULT_CODEX_MODEL,
-        reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
+        ...(usesLegacyModelDefaults ? {
+          model: DEFAULT_CODEX_MODEL,
+          reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
+        } : {}),
+        ...(parsed.permissionMode === 'approveForMe' ? { permissionMode: 'edit' } : {}),
       }, fallback);
       saveRoomCodexSettings(roomId, migrated);
       return migrated;

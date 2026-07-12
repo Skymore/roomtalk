@@ -1229,6 +1229,8 @@ describe('AI socket handlers', () => {
       maxContextMessages: undefined,
       clientOrigin: 'https://room.ruit.me',
       serverOrigin: 'https://room.ruit.me',
+      promptMessage: store.messages.find(message => message.id === 'message-edited'),
+      promptMessageId: 'message-edited',
     });
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
@@ -1366,6 +1368,8 @@ describe('AI socket handlers', () => {
       maxContextMessages: undefined,
       clientOrigin: 'https://room.ruit.me',
       serverOrigin: 'https://room.ruit.me',
+      promptMessage: store.appendedMessages[0],
+      promptMessageId: store.appendedMessages[0].id,
     });
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     assert.equal(response?.success, true);

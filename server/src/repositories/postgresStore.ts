@@ -168,6 +168,9 @@ type RoomAgentTurnRow = {
   final_message_id: string | null;
   backend: RoomAgentTurn['backend'];
   assistant_name: string;
+  phase: RoomAgentTurn['phase'] | null;
+  phase_message: string | null;
+  last_heartbeat_at: string | Date | null;
   updated_at: string | Date;
 };
 
@@ -221,7 +224,7 @@ const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_typ
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
 const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at';
-const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, updated_at';
+const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at';
 const OUTBOX_EVENT_COLUMNS = 'id, event_type, aggregate_type, aggregate_id, room_id, payload, status, attempts, available_at, locked_at, locked_by, processed_at, last_error, created_at, updated_at';
 const CLAIMED_OUTBOX_EVENT_COLUMNS = 'e.id, e.event_type, e.aggregate_type, e.aggregate_id, e.room_id, e.payload, e.status, e.attempts, e.available_at, e.locked_at, e.locked_by, e.processed_at, e.last_error, e.created_at, e.updated_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
@@ -440,6 +443,9 @@ const mapRoomAgentTurn = (row: RoomAgentTurnRow): RoomAgentTurn => ({
   ...(row.final_message_id ? { finalMessageId: row.final_message_id } : {}),
   backend: row.backend,
   assistantName: row.assistant_name,
+  ...(row.phase ? { phase: row.phase } : {}),
+  ...(row.phase_message ? { phaseMessage: row.phase_message } : {}),
+  ...(row.last_heartbeat_at ? { lastHeartbeatAt: toIsoString(row.last_heartbeat_at) } : {}),
   updatedAt: toIsoString(row.updated_at),
 });
 
@@ -1561,16 +1567,19 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomAgentTurnRow>(
         `INSERT INTO room_agent_turns (${ROOM_AGENT_TURN_COLUMNS})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO UPDATE SET
           status = EXCLUDED.status,
           completed_at = EXCLUDED.completed_at,
           final_message_id = EXCLUDED.final_message_id,
           backend = EXCLUDED.backend,
           assistant_name = EXCLUDED.assistant_name,
+          phase = EXCLUDED.phase,
+          phase_message = EXCLUDED.phase_message,
+          last_heartbeat_at = EXCLUDED.last_heartbeat_at,
           updated_at = EXCLUDED.updated_at
         RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
-        [turn.id, turn.roomId, turn.status, turn.startedAt, turn.completedAt || null, turn.finalMessageId || null, turn.backend, turn.assistantName, turn.updatedAt]
+        [turn.id, turn.roomId, turn.status, turn.startedAt, turn.completedAt || null, turn.finalMessageId || null, turn.backend, turn.assistantName, turn.phase || null, turn.phaseMessage || null, turn.lastHeartbeatAt || null, turn.updatedAt]
       );
       return result.rows[0] ? mapRoomAgentTurn(result.rows[0]) : null;
     } catch (error) {
@@ -1601,7 +1610,7 @@ export class PostgresStore implements DurableRoomStore {
   async failInterruptedRoomAgentTurns(completedAt = new Date().toISOString()): Promise<number> {
     try {
       const result = await this.pool.query(
-        `UPDATE room_agent_turns SET status = 'error', completed_at = $1, updated_at = $1 WHERE status = 'running'`,
+        `UPDATE room_agent_turns SET status = 'error', completed_at = $1, phase = NULL, phase_message = NULL, last_heartbeat_at = $1, updated_at = $1 WHERE status = 'running'`,
         [completedAt]
       );
       return result.rowCount || 0;

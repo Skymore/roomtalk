@@ -1,7 +1,7 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Message, RoomAgentTurn } from '../utils/types';
+import { Message, RoomAgentTurn, RoomAgentTurnPhase } from '../utils/types';
 import { AgentBackendAvatar } from './AgentBackendAvatar';
 
 interface AgentTurnItemProps {
@@ -10,6 +10,15 @@ interface AgentTurnItemProps {
   renderAgentMessage: (message: Message) => React.ReactNode;
   renderStandaloneMessage: (message: Message) => React.ReactNode;
 }
+
+const phaseLabelKeys: Record<RoomAgentTurnPhase, string> = {
+  preparing_context: 'agentPhasePreparingContext',
+  preparing_sandbox: 'agentPhasePreparingSandbox',
+  starting_agent: 'agentPhaseStarting',
+  running: 'agentPhaseRunning',
+  waiting_approval: 'agentPhaseWaitingApproval',
+  completing: 'agentPhaseCompleting',
+};
 
 const timestampMs = (value?: string) => {
   const parsed = Date.parse(value || '');
@@ -52,6 +61,7 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const startedAtMs = timestampMs(turn.startedAt);
   const completedAtMs = timestampMs(turn.completedAt) || Math.max(...ownMessages.map(message => timestampMs(message.timestamp)), startedAtMs);
   const totalDuration = formatAgentTurnDuration((turn.status === 'running' ? now : completedAtMs) - startedAtMs);
+  const activePhaseLabel = turn.phase ? t(phaseLabelKeys[turn.phase]) : t('agentPhaseRunning');
 
   const renderOwnMessage = (message: Message) => (
     <div key={message.id} className="ml-10 max-w-[82%] sm:max-w-[70%]">
@@ -66,7 +76,7 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
       {turn.status === 'running' ? (
         <div className="ml-10 max-w-[82%] sm:max-w-[70%]">
           <div className="mb-1 border-b border-[#dedbd0] px-1 pb-1.5 text-xs text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
-            {t('agentWorkingFor', { duration: totalDuration })}
+            {activePhaseLabel} · {totalDuration}
           </div>
         </div>
       ) : (

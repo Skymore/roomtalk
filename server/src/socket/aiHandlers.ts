@@ -91,6 +91,7 @@ const buildCodeAgentTurnInput = ({
   maxContextMessages,
   socket,
   requestedMode,
+  promptMessage,
 }: {
   roomId: string;
   clientId: string;
@@ -102,6 +103,7 @@ const buildCodeAgentTurnInput = ({
   maxContextMessages?: number;
   socket: SocketConnectionContext['socket'];
   requestedMode?: CodeAgentRunnerMode;
+  promptMessage?: Message;
 }): CodeAgentTurnInput => ({
   roomId,
   clientId,
@@ -112,6 +114,7 @@ const buildCodeAgentTurnInput = ({
   maxContextMessages,
   ...getCodeAgentTurnOriginInput(socket),
   ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
+  ...(promptMessage ? { promptMessage, promptMessageId: promptMessage.id } : {}),
 });
 
 const isPrematureCloseError = (error: unknown): boolean => {
@@ -1151,7 +1154,9 @@ export function registerAIHandlers({
           openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
         }
       } else {
-        historyUsedForContext = await store.readMessagesByRoom(roomId);
+        historyUsedForContext = (await store.readMessagePageByRoom(roomId, {
+          limit: normalizeAIContextMessageLimit(maxContextMessages, MAX_CONTEXT_MESSAGES),
+        })).messages;
       }
 
       const selection = selectAIHistory(historyUsedForContext, {
@@ -2153,6 +2158,7 @@ export function registerAIHandlers({
         codexServiceTier: data.codexServiceTier,
         maxContextMessages: data.maxContextMessages,
         socket,
+        promptMessage: userMessage,
       }), (response) => {
         if (response.success && response.messageId) {
           callback?.({
@@ -2174,7 +2180,9 @@ export function registerAIHandlers({
       return;
     }
 
-    const latestHistory = await store.readMessagesByRoom(data.roomId);
+    const latestHistory = (await store.readMessagePageByRoom(data.roomId, {
+      limit: normalizeAIContextMessageLimit(data.maxContextMessages, MAX_CONTEXT_MESSAGES),
+    })).messages;
     const preparedHistory = latestHistory.some(message => message.id === userMessage.id)
       ? latestHistory
       : [...latestHistory, userMessage];
@@ -2286,6 +2294,7 @@ export function registerAIHandlers({
         maxContextMessages: data.maxContextMessages,
         socket,
         requestedMode,
+        promptMessage: editResult.updatedMessage,
       }), callback);
       return;
     }

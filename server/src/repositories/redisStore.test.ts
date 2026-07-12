@@ -1525,15 +1525,20 @@ describe('RedisStore', () => {
       startedAt: '2026-05-03T00:00:00.000Z',
       backend: 'codex-app-server',
       assistantName: 'Codex',
+      phase: 'preparing_sandbox',
+      phaseMessage: 'Connecting to the workspace',
+      lastHeartbeatAt: '2026-05-03T00:00:00.000Z',
       updatedAt: '2026-05-03T00:00:00.000Z',
     };
 
     assert.deepEqual(await store.upsertRoomAgentTurn(turn), turn);
     assert.deepEqual(await store.readRoomAgentTurns('room-1', ['turn-1']), [turn]);
     assert.equal(await store.failInterruptedRoomAgentTurns('2026-05-03T00:01:00.000Z'), 1);
+    const { phase: _phase, phaseMessage: _phaseMessage, ...turnWithoutPhase } = turn;
     assert.deepEqual(await store.readRoomAgentTurns('room-1'), [{
-      ...turn,
+      ...turnWithoutPhase,
       status: 'error',
+      lastHeartbeatAt: '2026-05-03T00:01:00.000Z',
       completedAt: '2026-05-03T00:01:00.000Z',
       updatedAt: '2026-05-03T00:01:00.000Z',
     }]);

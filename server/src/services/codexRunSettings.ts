@@ -9,7 +9,7 @@ export interface CodexRunSettings {
 
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'high';
-export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'approveForMe';
+export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'edit';
 export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
 const CODEX_MODELS = [

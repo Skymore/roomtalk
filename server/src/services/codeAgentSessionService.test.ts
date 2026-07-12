@@ -238,6 +238,39 @@ class MemoryCodeAgentStore {
   }
 }
 
+class BlockingContextStore extends MemoryCodeAgentStore {
+  contextReadOptions?: { limit?: number; beforeMessageId?: string };
+  private releaseContext!: () => void;
+  private readonly contextBlocked = new Promise<void>(resolve => {
+    this.releaseContext = resolve;
+  });
+  private markContextRead!: () => void;
+  readonly contextReadStarted = new Promise<void>(resolve => {
+    this.markContextRead = resolve;
+  });
+
+  releaseContextRead() {
+    this.releaseContext();
+  }
+
+  async readMessagePageByRoom(roomId: string, options: { limit?: number; beforeMessageId?: string } = {}) {
+    this.contextReadOptions = options;
+    this.markContextRead();
+    await this.contextBlocked;
+    const messages = this.messages.get(roomId) || [];
+    const end = options.beforeMessageId
+      ? Math.max(0, messages.findIndex(message => message.id === options.beforeMessageId))
+      : messages.length;
+    const limit = options.limit || 80;
+    return {
+      roomId,
+      messages: messages.slice(Math.max(0, end - limit), end),
+      historyVersion: messages.length,
+      hasMore: end > limit,
+    };
+  }
+}
+
 const cocoModelStep = (
   sequence: number,
   hasText: boolean,
@@ -693,10 +726,25 @@ describe('CodeAgentSessionService', () => {
     assert.equal(persistedTurn.status, 'complete');
     assert.equal(persistedTurn.finalMessageId, messages[4].id);
     assert.ok(persistedTurn.completedAt);
-    assert.deepEqual(
-      emitter.roomEmits.filter(event => event.event === 'agent_turn_updated').map(event => (event.args[0] as RoomAgentTurn).status),
-      ['running', 'complete'],
-    );
+    const turnUpdates = emitter.roomEmits
+      .filter(event => event.event === 'agent_turn_updated')
+      .map(event => event.args[0] as RoomAgentTurn);
+    assert.deepEqual(turnUpdates.map(turn => turn.phase), [
+      'preparing_context',
+      'preparing_sandbox',
+      'starting_agent',
+      'running',
+      'completing',
+      undefined,
+    ]);
+    assert.deepEqual(turnUpdates.map(turn => turn.status), [
+      'running',
+      'running',
+      'running',
+      'running',
+      'running',
+      'complete',
+    ]);
     assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
     assert.deepEqual(observability.events.map(event => event.event), [
       'code_agent.turn.started',
@@ -775,6 +823,46 @@ describe('CodeAgentSessionService', () => {
       60 * 60 * 1000,
       2 * 60 * 1000,
     ]);
+  });
+
+  it('acknowledges a durable preparing turn before paged context loading completes', async () => {
+    const prompt = userMessage('inspect the latest changes');
+    const store = new BlockingContextStore(room(), [prompt]);
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done',
+        sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
+    ]);
+    const { service } = createService({ store, runner });
+    let resolveAck!: (response: unknown) => void;
+    const acked = new Promise<unknown>(resolve => {
+      resolveAck = resolve;
+    });
+
+    const turn = service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      promptMessageId: prompt.id,
+      promptMessage: prompt,
+    }, resolveAck);
+
+    await store.contextReadStarted;
+    assert.deepEqual(await acked, { success: true, messageId: 'ai-1' });
+    const preparing = [...store.agentTurns.values()][0];
+    assert.equal(preparing.phase, 'preparing_context');
+    assert.ok(preparing.lastHeartbeatAt);
+    assert.deepEqual(store.contextReadOptions, { beforeMessageId: prompt.id, limit: 100 });
+
+    store.releaseContextRead();
+    assert.deepEqual(await turn, { success: true, messageId: 'ai-1' });
   });
 
   it('reuses one sandbox daemon process across sequential turns while passing per-turn env', async () => {
@@ -1369,6 +1457,27 @@ describe('CodeAgentSessionService', () => {
     ]);
   });
 
+  it('uses only the saved prompt when maxContextMessages is zero', async () => {
+    const prompt = { ...userMessage('current prompt'), id: 'user-current' };
+    const store = new MemoryCodeAgentStore(room(), [userMessage('older prompt'), prompt]);
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      maxContextMessages: 0,
+      promptMessageId: prompt.id,
+      promptMessage: prompt,
+    });
+
+    assert.equal(runner.requests[0].prompt, 'current prompt');
+    assert.deepEqual(runner.requests[0].priorMessages, []);
+  });
+
   it('sends all prior messages when maxContextMessages is not set', async () => {
     const initialMessages: Message[] = [
       userMessage('list files'),
@@ -1872,6 +1981,38 @@ describe('CodeAgentSessionService', () => {
 
     runner.release();
     assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
+  });
+
+  it('rejects approval responses from members who did not start the turn', async () => {
+    const runner = new BlockingRunner();
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]);
+    store.addMember('room-1', 'member-1', 'member');
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'codex-app-server',
+      codexBackendEnabled: true,
+      codexConnectionService: {
+        async withCodexAuth(
+          _clientId: string,
+          _runId: string,
+          work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>,
+        ) {
+          const workResult = await work('{"tokens":{"access_token":"test"}}', { authVersion: 1 });
+          return workResult.result;
+        },
+      },
+    });
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+
+    assert.deepEqual(await service.respondToApproval('room-1', 'member-1', 'approval-1', 'accept'), {
+      success: false,
+      error: 'Only the task starter, room owner, or room admin can respond to this approval',
+    });
+
+    runner.release();
+    await active;
   });
 
   it('persists follow-up input and starts it as the next complete turn', async () => {

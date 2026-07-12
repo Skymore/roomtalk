@@ -155,8 +155,17 @@ export const POSTGRES_SCHEMA_SQL = [
     final_message_id TEXT REFERENCES room_messages(id) ON DELETE SET NULL,
     backend TEXT NOT NULL CHECK (backend IN ('code-agent', 'codex', 'codex-app-server')),
     assistant_name TEXT NOT NULL,
+    phase TEXT,
+    phase_message TEXT,
+    last_heartbeat_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL
   )`,
+  `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS phase TEXT`,
+  `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS phase_message TEXT`,
+  `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`,
+  `ALTER TABLE room_agent_turns DROP CONSTRAINT IF EXISTS room_agent_turns_phase_check`,
+  `ALTER TABLE room_agent_turns ADD CONSTRAINT room_agent_turns_phase_check
+    CHECK (phase IS NULL OR phase IN ('preparing_context', 'preparing_sandbox', 'starting_agent', 'running', 'waiting_approval', 'completing'))`,
   `CREATE INDEX IF NOT EXISTS idx_room_agent_turns_room_started
     ON room_agent_turns (room_id, started_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_room_agent_turns_status_updated

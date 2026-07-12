@@ -1222,6 +1222,9 @@ describe('PostgresStore', () => {
       startedAt: '2026-05-03T00:00:00.000Z',
       backend: 'codex-app-server',
       assistantName: 'Codex',
+      phase: 'preparing_sandbox',
+      phaseMessage: 'Connecting to the workspace',
+      lastHeartbeatAt: '2026-05-03T00:00:00.000Z',
       updatedAt: '2026-05-03T00:00:00.000Z',
     };
     const row = {
@@ -1233,6 +1236,9 @@ describe('PostgresStore', () => {
       final_message_id: null,
       backend: turn.backend,
       assistant_name: turn.assistantName,
+      phase: turn.phase,
+      phase_message: turn.phaseMessage,
+      last_heartbeat_at: turn.lastHeartbeatAt,
       updated_at: turn.updatedAt,
     };
     const pool = new ScriptedPool([

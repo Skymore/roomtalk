@@ -140,6 +140,13 @@ export interface Message {
 }
 
 export type RoomAgentTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';
+export type RoomAgentTurnPhase =
+  | 'preparing_context'
+  | 'preparing_sandbox'
+  | 'starting_agent'
+  | 'running'
+  | 'waiting_approval'
+  | 'completing';
 
 export interface RoomAgentTurn {
   id: string;
@@ -150,6 +157,9 @@ export interface RoomAgentTurn {
   finalMessageId?: string;
   backend: CodeAgentBackend;
   assistantName: string;
+  phase?: RoomAgentTurnPhase;
+  phaseMessage?: string;
+  lastHeartbeatAt?: string;
   updatedAt: string;
 }
 

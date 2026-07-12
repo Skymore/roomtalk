@@ -17,7 +17,7 @@ describe('room Codex settings', () => {
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
-      permissionMode: 'approveForMe',
+      permissionMode: 'edit',
       serviceTier: 'default',
     });
   });
@@ -61,7 +61,7 @@ describe('room Codex settings', () => {
     expect(updated).toEqual({
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
-      permissionMode: 'approveForMe',
+      permissionMode: 'edit',
       serviceTier: 'default',
     });
   });
@@ -77,7 +77,7 @@ describe('room Codex settings', () => {
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
-      permissionMode: 'approveForMe',
+      permissionMode: 'edit',
       serviceTier: 'default',
     });
 
