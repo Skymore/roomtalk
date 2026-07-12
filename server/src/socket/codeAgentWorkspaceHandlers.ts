@@ -1,4 +1,5 @@
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
+import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from '../services/codeAgentRoomAccess';
 import { CodeWorkspaceAssetError } from '../services/codeWorkspaceAssetAccess';
 import { CodeWorkspaceFilePreview, CodeWorkspaceFilePreviewService } from '../services/codeWorkspaceFilePreview';
 import {
@@ -17,7 +18,7 @@ import {
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
 import { CodeAgentRunnerApprovalDecision } from '../services/codeAgentRunnerProtocol';
 import { Room } from '../types';
-import { hasRoomAccess } from './roomAccess';
+import { getRoomActor } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
 
 type WorkspaceSnapshotAck = {
@@ -590,7 +591,8 @@ export function registerCodeAgentWorkspaceHandlers({
       return { success: false, error: 'Room ID is required', clientId };
     }
 
-    if (!(await hasRoomAccess(store, roomId, clientId))) {
+    const actor = await getRoomActor(store, roomId, clientId);
+    if (!actor) {
       socketLogger.warn(`Unauthorized ${action}`, { socketId: socket.id, clientId, roomId });
       return { success: false, error: 'You are not authorized to access this room', clientId };
     }
@@ -606,13 +608,20 @@ export function registerCodeAgentWorkspaceHandlers({
       return { success: false, error: access.message || 'Workspace is unavailable', clientId };
     }
 
-    const room = await store.getRoomById(roomId);
-    if (!room) {
-      return { success: false, error: 'Room not found', clientId };
-    }
+    const room = actor.room;
 
     if (room.type !== 'codeAgent') {
       return { success: false, error: 'Code workspaces are only available for Workspace rooms', clientId };
+    }
+    if (!canUseCodeAgentRoom(room, clientId, actor.role)) {
+      socketLogger.warn(`Code workspace ${action} rejected by room access policy`, {
+        socketId: socket.id,
+        clientId,
+        roomId,
+        role: actor.role,
+        requiredAccess: room.codeAgentAccess || 'owner',
+      });
+      return { success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE, clientId };
     }
 
     return { success: true, clientId, room };

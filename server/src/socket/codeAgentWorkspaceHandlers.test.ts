@@ -1129,4 +1129,45 @@ describe('code-agent workspace socket handlers', () => {
 
     assert.deepEqual(response, { success: false, error: 'Workspace is not enabled for this user' });
   });
+
+  it('applies the room code-agent access policy to every workspace handler guard', async () => {
+    const regularMember = member('room-1', 'client-2');
+    regularMember.role = 'member';
+    const ownerOnly = createHarness({
+      clientId: 'client-2',
+      currentRoom: room({ codeAgentAccess: 'owner' }),
+      members: [regularMember],
+    });
+
+    assert.deepEqual(
+      await ownerOnly.socket.invoke('get_code_workspace_snapshot', { roomId: 'room-1' }),
+      { success: false, error: 'You do not have access to this Workspace room' }
+    );
+    assert.deepEqual(
+      await ownerOnly.socket.invoke('write_code_workspace_file', {
+        roomId: 'room-1',
+        path: 'src/App.tsx',
+        content: 'blocked',
+      }),
+      { success: false, error: 'You do not have access to this Workspace room' }
+    );
+
+    const administrator = member('room-1', 'client-2');
+    administrator.role = 'admin';
+    const adminAccess = createHarness({
+      clientId: 'client-2',
+      currentRoom: room({ codeAgentAccess: 'admin' }),
+      members: [administrator],
+    });
+    const adminResponse = await adminAccess.socket.invoke<any>('get_code_workspace_snapshot', { roomId: 'room-1' });
+    assert.equal(adminResponse.success, true);
+
+    const memberAccess = createHarness({
+      clientId: 'client-2',
+      currentRoom: room({ codeAgentAccess: 'member' }),
+      members: [regularMember],
+    });
+    const memberResponse = await memberAccess.socket.invoke<any>('get_code_workspace_snapshot', { roomId: 'room-1' });
+    assert.equal(memberResponse.success, true);
+  });
 });
