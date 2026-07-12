@@ -7,6 +7,7 @@ import { normalizeCodeAgentMode } from '../services/codeAgentModes';
 import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
+import { clearCodeAgentWorkspaceRuntimeState } from './codeAgentWorkspaceHandlers';
 import { SocketConnectionContext } from './types';
 
 const MAX_ROOM_NAME_LENGTH = 20;
@@ -781,6 +782,7 @@ export function registerRoomHandlers({
       });
 
       const cleanupResults = await Promise.allSettled([
+        clearCodeAgentWorkspaceRuntimeState(roomId),
         ...(room.type === 'codeAgent' && room.sandboxId && codeAgentSandboxService
           ? [codeAgentSandboxService.destroy(room.sandboxId)]
           : []),

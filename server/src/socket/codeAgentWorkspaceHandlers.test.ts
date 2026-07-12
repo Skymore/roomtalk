@@ -1,10 +1,14 @@
 import assert from 'assert/strict';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import { CodeAgentWorkspaceChanges, CodeAgentWorkspaceEntry, CodeAgentWorkspacePreviewServer, CodeAgentWorkspaceRef } from '../services/codeAgentSandboxService';
 import { Message, Room, RoomMember } from '../types';
-import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
+import { clearCodeAgentWorkspaceRuntimeState, registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
+
+afterEach(async () => {
+  await clearCodeAgentWorkspaceRuntimeState('room-1');
+});
 
 class FakeSocket {
   id: string;
@@ -746,8 +750,42 @@ describe('code-agent workspace socket handlers', () => {
     });
     assert.equal(closed.success, true);
     assert.equal(closed.session.status, 'closed');
+    assert.deepEqual(closed.sessions, []);
     assert.deepEqual(stoppedWorkspaceTerminals, ['sandbox-1']);
     assert.equal((socketEvents.at(-1)?.payload as any).type, 'closed');
+  });
+
+  it('bounds terminal and preview runtime sessions per room', async () => {
+    const { socket, startWorkspaceTerminalCalls } = createHarness();
+
+    for (let index = 0; index < 8; index++) {
+      const opened = await socket.invoke<any>('open_code_workspace_terminal_session', {
+        roomId: 'room-1',
+        terminalId: `terminal-${index}`,
+      });
+      assert.equal(opened.success, true);
+    }
+    assert.deepEqual(
+      await socket.invoke('open_code_workspace_terminal_session', {
+        roomId: 'room-1',
+        terminalId: 'terminal-over-limit',
+      }),
+      { success: false, error: 'Workspace terminal session limit reached' }
+    );
+    assert.equal(startWorkspaceTerminalCalls.length, 8);
+
+    for (let index = 0; index < 21; index++) {
+      const opened = await socket.invoke<any>('open_code_workspace_preview_session', {
+        roomId: 'room-1',
+        tabId: `preview-${index}`,
+        url: `https://preview.example/${index}`,
+      });
+      assert.equal(opened.success, true);
+    }
+    const previews = await socket.invoke<any>('list_code_workspace_preview_sessions', { roomId: 'room-1' });
+    assert.equal(previews.sessions.length, 20);
+    assert.equal(previews.sessions.some((session: any) => session.tabId === 'preview-0'), false);
+    assert.equal(previews.sessions.some((session: any) => session.tabId === 'preview-20'), true);
   });
 
   it('ensures the latest workspace sandbox before opening a terminal', async () => {

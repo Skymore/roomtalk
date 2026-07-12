@@ -201,6 +201,10 @@ const TERMINAL_ID_MAX_LENGTH = 128;
 const TERMINAL_INPUT_MAX_LENGTH = 64 * 1024;
 const TERMINAL_INPUT_ACCESS_CACHE_MS = 2_000;
 const TERMINAL_OUTPUT_TAIL_MAX_LENGTH = 200 * 1024;
+const WORKSPACE_PREVIEW_SESSION_LIMIT = 20;
+const WORKSPACE_PREVIEW_HISTORY_LIMIT = 100;
+const WORKSPACE_TERMINAL_SESSION_LIMIT = 8;
+const WORKSPACE_RUNTIME_IDLE_TTL_MS = 30 * 60 * 1000;
 const TERMINAL_MIN_COLS = 20;
 const TERMINAL_MAX_COLS = 500;
 const TERMINAL_MIN_ROWS = 4;
@@ -211,6 +215,7 @@ const FILL_PREVIEW_VIEWPORT: WorkspacePreviewViewportSetting = { _tag: 'fill' };
 const workspacePreviewSessionsByRoomId = new Map<string, Map<string, WorkspacePreviewSessionSnapshot>>();
 const workspacePreviewHistoryByRoomAndTabId = new Map<string, string[]>();
 const workspaceTerminalSessionsByRoomId = new Map<string, Map<string, WorkspaceTerminalRuntime>>();
+const workspaceRuntimeSandboxIdByRoomId = new Map<string, string>();
 const workspaceTerminalInputQueues = new WeakMap<CodeAgentWorkspaceTerminal, Promise<void>>();
 
 const enqueueTerminalInput = async (terminal: CodeAgentWorkspaceTerminal, data: string): Promise<void> => {
@@ -223,6 +228,36 @@ const enqueueTerminalInput = async (terminal: CodeAgentWorkspaceTerminal, data: 
     if (workspaceTerminalInputQueues.get(terminal) === next) {
       workspaceTerminalInputQueues.delete(terminal);
     }
+  }
+};
+
+export const clearCodeAgentWorkspaceRuntimeState = async (roomId: string): Promise<void> => {
+  const terminalSessions = workspaceTerminalSessionsByRoomId.get(roomId);
+  workspaceTerminalSessionsByRoomId.delete(roomId);
+  workspacePreviewSessionsByRoomId.delete(roomId);
+  workspaceRuntimeSandboxIdByRoomId.delete(roomId);
+  for (const key of workspacePreviewHistoryByRoomAndTabId.keys()) {
+    if (key.startsWith(`${roomId}\u0000`)) {
+      workspacePreviewHistoryByRoomAndTabId.delete(key);
+    }
+  }
+  if (terminalSessions) {
+    await Promise.allSettled(
+      [...terminalSessions.values()]
+        .filter(session => session.status === 'running')
+        .map(session => session.terminal.stop())
+    );
+  }
+};
+
+const reconcileCodeAgentWorkspaceRuntime = async (room: Room): Promise<void> => {
+  const sandboxId = room.sandboxId || '';
+  const previousSandboxId = workspaceRuntimeSandboxIdByRoomId.get(room.id);
+  if (previousSandboxId && previousSandboxId !== sandboxId) {
+    await clearCodeAgentWorkspaceRuntimeState(room.id);
+  }
+  if (sandboxId) {
+    workspaceRuntimeSandboxIdByRoomId.set(room.id, sandboxId);
   }
 };
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
@@ -522,13 +557,16 @@ const rememberPreviewHistory = (
   const key = previewHistoryKey(roomId, tabId);
   const current = workspacePreviewHistoryByRoomAndTabId.get(key) || [];
   if (mode === 'replace' && current.length > 0) {
-    workspacePreviewHistoryByRoomAndTabId.set(key, [...current.slice(0, -1), url]);
+    workspacePreviewHistoryByRoomAndTabId.set(
+      key,
+      [...current.slice(0, -1), url].slice(-WORKSPACE_PREVIEW_HISTORY_LIMIT)
+    );
     return;
   }
   if (current[current.length - 1] === url) {
     return;
   }
-  workspacePreviewHistoryByRoomAndTabId.set(key, [...current, url]);
+  workspacePreviewHistoryByRoomAndTabId.set(key, [...current, url].slice(-WORKSPACE_PREVIEW_HISTORY_LIMIT));
 };
 
 const parseWorkspaceDiffScope = (payload: unknown): CodeAgentWorkspaceDiffScope => {
@@ -623,6 +661,8 @@ export function registerCodeAgentWorkspaceHandlers({
       });
       return { success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE, clientId };
     }
+
+    await reconcileCodeAgentWorkspaceRuntime(room);
 
     return { success: true, clientId, room };
   };
@@ -922,6 +962,21 @@ export function registerCodeAgentWorkspaceHandlers({
     return sessions;
   };
 
+  const prunePreviewSessions = (roomId: string, nowMs = Date.now()) => {
+    const sessions = workspacePreviewSessionsByRoomId.get(roomId);
+    if (!sessions) return;
+    const cutoff = nowMs - WORKSPACE_RUNTIME_IDLE_TTL_MS;
+    for (const [tabId, session] of sessions) {
+      if (Date.parse(session.updatedAt) <= cutoff) {
+        sessions.delete(tabId);
+        workspacePreviewHistoryByRoomAndTabId.delete(previewHistoryKey(roomId, tabId));
+      }
+    }
+    if (sessions.size === 0) {
+      workspacePreviewSessionsByRoomId.delete(roomId);
+    }
+  };
+
   const emitPreviewEvent = (event: WorkspacePreviewEvent) => {
     io.to(event.roomId).emit('code_workspace_preview_event', event);
   };
@@ -934,6 +989,22 @@ export function registerCodeAgentWorkspaceHandlers({
     const sessions = new Map<string, WorkspaceTerminalRuntime>();
     workspaceTerminalSessionsByRoomId.set(roomId, sessions);
     return sessions;
+  };
+
+  const pruneTerminalSessions = async (roomId: string, nowMs = Date.now()) => {
+    const sessions = workspaceTerminalSessionsByRoomId.get(roomId);
+    if (!sessions) return;
+    const cutoff = nowMs - WORKSPACE_RUNTIME_IDLE_TTL_MS;
+    const stale = [...sessions.entries()].filter(([, session]) => Date.parse(session.updatedAt) <= cutoff);
+    await Promise.allSettled(stale
+      .filter(([, session]) => session.status === 'running')
+      .map(([, session]) => session.terminal.stop()));
+    for (const [terminalId] of stale) {
+      sessions.delete(terminalId);
+    }
+    if (sessions.size === 0) {
+      workspaceTerminalSessionsByRoomId.delete(roomId);
+    }
   };
 
   const terminalSnapshot = (session: WorkspaceTerminalRuntime): WorkspaceTerminalSessionSnapshot => ({
@@ -966,7 +1037,22 @@ export function registerCodeAgentWorkspaceHandlers({
     snapshot: WorkspacePreviewSessionSnapshot,
     eventType: WorkspacePreviewEvent['type'],
   ) => {
+    prunePreviewSessions(roomId);
     const sessions = getPreviewSessionsForRoom(roomId);
+    if (!sessions.has(tabId) && sessions.size >= WORKSPACE_PREVIEW_SESSION_LIMIT) {
+      const oldest = [...sessions.entries()]
+        .sort((left, right) => Date.parse(left[1].updatedAt) - Date.parse(right[1].updatedAt))[0];
+      if (oldest) {
+        sessions.delete(oldest[0]);
+        workspacePreviewHistoryByRoomAndTabId.delete(previewHistoryKey(roomId, oldest[0]));
+        emitPreviewEvent({
+          type: 'closed',
+          roomId,
+          tabId: oldest[0],
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
     const nextSnapshot = snapshotWithHistoryState(snapshot);
     sessions.set(tabId, nextSnapshot);
     emitPreviewEvent({
@@ -1191,6 +1277,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: access.error });
         return;
       }
+      prunePreviewSessions(access.room.id);
       callback?.({
         success: true,
         sessions: [...getPreviewSessionsForRoom(access.room.id).values()],
@@ -1323,12 +1410,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace terminal is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room, access.clientId);
-      if (!workspace.success) {
-        callback?.({ success: false, error: workspace.error });
-        return;
-      }
-
+      await pruneTerminalSessions(access.room.id);
       const sessions = getTerminalSessionsForRoom(access.room.id);
       const existing = sessions.get(terminalId);
       if (existing && existing.status === 'running') {
@@ -1343,6 +1425,15 @@ export function registerCodeAgentWorkspaceHandlers({
           sessions.set(terminalId, resized);
         }
         callback?.({ success: true, session: terminalSnapshot(sessions.get(terminalId)!) });
+        return;
+      }
+      if (sessions.size >= WORKSPACE_TERMINAL_SESSION_LIMIT) {
+        callback?.({ success: false, error: 'Workspace terminal session limit reached' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
         return;
       }
 
@@ -1503,7 +1594,10 @@ export function registerCodeAgentWorkspaceHandlers({
         status: 'closed' as const,
         updatedAt: new Date().toISOString(),
       };
-      sessions.set(terminalId, next);
+      sessions.delete(terminalId);
+      if (sessions.size === 0) {
+        workspaceTerminalSessionsByRoomId.delete(access.room.id);
+      }
       const snapshot = terminalSnapshot(next);
       emitTerminalEvent({
         type: 'closed',
@@ -1530,6 +1624,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: access.error });
         return;
       }
+      await pruneTerminalSessions(access.room.id);
       callback?.({
         success: true,
         sessions: [...getTerminalSessionsForRoom(access.room.id).values()].map(terminalSnapshot),
