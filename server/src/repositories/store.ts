@@ -21,6 +21,14 @@ export interface CodeAgentQueueClaimResult {
   message: Message;
 }
 
+export interface CodeAgentRoomLease {
+  roomId: string;
+  turnId: string;
+  ownerId: string;
+  fence: number;
+  expiresAt: string;
+}
+
 export interface CodeAgentQueueMessageUpdate {
   expectedState: CodeAgentQueueState;
   queuedInput: CodeAgentQueuedInput | null;
@@ -283,6 +291,9 @@ export interface DurableRoomStore {
   upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
   readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
   failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
+  acquireCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
+  renewCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
+  releaseCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string): Promise<boolean>;
   saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
   replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset): Promise<MessageUpdateResult | null>;
   getMediaAsset(assetId: string): Promise<MediaAsset | null>;
@@ -582,6 +593,18 @@ export class CompositeRoomStore implements RoomStore {
 
   failInterruptedRoomAgentTurns(completedAt?: string) {
     return this.durableStore.failInterruptedRoomAgentTurns?.(completedAt) || Promise.resolve(0);
+  }
+
+  acquireCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
+    return this.durableStore.acquireCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
+  }
+
+  renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
+    return this.durableStore.renewCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
+  }
+
+  releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string) {
+    return this.durableStore.releaseCodeAgentRoomLease?.(roomId, turnId, ownerId) || Promise.resolve(false);
   }
 
   saveMediaAsset(asset: MediaAsset) {

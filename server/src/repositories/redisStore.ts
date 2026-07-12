@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -24,6 +24,8 @@ const AUDIO_TRANSCRIPTIONS_KEY = 'audio_transcriptions';
 const ASSISTANT_RUNS_KEY = 'assistant_runs';
 const ROOM_AGENT_TURN_ROOMS_KEY = 'room_agent_turn_rooms';
 const getRoomAgentTurnsKey = (roomId: string) => `room:${roomId}:agent_turns`;
+const getCodeAgentRoomLeaseKey = (roomId: string) => `room:${roomId}:agent_lease`;
+const getCodeAgentRoomLeaseFenceKey = (roomId: string) => `room:${roomId}:agent_lease_fence`;
 const OUTBOX_EVENTS_KEY = 'outbox_events';
 const OUTBOX_EVENTS_BY_AVAILABLE_KEY = 'outbox_events_by_available';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
@@ -715,6 +717,60 @@ end
 return { 1, found, roomJson, claimedPayload }
 `;
 
+const ACQUIRE_CODE_AGENT_ROOM_LEASE_SCRIPT = `
+-- ACQUIRE_CODE_AGENT_ROOM_LEASE
+local currentJson = redis.call('GET', KEYS[1])
+local nowMs = tonumber(ARGV[4])
+local ttlMs = tonumber(ARGV[5])
+if currentJson then
+  local ok, current = pcall(cjson.decode, currentJson)
+  if ok and tonumber(current['expiresAtMs']) > nowMs then
+    return ''
+  end
+end
+local fence = redis.call('INCR', KEYS[2])
+local lease = {
+  roomId = ARGV[1],
+  turnId = ARGV[2],
+  ownerId = ARGV[3],
+  fence = fence,
+  expiresAtMs = nowMs + ttlMs
+}
+local encoded = cjson.encode(lease)
+redis.call('SET', KEYS[1], encoded, 'PX', ttlMs)
+return encoded
+`;
+
+const RENEW_CODE_AGENT_ROOM_LEASE_SCRIPT = `
+-- RENEW_CODE_AGENT_ROOM_LEASE
+local currentJson = redis.call('GET', KEYS[1])
+if not currentJson then return '' end
+local ok, current = pcall(cjson.decode, currentJson)
+if not ok then return '' end
+local nowMs = tonumber(ARGV[4])
+local ttlMs = tonumber(ARGV[5])
+if current['roomId'] ~= ARGV[1] or current['turnId'] ~= ARGV[2] or current['ownerId'] ~= ARGV[3] then
+  return ''
+end
+if tonumber(current['expiresAtMs']) <= nowMs then return '' end
+current['expiresAtMs'] = nowMs + ttlMs
+local encoded = cjson.encode(current)
+redis.call('SET', KEYS[1], encoded, 'PX', ttlMs)
+return encoded
+`;
+
+const RELEASE_CODE_AGENT_ROOM_LEASE_SCRIPT = `
+-- RELEASE_CODE_AGENT_ROOM_LEASE
+local currentJson = redis.call('GET', KEYS[1])
+if not currentJson then return 0 end
+local ok, current = pcall(cjson.decode, currentJson)
+if not ok then return 0 end
+if current['roomId'] ~= ARGV[1] or current['turnId'] ~= ARGV[2] or current['ownerId'] ~= ARGV[3] then
+  return 0
+end
+return redis.call('DEL', KEYS[1])
+`;
+
 const DELETE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -950,6 +1006,33 @@ const parseScriptMessage = (value: unknown): Message | undefined => {
     return stripAIStreamRecoveryMetadata(JSON.parse(value) as Message);
   } catch {
     return undefined;
+  }
+};
+
+const parseCodeAgentRoomLease = (value: unknown): CodeAgentRoomLease | null => {
+  if (typeof value !== 'string' || !value) {
+    return null;
+  }
+  try {
+    const lease = JSON.parse(value) as Partial<CodeAgentRoomLease> & { expiresAtMs?: number };
+    if (
+      typeof lease.roomId !== 'string' ||
+      typeof lease.turnId !== 'string' ||
+      typeof lease.ownerId !== 'string' ||
+      !Number.isFinite(lease.fence) ||
+      !Number.isFinite(lease.expiresAtMs)
+    ) {
+      return null;
+    }
+    return {
+      roomId: lease.roomId,
+      turnId: lease.turnId,
+      ownerId: lease.ownerId,
+      fence: Number(lease.fence),
+      expiresAt: new Date(Number(lease.expiresAtMs)).toISOString(),
+    };
+  } catch {
+    return null;
   }
 };
 
@@ -1608,6 +1691,57 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error recovering interrupted Redis room agent turns', { error });
       return 0;
+    }
+  }
+
+  async acquireCodeAgentRoomLease(
+    roomId: string,
+    turnId: string,
+    ownerId: string,
+    now: string,
+    ttlMs: number
+  ): Promise<CodeAgentRoomLease | null> {
+    try {
+      const result = await (this.redisClient as any).eval(ACQUIRE_CODE_AGENT_ROOM_LEASE_SCRIPT, {
+        keys: [getCodeAgentRoomLeaseKey(roomId), getCodeAgentRoomLeaseFenceKey(roomId)],
+        arguments: [roomId, turnId, ownerId, String(Date.parse(now)), String(ttlMs)],
+      });
+      return parseCodeAgentRoomLease(result);
+    } catch (error) {
+      this.logger.error('Error acquiring Redis code-agent room lease', { error, roomId, turnId, ownerId });
+      return null;
+    }
+  }
+
+  async renewCodeAgentRoomLease(
+    roomId: string,
+    turnId: string,
+    ownerId: string,
+    now: string,
+    ttlMs: number
+  ): Promise<CodeAgentRoomLease | null> {
+    try {
+      const result = await (this.redisClient as any).eval(RENEW_CODE_AGENT_ROOM_LEASE_SCRIPT, {
+        keys: [getCodeAgentRoomLeaseKey(roomId)],
+        arguments: [roomId, turnId, ownerId, String(Date.parse(now)), String(ttlMs)],
+      });
+      return parseCodeAgentRoomLease(result);
+    } catch (error) {
+      this.logger.error('Error renewing Redis code-agent room lease', { error, roomId, turnId, ownerId });
+      return null;
+    }
+  }
+
+  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string): Promise<boolean> {
+    try {
+      const result = await (this.redisClient as any).eval(RELEASE_CODE_AGENT_ROOM_LEASE_SCRIPT, {
+        keys: [getCodeAgentRoomLeaseKey(roomId)],
+        arguments: [roomId, turnId, ownerId],
+      });
+      return Number(result) === 1;
+    } catch (error) {
+      this.logger.error('Error releasing Redis code-agent room lease', { error, roomId, turnId, ownerId });
+      return false;
     }
   }
 
@@ -3041,6 +3175,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.hDel('rooms', roomId),
         this.redisClient.del(`room:${roomId}:messages`),
         this.redisClient.del(getRoomAgentTurnsKey(roomId)),
+        this.redisClient.del(getCodeAgentRoomLeaseKey(roomId)),
+        this.redisClient.del(getCodeAgentRoomLeaseFenceKey(roomId)),
         this.redisClient.sRem(ROOM_AGENT_TURN_ROOMS_KEY, roomId),
         this.redisClient.del(getRoomClientMessageIdsKey(roomId)),
         this.redisClient.del(this.getRoomMessagesCacheKey(roomId)),

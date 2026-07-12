@@ -200,6 +200,49 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('ACQUIRE_CODE_AGENT_ROOM_LEASE')) {
+      const [roomId, turnId, ownerId, nowRaw, ttlRaw] = options.arguments;
+      const nowMs = Number(nowRaw);
+      const currentRaw = this.strings.get(options.keys[0]);
+      if (currentRaw && Number(JSON.parse(currentRaw).expiresAtMs) > nowMs) {
+        return '';
+      }
+      const fence = Number(this.strings.get(options.keys[1]) || '0') + 1;
+      this.strings.set(options.keys[1], String(fence));
+      const encoded = JSON.stringify({ roomId, turnId, ownerId, fence, expiresAtMs: nowMs + Number(ttlRaw) });
+      this.strings.set(options.keys[0], encoded);
+      return encoded;
+    }
+
+    if (script.includes('RENEW_CODE_AGENT_ROOM_LEASE')) {
+      const [roomId, turnId, ownerId, nowRaw, ttlRaw] = options.arguments;
+      const currentRaw = this.strings.get(options.keys[0]);
+      if (!currentRaw) return '';
+      const current = JSON.parse(currentRaw);
+      const nowMs = Number(nowRaw);
+      if (
+        current.roomId !== roomId ||
+        current.turnId !== turnId ||
+        current.ownerId !== ownerId ||
+        Number(current.expiresAtMs) <= nowMs
+      ) {
+        return '';
+      }
+      const encoded = JSON.stringify({ ...current, expiresAtMs: nowMs + Number(ttlRaw) });
+      this.strings.set(options.keys[0], encoded);
+      return encoded;
+    }
+
+    if (script.includes('RELEASE_CODE_AGENT_ROOM_LEASE')) {
+      const [roomId, turnId, ownerId] = options.arguments;
+      const currentRaw = this.strings.get(options.keys[0]);
+      if (!currentRaw) return 0;
+      const current = JSON.parse(currentRaw);
+      if (current.roomId !== roomId || current.turnId !== turnId || current.ownerId !== ownerId) return 0;
+      this.strings.delete(options.keys[0]);
+      return 1;
+    }
+
     // WRITE_ROOM_RECORD_SCRIPT:原子写房间 + roomVersion 以存储值为准自增
     if (script.includes('local incomingJson')) {
       const [roomId, incomingJson] = options.arguments;
@@ -1542,5 +1585,46 @@ describe('RedisStore', () => {
       completedAt: '2026-05-03T00:01:00.000Z',
       updatedAt: '2026-05-03T00:01:00.000Z',
     }]);
+  });
+
+  it('serializes room agent leases with fencing and ownership checks', async () => {
+    const { store } = createStore();
+    const acquired = await store.acquireCodeAgentRoomLease(
+      'room-1',
+      'turn-1',
+      'worker-1',
+      '2026-05-03T00:00:00.000Z',
+      60_000
+    );
+    assert.deepEqual(acquired, {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      ownerId: 'worker-1',
+      fence: 1,
+      expiresAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.equal(await store.acquireCodeAgentRoomLease(
+      'room-1',
+      'turn-2',
+      'worker-2',
+      '2026-05-03T00:00:30.000Z',
+      60_000
+    ), null);
+    assert.equal(await store.renewCodeAgentRoomLease(
+      'room-1',
+      'turn-1',
+      'worker-2',
+      '2026-05-03T00:00:30.000Z',
+      60_000
+    ), null);
+    assert.equal((await store.renewCodeAgentRoomLease(
+      'room-1',
+      'turn-1',
+      'worker-1',
+      '2026-05-03T00:00:30.000Z',
+      60_000
+    ))?.expiresAt, '2026-05-03T00:01:30.000Z');
+    assert.equal(await store.releaseCodeAgentRoomLease('room-1', 'turn-1', 'worker-2'), false);
+    assert.equal(await store.releaseCodeAgentRoomLease('room-1', 'turn-1', 'worker-1'), true);
   });
 });

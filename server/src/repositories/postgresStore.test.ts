@@ -1245,11 +1245,31 @@ describe('PostgresStore', () => {
       { rows: [row], assertCall: call => assert.match(call.sql, /INSERT INTO room_agent_turns/) },
       { rows: [row], assertCall: call => assert.match(call.sql, /FROM room_agent_turns WHERE room_id/) },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /status = 'error'/) },
+      {
+        rows: [{ room_id: 'room-1', turn_id: 'turn-1', owner_id: 'worker-1', fence: '1', expires_at: '2026-05-03T00:01:00.000Z' }],
+        assertCall: call => assert.match(call.sql, /INSERT INTO code_agent_room_leases/),
+      },
+      { rows: [], assertCall: call => assert.match(call.sql, /ON CONFLICT \(room_id\)/) },
+      {
+        rows: [{ room_id: 'room-1', turn_id: 'turn-1', owner_id: 'worker-1', fence: '1', expires_at: '2026-05-03T00:01:30.000Z' }],
+        assertCall: call => assert.match(call.sql, /UPDATE code_agent_room_leases/),
+      },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM code_agent_room_leases/) },
     ]);
     const store = new PostgresStore(pool, logger as any);
 
     assert.deepEqual(await store.upsertRoomAgentTurn(turn), turn);
     assert.deepEqual(await store.readRoomAgentTurns('room-1', ['turn-1']), [turn]);
     assert.equal(await store.failInterruptedRoomAgentTurns('2026-05-03T00:01:00.000Z'), 1);
+    assert.equal((await store.acquireCodeAgentRoomLease(
+      'room-1', 'turn-1', 'worker-1', '2026-05-03T00:00:00.000Z', 60_000
+    ))?.fence, 1);
+    assert.equal(await store.acquireCodeAgentRoomLease(
+      'room-1', 'turn-2', 'worker-2', '2026-05-03T00:00:30.000Z', 60_000
+    ), null);
+    assert.equal((await store.renewCodeAgentRoomLease(
+      'room-1', 'turn-1', 'worker-1', '2026-05-03T00:00:30.000Z', 60_000
+    ))?.expiresAt, '2026-05-03T00:01:30.000Z');
+    assert.equal(await store.releaseCodeAgentRoomLease('room-1', 'turn-1', 'worker-1'), true);
   });
 });

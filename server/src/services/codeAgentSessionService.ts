@@ -104,6 +104,8 @@ export interface CodeAgentSessionServiceOptions {
   observability?: ObservabilityEventRecorder;
   mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
   aiStreamOwnerId?: string;
+  leaseOwnerId?: string;
+  roomLeaseTtlMs?: number;
   now?: () => Date;
   createId?: () => string;
 }
@@ -142,6 +144,7 @@ interface ActiveCodeAgentTurn {
   clientId: string;
   turnId: string;
   backend: CodeAgentBackend;
+  leaseFence: number;
   sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
   interruptedByUser: boolean;
@@ -155,6 +158,7 @@ const CODE_AGENT_TURN_HEARTBEAT_MS = Math.max(
   5_000,
   Number.parseInt(process.env.CODE_AGENT_TURN_HEARTBEAT_MS || '15000', 10) || 15_000,
 );
+const DEFAULT_CODE_AGENT_ROOM_LEASE_TTL_MS = Math.max(60_000, CODE_AGENT_TURN_HEARTBEAT_MS * 4);
 
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
@@ -182,6 +186,8 @@ export class CodeAgentSessionService {
   private readonly queueDrains = new Set<string>();
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly leaseOwnerId: string;
+  private readonly roomLeaseTtlMs: number;
 
   private static readonly MAX_TURN_IMAGE_BYTES = 5 * 1024 * 1024;
   private static readonly TURN_IMAGE_URL_TTL_SECONDS = 2 * 60 * 60;
@@ -204,6 +210,8 @@ export class CodeAgentSessionService {
   ) {
     this.now = options.now || (() => new Date());
     this.createId = options.createId || (() => uuidv4());
+    this.leaseOwnerId = options.leaseOwnerId || options.aiStreamOwnerId || uuidv4();
+    this.roomLeaseTtlMs = Math.max(30_000, options.roomLeaseTtlMs || DEFAULT_CODE_AGENT_ROOM_LEASE_TTL_MS);
   }
 
   async startTurn(input: CodeAgentTurnInput, callback?: CodeAgentTurnAckCallback): Promise<CodeAgentTurnAck> {
@@ -276,6 +284,9 @@ export class CodeAgentSessionService {
     let turnRecord: RoomAgentTurn | null = null;
     let publicFailureMessage: string | undefined;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    let roomLeaseFence: number | undefined;
+    let leaseLost = false;
+    let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
     const updateTurn = (patch: Partial<RoomAgentTurn>) => {
       turnUpdateChain = turnUpdateChain.then(async () => {
@@ -300,11 +311,23 @@ export class CodeAgentSessionService {
     try {
       aiMessageId = this.createId();
       turnId = this.createId();
+      const roomLease = await this.store.acquireCodeAgentRoomLease?.(
+        input.roomId,
+        turnId,
+        this.leaseOwnerId,
+        this.now().toISOString(),
+        this.roomLeaseTtlMs
+      );
+      if (!roomLease) {
+        return rejectTurn('An agent task is already running in this workspace', { reason: 'room_lease_unavailable' });
+      }
+      roomLeaseFence = roomLease.fence;
       this.activeTurns.set(input.roomId, {
         roomId: input.roomId,
         clientId: input.clientId,
         turnId,
         backend: turnBackend,
+        leaseFence: roomLease.fence,
         interruptedByUser: false,
         pendingControls: new Map(),
       });
@@ -353,6 +376,31 @@ export class CodeAgentSessionService {
       placeholderAnnounced = true;
       heartbeatTimer = setInterval(() => {
         void updateTurn({ lastHeartbeatAt: this.now().toISOString() });
+        leaseRenewalChain = leaseRenewalChain.then(async () => {
+          if (leaseLost) return;
+          const renewed = await this.store.renewCodeAgentRoomLease?.(
+            input.roomId,
+            turnId,
+            this.leaseOwnerId,
+            this.now().toISOString(),
+            this.roomLeaseTtlMs
+          );
+          if (renewed) return;
+          leaseLost = true;
+          publicFailureMessage = 'Workspace agent lease was lost';
+          this.logger.error('Code-agent room lease was lost during an active turn', {
+            roomId: input.roomId,
+            turnId,
+            leaseOwnerId: this.leaseOwnerId,
+            leaseFence: roomLeaseFence,
+          });
+          const active = this.activeTurns.get(input.roomId);
+          if (active?.turnId === turnId && active.process) {
+            await this.stopRunnerProcess(active.process, input.roomId);
+          }
+        }).catch(error => {
+          this.logger.error('Failed to renew code-agent room lease', { error, roomId: input.roomId, turnId });
+        });
       }, CODE_AGENT_TURN_HEARTBEAT_MS);
       heartbeatTimer.unref?.();
       ack({ success: true, messageId: aiMessageId });
@@ -486,6 +534,9 @@ export class CodeAgentSessionService {
         ...(turnImages.length > 0 ? { images: turnImages } : {}),
       };
       const startRunnerProcess = async (env: Record<string, string>) => {
+        if (leaseLost) {
+          throw new Error('Workspace agent lease was lost before the runner started');
+        }
         const command = this.runnerCommandForBackend(turnBackend);
         if (this.options.runnerClient === 'daemon') {
           runnerProcess = await this.startDaemonProcess(turnSandbox!, env);
@@ -731,6 +782,7 @@ export class CodeAgentSessionService {
       };
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      await leaseRenewalChain;
       await turnUpdateChain;
       const active = this.activeTurns.get(input.roomId);
       const isCurrentTurn = active?.turnId === turnId;
@@ -748,6 +800,9 @@ export class CodeAgentSessionService {
       if (isCurrentTurn) {
         this.rejectPendingControls(active, 'The target turn is no longer active');
         this.activeTurns.delete(input.roomId);
+      }
+      if (roomLeaseFence !== undefined) {
+        await this.store.releaseCodeAgentRoomLease?.(input.roomId, turnId, this.leaseOwnerId);
       }
       if (shouldDrainQueue) {
         this.scheduleQueuedTurn(input.roomId);

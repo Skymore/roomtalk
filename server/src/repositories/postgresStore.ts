@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -88,6 +88,14 @@ type RoomMemberRow = {
   client_id: string;
   role: RoomMemberRole;
   joined_at: string | Date;
+};
+
+type CodeAgentRoomLeaseRow = {
+  room_id: string;
+  turn_id: string;
+  owner_id: string;
+  fence: number | string;
+  expires_at: string | Date;
 };
 
 type MediaAssetRow = {
@@ -335,6 +343,14 @@ const mapRoomMember = (row: RoomMemberRow): RoomMember => ({
   clientId: row.client_id,
   role: row.role,
   joinedAt: toIsoString(row.joined_at),
+});
+
+const mapCodeAgentRoomLease = (row: CodeAgentRoomLeaseRow): CodeAgentRoomLease => ({
+  roomId: row.room_id,
+  turnId: row.turn_id,
+  ownerId: row.owner_id,
+  fence: Number(row.fence),
+  expiresAt: toIsoString(row.expires_at),
 });
 
 const toOptionalNumber = (value: number | string | null): number | undefined => {
@@ -1617,6 +1633,69 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error recovering interrupted PostgreSQL room agent turns', { error });
       return 0;
+    }
+  }
+
+  async acquireCodeAgentRoomLease(
+    roomId: string,
+    turnId: string,
+    ownerId: string,
+    now: string,
+    ttlMs: number
+  ): Promise<CodeAgentRoomLease | null> {
+    try {
+      const result = await this.pool.query<CodeAgentRoomLeaseRow>(
+        `INSERT INTO code_agent_room_leases (room_id, turn_id, owner_id, fence, expires_at)
+        VALUES ($1, $2, $3, 1, $4::timestamptz + ($5::bigint * interval '1 millisecond'))
+        ON CONFLICT (room_id) DO UPDATE SET
+          turn_id = EXCLUDED.turn_id,
+          owner_id = EXCLUDED.owner_id,
+          fence = code_agent_room_leases.fence + 1,
+          expires_at = EXCLUDED.expires_at
+        WHERE code_agent_room_leases.expires_at <= $4::timestamptz
+        RETURNING room_id, turn_id, owner_id, fence, expires_at`,
+        [roomId, turnId, ownerId, now, ttlMs]
+      );
+      return result.rows[0] ? mapCodeAgentRoomLease(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error acquiring PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
+      return null;
+    }
+  }
+
+  async renewCodeAgentRoomLease(
+    roomId: string,
+    turnId: string,
+    ownerId: string,
+    now: string,
+    ttlMs: number
+  ): Promise<CodeAgentRoomLease | null> {
+    try {
+      const result = await this.pool.query<CodeAgentRoomLeaseRow>(
+        `UPDATE code_agent_room_leases
+        SET expires_at = $4::timestamptz + ($5::bigint * interval '1 millisecond')
+        WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3
+          AND expires_at > $4::timestamptz
+        RETURNING room_id, turn_id, owner_id, fence, expires_at`,
+        [roomId, turnId, ownerId, now, ttlMs]
+      );
+      return result.rows[0] ? mapCodeAgentRoomLease(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error renewing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
+      return null;
+    }
+  }
+
+  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        'DELETE FROM code_agent_room_leases WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3',
+        [roomId, turnId, ownerId]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error releasing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
+      return false;
     }
   }
 

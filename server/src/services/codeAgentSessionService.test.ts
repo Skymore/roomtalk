@@ -61,6 +61,8 @@ class MemoryCodeAgentStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
   agentTurns = new Map<string, RoomAgentTurn>();
+  roomLeases = new Map<string, { roomId: string; turnId: string; ownerId: string; fence: number; expiresAt: string }>();
+  roomLeaseFences = new Map<string, number>();
   mediaAssetsByMessageId = new Map<string, MediaAsset>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
@@ -104,6 +106,48 @@ class MemoryCodeAgentStore {
     const saved = { ...current, ...room };
     this.rooms.set(room.id, saved);
     return saved;
+  }
+
+  async acquireCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
+    const current = this.roomLeases.get(roomId);
+    if (current && Date.parse(current.expiresAt) > Date.parse(now)) {
+      return null;
+    }
+    const fence = (this.roomLeaseFences.get(roomId) || 0) + 1;
+    this.roomLeaseFences.set(roomId, fence);
+    const lease = {
+      roomId,
+      turnId,
+      ownerId,
+      fence,
+      expiresAt: new Date(Date.parse(now) + ttlMs).toISOString(),
+    };
+    this.roomLeases.set(roomId, lease);
+    return lease;
+  }
+
+  async renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
+    const current = this.roomLeases.get(roomId);
+    if (
+      !current ||
+      current.turnId !== turnId ||
+      current.ownerId !== ownerId ||
+      Date.parse(current.expiresAt) <= Date.parse(now)
+    ) {
+      return null;
+    }
+    const renewed = { ...current, expiresAt: new Date(Date.parse(now) + ttlMs).toISOString() };
+    this.roomLeases.set(roomId, renewed);
+    return renewed;
+  }
+
+  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string) {
+    const current = this.roomLeases.get(roomId);
+    if (!current || current.turnId !== turnId || current.ownerId !== ownerId) {
+      return false;
+    }
+    this.roomLeases.delete(roomId);
+    return true;
   }
 
   async upsertMessage(message: Message) {
@@ -1981,6 +2025,56 @@ describe('CodeAgentSessionService', () => {
 
     runner.release();
     assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
+  });
+
+  it('rejects overlapping turns across service instances with a durable room lease', async () => {
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+    const firstRunner = new BlockingRunner();
+    const firstService = createService({
+      store,
+      runner: firstRunner,
+      ids: ['ai-1', 'turn-1'],
+    }).service;
+    const secondService = createService({
+      store,
+      runner: new FakeCodeAgentRunnerClient([
+        { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-2', delta: 'Done' },
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'model_step',
+          turnId: 'turn-2',
+          stepId: 'turn-2:step:1',
+          sequence: 1,
+          hasText: true,
+          toolCallIds: [],
+          usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+        },
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final',
+          messageId: 'ai-2',
+          answer: 'Done',
+          sessionId: 'session-2',
+          usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+        },
+      ]),
+      ids: ['rejected-ai', 'rejected-turn', 'ai-2', 'turn-2'],
+    }).service;
+
+    const first = firstService.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await firstRunner.started;
+    assert.deepEqual(
+      await secondService.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+      { success: false, error: 'An agent task is already running in this workspace' }
+    );
+
+    firstRunner.release();
+    assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
+    assert.equal(store.roomLeases.has('room-1'), false);
+    assert.deepEqual(
+      await secondService.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+      { success: true, messageId: 'ai-2' }
+    );
   });
 
   it('rejects approval responses from members who did not start the turn', async () => {

@@ -170,6 +170,15 @@ export const POSTGRES_SCHEMA_SQL = [
     ON room_agent_turns (room_id, started_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_room_agent_turns_status_updated
     ON room_agent_turns (status, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS code_agent_room_leases (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    turn_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    fence BIGINT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_code_agent_room_leases_expiry
+    ON code_agent_room_leases (expires_at)`,
   `CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
