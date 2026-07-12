@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cacheMediaBlob,
   getCachedMediaBlob,
   getCachedMediaObjectUrl,
   getCachedMediaObjectUrlFromCache,
@@ -118,6 +119,26 @@ describe("mediaCache", () => {
       kind: "image",
       byteSize: 5,
     })).resolves.toBe("blob:cached-0");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for a concurrent sender cache write before reading the canonical message", async () => {
+    const cacheWrite = cacheMediaBlob({
+      assetId: "sending-image-asset",
+      roomId: "agent-room",
+      kind: "image",
+      blob: new Blob(["image"], { type: "image/webp" }),
+      mimeType: "image/webp",
+    });
+
+    await expect(getCachedMediaObjectUrlFromCache({
+      assetId: "sending-image-asset",
+      kind: "image",
+      byteSize: 5,
+      roomId: "agent-room",
+    })).resolves.toBe("blob:cached-0");
+    await cacheWrite;
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

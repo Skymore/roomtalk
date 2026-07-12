@@ -493,17 +493,23 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
 
     let settled = false;
+    const hasLocalPreview = Boolean(message.localMediaPreviewUrl);
     setSignedMediaUrl(null);
     setLocalCachedMediaUrl(null);
     setMediaError(false);
     setVideoPreviewError(false);
-    setIsMediaElementLoading(true);
-    const timeout = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      setMediaError(true);
-      setIsMediaElementLoading(false);
-    }, 12000);
+    setIsMediaElementLoading(!hasLocalPreview);
+    const timeout = hasLocalPreview
+      ? null
+      : window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          setMediaError(true);
+          setIsMediaElementLoading(false);
+        }, 12000);
+    const clearLoadTimeout = () => {
+      if (timeout !== null) window.clearTimeout(timeout);
+    };
 
     const playableKind = isImage ? "image" : isAudio ? "audio" : isVideo ? "video" : null;
     void (async () => {
@@ -518,7 +524,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       if (settled) return;
       if (cachedUrl) {
         settled = true;
-        window.clearTimeout(timeout);
+        clearLoadTimeout();
         setLocalCachedMediaUrl(cachedUrl);
         return;
       }
@@ -526,7 +532,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       const { url } = await getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset!.id });
       if (settled) return;
       settled = true;
-      window.clearTimeout(timeout);
+      clearLoadTimeout();
       setSignedMediaUrl(url);
       if (isFile) setIsMediaElementLoading(false);
     })()
@@ -534,16 +540,16 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         if (settled) return;
         console.error("Failed to get media URL:", error);
         settled = true;
-        window.clearTimeout(timeout);
-        setMediaError(true);
+        clearLoadTimeout();
+        setMediaError(!hasLocalPreview);
         setIsMediaElementLoading(false);
       });
 
     return () => {
       settled = true;
-      window.clearTimeout(timeout);
+      clearLoadTimeout();
     };
-  }, [isAudio, isFile, isImage, isInteractionDisabled, isMedia, isVideo, message.localMediaPending, message.mediaAsset, message.roomId]);
+  }, [isAudio, isFile, isImage, isInteractionDisabled, isMedia, isVideo, message.localMediaPending, message.localMediaPreviewUrl, message.mediaAsset, message.roomId]);
 
   React.useEffect(() => {
     return loadSignedMediaUrl();
@@ -872,10 +878,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         </div>
       );
     } else if (displayMediaUrl && isImage) {
+      const showImageLoading = isMediaElementLoading && !message.localMediaPreviewUrl;
       mediaContent = (
         <div
-          aria-busy={isMediaElementLoading}
-          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${isMediaElementLoading ? 'h-24 w-36' : ''} ${senderOutlineClassName}`}
+          aria-busy={showImageLoading}
+          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${showImageLoading ? 'h-24 w-36' : ''} ${senderOutlineClassName}`}
           style={senderOutlineElementStyle}
         >
           <button
@@ -894,7 +901,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               onError={handleMediaError}
             />
           </button>
-          {isMediaElementLoading && (
+          {showImageLoading && (
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[#e8e6dc]/85 text-xs text-[#5e5d59] dark:bg-[#30302e]/85 dark:text-[#b0aea5]">
               <Icon icon="lucide:image" className="mr-1 h-4 w-4" />
               {t('loadingMedia')}

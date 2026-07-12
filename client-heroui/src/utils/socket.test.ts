@@ -720,6 +720,7 @@ describe('socket message acknowledgement helpers', () => {
   });
 
   it('uploads media objects through relative local media URLs', async () => {
+    const onUploadAllocated = vi.fn();
     const savedMessage = message({
       id: 'media-message-1',
       content: '',
@@ -753,8 +754,19 @@ describe('socket message acknowledgement helpers', () => {
       roomId: 'room-1',
       kind: 'image',
       mimeType: 'image/webp',
+      onUploadAllocated,
     })).resolves.toEqual(savedMessage);
 
+    expect(onUploadAllocated).toHaveBeenCalledWith({
+      assetId: 'asset-1',
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      roomId: 'room-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 11,
+      filename: undefined,
+    });
+    expect(onUploadAllocated.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[1]);
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/media/local-objects/local-key', {
       method: 'PUT',
       headers: { 'Content-Type': 'image/webp' },

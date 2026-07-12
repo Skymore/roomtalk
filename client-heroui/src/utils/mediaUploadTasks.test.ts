@@ -46,7 +46,7 @@ describe('media upload tasks', () => {
       assetId: 'asset-small',
       objectKey: 'small',
       roomId: 'room-1',
-      kind: 'image',
+      kind: 'image' as const,
       mimeType: 'image/jpeg',
       byteSize: file.size,
       filename: file.name,
@@ -104,16 +104,26 @@ describe('media upload tasks', () => {
     expect(prepareMock).toHaveBeenCalledWith(expect.objectContaining({ file: compressed }));
   });
 
-  it('stores a completed upload blob in the persistent media cache without blocking completion', async () => {
+  it('starts persistent caching while the media object is still uploading', async () => {
     const file = new File(['image'], 'cached.jpg', { type: 'image/jpeg' });
-    prepareMock.mockResolvedValue({
+    const upload = {
       assetId: 'asset-cached',
       objectKey: 'cached',
       roomId: 'agent-room',
-      kind: 'image',
+      kind: 'image' as const,
       mimeType: 'image/jpeg',
       byteSize: file.size,
       filename: file.name,
+    };
+    let releaseObjectUpload!: () => void;
+    let markUploadAllocated!: () => void;
+    const objectUpload = new Promise<void>(resolve => { releaseObjectUpload = resolve; });
+    const uploadAllocated = new Promise<void>(resolve => { markUploadAllocated = resolve; });
+    prepareMock.mockImplementation(async params => {
+      params.onUploadAllocated?.(upload);
+      markUploadAllocated();
+      await objectUpload;
+      return upload;
     });
     completeMock.mockResolvedValue({
       id: 'message-cached',
@@ -133,7 +143,8 @@ describe('media upload tasks', () => {
       filename: file.name,
     });
 
-    await completeRegisteredMediaUpload('cached-client');
+    const preparation = prepareRegisteredMediaUpload('cached-client');
+    await uploadAllocated;
 
     expect(cacheMediaBlobMock).toHaveBeenCalledWith({
       assetId: 'asset-cached',
@@ -142,5 +153,12 @@ describe('media upload tasks', () => {
       blob: file,
       mimeType: 'image/jpeg',
     });
+    expect(completeMock).not.toHaveBeenCalled();
+
+    releaseObjectUpload();
+    await preparation;
+    await completeRegisteredMediaUpload('cached-client');
+
+    expect(completeMock).toHaveBeenCalledTimes(1);
   });
 });

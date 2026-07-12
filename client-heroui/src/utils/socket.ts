@@ -1247,6 +1247,7 @@ export type PrepareMediaUploadParams = {
   filename?: string;
   signal?: AbortSignal;
   onUploadProgress?: (progress: number) => void;
+  onUploadAllocated?: (upload: PreparedMediaUpload) => void;
 };
 
 export const prepareMediaUpload = async (params: PrepareMediaUploadParams): Promise<PreparedMediaUpload> => {
@@ -1264,15 +1265,7 @@ export const prepareMediaUpload = async (params: PrepareMediaUploadParams): Prom
   if (params.signal?.aborted) {
     throw new DOMException('Media upload cancelled', 'AbortError');
   }
-  await putMediaObject(upload.uploadUrl, params.file, mimeType, {
-    signal: params.signal,
-    onUploadProgress: params.onUploadProgress,
-  });
-  if (params.signal?.aborted) {
-    throw new DOMException('Media upload cancelled', 'AbortError');
-  }
-
-  return {
+  const preparedUpload = {
     assetId: upload.assetId,
     objectKey: upload.objectKey,
     roomId: params.roomId,
@@ -1281,6 +1274,16 @@ export const prepareMediaUpload = async (params: PrepareMediaUploadParams): Prom
     byteSize,
     filename: params.filename,
   };
+  params.onUploadAllocated?.(preparedUpload);
+  await putMediaObject(upload.uploadUrl, params.file, mimeType, {
+    signal: params.signal,
+    onUploadProgress: params.onUploadProgress,
+  });
+  if (params.signal?.aborted) {
+    throw new DOMException('Media upload cancelled', 'AbortError');
+  }
+
+  return preparedUpload;
 };
 
 export type CompleteMediaUploadParams = {

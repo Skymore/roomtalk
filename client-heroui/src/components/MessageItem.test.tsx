@@ -208,6 +208,42 @@ describe('MessageItem replies', () => {
     expect(onRetryDelivery).toHaveBeenCalled();
   });
 
+  it('keeps the local preview visible without a second loading state after send completes', () => {
+    getMediaDownloadUrlMock.mockReturnValue(new Promise(() => {}));
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'saved-image',
+          clientId: 'viewer',
+          clientMessageId: 'client-image',
+          messageType: 'media',
+          content: '',
+          deliveryStatus: 'sent',
+          localMediaPreviewUrl: 'blob:local-image',
+          mediaAsset: {
+            id: 'saved-image-asset',
+            kind: 'image',
+            mimeType: 'image/png',
+            byteSize: 123,
+            filename: 'local.png',
+          },
+        }}
+        roomPermissions={{ canPost: true } as any}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const image = screen.getByRole('img', { name: 'sharedImage' });
+    const shell = image.closest('.relative.inline-block') as HTMLElement;
+    expect(image.getAttribute('src')).toBe('blob:local-image');
+    expect(shell.getAttribute('aria-busy')).toBe('false');
+    expect(screen.queryByText('loadingMedia')).toBeNull();
+    expect(screen.queryByRole('status', { name: 'messageSending' })).toBeNull();
+  });
+
   it('leaves delivery and AI lifecycle announcements to the message list', () => {
     const rendered = render(
       <MessageItem

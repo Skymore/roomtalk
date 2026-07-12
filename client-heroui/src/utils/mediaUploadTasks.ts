@@ -32,6 +32,8 @@ interface MediaUploadTask extends MediaUploadTaskInput {
   compressedFile?: Blob;
   preparedUpload?: PreparedMediaUpload;
   preparePromise?: Promise<PreparedMediaUpload>;
+  cachedAssetId?: string;
+  cachePromise?: Promise<void>;
 }
 
 export type MediaPreparationOutcome =
@@ -61,6 +63,18 @@ const compressTaskFile = async (task: MediaUploadTask): Promise<Blob> => {
   return task.compressedFile;
 };
 
+const startTaskMediaCache = (task: MediaUploadTask, upload: PreparedMediaUpload) => {
+  if (task.cachedAssetId === upload.assetId || (task.kind !== 'image' && task.kind !== 'audio' && task.kind !== 'video')) return;
+  task.cachedAssetId = upload.assetId;
+  task.cachePromise = Promise.resolve(cacheMediaBlob({
+    assetId: upload.assetId,
+    roomId: task.roomId,
+    kind: task.kind,
+    blob: task.compressedFile || task.file,
+    mimeType: upload.mimeType,
+  })).catch(error => console.warn('Sent media could not be cached locally:', error));
+};
+
 export const registerMediaUploadTask = (input: MediaUploadTaskInput) => {
   tasks.set(input.clientMessageId, {
     ...input,
@@ -83,6 +97,7 @@ export const prepareRegisteredMediaUpload = async (clientMessageId: string): Pro
       mimeType: file.type || task.mimeType,
       filename: task.filename,
       signal: task.controller.signal,
+      onUploadAllocated: upload => startTaskMediaCache(task, upload),
     });
     task.preparedUpload = upload;
     return upload;
@@ -111,15 +126,6 @@ export const completeRegisteredMediaUpload = async (clientMessageId: string): Pr
     durationMs: task.durationMs,
     signal: task.controller.signal,
   });
-  if (task.kind === 'image' || task.kind === 'audio' || task.kind === 'video') {
-    void Promise.resolve(cacheMediaBlob({
-      assetId: upload.assetId,
-      roomId: task.roomId,
-      kind: task.kind,
-      blob: task.compressedFile || task.file,
-      mimeType: upload.mimeType,
-    })).catch(error => console.warn('Sent media could not be cached locally:', error));
-  }
   tasks.delete(clientMessageId);
   if (task.previewUrl) {
     window.setTimeout(() => URL.revokeObjectURL(task.previewUrl!), 30_000);

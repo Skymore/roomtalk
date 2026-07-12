@@ -20,6 +20,7 @@ const POSTER_MAX_HEIGHT = 640;
 
 const objectUrls = new Map<string, string>();
 const inFlightBodyUrls = new Map<string, Promise<string | null>>();
+const inFlightBodyWrites = new Map<string, Promise<void>>();
 const inFlightPosterUrls = new Map<string, Promise<string | null>>();
 let legacyCacheCleanup: Promise<void> | null = null;
 
@@ -272,7 +273,9 @@ export const getCachedMediaObjectUrlFromCache = async (input: {
   void cleanupLegacyMediaCaches();
 
   try {
-    return await getBlobObjectUrlFromCache(MEDIA_BODY_CACHE_NAME, bodyCacheKey(assetId), assetId, roomId);
+    const key = bodyCacheKey(assetId);
+    await inFlightBodyWrites.get(`${resolveCacheName(MEDIA_BODY_CACHE_NAME)}:${key}`);
+    return await getBlobObjectUrlFromCache(MEDIA_BODY_CACHE_NAME, key, assetId, roomId);
   } catch (error) {
     console.warn("Cached media object URL unavailable:", error);
     return null;
@@ -574,14 +577,20 @@ export const cacheMediaBlob = async (input: {
   const { assetId, roomId, kind, blob, mimeType } = input;
   if (!assetId || !canUseBrowserCache() || !shouldCacheMediaBody(kind, blob.size)) return;
   void cleanupLegacyMediaCaches();
-  await putBlobInCache(
+  const key = bodyCacheKey(assetId);
+  const requestKey = `${resolveCacheName(MEDIA_BODY_CACHE_NAME)}:${key}`;
+  const existingWrite = inFlightBodyWrites.get(requestKey);
+  if (existingWrite) return existingWrite;
+  const write = putBlobInCache(
     MEDIA_BODY_CACHE_NAME,
     assetId,
-    bodyCacheKey(assetId),
+    key,
     blob,
     mimeType,
     roomId,
-  );
+  ).finally(() => inFlightBodyWrites.delete(requestKey));
+  inFlightBodyWrites.set(requestKey, write);
+  return write;
 };
 
 const deleteIndexedMediaEntry = async (entry: MediaCacheEntry, ownerId = getBrowserCacheOwnerId()) => {
