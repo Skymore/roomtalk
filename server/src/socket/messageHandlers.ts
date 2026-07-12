@@ -3,6 +3,7 @@ import {
   createReplyReference,
   createStickerMessage,
   createUserMessage,
+  parseClientMessageBatch,
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
@@ -123,6 +124,8 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       };
       replyToMessageId?: string;
       clientMessageId?: string;
+      clientBatchId?: string;
+      clientBatchIndex?: number;
     },
     callback?: (response: { success: boolean; message?: Message; error?: string }) => void,
   ) => {
@@ -161,6 +164,11 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     const clientMessageId = parseClientMessageId(messageData.clientMessageId);
     if (messageData.clientMessageId !== undefined && !clientMessageId) {
       callback?.({ success: false, error: 'Invalid client message ID' });
+      return;
+    }
+    const clientBatch = parseClientMessageBatch(messageData.clientBatchId, messageData.clientBatchIndex);
+    if (clientBatch === null) {
+      callback?.({ success: false, error: 'Invalid client message batch' });
       return;
     }
 
@@ -235,6 +243,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
           avatar: messageData.avatar,
           replyTo,
           clientMessageId,
+          clientBatch,
         });
 
     const loggableMessage = socketLogger.formatMessageForLog(message);

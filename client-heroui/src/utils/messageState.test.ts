@@ -99,6 +99,8 @@ describe("messageState", () => {
       id: "temp-text",
       content: "caption",
       clientMessageId: "client-text",
+      clientBatchId: "mixed-batch",
+      clientBatchIndex: 1,
       deliveryStatus: "pending",
       timestamp: "2026-05-03T10:00:00.001Z",
     });
@@ -106,6 +108,8 @@ describe("messageState", () => {
       id: "temp-image",
       content: "",
       clientMessageId: "client-image",
+      clientBatchId: "mixed-batch",
+      clientBatchIndex: 0,
       deliveryStatus: "pending",
       messageType: "media",
       timestamp: "2026-05-03T10:00:00.000Z",
@@ -121,12 +125,16 @@ describe("messageState", () => {
       id: "server-text",
       content: "caption",
       clientMessageId: "client-text",
+      clientBatchId: "mixed-batch",
+      clientBatchIndex: 1,
       timestamp: "2026-05-03T10:00:00.100Z",
     });
     const acknowledgedImage = message({
       id: "server-image",
       content: "",
       clientMessageId: "client-image",
+      clientBatchId: "mixed-batch",
+      clientBatchIndex: 0,
       messageType: "media",
       timestamp: "2026-05-03T10:00:00.200Z",
       mediaAsset: {
@@ -154,6 +162,10 @@ describe("messageState", () => {
       optimisticText.timestamp,
     ]);
     expect(imageFirstSettled[0].localMediaPreviewUrl).toBe("blob:local-image");
+    expect(sortMessages([acknowledgedText, acknowledgedImage]).map(item => item.id)).toEqual([
+      "server-image",
+      "server-text",
+    ]);
   });
 
   it("keeps an Ask AI delivery action when the canonical message arrives before a failed ack", () => {

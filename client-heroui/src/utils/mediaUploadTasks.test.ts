@@ -136,6 +136,8 @@ describe('media upload tasks', () => {
     });
     registerMediaUploadTask({
       clientMessageId: 'cached-client',
+      clientBatchId: 'mixed-batch',
+      clientBatchIndex: 0,
       roomId: 'agent-room',
       file,
       kind: 'image',
@@ -160,5 +162,10 @@ describe('media upload tasks', () => {
     await completeRegisteredMediaUpload('cached-client');
 
     expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(completeMock).toHaveBeenCalledWith(expect.objectContaining({
+      clientMessageId: 'cached-client',
+      clientBatchId: 'mixed-batch',
+      clientBatchIndex: 0,
+    }));
   });
 });

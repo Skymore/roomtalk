@@ -586,9 +586,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     avatar: { text: string; color: string },
     replyTo: Message | null,
     timestamp: string,
+    clientBatch?: { id: string; index: number },
   ): Message => ({
     id: `temp-${clientMessageId}`,
     clientMessageId,
+    clientBatchId: clientBatch?.id,
+    clientBatchIndex: clientBatch?.index,
     clientId,
     roomId,
     content: '',
@@ -624,6 +627,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     avatar: { text: string; color: string },
     replyTo: Message | null,
     baseTimestamp = Date.now(),
+    clientBatchId?: string,
   ): Promise<Message[]> => {
     if (drafts.length === 0) return Promise.resolve([]);
 
@@ -638,6 +642,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const clientMessageId = createClientMessageId();
       registerMediaUploadTask({
         clientMessageId,
+        clientBatchId,
+        clientBatchIndex: clientBatchId ? index : undefined,
         roomId,
         file: draft.file,
         kind: draft.kind,
@@ -654,6 +660,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         avatar,
         index === 0 ? replyTo : null,
         new Date(baseTimestamp + index).toISOString(),
+        clientBatchId ? { id: clientBatchId, index } : undefined,
       ));
       return { clientMessageId };
     });
@@ -1051,11 +1058,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     if (currentAttachmentDrafts.length > 0) {
       const textItem = outgoingItems.find(item => item.type === 'text');
       const sendStartedAt = Date.now();
+      const clientBatchId = textItem ? createClientMessageId() : undefined;
       const mediaPromise = startMediaUploadBatch(
         currentAttachmentDrafts,
         avatar,
         textItem ? null : replyToMessage,
         sendStartedAt,
+        clientBatchId,
       );
       let textSendPromise: Promise<void> | undefined;
 
@@ -1063,21 +1072,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         const clientMessageId = createClientMessageId();
         const optimisticMessage = buildOptimisticTextMessage(textItem.content, clientMessageId, avatar, replyToMessage);
         optimisticMessage.timestamp = new Date(sendStartedAt + currentAttachmentDrafts.length).toISOString();
+        optimisticMessage.clientBatchId = clientBatchId;
+        optimisticMessage.clientBatchIndex = currentAttachmentDrafts.length;
         onOptimisticMessage?.(optimisticMessage);
-        // Keep the durable order aligned with the optimistic image-first order.
-        // Upload preparation remains parallel, while the text message is only
-        // persisted after every media completion has settled.
-        textSendPromise = mediaPromise
-          .catch(() => undefined)
-          .then(() => sendMessage(
-            textItem.content,
-            submitRoomId,
-            'text',
-            username,
-            avatar,
-            replyToMessage?.id,
-            clientMessageId,
-          ))
+        textSendPromise = sendMessage(
+          textItem.content,
+          submitRoomId,
+          'text',
+          username,
+          avatar,
+          replyToMessage?.id,
+          clientMessageId,
+          clientBatchId ? { id: clientBatchId, index: currentAttachmentDrafts.length } : undefined,
+        )
           .then(savedMessage => {
             if (isSubmitRoomCurrent()) {
               onOptimisticMessageSaved?.(clientMessageId, savedMessage);

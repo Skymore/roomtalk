@@ -1,7 +1,7 @@
 import { A2UIPayload, Message } from "./types";
 
 export const sortMessages = (messages: Message[]) => {
-  return [...messages].sort((a, b) => {
+  const chronological = [...messages].sort((a, b) => {
     const timeA = new Date(a.timestamp).getTime();
     const timeB = new Date(b.timestamp).getTime();
 
@@ -20,6 +20,25 @@ export const sortMessages = (messages: Message[]) => {
     }
 
     return a.id.localeCompare(b.id);
+  });
+  const batchMembers = new Map<string, Message[]>();
+  chronological.forEach(message => {
+    if (!message.clientBatchId || message.clientBatchIndex === undefined) return;
+    const key = `${message.clientId}:${message.clientBatchId}`;
+    const members = batchMembers.get(key) || [];
+    members.push(message);
+    batchMembers.set(key, members);
+  });
+  batchMembers.forEach(members => members.sort((a, b) => (
+    (a.clientBatchIndex! - b.clientBatchIndex!) || a.id.localeCompare(b.id)
+  )));
+  const emitted = new Set<string>();
+  return chronological.flatMap(message => {
+    if (!message.clientBatchId || message.clientBatchIndex === undefined) return [message];
+    const key = `${message.clientId}:${message.clientBatchId}`;
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    return batchMembers.get(key) || [message];
   });
 };
 
@@ -49,6 +68,12 @@ export const upsertMessage = (messages: Message[], message: Message) => {
         // replacing it with the acknowledgement timestamp makes a mixed send
         // visibly reorder while it is settling.
         timestamp: optimisticMessage.timestamp,
+        ...(!serverMessage.clientBatchId && optimisticMessage.clientBatchId
+          ? {
+              clientBatchId: optimisticMessage.clientBatchId,
+              clientBatchIndex: optimisticMessage.clientBatchIndex,
+            }
+          : {}),
         ...(!serverMessage.deliveryAction && optimisticAction ? { deliveryAction: optimisticAction } : {}),
         ...(localMediaPreviewUrl ? { localMediaPreviewUrl } : {}),
       };

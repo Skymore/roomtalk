@@ -317,6 +317,8 @@ describe('message socket handlers', () => {
       username: 'Ada',
       avatar: { text: 'A', color: 'primary' },
       clientMessageId: 'client-message-1',
+      clientBatchId: 'mixed-batch',
+      clientBatchIndex: 1,
     }, (response: { success: boolean; message?: Message }) => {
       validResponse = response;
     });
@@ -328,6 +330,8 @@ describe('message socket handlers', () => {
     assert.equal(created.content, 'created through socket');
     assert.equal(created.messageType, 'text');
     assert.equal(created.clientMessageId, 'client-message-1');
+    assert.equal(created.clientBatchId, 'mixed-batch');
+    assert.equal(created.clientBatchIndex, 1);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
       { roomId: 'room-1', event: 'new_message', args: [created] },
@@ -377,6 +381,28 @@ describe('message socket handlers', () => {
     assert.deepEqual(responses, [
       { success: false, error: 'Invalid client message ID' },
       { success: false, error: 'Invalid client message ID' },
+    ]);
+    assert.equal(h.store.appendedMessages.length, 0);
+  });
+
+  it('rejects incomplete or out-of-range client message batches', async () => {
+    const h = createHarness('client-2');
+    const responses: unknown[] = [];
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'invalid batch',
+      clientBatchId: 'mixed-batch',
+    }, (response: unknown) => responses.push(response));
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'invalid batch',
+      clientBatchId: 'mixed-batch',
+      clientBatchIndex: 101,
+    }, (response: unknown) => responses.push(response));
+
+    assert.deepEqual(responses, [
+      { success: false, error: 'Invalid client message batch' },
+      { success: false, error: 'Invalid client message batch' },
     ]);
     assert.equal(h.store.appendedMessages.length, 0);
   });

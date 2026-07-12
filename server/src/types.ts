@@ -137,6 +137,8 @@ export interface Message {
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
   clientMessageId?: string;
+  clientBatchId?: string;
+  clientBatchIndex?: number;
   turnId?: string;
   modelStepId?: string;
   modelStepSequence?: number;

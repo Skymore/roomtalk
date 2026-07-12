@@ -3,6 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
+import { orderMessageBatches } from '../services/messageDomain';
 import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -1660,7 +1661,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const messages = await this.redisClient.lRange(`room:${roomId}:messages`, 0, -1);
       this.logger.debug('Messages read from Redis', { roomId, count: messages.length });
-      return this.attachMediaAssets(roomId, messages.map((message: string) => stripAIStreamRecoveryMetadata(JSON.parse(message))));
+      return orderMessageBatches(await this.attachMediaAssets(roomId, messages.map((message: string) => stripAIStreamRecoveryMetadata(JSON.parse(message)))));
     } catch (error) {
       this.logger.error('Error reading messages from Redis', { error, roomId });
       return [];
@@ -1684,17 +1685,23 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         if (targetIndex === -1) {
           return { roomId, messages: [], historyVersion, hasMore: false };
         }
-        const targetTurnId = allMessages[targetIndex].turnId;
-        endIndex = targetTurnId
-          ? allMessages.findIndex(message => message.turnId === targetTurnId)
-          : targetIndex;
+        const target = allMessages[targetIndex];
+        endIndex = target.turnId
+          ? allMessages.findIndex(message => message.turnId === target.turnId)
+          : target.clientBatchId
+            ? allMessages.findIndex(message => message.clientId === target.clientId && message.clientBatchId === target.clientBatchId)
+            : targetIndex;
       }
 
       const selectedUnits = new Set<string>();
       let startIndex = endIndex;
       for (let index = endIndex - 1; index >= 0; index--) {
         const message = allMessages[index];
-        const unitKey = message.turnId ? `turn:${message.turnId}` : `message:${message.id}`;
+        const unitKey = message.turnId
+          ? `turn:${message.turnId}`
+          : message.clientBatchId
+            ? `batch:${message.clientId}:${message.clientBatchId}`
+            : `message:${message.id}`;
         if (!selectedUnits.has(unitKey)) {
           if (selectedUnits.size >= limit) break;
           selectedUnits.add(unitKey);
@@ -1702,10 +1709,16 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         startIndex = index;
       }
       for (const unitKey of selectedUnits) {
-        if (!unitKey.startsWith('turn:')) continue;
-        const turnId = unitKey.slice(5);
-        const turnStart = allMessages.findIndex(message => message.turnId === turnId);
-        if (turnStart >= 0) startIndex = Math.min(startIndex, turnStart);
+        if (unitKey.startsWith('turn:')) {
+          const turnId = unitKey.slice(5);
+          const turnStart = allMessages.findIndex(message => message.turnId === turnId);
+          if (turnStart >= 0) startIndex = Math.min(startIndex, turnStart);
+        } else if (unitKey.startsWith('batch:')) {
+          const batchStart = allMessages.findIndex(message => (
+            message.clientBatchId && `batch:${message.clientId}:${message.clientBatchId}` === unitKey
+          ));
+          if (batchStart >= 0) startIndex = Math.min(startIndex, batchStart);
+        }
       }
       const messages = allMessages.slice(startIndex, endIndex);
       const turns = await this.readRoomAgentTurns(roomId, Array.from(new Set(messages.map(message => message.turnId).filter((id): id is string => Boolean(id)))));

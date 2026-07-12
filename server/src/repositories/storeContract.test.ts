@@ -580,6 +580,8 @@ type MessageRow = {
   room_id: string;
   client_id: string;
   client_message_id?: string | null;
+  client_batch_id?: string | null;
+  client_batch_index?: number | null;
   content: string;
   timestamp: string;
   updated_at: string | null;
@@ -853,6 +855,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         modelStepId,
         modelStepSequence,
         clientMessageId,
+        clientBatchId,
+        clientBatchIndex,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
       const existingIndex = roomMessages.findIndex(message => message.id === id);
@@ -862,6 +866,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         room_id: String(roomId),
         client_id: String(clientId),
         client_message_id: clientMessageId === null || clientMessageId === undefined ? null : String(clientMessageId),
+        client_batch_id: clientBatchId === null || clientBatchId === undefined ? null : String(clientBatchId),
+        client_batch_index: clientBatchIndex === null || clientBatchIndex === undefined ? null : Number(clientBatchIndex),
         content: String(content),
         timestamp: String(timestamp),
         updated_at: updatedAt === null || updatedAt === undefined ? null : String(updatedAt),
@@ -1151,10 +1157,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: (deleted ? [{ id: messageId }] : []) as T[], rowCount: deleted ? 1 : 0 };
     }
 
-    if (/SELECT position(?:, turn_id)? FROM room_messages WHERE room_id = \$1 AND id = \$2/.test(compactSql)) {
+    if (/SELECT position(?:, turn_id, client_id, client_batch_id)? FROM room_messages WHERE room_id = \$1 AND id = \$2/.test(compactSql)) {
       const [roomId, messageId] = params.map(String);
       const row = (this.messages.get(roomId) || []).find(item => item.id === messageId);
-      return { rows: (row ? [{ position: row.position, turn_id: row.turn_id }] : []) as T[], rowCount: row ? 1 : 0 };
+      return { rows: (row ? [{ position: row.position, turn_id: row.turn_id, client_id: row.client_id, client_batch_id: row.client_batch_id }] : []) as T[], rowCount: row ? 1 : 0 };
     }
 
     if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND turn_id = \$2/.test(compactSql)) {
@@ -1163,12 +1169,24 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [{ position }] as T[], rowCount: 1 };
     }
 
-    if (/SELECT CASE WHEN turn_id IS NULL THEN 'message:' \|\| id ELSE 'turn:' \|\| turn_id END AS unit_key/.test(compactSql)) {
+    if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND client_id = \$2 AND client_batch_id = \$3/.test(compactSql)) {
+      const rows = (this.messages.get(String(params[0])) || []).filter(row => (
+        row.client_id === params[1] && row.client_batch_id === params[2]
+      ));
+      const position = rows.length ? Math.min(...rows.map(row => row.position)) : null;
+      return { rows: [{ position }] as T[], rowCount: 1 };
+    }
+
+    if (/END AS unit_key, MAX\(position\) AS max_position/.test(compactSql)) {
       const boundary = params[1] === null ? Number.POSITIVE_INFINITY : Number(params[1]);
       const maxByUnit = new Map<string, number>();
       for (const row of this.messages.get(String(params[0])) || []) {
         if (row.position >= boundary) continue;
-        const key = row.turn_id ? `turn:${row.turn_id}` : `message:${row.id}`;
+        const key = row.turn_id
+          ? `turn:${row.turn_id}`
+          : row.client_batch_id
+            ? `batch:${row.client_id}:${row.client_batch_id}`
+            : `message:${row.id}`;
         maxByUnit.set(key, Math.max(maxByUnit.get(key) ?? -1, row.position));
       }
       const rows = [...maxByUnit.entries()]
@@ -1178,9 +1196,15 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: rows as T[], rowCount: rows.length };
     }
 
-    if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND CASE WHEN turn_id IS NULL/.test(compactSql)) {
+    if (/SELECT MIN\(position\) AS position FROM room_messages WHERE room_id = \$1 AND CASE WHEN turn_id IS NOT NULL/.test(compactSql)) {
       const keys = new Set(params[1] as string[]);
-      const rows = (this.messages.get(String(params[0])) || []).filter(row => keys.has(row.turn_id ? `turn:${row.turn_id}` : `message:${row.id}`));
+      const rows = (this.messages.get(String(params[0])) || []).filter(row => keys.has(
+        row.turn_id
+          ? `turn:${row.turn_id}`
+          : row.client_batch_id
+            ? `batch:${row.client_id}:${row.client_batch_id}`
+            : `message:${row.id}`
+      ));
       return { rows: [{ position: rows.length ? Math.min(...rows.map(row => row.position)) : null }] as T[], rowCount: 1 };
     }
 
@@ -1589,6 +1613,35 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal((await store.appendMessageIdempotent(withoutKeyOne))?.inserted, true);
       assert.equal((await store.appendMessageIdempotent(withoutKeyTwo))?.inserted, true);
       assert.equal((await store.readMessagesByRoom(initialRoom.id)).length, 4);
+    });
+
+    it('persists a client batch and returns every member in its declared order', async () => {
+      const { store } = createFixture();
+      const baseRoom = room();
+      await store.saveRoom(baseRoom);
+      const text = message({
+        id: 'batch-text',
+        clientMessageId: 'batch-text-client',
+        clientBatchId: 'mixed-batch',
+        clientBatchIndex: 1,
+        content: 'caption',
+      });
+      const image = message({
+        id: 'batch-image',
+        clientMessageId: 'batch-image-client',
+        clientBatchId: 'mixed-batch',
+        clientBatchIndex: 0,
+        content: '[image]',
+      });
+
+      await store.appendMessageIdempotent(text);
+      await store.appendMessageIdempotent(image);
+
+      const history = await store.readMessagesByRoom(baseRoom.id);
+      assert.deepEqual(history.map(item => item.id), ['batch-image', 'batch-text']);
+      assert.deepEqual(history.map(item => item.clientBatchIndex), [0, 1]);
+      const page = await store.readMessagePageByRoom(baseRoom.id, { limit: 1 });
+      assert.deepEqual(page.messages.map(item => item.id), ['batch-image', 'batch-text']);
     });
 
     it('reads latest message windows and older pages in durable order', async () => {

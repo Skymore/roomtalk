@@ -173,7 +173,8 @@ describe('socket message acknowledgement helpers', () => {
         'Ada',
         { text: 'A', color: '#123456' },
         'reply-1',
-        'client-message-1'
+        'client-message-1',
+        { id: 'mixed-batch', index: 1 },
       )
     ).resolves.toEqual(savedMessage);
 
@@ -187,6 +188,8 @@ describe('socket message acknowledgement helpers', () => {
         avatar: { text: 'A', color: '#123456' },
         replyToMessageId: 'reply-1',
         clientMessageId: 'client-message-1',
+        clientBatchId: 'mixed-batch',
+        clientBatchIndex: 1,
       },
       expect.any(Function)
     );

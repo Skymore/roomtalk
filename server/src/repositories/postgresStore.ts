@@ -5,6 +5,7 @@ import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '
 import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
+import { orderMessageBatches } from '../services/messageDomain';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -54,6 +55,8 @@ type MessageRow = {
   room_id: string;
   client_id: string;
   client_message_id?: string | null;
+  client_batch_id?: string | null;
+  client_batch_index?: number | string | null;
   content: string;
   timestamp: string | Date;
   updated_at?: string | Date | null;
@@ -226,7 +229,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -549,6 +552,9 @@ const mapMessage = (row: MessageRow): Message => {
   };
 
   if (row.client_message_id) message.clientMessageId = row.client_message_id;
+  if (row.client_batch_id) message.clientBatchId = row.client_batch_id;
+  const clientBatchIndex = toOptionalNumber(row.client_batch_index ?? null);
+  if (clientBatchIndex !== undefined) message.clientBatchIndex = clientBatchIndex;
   if (row.updated_at) message.updatedAt = toIsoString(row.updated_at);
   if (row.username) message.username = row.username;
   if (avatar) message.avatar = avatar;
@@ -610,6 +616,8 @@ const messageParams = (message: Message, position: number): unknown[] => [
   message.modelStepId || null,
   message.modelStepSequence ?? null,
   message.clientMessageId || null,
+  message.clientBatchId || null,
+  message.clientBatchIndex ?? null,
 ];
 
 const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
@@ -685,9 +693,11 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   position,
   model_step_id,
   model_step_sequence,
-  client_message_id
+  client_message_id,
+  client_batch_id,
+  client_batch_index
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30, $31
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30, $31, $32, $33
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -718,6 +728,8 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   code_agent_queued_input = EXCLUDED.code_agent_queued_input,
   code_agent_image_message_ids = EXCLUDED.code_agent_image_message_ids,
   client_message_id = EXCLUDED.client_message_id,
+  client_batch_id = EXCLUDED.client_batch_id,
+  client_batch_index = EXCLUDED.client_batch_index,
   position = room_messages.position`;
 
 const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
@@ -1539,7 +1551,7 @@ export class PostgresStore implements DurableRoomStore {
         ORDER BY position ASC, timestamp ASC`,
         [roomId]
       );
-      return this.attachMediaAssets(roomId, result.rows.map(mapMessage));
+      return orderMessageBatches(await this.attachMediaAssets(roomId, result.rows.map(mapMessage)));
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room messages', { error, roomId });
       return [];
@@ -1561,8 +1573,8 @@ export class PostgresStore implements DurableRoomStore {
 
       let boundaryPosition: number | undefined;
       if (options.beforeMessageId) {
-        const target = await this.pool.query<{ position: number | string; turn_id: string | null }>(
-          'SELECT position, turn_id FROM room_messages WHERE room_id = $1 AND id = $2',
+        const target = await this.pool.query<{ position: number | string; turn_id: string | null; client_id: string; client_batch_id: string | null }>(
+          'SELECT position, turn_id, client_id, client_batch_id FROM room_messages WHERE room_id = $1 AND id = $2',
           [roomId, options.beforeMessageId]
         );
         if (target.rows.length === 0) {
@@ -1575,11 +1587,21 @@ export class PostgresStore implements DurableRoomStore {
             [roomId, target.rows[0].turn_id]
           );
           boundaryPosition = Number(turnStart.rows[0]?.position ?? boundaryPosition);
+        } else if (target.rows[0].client_batch_id) {
+          const batchStart = await this.pool.query<{ position: number | string }>(
+            'SELECT MIN(position) AS position FROM room_messages WHERE room_id = $1 AND client_id = $2 AND client_batch_id = $3',
+            [roomId, target.rows[0].client_id, target.rows[0].client_batch_id]
+          );
+          boundaryPosition = Number(batchStart.rows[0]?.position ?? boundaryPosition);
         }
       }
 
       const units = await this.pool.query<{ unit_key: string; max_position: number | string }>(
-        `SELECT CASE WHEN turn_id IS NULL THEN 'message:' || id ELSE 'turn:' || turn_id END AS unit_key,
+        `SELECT CASE
+            WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
+            WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
+            ELSE 'message:' || id
+          END AS unit_key,
           MAX(position) AS max_position
         FROM room_messages
         WHERE room_id = $1 AND ($2::bigint IS NULL OR position < $2)
@@ -1596,7 +1618,11 @@ export class PostgresStore implements DurableRoomStore {
           `SELECT MIN(position) AS position
           FROM room_messages
           WHERE room_id = $1
-            AND CASE WHEN turn_id IS NULL THEN 'message:' || id ELSE 'turn:' || turn_id END = ANY($2::text[])`,
+            AND CASE
+              WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
+              WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
+              ELSE 'message:' || id
+            END = ANY($2::text[])`,
           [roomId, selectedUnitKeys]
         );
         const pageStartPosition = Number(start.rows[0]?.position);
@@ -1614,7 +1640,7 @@ export class PostgresStore implements DurableRoomStore {
         );
         hasMore = Boolean(older.rows[0]?.exists);
       }
-      const messages = await this.attachMediaAssets(roomId, rows.map(mapMessage));
+      const messages = orderMessageBatches(await this.attachMediaAssets(roomId, rows.map(mapMessage)));
       const turns = await this.readRoomAgentTurns(roomId, Array.from(new Set(messages.map(message => message.turnId).filter((id): id is string => Boolean(id)))));
       return {
         roomId,

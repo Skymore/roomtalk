@@ -999,7 +999,7 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
-  it('places mixed media before text and keeps text persistence behind media completion', async () => {
+  it('places mixed media before text while sending text without waiting for media completion', async () => {
     let resolveMedia!: (value: Message) => void;
     socketMocks.completeMediaUpload.mockImplementationOnce(() => new Promise(resolve => { resolveMedia = resolve; }));
     const { editor, props } = renderMessageInput();
@@ -1015,12 +1015,24 @@ describe('MessageInput optimistic send flow', () => {
       .map(call => call[0] as Message);
     expect(optimisticMedia.messageType).toBe('media');
     expect(optimisticText.messageType).toBe('text');
+    expect(optimisticMedia.clientBatchId).toBeTruthy();
+    expect(optimisticText.clientBatchId).toBe(optimisticMedia.clientBatchId);
+    expect(optimisticMedia.clientBatchIndex).toBe(0);
+    expect(optimisticText.clientBatchIndex).toBe(1);
     expect(new Date(optimisticMedia.timestamp).getTime()).toBeLessThan(
       new Date(optimisticText.timestamp).getTime(),
     );
     await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(socketMocks.sendMessage.mock.calls[0][7]).toEqual({
+      id: optimisticMedia.clientBatchId,
+      index: 1,
+    });
+    await waitFor(() => expect(props.onOptimisticMessageSaved).toHaveBeenCalledWith(
+      optimisticText.clientMessageId,
+      expect.objectContaining({ messageType: 'text' }),
+    ));
 
     await act(async () => {
       resolveMedia(message({
@@ -1038,7 +1050,10 @@ describe('MessageInput optimistic send flow', () => {
       }));
     });
 
-    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(props.onOptimisticMessageSaved).toHaveBeenCalledWith(
+      optimisticMedia.clientMessageId,
+      expect.objectContaining({ messageType: 'media' }),
+    ));
   });
 
   it('stages and sends multiple arbitrary picker files as a batch', async () => {

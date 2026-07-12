@@ -1343,6 +1343,8 @@ describe('API routes', () => {
         username: 'Alice',
         width: 40,
         height: 30,
+        clientBatchId: 'mixed-batch',
+        clientBatchIndex: 0,
       }),
     });
 
@@ -1352,6 +1354,8 @@ describe('API routes', () => {
     assert.equal(message.roomId, 'room-1');
     assert.equal(message.messageType, 'media');
     assert.equal(message.mimeType, 'image/webp');
+    assert.equal(message.clientBatchId, 'mixed-batch');
+    assert.equal(message.clientBatchIndex, 0);
     assert.deepEqual(message.mediaAsset, {
       id: upload.assetId,
       kind: 'image',

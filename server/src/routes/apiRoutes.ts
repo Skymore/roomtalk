@@ -10,7 +10,7 @@ import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
-import { createMediaMessage, createReplyReference, createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
+import { createMediaMessage, createReplyReference, createRoomRecord, parseClientMessageBatch, validateRoomNameInput } from '../services/messageDomain';
 import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { AudioTranscriptionRunner } from '../services/audioTranscription';
@@ -1151,6 +1151,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const height = parseOptionalInteger(req.body?.height);
     const durationMs = parseOptionalInteger(req.body?.durationMs);
     const clientMessageId = typeof req.body?.clientMessageId === 'string' ? req.body.clientMessageId.trim() : '';
+    const clientBatch = parseClientMessageBatch(req.body?.clientBatchId, req.body?.clientBatchIndex);
     const filenameResult = sanitizeUploadFilename(req.body?.filename);
 
     if (!assetId || !clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize || !objectKey) {
@@ -1158,6 +1159,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
     if (!filenameResult.ok) {
       return res.status(400).json({ error: filenameResult.error });
+    }
+    if (clientBatch === null) {
+      return res.status(400).json({ error: 'Invalid client message batch' });
     }
     if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/media/uploads/:assetId/complete'))) {
       return;
@@ -1273,6 +1277,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       avatar: req.body?.avatar,
       replyTo,
       clientMessageId: clientMessageId || undefined,
+      clientBatch,
     });
 
     const asset: MediaAsset = {

@@ -12,6 +12,8 @@ export const MEDIA_PREPARATION_CONCURRENCY = 3;
 
 export interface MediaUploadTaskInput {
   clientMessageId: string;
+  clientBatchId?: string;
+  clientBatchIndex?: number;
   roomId: string;
   file: File;
   kind: MediaKind;
@@ -120,6 +122,8 @@ export const completeRegisteredMediaUpload = async (clientMessageId: string): Pr
     avatar: task.avatar,
     replyToMessageId: task.replyToMessageId,
     clientMessageId: task.clientMessageId,
+    clientBatchId: task.clientBatchId,
+    clientBatchIndex: task.clientBatchIndex,
     caption: task.caption,
     width: task.width,
     height: task.height,

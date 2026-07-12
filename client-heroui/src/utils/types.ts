@@ -119,6 +119,8 @@ export interface Message {
   exitCode?: number;
   isError?: boolean;
   clientMessageId?: string;
+  clientBatchId?: string;
+  clientBatchIndex?: number;
   deliveryStatus?: 'pending' | 'sent' | 'failed';
   deliveryError?: string;
   deliveryAction?: 'send' | 'ask-ai';

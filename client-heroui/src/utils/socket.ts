@@ -1016,10 +1016,21 @@ export const sendMessage = (
   avatar?: { text: string; color: string },
   replyToMessageId?: string,
   clientMessageId?: string,
+  clientBatch?: { id: string; index: number },
 ): Promise<Message> => {
   return emitWithAck<SendMessageAckResponse>(
     'send_message',
-    { content, roomId, messageType, username, avatar, replyToMessageId, clientMessageId },
+    {
+      content,
+      roomId,
+      messageType,
+      username,
+      avatar,
+      replyToMessageId,
+      clientMessageId,
+      clientBatchId: clientBatch?.id,
+      clientBatchIndex: clientBatch?.index,
+    },
     'Timed out while saving message',
     'Failed to save message',
   ).then((response) => {
@@ -1292,6 +1303,8 @@ export type CompleteMediaUploadParams = {
   avatar?: { text: string; color: string };
   replyToMessageId?: string;
   clientMessageId?: string;
+  clientBatchId?: string;
+  clientBatchIndex?: number;
   caption?: string;
   width?: number;
   height?: number;
@@ -1312,6 +1325,8 @@ export const completeMediaUpload = async (params: CompleteMediaUploadParams): Pr
     avatar: params.avatar,
     replyToMessageId: params.replyToMessageId,
     clientMessageId: params.clientMessageId,
+    clientBatchId: params.clientBatchId,
+    clientBatchIndex: params.clientBatchIndex,
     caption: params.caption,
     filename: upload.filename,
     width: params.width,

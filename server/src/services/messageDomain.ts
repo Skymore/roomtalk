@@ -10,6 +10,45 @@ export interface AvatarPayload {
   color: string;
 }
 
+export interface ClientMessageBatch {
+  id: string;
+  index: number;
+}
+
+export function parseClientMessageBatch(id: unknown, index: unknown): ClientMessageBatch | null | undefined {
+  if (id === undefined && index === undefined) return undefined;
+  if (typeof id !== 'string' || !id.trim() || id.length > 128) return null;
+  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) > 100) return null;
+  return { id: id.trim(), index: index as number };
+}
+
+export function orderMessageBatches(messages: Message[]): Message[] {
+  const members = new Map<string, Message[]>();
+  for (const message of messages) {
+    if (!message.clientBatchId || message.clientBatchIndex === undefined) continue;
+    const key = `${message.clientId}:${message.clientBatchId}`;
+    const batch = members.get(key) || [];
+    batch.push(message);
+    members.set(key, batch);
+  }
+  for (const batch of members.values()) {
+    batch.sort((a, b) => (a.clientBatchIndex! - b.clientBatchIndex!) || a.id.localeCompare(b.id));
+  }
+  const emitted = new Set<string>();
+  const ordered: Message[] = [];
+  for (const message of messages) {
+    if (!message.clientBatchId || message.clientBatchIndex === undefined) {
+      ordered.push(message);
+      continue;
+    }
+    const key = `${message.clientId}:${message.clientBatchId}`;
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    ordered.push(...(members.get(key) || [message]));
+  }
+  return ordered;
+}
+
 const collapseInlineText = (value: string) => value
   .replace(/[\u0000-\u001f\u007f]/g, ' ')
   .replace(/\s+/g, ' ')
@@ -117,6 +156,7 @@ export function createUserMessage(input: {
   avatar?: AvatarPayload;
   replyTo?: MessageReplyReference;
   clientMessageId?: string;
+  clientBatch?: ClientMessageBatch;
   now?: Date;
 }): Message {
   return {
@@ -130,6 +170,8 @@ export function createUserMessage(input: {
     avatar: input.avatar,
     replyTo: input.replyTo,
     clientMessageId: input.clientMessageId,
+    clientBatchId: input.clientBatch?.id,
+    clientBatchIndex: input.clientBatch?.index,
   };
 }
 
@@ -150,6 +192,7 @@ export function createMediaMessage(input: {
   avatar?: AvatarPayload;
   replyTo?: MessageReplyReference;
   clientMessageId?: string;
+  clientBatch?: ClientMessageBatch;
   now?: Date;
 }): Message {
   const mediaAsset: Message['mediaAsset'] = {
@@ -175,6 +218,8 @@ export function createMediaMessage(input: {
     mimeType: input.mimeType,
     replyTo: input.replyTo,
     clientMessageId: input.clientMessageId,
+    clientBatchId: input.clientBatch?.id,
+    clientBatchIndex: input.clientBatch?.index,
     mediaAsset,
   };
 }
