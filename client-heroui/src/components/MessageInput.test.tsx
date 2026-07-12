@@ -999,9 +999,9 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
-  it('places mixed text before media and keeps media completion behind the text acknowledgement', async () => {
-    let resolveText!: (value: Message) => void;
-    socketMocks.sendMessage.mockImplementation(() => new Promise(resolve => { resolveText = resolve; }));
+  it('places mixed media before text and keeps text persistence behind media completion', async () => {
+    let resolveMedia!: (value: Message) => void;
+    socketMocks.completeMediaUpload.mockImplementationOnce(() => new Promise(resolve => { resolveMedia = resolve; }));
     const { editor, props } = renderMessageInput();
     const file = new File(['image'], 'mixed.png', { type: 'image/png' });
 
@@ -1010,27 +1010,35 @@ describe('MessageInput optimistic send flow', () => {
     fireEvent.click(screen.getByText('send-message'));
 
     await waitFor(() => expect(props.onOptimisticMessage).toHaveBeenCalledTimes(2));
-    const [optimisticText, optimisticMedia] = (props.onOptimisticMessage as ReturnType<typeof vi.fn>)
+    const [optimisticMedia, optimisticText] = (props.onOptimisticMessage as ReturnType<typeof vi.fn>)
       .mock.calls
       .map(call => call[0] as Message);
-    expect(optimisticText.messageType).toBe('text');
     expect(optimisticMedia.messageType).toBe('media');
-    expect(new Date(optimisticText.timestamp).getTime()).toBeLessThan(
-      new Date(optimisticMedia.timestamp).getTime(),
+    expect(optimisticText.messageType).toBe('text');
+    expect(new Date(optimisticMedia.timestamp).getTime()).toBeLessThan(
+      new Date(optimisticText.timestamp).getTime(),
     );
     await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
-    expect(socketMocks.completeMediaUpload).not.toHaveBeenCalled();
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(1));
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveText(message({
-        id: 'saved-mixed-text',
-        content: 'caption',
-        clientMessageId: optimisticText.clientMessageId,
+      resolveMedia(message({
+        id: 'saved-mixed-image',
+        content: '',
+        clientMessageId: optimisticMedia.clientMessageId,
+        messageType: 'media',
         timestamp: '2026-05-03T10:00:00.500Z',
+        mediaAsset: {
+          id: 'saved-mixed-image-asset',
+          kind: 'image',
+          mimeType: 'image/png',
+          byteSize: file.size,
+        },
       }));
     });
 
-    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
   });
 
   it('stages and sends multiple arbitrary picker files as a batch', async () => {

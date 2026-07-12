@@ -623,7 +623,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     drafts: readonly AttachmentDraft[],
     avatar: { text: string; color: string },
     replyTo: Message | null,
-    completionBarrier?: Promise<unknown>,
     baseTimestamp = Date.now(),
   ): Promise<Message[]> => {
     if (drafts.length === 0) return Promise.resolve([]);
@@ -665,9 +664,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     return (async () => {
       const savedMessages: Message[] = [];
       let firstError: unknown;
-      if (completionBarrier) {
-        await completionBarrier.catch(() => undefined);
-      }
       for (let index = 0; index < entries.length; index += 1) {
         const { clientMessageId } = entries[index];
         const preparation = await preparations[index];
@@ -1055,36 +1051,46 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     if (currentAttachmentDrafts.length > 0) {
       const textItem = outgoingItems.find(item => item.type === 'text');
       const sendStartedAt = Date.now();
-      let textSendPromise: Promise<unknown> | undefined;
-
-      if (textItem?.type === 'text') {
-        const clientMessageId = createClientMessageId();
-        const optimisticMessage = buildOptimisticTextMessage(textItem.content, clientMessageId, avatar, replyToMessage);
-        optimisticMessage.timestamp = new Date(sendStartedAt).toISOString();
-        onOptimisticMessage?.(optimisticMessage);
-        textSendPromise = sendMessage(
-          textItem.content,
-          submitRoomId,
-          'text',
-          username,
-          avatar,
-          replyToMessage?.id,
-          clientMessageId,
-        ).then(savedMessage => {
-          onOptimisticMessageSaved?.(clientMessageId, savedMessage);
-        }).catch(error => {
-          onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
-          throw error;
-        });
-      }
-
       const mediaPromise = startMediaUploadBatch(
         currentAttachmentDrafts,
         avatar,
         textItem ? null : replyToMessage,
-        textSendPromise,
-        sendStartedAt + (textItem ? 1 : 0),
+        sendStartedAt,
       );
+      let textSendPromise: Promise<void> | undefined;
+
+      if (textItem?.type === 'text') {
+        const clientMessageId = createClientMessageId();
+        const optimisticMessage = buildOptimisticTextMessage(textItem.content, clientMessageId, avatar, replyToMessage);
+        optimisticMessage.timestamp = new Date(sendStartedAt + currentAttachmentDrafts.length).toISOString();
+        onOptimisticMessage?.(optimisticMessage);
+        // Keep the durable order aligned with the optimistic image-first order.
+        // Upload preparation remains parallel, while the text message is only
+        // persisted after every media completion has settled.
+        textSendPromise = mediaPromise
+          .catch(() => undefined)
+          .then(() => sendMessage(
+            textItem.content,
+            submitRoomId,
+            'text',
+            username,
+            avatar,
+            replyToMessage?.id,
+            clientMessageId,
+          ))
+          .then(savedMessage => {
+            if (isSubmitRoomCurrent()) {
+              onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+            }
+          })
+          .catch(error => {
+            if (isSubmitRoomCurrent()) {
+              onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
+            }
+            throw error;
+          });
+      }
+
       clearEditorImmediately();
       onCancelReply();
       void mediaPromise.catch(error => {

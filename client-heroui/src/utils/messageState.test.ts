@@ -94,13 +94,13 @@ describe("messageState", () => {
     });
   });
 
-  it("keeps mixed text and media in their optimistic order when text is acknowledged", () => {
+  it("keeps mixed media and text in their optimistic order as acknowledgements arrive", () => {
     const optimisticText = message({
       id: "temp-text",
       content: "caption",
       clientMessageId: "client-text",
       deliveryStatus: "pending",
-      timestamp: "2026-05-03T10:00:00.000Z",
+      timestamp: "2026-05-03T10:00:00.001Z",
     });
     const optimisticImage = message({
       id: "temp-image",
@@ -108,7 +108,7 @@ describe("messageState", () => {
       clientMessageId: "client-image",
       deliveryStatus: "pending",
       messageType: "media",
-      timestamp: "2026-05-03T10:00:00.001Z",
+      timestamp: "2026-05-03T10:00:00.000Z",
       localMediaPreviewUrl: "blob:local-image",
       mediaAsset: {
         id: "local-client-image",
@@ -138,22 +138,22 @@ describe("messageState", () => {
     });
 
     const pending = addOptimisticMessage(
-      addOptimisticMessage([], optimisticText),
-      optimisticImage,
+      addOptimisticMessage([], optimisticImage),
+      optimisticText,
     );
     const textFirst = upsertMessage(pending, acknowledgedText);
     const textFirstSettled = upsertMessage(textFirst, acknowledgedImage);
     const imageFirst = upsertMessage(pending, acknowledgedImage);
     const imageFirstSettled = upsertMessage(imageFirst, acknowledgedText);
 
-    expect(textFirst.map(item => item.id)).toEqual(["server-text", "temp-image"]);
-    expect(textFirstSettled.map(item => item.id)).toEqual(["server-text", "server-image"]);
-    expect(imageFirstSettled.map(item => item.id)).toEqual(["server-text", "server-image"]);
+    expect(textFirst.map(item => item.id)).toEqual(["temp-image", "server-text"]);
+    expect(textFirstSettled.map(item => item.id)).toEqual(["server-image", "server-text"]);
+    expect(imageFirstSettled.map(item => item.id)).toEqual(["server-image", "server-text"]);
     expect(textFirstSettled.map(item => item.timestamp)).toEqual([
-      optimisticText.timestamp,
       optimisticImage.timestamp,
+      optimisticText.timestamp,
     ]);
-    expect(imageFirstSettled[1].localMediaPreviewUrl).toBe("blob:local-image");
+    expect(imageFirstSettled[0].localMediaPreviewUrl).toBe("blob:local-image");
   });
 
   it("keeps an Ask AI delivery action when the canonical message arrives before a failed ack", () => {
