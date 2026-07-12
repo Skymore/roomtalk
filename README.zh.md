@@ -78,7 +78,14 @@ flowchart LR
 - **E2B execution plane**：在 `/workspace` 中承载不可信文件、进程、terminal、dev server 和 Agent 执行。
 - **Agent backend**：拥有推理和原生工具循环，通过窄 JSONL/CLI 合约使用 RoomTalk 能力，不接触数据库或基础设施凭据。
 
-完整 turn 流程、安全模型、workspace surface、持久化边界和发布流程见 [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)。
+### 关键难点是怎么工作的
+
+- **Code Agent turn** 会先授权并持久化，再用 durable fenced room lease 串行执行，随后把 turn-scoped model/context/publish capability 和用户自有 connection 交给可复用 sandbox daemon。文本、工具、审批、usage 和 lifecycle 事件经同一有序协议返回，先持久化再广播。
+- **顺序由源头拥有。** Coco/Codex adapter 保留原生文本/工具边界；RoomTalk 分配单调 message position，并按 durable turn 分组。浏览器只展示这个顺序，不用 timestamp 猜执行过程。
+- **恢复跨越多个进程边界。** PostgreSQL 或 Redis 保存 durable turn/message，Redis 协调实时客户端，E2B 拥有可变 workspace，Node 进程只保留可替换 live handle。启动恢复会显式结束中断工作、修复 stale sandbox state，并重新获取 fenced lease。
+- **发布产物不依赖执行生命周期。** 静态文件在 sandbox 内校验，通过预签名 URL 直传对象存储，最终写入不可变版本和 manifest；源 sandbox 暂停或替换后仍由 RoomTalk 服务。
+
+完整 lifecycle 和验证证据见 [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)。
 
 ## 仓库结构
 
@@ -89,7 +96,6 @@ server/roomtalk_code_agent_runner Python runner、daemon、backend 和 RoomTalk 
 ops/code-agent-sandbox/           固定 E2B artifact 定义与 lock
 scripts/code-agent/               artifact context 准备脚本
 docs/                             架构、runbook、方案和复盘
-output/resume-overleaf/           简历源文件与 PDF
 ```
 
 ## 快速开始
@@ -180,9 +186,7 @@ npm run test:e2e:postgres
 迁移和上线参考：
 
 - [PostgreSQL 上线 runbook](docs/postgres-rollout-runbook.md)
-- [PostgreSQL 迁移总结](docs/postgres-migration-development-summary.zh.md)
 - [媒体对象存储迁移](docs/image-object-storage-migration-runbook.md)
-- [静态发布实现](docs/code-agent-static-publish-implementation.md)
 
 ## 测试
 
@@ -201,18 +205,25 @@ npm run test:e2e:postgres
 
 生产使用 Fly.io 承载 Node control plane、Supabase PostgreSQL、Upstash Redis、Tigris 对象存储，以及 E2B 的每房间 execution sandbox。
 
-## 文档地图
+## 精选工程复盘
 
-- [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)：当前端到端设计与职责边界。
-- [Code Agent sandbox artifact](docs/code-agent-sandbox-artifact.md)：固定 artifact 的构建与上线合约。
-- [Room context CLI 设计](docs/codex-room-context-cli-design.zh.md)：broker 历史/搜索访问与 Plan 模式隔离。
-- [静态发布实现](docs/code-agent-static-publish-implementation.md)：持久 artifact pipeline 与 RoomTalk CLI。
-- [Sandbox daemon 方案](docs/sandbox-daemon-plan.md)：daemon 协议和迁移动机。
-- [PostgreSQL 上线 runbook](docs/postgres-rollout-runbook.md)：durable store 生产切换。
-- [房间可靠性](docs/room-reliability/README.zh.md)：恢复、顺序和多客户端一致性。
-- [CLAUDE.md](CLAUDE.md)：贡献与 release 规范。
+历史记录是工程证据的一部分，不是“已过期的产品文档”：
 
-`docs/` 中部分文件是历史方案或复盘。当前操作应以架构文档、runbook、本 README 和源码为准。
+- [Redis 到 PostgreSQL 生产迁移](docs/postgres-migration-development-summary.zh.md)：写入冻结切换、provider 响应限制、幂等、回滚边界，以及真正零停机所需的设计。
+- [房间可靠性系列](docs/room-reliability/README.zh.md)：移动端恢复、房间整体替换、版本顺序、read-your-write ack 和多客户端一致性。
+- [Code Agent 工具顺序](docs/code-agent-tool-ordering-fix-plan.zh.md)：从 engine 源头到持久化和渲染，保留文本/工具/model event 的交错顺序。
+- [A2UI streaming 实现](docs/a2ui-streaming-implementation.zh.md)：结构化 UI streaming、持久化、修复和 provider-independent validation。
+- [CI/CD 构建优化](docs/ci-cd-build-optimization.zh.md)：Docker build 边界、cache 行为、release detection 和生产验证。
+
+## 文档
+
+- [文档索引](docs/README.zh.md)：当前架构、runbook、子系统参考、复盘、历史方案、报告和语言版本。
+- [部署指南](部署指南.md)：当前 GitHub Actions 与 Fly.io 生产流程。
+- [配置参考](docs/configuration.zh.md)：环境变量分组、存储模式、secret 边界和生产/开发差异。
+- [安全](SECURITY.zh.md)：身份、授权、credential 处理、scoped capability、媒体访问和 sandbox trust boundary。
+- [贡献指南](CONTRIBUTING.zh.md)：开发、验证、artifact、commit 和 release 要求。
+
+当前文档标注 `Updated` 或 `Verified` 日期；历史方案和复盘保留原始语境，并指向当前事实源。
 
 ## 许可证
 

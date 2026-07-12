@@ -78,7 +78,14 @@ The ownership boundary is deliberate:
 - **E2B execution plane** owns untrusted files, processes, terminals, dev servers, and agent execution inside `/workspace`.
 - **Agent backends** own reasoning and native tool loops. They consume RoomTalk capabilities through a narrow JSONL/CLI contract rather than receiving database or infrastructure credentials.
 
-See [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md) for the complete turn flow, security model, workspace surfaces, persistence boundaries, and release process.
+### How the difficult paths work
+
+- **A code-agent turn** is authorized and persisted before execution, fenced by a durable room lease, then sent to the reusable sandbox daemon with turn-scoped model, context, publish, and user-owned connection capabilities. Text, tool, approval, usage, and lifecycle events return through one ordered protocol and are persisted before broadcast.
+- **Ordering is source-owned.** Coco/Codex adapters preserve native text/tool boundaries; RoomTalk assigns monotonic message positions and groups them by durable turn. The browser renders that order and never attempts to reconstruct execution from timestamps.
+- **Recovery crosses process boundaries.** PostgreSQL or Redis holds durable turn/message state, Redis coordinates realtime clients, E2B owns the mutable workspace, and the Node process holds only replaceable live handles. Startup recovery fails interrupted work explicitly, repairs stale sandbox state, and reacquires fenced leases rather than trusting memory.
+- **Published work outlives execution.** Static files are validated in the sandbox, uploaded directly to object storage through presigned URLs, finalized into immutable versions and manifests, and served through RoomTalk after the source sandbox pauses or is replaced.
+
+See [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md) for the full lifecycle and evidence.
 
 ## Repository Layout
 
@@ -89,7 +96,6 @@ server/roomtalk_code_agent_runner Python runner, daemon, backends, and RoomTalk 
 ops/code-agent-sandbox/           pinned E2B artifact definition and lock
 scripts/code-agent/               artifact context preparation
 docs/                             architecture, runbooks, plans, and postmortems
-output/resume-overleaf/           generated resume sources and PDFs
 ```
 
 ## Quick Start
@@ -180,9 +186,7 @@ Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Doc
 Migration and rollout references:
 
 - [PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md)
-- [PostgreSQL migration summary](docs/postgres-migration-development-summary.zh.md)
 - [Media object-storage migration](docs/image-object-storage-migration-runbook.md)
-- [Static publishing implementation](docs/code-agent-static-publish-implementation.md)
 
 ## Testing
 
@@ -201,18 +205,25 @@ Run focused tests next to changed code and expand to the affected production bui
 
 Production uses Fly.io for the Node control plane, Supabase PostgreSQL, Upstash Redis, Tigris object storage, and E2B for per-room execution sandboxes.
 
-## Documentation Map
+## Selected Engineering Retrospectives
 
-- [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md): current end-to-end design and ownership boundaries.
-- [Code-agent sandbox artifact](docs/code-agent-sandbox-artifact.md): pinned artifact build and rollout contract.
-- [Room-context CLI design](docs/codex-room-context-cli-design.zh.md): brokered history/search access and Plan-mode isolation.
-- [Static publishing implementation](docs/code-agent-static-publish-implementation.md): durable artifact pipeline and RoomTalk CLI.
-- [Sandbox daemon plan](docs/sandbox-daemon-plan.md): daemon protocol and migration rationale.
-- [PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md): durable-store production cutover.
-- [Room reliability](docs/room-reliability/README.zh.md): restore, ordering, and multi-client consistency work.
-- [CLAUDE.md](CLAUDE.md): contributor and release guidance.
+The historical records are part of the engineering evidence, not obsolete product documentation:
 
-Some files under `docs/` are historical plans or postmortems. The architecture document, runbooks, this README, and the source code are the current operational references.
+- [Redis-to-PostgreSQL production migration](docs/postgres-migration-development-summary.zh.md): write-freeze cutover, provider response limits, idempotency, rollback boundaries, and what a true zero-downtime design would require.
+- [Room reliability series](docs/room-reliability/README.zh.md): mobile restoration, whole-object room replacement, version ordering, read-your-write acknowledgements, and multi-client consistency.
+- [Code-agent tool ordering](docs/code-agent-tool-ordering-fix-plan.zh.md): preserving interleaved text/tool/model events from engine source through persistence and rendering.
+- [A2UI streaming implementation](docs/a2ui-streaming-implementation.zh.md): structured UI streaming, persistence, repair, and provider-independent validation.
+- [CI/CD build optimization](docs/ci-cd-build-optimization.zh.md): Docker build boundaries, cache behavior, release detection, and production verification.
+
+## Documentation
+
+- [Documentation index](docs/README.md): current architecture, runbooks, subsystem references, retrospectives, historical plans, reports, and language editions.
+- [Deployment guide](DeploymentGuide.md): the current GitHub Actions and Fly.io production workflow.
+- [Configuration reference](docs/configuration.md): environment groups, storage modes, secret boundaries, and production/development differences.
+- [Security](SECURITY.md): identity, authorization, credential handling, scoped capabilities, media access, and sandbox trust boundaries.
+- [Contributing](CONTRIBUTING.md): development, validation, artifact, commit, and release expectations.
+
+Current documents carry an `Updated` or `Verified` date. Historical plans and retrospectives retain their original context and point to the current source of truth.
 
 ## License
 

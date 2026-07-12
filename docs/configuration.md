@@ -1,0 +1,133 @@
+# RoomTalk Configuration Reference
+
+[中文](configuration.zh.md)
+
+Status: Current
+Updated: 2026-07-12
+Source of truth: `server/.env.example`, runtime config loaders, `fly.toml`, and `.github/workflows/fly-deploy.yml`
+
+This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
+
+## HTTP and Browser Origins
+
+| Variable | Purpose | Notes |
+| --- | --- | --- |
+| `PORT` | Server listen port | Default/local port is `3012`. |
+| `NODE_ENV` | Runtime mode | Production enables fail-closed origin and artifact checks. |
+| `CLIENT_URL` | Primary browser origin | Also used by some public callback defaults. |
+| `CLIENT_URLS` | Comma-separated browser-origin allowlist | Use for deployments with multiple accepted browser origins. |
+
+The client is a Vite application. Only values safe to expose publicly may use a `VITE_*` prefix.
+
+## Storage
+
+| Variable | Purpose |
+| --- | --- |
+| `REDIS_URL` | Required Redis connection for realtime state; also the durable store in Redis mode. |
+| `PERSISTENCE_STORE` | `redis` (`R`) or `postgres` (`R+P`). |
+| `DATABASE_URL` | Required when `PERSISTENCE_STORE=postgres`. |
+| `POSTGRES_SSL` | Enables PostgreSQL TLS. |
+| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | Keeps certificate validation enabled by default. |
+| `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | Optional managed-provider CA. Prefer base64 in secret managers. |
+| `ROOM_MESSAGES_CACHE_TTL_SECONDS` | Redis recent-message cache TTL in PostgreSQL mode; `0` disables writes. |
+| `ROOM_MESSAGES_CACHE_MAX_BYTES` | Maximum serialized cache payload. |
+
+Supported models:
+
+- `PERSISTENCE_STORE=redis`: Redis owns durable and realtime state (`R`).
+- `PERSISTENCE_STORE=postgres`: PostgreSQL owns durable facts; Redis owns realtime coordination and bounded cache state (`R+P`).
+- PostgreSQL-only operation is not supported.
+
+## Media and Artifacts
+
+| Variable | Purpose |
+| --- | --- |
+| `MEDIA_BUCKET_NAME` | S3/Tigris bucket. |
+| `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
+| `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
+| `MEDIA_STORAGE_FORCE_PATH_STYLE` | Optional path-style addressing. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Storage credentials. |
+| `LOCAL_MEDIA_DIR` | Local development media directory. |
+| `DISABLE_LOCAL_MEDIA_STORAGE` | Disables the development fallback. |
+| `CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL` | Public static-publish base fallback. |
+| `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | Signs room/client/turn/mode-scoped publish tokens. |
+| `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish-token lifetime. |
+
+Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts.
+
+## Chat AI and Optional Services
+
+| Group | Variables |
+| --- | --- |
+| Model selection/context | `AI_MODEL`, `AI_MAX_CONTEXT_MESSAGES`, `AI_MAX_CONTEXT_TOKENS` |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
+| DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` |
+| Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MAX_TOKENS` |
+| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
+| Transcription | `ASSEMBLYAI_API_KEY` |
+| Google sign-in | `GOOGLE_CLIENT_ID`, optional `GOOGLE_CLIENT_IDS` |
+| Web Push | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_SUBJECT` |
+
+Provider keys remain server-side. They are never forwarded to the browser or copied wholesale into a sandbox.
+
+## Code-Agent Runtime
+
+Core selection:
+
+| Variable | Purpose |
+| --- | --- |
+| `CODE_AGENT_ENABLED` | Enables code-agent product entry points. |
+| `CODE_AGENT_ALLOWED_USER_IDS` | Optional rollout allowlist. |
+| `CODE_AGENT_ALLOWED_RUN_MODES` / `CODE_AGENT_DEFAULT_MODE` | Available and default Plan/Ask/Auto/Full modes. |
+| `CODE_AGENT_SANDBOX_PROVIDER` | Production uses `e2b`. |
+| `CODE_AGENT_RUNNER_CLIENT` | Production uses the reusable `daemon`. |
+| `CODE_AGENT_BACKEND` | Default backend; production uses `codex-app-server`. |
+| `CODE_AGENT_DAEMON_COMMAND` | Optional daemon command override. |
+
+Pinned artifact and E2B:
+
+| Variable | Purpose |
+| --- | --- |
+| `E2B_API_KEY` / `E2B_ACCESS_TOKEN` | E2B credential. |
+| `E2B_TEAM_ID` | Optional E2B team. |
+| `CODE_AGENT_E2B_TEMPLATE_ID` | Pinned production template. |
+| `CODE_AGENT_ARTIFACT_VERSION` | Expected artifact version. |
+| `CODE_AGENT_SOURCE_REF` | Expected code-agent-engine source ref. |
+| `CODE_AGENT_ARTIFACT_MODE` | Pinned production or explicit development mode. |
+| `CODE_AGENT_E2B_AUTO_RESUME` / `CODE_AGENT_E2B_ON_TIMEOUT` | Pause/resume lifecycle. |
+| `CODE_AGENT_IDLE_SANDBOX_TTL_MS` / `CODE_AGENT_ACTIVE_SANDBOX_TTL_MS` | Idle and running-turn sandbox TTLs. |
+| `CODE_AGENT_SANDBOX_TTL_MS` | Legacy fallback for the idle TTL. |
+
+Scoped capabilities:
+
+| Variable group | Purpose |
+| --- | --- |
+| `CODE_AGENT_MODEL_GATEWAY_*` | Turn-scoped model proxy, body limits, budgets, and signing. |
+| `CODE_AGENT_ROOM_CONTEXT_*` | Read-only room history/search token and lifetime. |
+| `CODE_AGENT_WORKSPACE_ASSET_*` | Signed workspace asset access. |
+| `CODE_AGENT_STATIC_PUBLISH_*` | Scoped durable static publishing. |
+
+## User-Owned Codex and GitHub Connections
+
+| Variable | Purpose |
+| --- | --- |
+| `CODEX_CONNECTIONS_ENABLED` | Enables Codex subscription connection routes. |
+| `CODEX_AUTH_ENCRYPTION_KEY` | Encrypts stored Codex auth. |
+| `CODEX_AUTH_LOGIN_TIMEOUT_MS` | Device-auth session timeout. |
+| `CODEX_AUTH_REFRESH_LOCK_TTL_MS` / `CODEX_AUTH_REFRESH_WAIT_MS` | Refresh serialization. |
+| `GITHUB_CONNECTIONS_ENABLED` | Enables GitHub PAT connection routes. |
+| `GITHUB_AUTH_ENCRYPTION_KEY` | Encrypts stored GitHub tokens; may be independently rotated. |
+
+Do not add new product behavior to the deprecated Codex CLI path. `codex-app-server` is the supported backend.
+
+## Workers and Observability
+
+`OUTBOX_WORKER_ENABLED` selects the durable AI-run outbox path. Batch size, poll interval, lock duration, retry delay, and maximum attempts are controlled by the corresponding `OUTBOX_WORKER_*` variables. `LOG_FILE_ENABLED` controls optional file logging; production logs should remain structured and secret-safe.
+
+## Production Configuration Rules
+
+- Store secrets in Fly/GitHub/provider secret managers, not `fly.toml` or tracked files.
+- Keep `server/.env` ignored and local.
+- Production E2B must use matching template, artifact version, source ref, runner dependencies, and smoke evidence.
+- Changing a Fly secret restarts or rolls the machine; verify `/api/status` afterward.
+- A scheduled or manually dispatched GitHub Actions workflow owns application deployment. Do not run `fly deploy` manually.
