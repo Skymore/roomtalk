@@ -554,7 +554,7 @@ export function WorkspaceBrowserAssetPreview({
               src={src}
               title={title}
               className="h-full min-h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              sandbox="allow-scripts allow-forms allow-popups"
               onLoad={handleLoad}
               onError={handleError}
             />
@@ -584,7 +584,7 @@ export function WorkspaceBrowserAssetPreview({
                 src={src}
                 title={title}
                 className="h-full w-full border-0 bg-white"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                sandbox="allow-scripts allow-forms allow-popups"
                 onLoad={handleLoad}
                 onError={handleError}
               />

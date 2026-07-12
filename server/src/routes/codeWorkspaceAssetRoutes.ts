@@ -80,6 +80,12 @@ export function registerCodeWorkspaceAssetRoutes(app: Express, options: CodeWork
       res.setHeader('Content-Length', asset.body.length);
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
+      if (resolved.mimeType.startsWith('text/html')) {
+        res.setHeader(
+          'Content-Security-Policy',
+          "sandbox allow-scripts allow-forms allow-popups; base-uri 'none'; object-src 'none'"
+        );
+      }
       res.setHeader('Cache-Control', resolved.mimeType.startsWith('text/html')
         ? 'private, max-age=0, must-revalidate'
         : 'private, max-age=60');

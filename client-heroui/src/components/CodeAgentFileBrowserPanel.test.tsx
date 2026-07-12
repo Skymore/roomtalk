@@ -1828,6 +1828,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     });
+    expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe('allow-scripts allow-forms allow-popups');
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
   });
 

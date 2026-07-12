@@ -124,6 +124,10 @@ describe('code workspace asset routes', () => {
     const entryResponse = await fetch(`${server.baseUrl}${asset.relativeUrl}`);
     assert.equal(entryResponse.status, 200);
     assert.match(entryResponse.headers.get('content-type') || '', /^text\/html/);
+    assert.equal(
+      entryResponse.headers.get('content-security-policy'),
+      "sandbox allow-scripts allow-forms allow-popups; base-uri 'none'; object-src 'none'"
+    );
     assert.equal(await entryResponse.text(), '<!doctype html><script src="assets/app.js"></script>');
 
     const siblingUrl = new URL('assets/app.js', `${server.baseUrl}${asset.relativeUrl}`).toString();
