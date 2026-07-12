@@ -325,12 +325,12 @@
   <a href="#arch-socketio" class="sub"><span data-lang="zh">Socket.IO 多实例</span><span data-lang="en">Socket.IO Multi-Instance</span></a>
   <a href="#arch-ai" class="sub"><span data-lang="zh">AI 流式响应</span><span data-lang="en">AI Streaming</span></a>
   <a href="#arch-media" class="sub"><span data-lang="zh">Presigned URL 上传</span><span data-lang="en">Presigned URL Upload</span></a>
-  <a href="#arch-agent" class="sub"><span data-lang="zh">Code Agent Control Plane</span><span data-lang="en">Code-Agent Control Plane</span></a>
+  <a href="#arch-agent" class="sub"><span data-lang="zh">Code Agent Runtime</span><span data-lang="en">Code-Agent Runtime</span></a>
   <a href="#arch-security" class="sub"><span data-lang="zh">权限与 Scoped Token</span><span data-lang="en">Permissions &amp; Scoped Tokens</span></a>
   <a href="#arch-workspace" class="sub"><span data-lang="zh">浏览器 Workspace</span><span data-lang="en">Browser Workspace</span></a>
   <a href="#challenges"><span data-lang="zh">三、技术难点</span><span data-lang="en">3. Technical Challenges</span></a>
   <a href="#ch-agent-control" style="color:var(--cyan);font-size:11px;padding:8px 10px 2px" class="sub"><span data-lang="zh">── Code Agent 篇 ──</span><span data-lang="en">── Code Agent ──</span></a>
-  <a href="#ch-agent-control" class="sub"><span data-lang="zh">Control / Execution Plane</span><span data-lang="en">Control / Execution Plane</span></a>
+  <a href="#ch-agent-control" class="sub"><span data-lang="zh">两 Plane / 三层 Runtime</span><span data-lang="en">Two Planes / Three Runtime Layers</span></a>
   <a href="#ch-agent-order" class="sub"><span data-lang="zh">AI / 工具事件顺序</span><span data-lang="en">AI / Tool Event Ordering</span></a>
   <a href="#ch-agent-context" class="sub"><span data-lang="zh">Context 与权限隔离</span><span data-lang="en">Context &amp; Permission Isolation</span></a>
   <a href="#ch-agent-workspace" class="sub"><span data-lang="zh">Workspace 与 Review</span><span data-lang="en">Workspace &amp; Review</span></a>
@@ -500,37 +500,37 @@ Files never pass through our server. The client requests a temporary upload URL 
   <p>The URL itself contains a cryptographic signature, valid only for a specific bucket/key and with an expiration time. Even if leaked, it can only upload to that one location — it can't read other files. Our bucket has "block all public access" enabled, so nothing is visible without a presigned URL.</p>
 </div>
 
-<h3 id="arch-agent"><span data-lang="zh">5. Code Agent — Control Plane / Execution Plane</span><span data-lang="en">5. Code Agent — Control Plane / Execution Plane</span></h3>
+<h3 id="arch-agent"><span data-lang="zh">5. Code Agent — 两个 Security Plane / 三层 Runtime</span><span data-lang="en">5. Code Agent — Two Security Planes / Three Runtime Layers</span></h3>
 
-<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。可以先记住三个 ownership：<strong>RoomTalk 决定谁能做什么并记录发生了什么；E2B 真正运行不可信代码；Coco/Codex 决定下一步调用哪个工具。</strong>完整边界如下：</p>
-<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” Start with three ownership rules: <strong>RoomTalk decides who may act and records what happened; E2B executes untrusted code; Coco or Codex chooses the next tool action.</strong> The full boundary is:</p>
+<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。安全边界分成两个 plane：可信的 RoomTalk control plane 与隔离的 E2B execution plane；实际请求链路再分成三层 runtime：<strong>RoomTalk 编排 → sandbox-local JSONL daemon/runner → Coco 或 Codex app-server backend。</strong>完整边界如下：</p>
+<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” The security boundary has two planes: the trusted RoomTalk control plane and the isolated E2B execution plane. The request path has three runtime layers: <strong>RoomTalk orchestration → sandbox-local JSONL daemon/runner → Coco or Codex app-server backend.</strong> The full boundary is:</p>
 
 <table data-lang="zh">
-  <thead><tr><th>层</th><th>负责</th><th>不负责</th></tr></thead>
+  <thead><tr><th>组件</th><th>负责</th><th>不负责</th></tr></thead>
   <tbody>
     <tr><td>Browser</td><td>聊天、workspace UI、流式渲染、review draft</td><td>E2B/provider secret、持久化顺序</td></tr>
-    <tr><td>RoomTalk</td><td>身份、房间权限、turn 编排、message position、usage/cost、scoped token、lifecycle</td><td>在 Fly 进程执行用户命令</td></tr>
-    <tr><td>E2B</td><td><code>/workspace</code>、Git、PTY、进程、dev server、Agent daemon</td><td>成员权限、持久消息、公开 URL 所有权</td></tr>
-    <tr><td>Coco</td><td>自研 CLI coding agent；推理与原生工具循环</td><td>RoomTalk 数据库和基础设施凭据</td></tr>
-    <tr><td>Codex</td><td>用户自己的 Codex 订阅；CLI/app-server session/thread</td><td>其他成员的订阅凭据和 RoomTalk secret</td></tr>
+    <tr><td>RoomTalk control plane</td><td>身份、房间权限、turn 编排、message position、usage/cost、scoped token、sandbox lifecycle</td><td>在 Fly 进程执行用户命令</td></tr>
+    <tr><td>E2B execution plane</td><td>隔离边界、<code>/workspace</code>、Git、PTY、进程和 dev server</td><td>成员权限、持久消息、公开 URL 所有权</td></tr>
+    <tr><td>Sandbox daemon / runner</td><td>JSONL request/control、turn 串行化、backend 路由、事件归一化和 <code>turn_released</code></td><td>房间授权、Agent 推理和 durable truth</td></tr>
+    <tr><td>Agent backend</td><td>自研 Coco 或用户订阅的 Codex app-server；推理、原生 tool loop、session/thread</td><td>RoomTalk 数据库、其他成员凭据和基础设施 secret</td></tr>
   </tbody>
 </table>
 <table data-lang="en">
-  <thead><tr><th>Layer</th><th>Owns</th><th>Does Not Own</th></tr></thead>
+  <thead><tr><th>Component</th><th>Owns</th><th>Does Not Own</th></tr></thead>
   <tbody>
     <tr><td>Browser</td><td>Chat, workspace UI, streamed rendering, review drafts</td><td>E2B/provider secrets, persistence ordering</td></tr>
-    <tr><td>RoomTalk</td><td>Identity, room access, turn orchestration, message positions, usage/cost, scoped tokens, lifecycle</td><td>Executing user commands inside the Fly process</td></tr>
-    <tr><td>E2B</td><td><code>/workspace</code>, Git, PTY, processes, dev servers, agent daemon</td><td>Membership, durable messages, public URL ownership</td></tr>
-    <tr><td>Coco</td><td>In-house CLI coding agent; reasoning and native tool loop</td><td>RoomTalk database and infrastructure credentials</td></tr>
-    <tr><td>Codex</td><td>The user's own Codex subscription; CLI/app-server session/thread state</td><td>Other members' subscription credentials and RoomTalk secrets</td></tr>
+    <tr><td>RoomTalk control plane</td><td>Identity, room access, turn orchestration, message positions, usage/cost, scoped tokens, sandbox lifecycle</td><td>Executing user commands inside the Fly process</td></tr>
+    <tr><td>E2B execution plane</td><td>Isolation boundary, <code>/workspace</code>, Git, PTY, processes, and dev servers</td><td>Membership, durable messages, public URL ownership</td></tr>
+    <tr><td>Sandbox daemon / runner</td><td>JSONL requests/controls, turn serialization, backend routing, event normalization, and <code>turn_released</code></td><td>Room authorization, agent reasoning, durable truth</td></tr>
+    <tr><td>Agent backend</td><td>In-house Coco or subscription-backed Codex app-server; reasoning, native tool loop, session/thread state</td><td>RoomTalk database, other members' credentials, infrastructure secrets</td></tr>
   </tbody>
 </table>
 
 <blockquote data-lang="zh">
-我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。RoomTalk 控制身份、权限、持久 turn 和 sandbox；E2B 执行不可信代码；自研 Coco CLI agent 和使用成员个人订阅的 Codex 负责推理与工具循环。三个层之间通过版本化 JSONL 协议和 scoped capability 连接，所以每层可以独立替换和测试。
+我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。安全上分为 RoomTalk control plane 和 E2B execution plane；运行时请求经过 RoomTalk 编排、sandbox-local daemon/runner、Coco 或 Codex app-server 三层。版本化 JSONL 协议把控制面与 daemon 隔开，backend adapter 再把 daemon 与 Agent tool loop 隔开，所以三层可以独立演进和测试。
 </blockquote>
 <blockquote data-lang="en">
-I designed it as a shared cloud code-agent room, not a remote-shell widget. RoomTalk controls identity, permissions, durable turns, and sandbox lifecycle; E2B executes untrusted code; our self-built Coco CLI agent and Codex running on each member's connected subscription own reasoning and tool loops. The layers communicate through a versioned JSONL protocol and scoped capabilities, so each layer can be replaced and tested independently.
+I designed it as a shared cloud code-agent room, not a remote-shell widget. Security is split between the RoomTalk control plane and E2B execution plane; runtime requests pass through three layers: RoomTalk orchestration, the sandbox-local daemon/runner, and Coco or Codex app-server. Versioned JSONL separates the control plane from the daemon, while backend adapters separate the daemon from each agent tool loop, so the layers can evolve and be tested independently.
 </blockquote>
 
 <h3 id="arch-security"><span data-lang="zh">6. 权限、Context 与 Scoped Token</span><span data-lang="en">6. Permissions, Context, and Scoped Tokens</span></h3>
@@ -598,8 +598,8 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 <p data-lang="zh"><strong>问题</strong>：Agent 要读写文件、安装依赖、运行测试和启动服务，但这些命令不能进入 Fly 应用进程；同时房间成员、消息、权限、计费和恢复又必须由 RoomTalk 统一管理。</p>
 <p data-lang="en"><strong>Problem</strong>: The agent must edit files, install dependencies, run tests, and start services, but none of that can execute in the Fly application process. Room membership, messages, permissions, billing, and recovery still need one RoomTalk source of truth.</p>
 
-<p data-lang="zh"><strong>方案</strong>：拆成 control plane 与 execution plane。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给沙盒 daemon。daemon 可以路由到自研 Coco CLI agent，也可以使用当前成员通过 device authorization 连接的 Codex 订阅启动 Codex CLI 或 app-server。</p>
-<p data-lang="en"><strong>Solution</strong>: Split control and execution planes. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon. The daemon can dispatch to the self-built Coco CLI agent or launch Codex CLI/app-server with the current member's subscription connected through device authorization.</p>
+<p data-lang="zh"><strong>方案</strong>：安全边界拆成 control plane 与 execution plane，运行时链路拆成 RoomTalk → daemon/runner → Agent backend 三层。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给 sandbox daemon。daemon 路由到自研 Coco，或使用当前成员通过 device authorization 连接的订阅启动 Codex app-server。</p>
+<p data-lang="en"><strong>Solution</strong>: Split the security boundary into control and execution planes, then split the runtime path into three layers: RoomTalk → daemon/runner → agent backend. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon. The daemon dispatches to the self-built Coco agent or starts Codex app-server with the current member's subscription connected through device authorization.</p>
 
 <div class="diagram">1. Browser ──authenticated Socket.IO prompt──▶ RoomTalk control plane
 2. RoomTalk ──check room access/mode──▶ create durable turn
@@ -680,7 +680,7 @@ roomtalk site list --json</code></pre>
 <ul data-lang="zh">
   <li>每个 sandbox 一个可复用 daemon，串行执行多个 turn；</li>
   <li>启动按 sandbox 加锁，并在新 daemon 前清理 stale runner/Codex child；</li>
-  <li>active turn 延长 TTL，完成后缩短为 idle；默认 5 分钟 pause + keep memory + autoResume；</li>
+  <li>active turn 延长 TTL，完成后缩短为 idle；默认 2 分钟 pause + keep memory + autoResume；</li>
   <li>SIGTERM/SIGINT 调用 <code>shutdownAll()</code>，回收当前 Fly 进程拥有的 daemon；</li>
   <li>等待 <code>turn_released</code> 有上限，信号丢失也能结束 room running 状态；</li>
   <li>固定 artifact 升级时 export archive → 新 sandbox → import → Git init → 原子换 sandbox ID。</li>
@@ -688,7 +688,7 @@ roomtalk site list --json</code></pre>
 <ul data-lang="en">
   <li>One reusable daemon per sandbox executes multiple turns serially;</li>
   <li>Startup is locked by sandbox and removes stale runner/Codex children before replacement;</li>
-  <li>Active turns extend TTL; completion returns to idle. Default lifecycle is five-minute pause + keep memory + autoResume;</li>
+  <li>Active turns extend TTL; completion returns to idle. Default lifecycle is two-minute pause + keep memory + autoResume;</li>
   <li>SIGTERM/SIGINT invokes <code>shutdownAll()</code> to reclaim daemons owned by the Fly process;</li>
   <li><code>turn_released</code> waits are bounded so a lost signal cannot leave the room running forever;</li>
   <li>Pinned artifact upgrades export an archive, create/import/init a new sandbox, and atomically swap sandbox IDs.</li>
@@ -1669,7 +1669,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk 已支持 AI chat，但模型不能安全地读写项目、运行命令，也没有多人可检查的 workspace 或可靠的长任务生命周期。</div>
     <div class="star-label t">Task</div><div class="star-val">在不把不可信执行放进 Fly 服务、也不重写 Coco/Codex 工具循环的前提下，构建生产可用的共享 cloud code-agent room。</div>
-    <div class="star-label a">Action</div><div class="star-val">设计 RoomTalk control plane + E2B execution plane；实现版本化 JSONL daemon，接入自研 Coco CLI agent 和用户自己的 Codex 订阅，加入四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt；在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计两个 security plane、三层 runtime：RoomTalk control plane → E2B 中的 JSONL daemon/runner → 自研 Coco 或用户订阅的 Codex app-server；加入四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt，并在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
     <div class="star-label r">Result</div><div class="star-val">同一房间可以持续完成代码任务并在刷新后保留可审计 transcript；sandbox 可 pause/autoResume，artifact URL 独立于 sandbox 存活；Node/Vitest/Playwright/E2B smoke 覆盖关键边界。</div>
   </div>
 </div>
@@ -1678,7 +1678,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk supported AI chat, but models could not safely edit projects or run commands, and users had no shared inspectable workspace or reliable long-task lifecycle.</div>
     <div class="star-label t">Task</div><div class="star-val">Build a production-ready shared cloud code-agent room without executing untrusted work on Fly or reimplementing Coco/Codex tool loops.</div>
-    <div class="star-label a">Action</div><div class="star-val">Designed a RoomTalk control plane and E2B execution plane; implemented a versioned JSONL daemon integrating our self-built Coco CLI agent and users' own Codex subscriptions, four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed two security planes and a three-layer runtime: RoomTalk control plane → JSONL daemon/runner in E2B → our self-built Coco agent or subscription-backed Codex app-server; added four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
     <div class="star-label r">Result</div><div class="star-val">A room can carry out sustained coding tasks with an auditable transcript that survives refresh. Sandboxes pause/auto-resume, artifact URLs outlive sandboxes, and Node/Vitest/Playwright/E2B smoke tests cover the critical boundaries.</div>
   </div>
 </div>
@@ -1785,11 +1785,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>Sandbox 暂停或升级后，文件和网页会怎样？</summary>
-  <div class="answer">默认 idle 五分钟后 E2B pause，并启用 keep-memory + autoResume，所以同一个 sandbox 恢复时文件和进程内存可以继续。固定 artifact 版本变化时，RoomTalk 会 bounded export/import workspace archive 后原子替换 sandbox。公开静态站点单独存入 Tigris manifest/version，不依赖 sandbox 存活。</div>
+  <div class="answer">默认 idle 两分钟后 E2B pause，并启用 keep-memory + autoResume，所以同一个 sandbox 恢复时文件和进程内存可以继续。固定 artifact 版本变化时，RoomTalk 会 bounded export/import workspace archive 后原子替换 sandbox。公开静态站点单独存入 Tigris manifest/version，不依赖 sandbox 存活。</div>
 </details>
 <details data-lang="en">
   <summary>What happens to files and published pages when a sandbox pauses or upgrades?</summary>
-  <div class="answer">The default E2B policy pauses after five idle minutes with keep-memory and autoResume, so the same sandbox can continue. When the pinned artifact changes, RoomTalk performs a bounded workspace archive export/import and atomically swaps sandboxes. Public static sites live in separate Tigris manifests/versions and do not depend on sandbox lifetime.</div>
+  <div class="answer">The default E2B policy pauses after two idle minutes with keep-memory and autoResume, so the same sandbox can continue. When the pinned artifact changes, RoomTalk performs a bounded workspace archive export/import and atomically swaps sandboxes. Public static sites live in separate Tigris manifests/versions and do not depend on sandbox lifetime.</div>
 </details>
 
 <details data-lang="zh">
