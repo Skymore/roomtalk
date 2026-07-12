@@ -104,6 +104,50 @@ describe('messageHistoryCache invalidation', () => {
     expect(readMemoryRoomMessageWindow(roomId)?.messages[0]?.content).toBe('after clear');
   });
 
+  it('persists agent turns while dropping temporary messages and blob URLs', async () => {
+    const roomId = 'agent-cache-room';
+    await writeCachedRoomMessageWindow({
+      ...cachedWindow(roomId, 'saved'),
+      messages: [
+        { id: 'temp-upload', roomId, content: '', deliveryStatus: 'pending' } as CachedRoomMessageWindow['messages'][number],
+        {
+          id: 'saved-media',
+          roomId,
+          content: '',
+          messageType: 'media',
+          localMediaPreviewUrl: 'blob:temporary',
+          localMediaPending: false,
+        } as CachedRoomMessageWindow['messages'][number],
+      ],
+      turns: [{
+        id: 'turn-1',
+        roomId,
+        status: 'complete',
+        startedAt: '2026-07-12T00:00:00.000Z',
+        backend: 'code-agent',
+        assistantName: 'Coco',
+        updatedAt: '2026-07-12T00:00:01.000Z',
+      }],
+    });
+
+    const cached = readMemoryRoomMessageWindow(roomId);
+    expect(cached?.messages.map(message => message.id)).toEqual(['saved-media']);
+    expect(cached?.messages[0].localMediaPreviewUrl).toBeUndefined();
+    expect(cached?.turns?.map(turn => turn.id)).toEqual(['turn-1']);
+  });
+
+  it('isolates room message windows by the active client id', async () => {
+    const roomId = 'shared-room-id';
+    localStorage.setItem('clientId', 'cache-owner-a');
+    await writeCachedRoomMessageWindow(cachedWindow(roomId, 'owner a'));
+
+    localStorage.setItem('clientId', 'cache-owner-b');
+    expect(readMemoryRoomMessageWindow(roomId)).toBeNull();
+
+    localStorage.setItem('clientId', 'cache-owner-a');
+    expect(readMemoryRoomMessageWindow(roomId)?.messages[0]?.content).toBe('owner a');
+  });
+
   it('rejects an old write that completes after clear while allowing the new generation', async () => {
     const roomId = 'clear-race-room';
     const controlledDb = installControlledIndexedDb();
@@ -151,9 +195,10 @@ describe('messageHistoryCache invalidation', () => {
 
     const storageKey = 'roomtalk-message-cache-generations';
     const persisted = JSON.parse(localStorage.getItem(storageKey) || '{}') as Record<string, number>;
+    const scopedRoomId = `${localStorage.getItem('clientId') || 'anonymous'}:${roomId}`;
     localStorage.setItem(storageKey, JSON.stringify({
       ...persisted,
-      [roomId]: (persisted[roomId] ?? 0) + 1,
+      [scopedRoomId]: (persisted[scopedRoomId] ?? 0) + 1,
     }));
 
     expect(readMemoryRoomMessageWindow(roomId)).toBeNull();
@@ -165,7 +210,8 @@ describe('messageHistoryCache invalidation', () => {
   it('honors a cross-tab invalidation tombstone until a verified rejoin', async () => {
     const roomId = 'cross-tab-missing-room';
     await writeCachedRoomMessageWindow(cachedWindow(roomId, 'before remote invalidation'));
-    localStorage.setItem(`roomtalk-message-cache-invalidated:${encodeURIComponent(roomId)}`, '1');
+    const scopedRoomId = `${localStorage.getItem('clientId') || 'anonymous'}:${roomId}`;
+    localStorage.setItem(`roomtalk-message-cache-invalidated:${encodeURIComponent(scopedRoomId)}`, '1');
 
     expect(readMemoryRoomMessageWindow(roomId)).toBeNull();
     await writeCachedRoomMessageWindow(cachedWindow(roomId, 'late remote-tab event'));

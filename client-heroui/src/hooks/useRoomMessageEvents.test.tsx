@@ -398,10 +398,21 @@ describe('useRoomMessageEvents', () => {
       content: 'Second text',
       timestamp: sameTimestamp,
     });
+    const agentTurn: RoomAgentTurn = {
+      id: 'turn-1',
+      roomId: 'room-1',
+      status: 'complete',
+      startedAt: sameTimestamp,
+      completedAt: sameTimestamp,
+      backend: 'code-agent',
+      assistantName: 'Coco',
+      updatedAt: sameTimestamp,
+    };
 
     socketMock.trigger('message_history', {
       roomId: 'room-1',
       messages: [firstAi, toolCall, toolResult, secondAi],
+      turns: [agentTurn],
       historyVersion: 1,
       hasMore: false,
       mode: 'replace',
@@ -413,6 +424,10 @@ describe('useRoomMessageEvents', () => {
       toolResult,
       secondAi,
     ]);
+    expect(cacheMock.writeCachedRoomMessageWindow).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      turns: [agentTurn],
+    }));
   });
 
   it('does not let a slower cached window overwrite server history', async () => {

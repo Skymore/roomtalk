@@ -33,7 +33,8 @@ import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sor
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
 import { getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode } from "../utils/codeAgent";
-import { invalidateCachedRoomMessageWindow, reactivateCachedRoomMessageWindow } from "../utils/messageHistoryCache";
+import { reactivateCachedRoomMessageWindow } from "../utils/messageHistoryCache";
+import { invalidatePersistentRoomCache } from "../utils/persistentCacheLifecycle";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -420,7 +421,7 @@ export const MessagePage: React.FC = () => {
         leaveRoom(roomId);
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
-        void invalidateCachedRoomMessageWindow(roomId);
+        void invalidatePersistentRoomCache(roomId);
         if (canRollbackToPreviousRoom && previousRoom && previousSession) {
           currentRoomRef.current = previousRoom;
           setCurrentRoom(previousRoom);
@@ -718,7 +719,7 @@ export const MessagePage: React.FC = () => {
     const handleRoomRemoved = (roomId: string) => {
       setRooms((previous) => previous.filter(room => room.id !== roomId));
       setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
-      void invalidateCachedRoomMessageWindow(roomId);
+      void invalidatePersistentRoomCache(roomId);
       const currentRoomAtRemoval = currentRoomRef.current;
       const removedPendingTarget = pendingRestoreRoomIdRef.current === roomId;
       if (currentRoomAtRemoval?.id !== roomId && !removedPendingTarget) {
@@ -784,7 +785,7 @@ export const MessagePage: React.FC = () => {
         leaveRoom(roomId);
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
-        void invalidateCachedRoomMessageWindow(roomId);
+        void invalidatePersistentRoomCache(roomId);
       }
       if (currentRoomRef.current?.id !== roomId) return;
       clearBackgroundRestoreState(roomId);
@@ -1106,7 +1107,7 @@ export const MessagePage: React.FC = () => {
         console.log('Server confirmed PERMANENT room deletion:', roomId);
         // A deleted room's cached shell is invalid regardless of which room is
         // active when the acknowledgement arrives.
-        void invalidateCachedRoomMessageWindow(roomId);
+        void invalidatePersistentRoomCache(roomId);
         // No need to update savedRooms here, that's handled by unsave.
         // The room list (`rooms` state) will be updated automatically
         // when the server sends the new 'room_list' event.

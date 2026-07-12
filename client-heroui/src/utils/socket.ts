@@ -21,6 +21,7 @@ import {
   RoomType,
 } from './types';
 import type { CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from './codexSettings';
+import { clearPersistentCachesForClient } from './persistentCacheLifecycle';
 
 // Get client ID from local storage or create a new one
 // This ID persists across browser sessions and uniquely identifies the user
@@ -1118,7 +1119,11 @@ export const getClientAccountStatus = async (targetClientId = getClientId()): Pr
   return response.json() as Promise<ClientAccountStatus>;
 };
 
-const adoptAuthenticatedClient = (response: ClientAuthResponse) => {
+const adoptAuthenticatedClient = async (response: ClientAuthResponse) => {
+  const previousClientId = getClientId();
+  if (previousClientId !== response.clientId) {
+    await clearPersistentCachesForClient(previousClientId);
+  }
   localStorage.setItem('clientId', response.clientId);
   const nickname = typeof response.nickname === 'string' ? response.nickname.trim() : '';
   if (nickname) {
@@ -1155,7 +1160,7 @@ export const loginWithClientPassword = async (targetClientId: string, password: 
     clientId: targetClientId,
     password,
   });
-  adoptAuthenticatedClient(response);
+  await adoptAuthenticatedClient(response);
   return { clientId: response.clientId, hasPassword: response.hasPassword };
 };
 
@@ -1164,11 +1169,12 @@ export const loginWithGoogleCredential = async (credential: string): Promise<Goo
     clientId: getClientId(),
     credential,
   }));
-  adoptAuthenticatedClient(response);
+  await adoptAuthenticatedClient(response);
   return response;
 };
 
 export const logoutClientPasswordSession = async (): Promise<void> => {
+  const currentClientId = getClientId();
   const token = getClientAuthToken();
   if (token) {
     await postJson('/api/client-auth/logout', {
@@ -1177,6 +1183,7 @@ export const logoutClientPasswordSession = async (): Promise<void> => {
     }).catch(() => undefined);
   }
   clearClientAuthToken();
+  await clearPersistentCachesForClient(currentClientId);
 };
 
 const putMediaObject = async (

@@ -10,6 +10,7 @@ import {
   registerMediaUploadTask,
 } from './mediaUploadTasks';
 import { completeMediaUpload, prepareMediaUpload } from './socket';
+import { cacheMediaBlob } from './mediaCache';
 
 vi.mock('browser-image-compression', () => ({
   default: vi.fn(),
@@ -20,9 +21,14 @@ vi.mock('./socket', () => ({
   completeMediaUpload: vi.fn(),
 }));
 
+vi.mock('./mediaCache', () => ({
+  cacheMediaBlob: vi.fn().mockResolvedValue(undefined),
+}));
+
 const compressionMock = vi.mocked(imageCompression);
 const prepareMock = vi.mocked(prepareMediaUpload);
 const completeMock = vi.mocked(completeMediaUpload);
+const cacheMediaBlobMock = vi.mocked(cacheMediaBlob);
 
 describe('media upload tasks', () => {
   beforeEach(() => {
@@ -96,5 +102,45 @@ describe('media upload tasks', () => {
     });
     expect(prepareMock).toHaveBeenCalledTimes(1);
     expect(prepareMock).toHaveBeenCalledWith(expect.objectContaining({ file: compressed }));
+  });
+
+  it('stores a completed upload blob in the persistent media cache without blocking completion', async () => {
+    const file = new File(['image'], 'cached.jpg', { type: 'image/jpeg' });
+    prepareMock.mockResolvedValue({
+      assetId: 'asset-cached',
+      objectKey: 'cached',
+      roomId: 'agent-room',
+      kind: 'image',
+      mimeType: 'image/jpeg',
+      byteSize: file.size,
+      filename: file.name,
+    });
+    completeMock.mockResolvedValue({
+      id: 'message-cached',
+      clientId: 'client-1',
+      roomId: 'agent-room',
+      content: '',
+      timestamp: '2026-07-12T00:00:00.000Z',
+      messageType: 'media',
+      mediaAsset: { id: 'asset-cached', kind: 'image', mimeType: 'image/jpeg', byteSize: file.size },
+    });
+    registerMediaUploadTask({
+      clientMessageId: 'cached-client',
+      roomId: 'agent-room',
+      file,
+      kind: 'image',
+      mimeType: file.type,
+      filename: file.name,
+    });
+
+    await completeRegisteredMediaUpload('cached-client');
+
+    expect(cacheMediaBlobMock).toHaveBeenCalledWith({
+      assetId: 'asset-cached',
+      roomId: 'agent-room',
+      kind: 'image',
+      blob: file,
+      mimeType: 'image/jpeg',
+    });
   });
 });

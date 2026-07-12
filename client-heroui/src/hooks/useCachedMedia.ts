@@ -8,8 +8,11 @@ export const useCachedMedia = (input: {
   mimeType?: string;
   byteSize?: number;
   cacheBodyFetchKey?: number | null;
+  roomId?: string;
+  isAccessVerified?: boolean;
+  cacheLookupKey?: number;
 }) => {
-  const { assetId, url, kind, mimeType, byteSize, cacheBodyFetchKey } = input;
+  const { assetId, url, kind, mimeType, byteSize, cacheBodyFetchKey, roomId, isAccessVerified = true, cacheLookupKey = 0 } = input;
   const [cachedUrl, setCachedUrl] = React.useState<string | null>(null);
   const [posterUrl, setPosterUrl] = React.useState<string | null>(null);
 
@@ -18,7 +21,7 @@ export const useCachedMedia = (input: {
     setCachedUrl(null);
     setPosterUrl(null);
 
-    if (!assetId || !url || !kind) {
+    if (!assetId || !kind || !isAccessVerified) {
       return () => {
         cancelled = true;
       };
@@ -29,6 +32,7 @@ export const useCachedMedia = (input: {
         assetId,
         kind,
         byteSize,
+        roomId,
       });
       if (!cancelled && mediaObjectUrl) {
         setCachedUrl(mediaObjectUrl);
@@ -38,12 +42,12 @@ export const useCachedMedia = (input: {
     return () => {
       cancelled = true;
     };
-  }, [assetId, byteSize, kind, url]);
+  }, [assetId, byteSize, cacheLookupKey, isAccessVerified, kind, roomId]);
 
   React.useEffect(() => {
     let cancelled = false;
 
-    if (!assetId || !url || !kind || cacheBodyFetchKey === null) {
+    if (!assetId || !url || !kind || !isAccessVerified || cacheBodyFetchKey === null) {
       return () => {
         cancelled = true;
       };
@@ -56,6 +60,7 @@ export const useCachedMedia = (input: {
         kind,
         mimeType,
         byteSize,
+        roomId,
       });
       if (!cancelled && mediaObjectUrl) {
         setCachedUrl(mediaObjectUrl);
@@ -65,12 +70,12 @@ export const useCachedMedia = (input: {
     return () => {
       cancelled = true;
     };
-  }, [assetId, byteSize, cacheBodyFetchKey, kind, mimeType, url]);
+  }, [assetId, byteSize, cacheBodyFetchKey, isAccessVerified, kind, mimeType, roomId, url]);
 
   React.useEffect(() => {
     let cancelled = false;
 
-    if (!assetId || !url || kind !== "video" || cacheBodyFetchKey === null) {
+    if (!assetId || !url || kind !== "video" || !isAccessVerified || cacheBodyFetchKey === null) {
       return () => {
         cancelled = true;
       };
@@ -80,6 +85,7 @@ export const useCachedMedia = (input: {
       const videoPosterUrl = await getCachedVideoPosterUrl({
         assetId,
         videoUrl: cachedUrl || url,
+        roomId,
       });
       if (!cancelled && videoPosterUrl) {
         setPosterUrl(videoPosterUrl);
@@ -89,7 +95,7 @@ export const useCachedMedia = (input: {
     return () => {
       cancelled = true;
     };
-  }, [assetId, cacheBodyFetchKey, cachedUrl, kind, url]);
+  }, [assetId, cacheBodyFetchKey, cachedUrl, isAccessVerified, kind, roomId, url]);
 
   return {
     mediaUrl: cachedUrl || url,

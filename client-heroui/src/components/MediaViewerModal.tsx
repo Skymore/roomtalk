@@ -94,6 +94,7 @@ interface MediaStageItemProps {
 
 interface MediaHistoryGridItemProps {
   item: RoomMediaHistoryItem;
+  roomId: string;
   isActive: boolean;
   sharedImageLabel: string;
   openMediaLabel: string;
@@ -254,6 +255,7 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, im
 
 const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   item,
+  roomId,
   isActive,
   sharedImageLabel,
   openMediaLabel,
@@ -268,6 +270,7 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
     mimeType: item.mimeType,
     byteSize: item.byteSize,
     cacheBodyFetchKey,
+    roomId,
   });
   const displayUrl = mediaUrl || item.url;
 
@@ -1946,6 +1949,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                         <MediaHistoryGridItem
                           key={item.assetId}
                           item={item}
+                          roomId={roomId}
                           isActive={item.assetId === activeMedia.assetId}
                           sharedImageLabel={t("sharedImage")}
                           openMediaLabel={t("openMediaItem")}

@@ -27,6 +27,7 @@ import { getSenderColorTheme } from "../utils/userProfile";
 import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
 import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
 import { getCodeAgentAssistantDisplayName, getCodeAgentModeLabelKey, normalizeCodeAgentMode } from "../utils/codeAgent";
+import { clearCachedMediaAsset, getCachedMediaObjectUrlFromCache } from "../utils/mediaCache";
 
 interface MessageItemProps {
   message: Message;
@@ -164,6 +165,7 @@ const ReplyReference: React.FC<{
 }> = ({ replyTo, roomId, isInteractionDisabled = false }) => {
   const { t } = useTranslation();
   const [signedUrl, setSignedUrl] = React.useState<string | null>(null);
+  const [localCachedUrl, setLocalCachedUrl] = React.useState<string | null>(null);
   const [mediaError, setMediaError] = React.useState(false);
   const mediaAsset = replyTo.mediaAsset;
   const playableMediaKind = getPlayableMediaKind(mediaAsset);
@@ -181,26 +183,41 @@ const ReplyReference: React.FC<{
     mimeType: mediaAsset?.mimeType,
     byteSize: mediaAsset?.byteSize,
     cacheBodyFetchKey,
+    roomId,
+    isAccessVerified: !isInteractionDisabled,
   });
-  const displayMediaUrl = isInteractionDisabled ? null : cachedDisplayMediaUrl;
+  const displayMediaUrl = isInteractionDisabled ? null : (localCachedUrl || cachedDisplayMediaUrl);
 
   React.useEffect(() => {
     if (isInteractionDisabled || !canRenderMedia || !mediaAsset?.id) {
       setSignedUrl(null);
+      setLocalCachedUrl(null);
       setMediaError(false);
       return () => {};
     }
 
     let cancelled = false;
     setSignedUrl(null);
+    setLocalCachedUrl(null);
     setMediaError(false);
 
-    getMediaDownloadUrl({ roomId, assetId: mediaAsset.id })
-      .then(({ url }) => {
-        if (!cancelled) {
-          setSignedUrl(url);
-        }
-      })
+    void (async () => {
+      const cachedUrl = playableMediaKind
+        ? await getCachedMediaObjectUrlFromCache({
+            assetId: mediaAsset.id,
+            kind: playableMediaKind,
+            byteSize: mediaAsset.byteSize,
+            roomId,
+          })
+        : null;
+      if (cancelled) return;
+      if (cachedUrl) {
+        setLocalCachedUrl(cachedUrl);
+        return;
+      }
+      const { url } = await getMediaDownloadUrl({ roomId, assetId: mediaAsset.id });
+      if (!cancelled) setSignedUrl(url);
+    })()
       .catch((error) => {
         console.error("Failed to get quoted media URL:", error);
         if (!cancelled) {
@@ -211,7 +228,7 @@ const ReplyReference: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [canRenderMedia, isInteractionDisabled, mediaAsset?.id, roomId]);
+  }, [canRenderMedia, isInteractionDisabled, mediaAsset?.byteSize, mediaAsset?.id, playableMediaKind, roomId]);
 
   let content: React.ReactNode = <div className="truncate">{fallbackPreview}</div>;
   if (canRenderMedia && displayMediaUrl && !mediaError) {
@@ -287,11 +304,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isMine = !isAI && message.clientId === clientId;
   const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
-  const [isMediaUrlLoading, setIsMediaUrlLoading] = React.useState(false);
   const [isMediaElementLoading, setIsMediaElementLoading] = React.useState(false);
   const [mediaLoadAttempt, setMediaLoadAttempt] = React.useState(0);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
+  const [localCachedMediaUrl, setLocalCachedMediaUrl] = React.useState<string | null>(null);
   const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
   const [audioTranscription, setAudioTranscription] = React.useState<AudioTranscription | null>(null);
   const [isAudioTranscriptionLoading, setIsAudioTranscriptionLoading] = React.useState(false);
@@ -438,25 +455,25 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }, [isInteractionDisabled, message.uiPayload]);
 
   React.useEffect(() => {
-    if (isInteractionDisabled || !signedMediaUrl || mediaError || (!isImage && !isVideo)) {
+    if (isInteractionDisabled || !(signedMediaUrl || localCachedMediaUrl) || mediaError || (!isImage && !isVideo)) {
       setIsMediaViewerOpen(false);
     }
-  }, [isImage, isInteractionDisabled, isVideo, mediaError, signedMediaUrl]);
+  }, [isImage, isInteractionDisabled, isVideo, localCachedMediaUrl, mediaError, signedMediaUrl]);
 
-  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl);
+  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl || localCachedMediaUrl);
 
   const loadSignedMediaUrl = React.useCallback(() => {
     if (message.localMediaPending) {
       setSignedMediaUrl(null);
+      setLocalCachedMediaUrl(null);
       setMediaError(false);
-      setIsMediaUrlLoading(false);
       setIsMediaElementLoading(false);
       return () => {};
     }
     if (!isMedia || !message.mediaAsset?.id) {
       setSignedMediaUrl(null);
+      setLocalCachedMediaUrl(null);
       setMediaError(false);
-      setIsMediaUrlLoading(false);
       setIsMediaElementLoading(false);
       return () => {};
     }
@@ -467,44 +484,58 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     // load (or retry after a reconnect) exactly once.
     if (isInteractionDisabled) {
       setSignedMediaUrl(null);
+      setLocalCachedMediaUrl(null);
       setIsMediaViewerOpen(false);
       setFileDownloadStatus('idle');
       setMediaError(false);
-      setIsMediaUrlLoading(false);
       setIsMediaElementLoading(false);
       return () => {};
     }
 
     let settled = false;
     setSignedMediaUrl(null);
+    setLocalCachedMediaUrl(null);
     setMediaError(false);
     setVideoPreviewError(false);
-    setIsMediaUrlLoading(true);
     setIsMediaElementLoading(true);
     const timeout = window.setTimeout(() => {
       if (settled) return;
       settled = true;
       setMediaError(true);
-      setIsMediaUrlLoading(false);
       setIsMediaElementLoading(false);
     }, 12000);
 
-    getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id })
-      .then(({ url }) => {
-        if (settled) return;
+    const playableKind = isImage ? "image" : isAudio ? "audio" : isVideo ? "video" : null;
+    void (async () => {
+      const cachedUrl = playableKind
+        ? await getCachedMediaObjectUrlFromCache({
+            assetId: message.mediaAsset!.id,
+            kind: playableKind,
+            byteSize: message.mediaAsset?.byteSize,
+            roomId: message.roomId,
+          })
+        : null;
+      if (settled) return;
+      if (cachedUrl) {
         settled = true;
         window.clearTimeout(timeout);
-        setSignedMediaUrl(url);
-        setIsMediaUrlLoading(false);
-        if (isFile) setIsMediaElementLoading(false);
-      })
+        setLocalCachedMediaUrl(cachedUrl);
+        return;
+      }
+
+      const { url } = await getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset!.id });
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      setSignedMediaUrl(url);
+      if (isFile) setIsMediaElementLoading(false);
+    })()
       .catch((error) => {
-        console.error("Failed to get media URL:", error);
         if (settled) return;
+        console.error("Failed to get media URL:", error);
         settled = true;
         window.clearTimeout(timeout);
         setMediaError(true);
-        setIsMediaUrlLoading(false);
         setIsMediaElementLoading(false);
       });
 
@@ -512,7 +543,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       settled = true;
       window.clearTimeout(timeout);
     };
-  }, [isFile, isInteractionDisabled, isMedia, message.localMediaPending, message.mediaAsset?.id, message.roomId]);
+  }, [isAudio, isFile, isImage, isInteractionDisabled, isMedia, isVideo, message.localMediaPending, message.mediaAsset, message.roomId]);
 
   React.useEffect(() => {
     return loadSignedMediaUrl();
@@ -523,13 +554,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }, [message.mediaAsset?.id]);
 
   React.useEffect(() => {
-    if (!signedMediaUrl || !isMediaElementLoading || (!isImage && !isAudio && !isVideo)) return;
+    if (!(signedMediaUrl || localCachedMediaUrl) || !isMediaElementLoading || (!isImage && !isAudio && !isVideo)) return;
     const timeout = window.setTimeout(() => {
       setMediaError(true);
       setIsMediaElementLoading(false);
     }, 15000);
     return () => window.clearTimeout(timeout);
-  }, [isAudio, isImage, isMediaElementLoading, isVideo, signedMediaUrl]);
+  }, [isAudio, isImage, isMediaElementLoading, isVideo, localCachedMediaUrl, signedMediaUrl]);
 
   React.useEffect(() => {
     if (!isAudio) {
@@ -594,6 +625,14 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }, [audioTranscription?.status, isAudio, isInteractionDisabled, message.id, message.roomId]);
 
   const handleMediaError = () => {
+    if (localCachedMediaUrl && message.mediaAsset?.id) {
+      const assetId = message.mediaAsset.id;
+      setLocalCachedMediaUrl(null);
+      void clearCachedMediaAsset(assetId).finally(() => {
+        if (componentMountedRef.current) setMediaLoadAttempt(value => value + 1);
+      });
+      return;
+    }
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
       setMediaLoadAttempt(value => value + 1);
@@ -606,6 +645,14 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
   const handleRetryMedia = () => {
     mediaRetryCountRef.current = 0;
+    if (localCachedMediaUrl && message.mediaAsset?.id) {
+      const assetId = message.mediaAsset.id;
+      setLocalCachedMediaUrl(null);
+      void clearCachedMediaAsset(assetId).finally(() => {
+        if (componentMountedRef.current) setMediaLoadAttempt(value => value + 1);
+      });
+      return;
+    }
     setMediaLoadAttempt(value => value + 1);
   };
 
@@ -687,7 +734,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         ? t('downloadFailed')
         : null;
 
-  const canOpenMediaViewer = Boolean(!isInteractionDisabled && signedMediaUrl && !mediaError && (isImage || isVideo));
   const { mediaUrl: cachedDisplayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
     assetId: message.mediaAsset?.id,
     url: signedMediaUrl,
@@ -695,8 +741,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     mimeType: message.mediaAsset?.mimeType,
     byteSize: message.mediaAsset?.byteSize,
     cacheBodyFetchKey,
+    roomId: message.roomId,
+    isAccessVerified: !isInteractionDisabled && !message.localMediaPending,
+    cacheLookupKey: mediaLoadAttempt,
   });
-  const displayMediaUrl = isInteractionDisabled ? null : (cachedDisplayMediaUrl || message.localMediaPreviewUrl || null);
+  const displayMediaUrl = isInteractionDisabled ? null : (localCachedMediaUrl || cachedDisplayMediaUrl || message.localMediaPreviewUrl || null);
+  const canOpenMediaViewer = Boolean(displayMediaUrl && !mediaError && (isImage || isVideo));
   const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
 
   const audioTranscriptionStatus = audioTranscription?.status || 'not_requested';
@@ -803,8 +853,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="truncate text-sm font-medium">{fileName}</div>
             <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
               {fileSize && <span>{fileSize}</span>}
-              {fileSize && isMediaUrlLoading && <span aria-hidden="true"> · </span>}
-              {isMediaUrlLoading && <span>{t('preparingMedia')}</span>}
             </div>
           </div>
           <Tooltip content={t('downloadFile')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
@@ -972,12 +1020,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       mediaContent = (
         <div
           role="status"
+          aria-label={t('loadingMedia')}
           aria-atomic="true"
-          className={`flex h-24 w-36 flex-col items-center justify-center gap-1 rounded-xl bg-[#e8e6dc] text-[#5e5d59] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
+          className={`flex h-24 w-36 animate-pulse items-center justify-center rounded-xl bg-[#e8e6dc] text-[#5e5d59] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
           style={senderOutlineElementStyle}
         >
           <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : isFile ? "lucide:file" : "lucide:image"} className="h-5 w-5" />
-          <span className="text-xs">{isMediaUrlLoading ? t('loadingMedia') : t('preparingMedia')}</span>
         </div>
       );
     }
@@ -986,8 +1034,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const handleCopyMessage = async () => {
     if (interactionDisabledRef.current) return;
     const success = isImage
-      ? signedMediaUrl
-        ? await copyImageToClipboard(signedMediaUrl)
+      ? displayMediaUrl
+        ? await copyImageToClipboard(displayMediaUrl)
         : false
       : await navigator.clipboard.writeText(message.content).then(() => true).catch((error) => {
         console.error("Failed to copy message:", error);

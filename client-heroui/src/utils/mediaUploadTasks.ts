@@ -5,6 +5,7 @@ import {
   type PreparedMediaUpload,
 } from './socket';
 import type { MediaKind, Message } from './types';
+import { cacheMediaBlob } from './mediaCache';
 
 export const CHAT_IMAGE_TARGET_BYTES = 5 * 1024 * 1024;
 export const MEDIA_PREPARATION_CONCURRENCY = 3;
@@ -110,6 +111,15 @@ export const completeRegisteredMediaUpload = async (clientMessageId: string): Pr
     durationMs: task.durationMs,
     signal: task.controller.signal,
   });
+  if (task.kind === 'image' || task.kind === 'audio' || task.kind === 'video') {
+    void Promise.resolve(cacheMediaBlob({
+      assetId: upload.assetId,
+      roomId: task.roomId,
+      kind: task.kind,
+      blob: task.compressedFile || task.file,
+      mimeType: upload.mimeType,
+    })).catch(error => console.warn('Sent media could not be cached locally:', error));
+  }
   tasks.delete(clientMessageId);
   if (task.previewUrl) {
     window.setTimeout(() => URL.revokeObjectURL(task.previewUrl!), 30_000);

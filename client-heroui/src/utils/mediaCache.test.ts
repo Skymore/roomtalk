@@ -28,6 +28,7 @@ describe("mediaCache", () => {
 
   beforeEach(() => {
     cachesByName.clear();
+    localStorage.setItem("clientId", "client-1");
     objectUrlIndex = 0;
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -110,7 +111,7 @@ describe("mediaCache", () => {
       "/roomtalk-media-cache/body/cached-image-asset",
       new Response(new Blob(["image"], { type: "image/webp" }), { status: 200 }),
     );
-    cachesByName.set("roomtalk-media-body-v1", bodyCache);
+    cachesByName.set("roomtalk-media-body-v2:client-1", bodyCache);
 
     await expect(getCachedMediaObjectUrlFromCache({
       assetId: "cached-image-asset",
@@ -143,7 +144,7 @@ describe("mediaCache", () => {
       "/roomtalk-media-cache/poster/video-asset.jpg",
       new Response(new Blob(["poster"], { type: "image/jpeg" }), { status: 200 }),
     );
-    cachesByName.set("roomtalk-video-poster-v1", posterCache);
+    cachesByName.set("roomtalk-video-poster-v2:client-1", posterCache);
 
     await expect(getCachedVideoPosterUrl({
       assetId: "video-asset",

@@ -3,14 +3,17 @@ import { clientId, socket } from '../utils/socket';
 import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomAgentTurn, RoomMessageHistoryPayload } from '../utils/types';
 import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
 import { clearCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCache';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
+const getEmptyAgentTurns = () => [] as RoomAgentTurn[];
 
 interface UseRoomMessageEventsArgs {
   roomId: string;
   isRoomSessionReady?: boolean;
   containerRef: RefObject<HTMLDivElement>;
   getCurrentMessages: () => Message[];
+  getCurrentAgentTurns?: () => RoomAgentTurn[];
   updateMessages: (updater: SetStateAction<Message[]>) => void;
   setAgentTurns: Dispatch<SetStateAction<RoomAgentTurn[]>>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
@@ -34,6 +37,7 @@ export const useRoomMessageEvents = ({
   isRoomSessionReady = true,
   containerRef,
   getCurrentMessages,
+  getCurrentAgentTurns = getEmptyAgentTurns,
   updateMessages,
   setAgentTurns,
   setIsLoading,
@@ -75,9 +79,10 @@ export const useRoomMessageEvents = ({
     let cancelled = false;
     let serverHistoryLoaded = false;
 
-    const memoryWindow = readMemoryRoomMessageWindow(roomId);
+    const memoryWindow = isRoomSessionReady ? readMemoryRoomMessageWindow(roomId) : null;
     const filterRoomMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
     const memoryMessages = memoryWindow ? filterRoomMessages(memoryWindow.messages) : [];
+    const memoryTurns = memoryWindow?.turns?.filter(turn => turn.roomId === roomId) || [];
 
     historyVersionRef.current = memoryWindow?.historyVersion ?? 0;
     hasMoreMessagesRef.current = memoryWindow?.hasMore ?? false;
@@ -109,10 +114,12 @@ export const useRoomMessageEvents = ({
       historyVersion = historyVersionRef.current,
       hasMore = hasMoreMessagesRef.current,
       oldestMessageId = oldestMessageIdRef.current,
+      turns = getCurrentAgentTurns(),
     ) => {
       writeCachedRoomMessageWindow({
         roomId,
         messages: filterRoomMessages(messages),
+        turns: turns.filter(turn => turn.roomId === roomId),
         historyVersion,
         hasMore,
         oldestMessageId,
@@ -139,9 +146,14 @@ export const useRoomMessageEvents = ({
       }, delayMs);
     };
 
-    if (memoryWindow) {
+    if (!isRoomSessionReady) {
+      updateMessages([]);
+      setAgentTurns([]);
+      setIsLoading(true);
+    } else if (memoryWindow) {
       // Synchronous in-memory hit: render instantly, no blank/loading flash.
       updateMessages(memoryMessages);
+      setAgentTurns(memoryTurns);
       setHistoryVersionState(memoryWindow.historyVersion);
       setHasMoreMessagesState(memoryWindow.hasMore);
       setOldestMessageIdState(memoryWindow.oldestMessageId);
@@ -157,6 +169,7 @@ export const useRoomMessageEvents = ({
         }
 
         updateMessages(filterRoomMessages(cachedWindow.messages));
+        setAgentTurns(cachedWindow.turns?.filter(turn => turn.roomId === roomId) || []);
         setHistoryVersionState(cachedWindow.historyVersion);
         setHasMoreMessagesState(cachedWindow.hasMore);
         setOldestMessageIdState(cachedWindow.oldestMessageId);
@@ -200,7 +213,13 @@ export const useRoomMessageEvents = ({
           setShowScrollButton(false);
           scheduleScroll('auto', 0);
         }
-        cacheCurrentWindow(roomMessages, historyPayload.historyVersion, historyPayload.hasMore, historyPayload.oldestMessageId);
+        cacheCurrentWindow(
+          roomMessages,
+          historyPayload.historyVersion,
+          historyPayload.hasMore,
+          historyPayload.oldestMessageId,
+          historyPayload.turns || [],
+        );
       }
 
       setHasMoreMessagesState(historyPayload.hasMore);
@@ -237,9 +256,9 @@ export const useRoomMessageEvents = ({
       if (turn.roomId !== roomId) return;
       setAgentTurns(previous => {
         const index = previous.findIndex(item => item.id === turn.id);
-        if (index === -1) return [...previous, turn];
-        const next = [...previous];
-        next[index] = turn;
+        const next = index === -1 ? [...previous, turn] : [...previous];
+        if (index !== -1) next[index] = turn;
+        cacheCurrentWindow(getCurrentMessages(), historyVersionRef.current, hasMoreMessagesRef.current, oldestMessageIdRef.current, next);
         return next;
       });
     };
@@ -326,6 +345,7 @@ export const useRoomMessageEvents = ({
         updateMessages([]);
         setAgentTurns([]);
         void clearCachedRoomMessageWindow(roomId);
+        void clearCachedMediaForRoom(roomId);
         bumpLocalHistoryVersion();
         setHasMoreMessagesState(false);
         setOldestMessageIdState(undefined);
@@ -364,6 +384,10 @@ export const useRoomMessageEvents = ({
         serverHistoryLoaded = true;
         const nextHistoryVersion = bumpLocalHistoryVersion();
         updateMessages(prev => {
+          const deletedMessage = prev.find(msg => msg.id === deletedMessageId);
+          if (deletedMessage?.mediaAsset?.id) {
+            void clearCachedMediaAsset(deletedMessage.mediaAsset.id);
+          }
           const next = prev.filter(msg => msg.id !== deletedMessageId);
           if (next.length !== prev.length) {
             if (oldestMessageIdRef.current === deletedMessageId) {
@@ -430,6 +454,7 @@ export const useRoomMessageEvents = ({
     roomId,
     containerRef,
     getCurrentMessages,
+    getCurrentAgentTurns,
     updateMessages,
     setAgentTurns,
     setIsLoading,

@@ -122,6 +122,7 @@ describe('MessageItem replies', () => {
     downloadMediaUrlMock.mockReset();
     downloadMediaBlobMock.mockReset();
     sendA2UIActionMock.mockReset();
+    vi.unstubAllGlobals();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {
@@ -984,6 +985,43 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('renders a verified room image from persistent cache without requesting a signed URL', async () => {
+    localStorage.setItem('clientId', 'viewer');
+    vi.stubGlobal('caches', {
+      open: vi.fn(async (name: string) => ({
+        match: vi.fn(async (key: string) => (
+          name === 'roomtalk-media-body-v2:viewer'
+          && key === '/roomtalk-media-cache/body/persisted-image'
+            ? new Response(new Blob(['cached'], { type: 'image/webp' }))
+            : null
+        )),
+      })),
+    });
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:persisted-image');
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'persisted-image-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'persisted-image', kind: 'image', mimeType: 'image/webp', byteSize: 6 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText('sharedImage').getAttribute('src')).toBe('blob:persisted-image');
+    });
+    expect(getMediaDownloadUrlMock).not.toHaveBeenCalled();
+    createObjectUrl.mockRestore();
+  });
+
   it('keeps a visible image loading skeleton until the media element loads', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/loading.webp' });
     render(
@@ -1036,11 +1074,19 @@ describe('MessageItem replies', () => {
       />
     );
 
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     await act(async () => { vi.advanceTimersByTime(12000); });
     expect(screen.getByRole('alert').textContent).toContain('mediaLoadFailed');
 
     fireEvent.click(screen.getByLabelText('retryMedia'));
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     const retriedImage = screen.getByAltText('sharedImage');
     expect(retriedImage.getAttribute('src')).toBe('https://signed.example/retried.webp');
 
