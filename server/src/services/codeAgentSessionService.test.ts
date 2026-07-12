@@ -1937,7 +1937,7 @@ describe('CodeAgentSessionService', () => {
       logger,
       tokenSecret: 'static-publish-secret',
       publicBaseUrl: 'https://room.ruit.me',
-      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://room.ruit.me'],
+      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://admin.room.ruit.me'],
       nodeEnv: 'production',
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',

@@ -13,16 +13,16 @@ describe('resolveCorsOrigin', () => {
   it('uses CLIENT_URLS for multiple production origins', () => {
     assert.deepEqual(resolveCorsOrigin({
       NODE_ENV: 'production',
-      CLIENT_URLS: ' https://room.ruit.me, https://room.ruit.me ',
-    }), ['https://room.ruit.me', 'https://room.ruit.me']);
+      CLIENT_URLS: ' https://room.ruit.me, https://admin.room.ruit.me ',
+    }), ['https://room.ruit.me', 'https://admin.room.ruit.me']);
   });
 
   it('combines CLIENT_URLS and CLIENT_URL without duplicates', () => {
     assert.deepEqual(resolveCorsOrigin({
       NODE_ENV: 'production',
-      CLIENT_URLS: 'https://room.ruit.me,https://room.ruit.me',
+      CLIENT_URLS: 'https://room.ruit.me,https://admin.room.ruit.me',
       CLIENT_URL: 'https://room.ruit.me',
-    }), ['https://room.ruit.me', 'https://room.ruit.me']);
+    }), ['https://room.ruit.me', 'https://admin.room.ruit.me']);
   });
 
   it('falls back to wildcard for local development without CLIENT_URL', () => {

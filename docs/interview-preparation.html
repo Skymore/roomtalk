@@ -364,8 +364,8 @@
 <main>
 
 <h1><span data-lang="zh">RoomTalk 面试准备资料</span><span data-lang="en">RoomTalk Interview Preparation</span></h1>
-<p class="subtitle" data-lang="zh">重点覆盖共享 sandbox Code Agent runtime、实时协作、持久化、安全边界、故障恢复和常见追问</p>
-<p class="subtitle" data-lang="en">Focused on the shared sandboxed code-agent runtime, realtime collaboration, persistence, security boundaries, recovery, and interview follow-ups</p>
+<p class="subtitle" data-lang="zh">重点覆盖共享 sandbox Code Agent runtime、实时协作、持久化、安全边界、故障恢复和常见追问 · <a href="https://room.ruit.me/" target="_blank" rel="noopener noreferrer">在线应用</a></p>
+<p class="subtitle" data-lang="en">Focused on the shared sandboxed code-agent runtime, realtime collaboration, persistence, security boundaries, recovery, and interview follow-ups · <a href="https://room.ruit.me/" target="_blank" rel="noopener noreferrer">Live app</a></p>
 
 <!-- ==================== 一、30秒 ==================== -->
 <hr>
@@ -1187,28 +1187,28 @@ Mobile WebSocket recovery was where we hit the most bugs. The core approach is "
   <li>Backup and recovery less mature than relational databases</li>
 </ul>
 
-<p data-lang="zh"><strong>解决方案</strong> — 渐进式迁移，不停服：</p>
-<p data-lang="en"><strong>Solution</strong> — Incremental migration, zero downtime:</p>
+<p data-lang="zh"><strong>解决方案</strong> — 先兼容两种模型，再在维护窗口做最终同步：</p>
+<p data-lang="en"><strong>Solution</strong> — Support both models first, then perform the final sync in a maintenance window:</p>
 <ol data-lang="zh">
   <li>抽象出 <code>DurableRoomStore</code> 接口，<code>RedisStore</code> 和 <code>PostgresStore</code> 各自实现。</li>
   <li><code>CompositeRoomStore</code> 组合 durable + realtime，切换 durable 实现只需要改环境变量。</li>
-  <li>写了幂等迁移脚本 <code>migrate:redis-to-postgres</code>，支持 dry-run。</li>
+  <li>写了幂等迁移脚本 <code>migrate:redis-to-postgres</code>，支持 dry-run，覆盖当前全部 durable record。</li>
   <li>加了 <code>smoke:persistence</code> 安全测试，保护不会误连生产 Redis。</li>
-  <li>回滚是纯配置切换：<code>PERSISTENCE_STORE=redis</code>，因为迁移期间不删 Redis 数据。</li>
+  <li>在冻结写入的切换窗口内可纯配置回滚；一旦 PostgreSQL 接收了独有写入，就不能无损切回 Redis。</li>
 </ol>
 <ol data-lang="en">
   <li>Extracted a <code>DurableRoomStore</code> interface with separate <code>RedisStore</code> and <code>PostgresStore</code> implementations.</li>
   <li><code>CompositeRoomStore</code> combines durable + realtime — switching the durable implementation only requires changing an environment variable.</li>
-  <li>Wrote an idempotent migration script <code>migrate:redis-to-postgres</code> with dry-run support.</li>
+  <li>Wrote an idempotent migration script <code>migrate:redis-to-postgres</code> with dry-run support and coverage for every current durable record.</li>
   <li>Added <code>smoke:persistence</code> safety tests to prevent accidental connection to production Redis.</li>
-  <li>Rollback is pure config: <code>PERSISTENCE_STORE=redis</code>, since Redis data is preserved during migration.</li>
+  <li>Config-only rollback is safe during the frozen cutover window; after PostgreSQL accepts unique writes, switching back to Redis is lossy.</li>
 </ol>
 
 <blockquote data-lang="zh">
-我们做了一个 Store 接口抽象层，Redis 和 PostgreSQL 各自实现相同接口。上层代码完全不知道底下是哪个数据库。切换只需要改一个环境变量，回滚也是。迁移脚本是幂等的，可以反复跑。这样我们在生产环境做了零停机迁移。
+我们做了一个 Store 接口抽象层：<code>R</code> 模型由 Redis 同时承担 durable 和 realtime，<code>R+P</code> 模型由 PostgreSQL 承担 durable、Redis 保留 realtime，不支持纯 <code>P</code>。迁移脚本支持 dry-run 和幂等重跑；生产切换用短维护窗口冻结写入，避免最终同步期间丢数据。
 </blockquote>
 <blockquote data-lang="en">
-We built a Store interface abstraction layer — Redis and PostgreSQL each implement the same interface. Upper-level code has no idea which database is underneath. Switching requires changing a single environment variable; so does rollback. The migration script is idempotent and can be run repeatedly. This enabled zero-downtime migration in production.
+We built a Store abstraction with two supported models: Redis owns durable and realtime state in <code>R</code>; PostgreSQL owns durable state and Redis retains realtime duties in <code>R+P</code>. PostgreSQL-only is unsupported. The migration supports dry-run and idempotent reruns; production used a short write-freeze maintenance window for the final sync.
 </blockquote>
 
 <!-- ===== 难点8：房间同步 ===== -->
@@ -1687,18 +1687,18 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <h4>故事 2：PostgreSQL 持久化迁移</h4>
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">项目最初用 Redis 做全量持久化，数据增长后内存成本上升，且缺少关系约束。</div>
-    <div class="star-label t">Task</div><div class="star-val">在不停服的情况下迁移到 PostgreSQL。</div>
-    <div class="star-label a">Action</div><div class="star-val">设计了 Store 接口抽象层，实现 Redis 和 PostgreSQL 双实现，写了幂等迁移脚本和安全 smoke 测试，通过环境变量切换实现零停机迁移。</div>
-    <div class="star-label r">Result</div><div class="star-val">Redis 和 PostgreSQL 通过同一 store contract、migration smoke 和 Playwright 流程验证；生产可以按配置切换并保留明确回滚路径，Redis 只承担实时状态和缓存职责。</div>
+    <div class="star-label t">Task</div><div class="star-val">把持久事实迁移到 PostgreSQL，同时保留 Redis 实时能力和可验证的切换路径。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计 Store 接口抽象层和 <code>R</code> / <code>R+P</code> 两种模型，实现支持 dry-run 和幂等重跑的全量 durable-data 迁移，并用维护窗口做最终同步。</div>
+    <div class="star-label r">Result</div><div class="star-val">Redis 和 PostgreSQL 通过同一 store contract、migration smoke 和 Playwright 流程验证；生产运行 <code>R+P</code>，PostgreSQL 作为持久事实源，Redis 保留实时状态和缓存职责。</div>
   </div>
 </div>
 <div class="card" data-lang="en">
   <h4>Story 2: PostgreSQL Persistence Migration</h4>
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">The project originally used Redis for all persistence. As data grew, memory costs increased and we lacked relational constraints.</div>
-    <div class="star-label t">Task</div><div class="star-val">Migrate to PostgreSQL with zero downtime.</div>
-    <div class="star-label a">Action</div><div class="star-val">Designed a Store interface abstraction layer, implemented both Redis and PostgreSQL backends, wrote an idempotent migration script and safety smoke tests, and used environment variable switching for zero-downtime migration.</div>
-    <div class="star-label r">Result</div><div class="star-val">Redis and PostgreSQL now pass the same store contracts, migration smoke, and Playwright flows. Production can switch by configuration with an explicit rollback path, while Redis is limited to realtime state and caching.</div>
+    <div class="star-label t">Task</div><div class="star-val">Move durable facts to PostgreSQL while retaining Redis realtime capabilities and a verifiable cutover path.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed the Store abstraction and <code>R</code> / <code>R+P</code> models, implemented a full durable-data migration with dry-run and idempotent reruns, and performed the final sync in a maintenance window.</div>
+    <div class="star-label r">Result</div><div class="star-val">Redis and PostgreSQL pass the same store contracts, migration smoke, and Playwright flows. Production runs <code>R+P</code>: PostgreSQL is the durable source of truth while Redis retains realtime and cache responsibilities.</div>
   </div>
 </div>
 

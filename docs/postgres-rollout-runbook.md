@@ -1,10 +1,33 @@
 # PostgreSQL Rollout Runbook
 
+Verified against `master` and `https://room.ruit.me/api/status`: 2026-07-12
+
+Current production status: `PERSISTENCE_STORE=postgres`; Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, model-gateway counters, and the bounded recent-message cache.
+
+## Supported Storage Models
+
+RoomTalk supports two deployment models, not three:
+
+| `PERSISTENCE_STORE` | Durable source of truth | Realtime coordination/cache | Shorthand |
+| --- | --- | --- | --- |
+| `redis` | Redis | Redis | `R` |
+| `postgres` | PostgreSQL | Redis | `R+P` |
+
+There is no supported PostgreSQL-only (`P`) model: Socket.IO scaling, presence, socket sessions, pub/sub, counters, and the bounded recent-message cache still require Redis.
+
 ## Goal
 
-Move durable room data from Redis to PostgreSQL while keeping Redis available for Socket.IO scaling, realtime session state, online membership, and short TTL message cache.
+`migrate:redis-to-postgres` performs the one-way durable-data bootstrap from `R` to `R+P`. It migrates the current Redis durable model:
 
-Redis-only mode remains the rollback path. Do not delete Redis room/message data until PostgreSQL mode has been verified in production.
+- rooms, full message histories, members, saves, password hashes, AI-cost totals;
+- Code Agent turns and media metadata;
+- pending media uploads, audio transcriptions, assistant runs, and outbox events;
+- push subscriptions, client accounts/links, passwords, auth tokens, and nicknames;
+- Codex and GitHub connection records.
+
+It intentionally does not copy realtime/cache state: presence, socket sessions, Socket.IO pub/sub, recent-message cache entries, idempotency indexes, expiry indexes, or live Code Agent room leases/fence counters. Those records are rebuilt or reacquired after cutover. Codex auth-refresh lease fields are cleared while copying the durable connection record.
+
+This is a cutover tool, not a general Redis backup/restore utility or a reverse `R+P` to `R` synchronizer.
 
 ## Required Inputs
 
@@ -13,6 +36,7 @@ Redis-only mode remains the rollback path. Do not delete Redis room/message data
 - `POSTGRES_SSL=true` for managed PostgreSQL providers that require TLS.
 - `POSTGRES_SSL_REJECT_UNAUTHORIZED=true` by default. Set `false` only for intentionally self-signed TLS.
 - Optional managed-provider CA: `POSTGRES_SSL_CA_BASE64` preferred, or `POSTGRES_SSL_CA`.
+- A dedicated non-superuser application role. `npm run provision:postgres-app-user` can create/update it and grant the current RoomTalk tables and sequences when run with an administrative `DATABASE_URL` plus `APP_DATABASE_USER` / `APP_DATABASE_PASSWORD`.
 
 ## Preflight
 
@@ -44,7 +68,10 @@ Expected checks:
 
 - `roomsRead` matches the expected Redis room count.
 - `messagesRead` is plausible for current production traffic.
+- room-related counts and every `globalRecordsRead` category match an independent Redis inventory.
 - `failures` is empty. If not empty, inspect and fix before continuing.
+
+Dry-run parses every supported durable Redis record and does not initialize PostgreSQL. Invalid JSON or a room save missing its `savedAt` counterpart fails closed instead of fabricating data.
 
 ## Migration
 
@@ -63,9 +90,10 @@ Recommended final-sync sequence for Fly:
 
 The migration is idempotent:
 
-- Rooms are upserted.
+- Rooms and related durable records are upserted by their stable keys.
 - Message history is replaced per room, so repeated runs do not duplicate messages.
 - AI cost totals are set to the exact Redis total, not incremented.
+- Auth-token `lastUsedAt` is preserved; live lease ownership is not.
 
 ```bash
 cd server
@@ -76,8 +104,9 @@ Expected checks:
 
 - `roomsWritten` equals `roomsRead` unless failures were reported.
 - `messagesWritten` equals `messagesRead`.
+- every room-related and `globalRecordsWritten` count equals its corresponding read count.
 - `failures` is empty.
-- If the command is run a second time, the same counts should appear without duplicate messages or increased cost totals.
+- If the command is run a second time, the same counts should appear without duplicates or increased cost totals.
 
 ## Cutover
 
@@ -92,6 +121,8 @@ fly secrets set ROOM_MESSAGES_CACHE_TTL_SECONDS="30"
 ```
 
 For non-Fly deployments, set the same environment variables in the platform secret manager.
+
+The app initializes additive PostgreSQL schema on startup, but production credentials should use the dedicated application role rather than an owner/superuser account.
 
 ## Verification
 
@@ -111,7 +142,9 @@ For non-Fly deployments, set the same environment variables in the platform secr
 
 ## Rollback
 
-Rollback is configuration-only as long as Redis data has not been deleted:
+Configuration-only rollback is safe only inside the frozen cutover window, before PostgreSQL has accepted writes that Redis did not receive. The application does not dual-write durable data after cutover. Once production traffic resumes, switching back to Redis can discard every PostgreSQL-only durable record.
+
+For an immediate cutover failure while writes are still frozen:
 
 ```bash
 fly secrets set PERSISTENCE_STORE="redis"
@@ -125,12 +158,14 @@ After rollback:
 - Confirm existing rooms and messages load from Redis.
 - Keep PostgreSQL data for analysis; do not truncate it during incident response.
 
+For a later incident, prefer restoring PostgreSQL or running a separately designed reverse/full migration. Do not flip `PERSISTENCE_STORE=redis` until data divergence has been measured and explicitly accepted.
+
 ## Cleanup Window
 
-Only consider Redis durable-data cleanup after:
+Only consider legacy Redis durable-data cleanup after:
 
 - PostgreSQL mode has been stable through at least one normal production traffic window.
 - Migration statistics and `/api/status` room counts have been reconciled.
-- A rollback decision has been explicitly closed.
+- The configuration-only rollback window has been explicitly closed and PostgreSQL backup/restore has become the durable recovery path.
 
 Even after cleanup, Redis is still required for Socket.IO adapter state and realtime room membership.

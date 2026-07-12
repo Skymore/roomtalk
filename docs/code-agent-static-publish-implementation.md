@@ -1,6 +1,6 @@
 # Code Agent Static Publish Implementation
 
-Date: 2026-06-30
+Verified against `master`: 2026-07-12
 
 ## Architecture
 
@@ -11,21 +11,22 @@ sequenceDiagram
     participant UI as RoomTalk UI
     participant Node as RoomTalk Server
     participant Runner as roomtalk_code_agent_runner
-    participant Code Agent as Code Agent engine
+    participant Agent as Coco / Codex app-server
     participant Store as Object Storage
 
     User->>UI: ask Code Agent to build and publish a static page
     UI->>Node: ask_ai
     Node->>Runner: run request + scoped publish URL/token
-    Runner->>Code Agent: Shell + RoomTalk CLI instructions
-    Code Agent->>Runner: roomtalk site publish --root ... --slug ...
+    Runner->>Agent: Shell + RoomTalk CLI instructions
+    Agent->>Runner: roomtalk site publish --root ... --slug ...
     Runner->>Runner: read and validate workspace files
-    Runner->>Node: POST /api/code-agent/publish-static-site
-    Node->>Node: verify token and validate files
-    Node->>Store: write versioned files
-    Node->>Store: write manifest
+    Runner->>Node: POST .../prepare with paths and sizes
+    Node-->>Runner: signed upload token + presigned PUT URLs
+    Runner->>Store: upload versioned files directly
+    Runner->>Node: POST .../finalize
+    Node->>Store: HEAD each object and atomically write manifest/index
     Node-->>Runner: public URL
-    Runner-->>Code Agent: tool result with URL
+    Runner-->>Agent: CLI result with URL
     User->>Node: GET /p/:slug/
     Node->>Store: read manifest + file
     Node-->>User: static content
@@ -35,7 +36,7 @@ sequenceDiagram
 
 ### 1. `PublishedStaticSiteService`
 
-New service under `server/src/services/publishedStaticSite.ts`.
+Implemented in `server/src/services/publishedStaticSite.ts`.
 
 Responsibilities:
 
@@ -58,6 +59,8 @@ published-sites/
         assets/app.js
         assets/style.css
 ```
+
+The room index lives at `published-sites/by-room/<base64url-room-id>/index.json`; it tracks the slugs and version object keys owned by a room so unpublish and room deletion can clean them without listing the bucket.
 
 Manifest shape:
 
@@ -88,7 +91,7 @@ Manifest shape:
 
 ### 2. Publish Routes
 
-New route module under `server/src/routes/publishedStaticSiteRoutes.ts`.
+Implemented in `server/src/routes/publishedStaticSiteRoutes.ts`.
 
 Routes:
 
@@ -119,14 +122,15 @@ Routes:
   - Reads manifest and serves the requested file.
   - No path means the manifest entry file.
   - Directory paths fall back to `<dir>/index.html`, then manifest entry for SPA-style routes.
+  - The route confirms the owning room still exists before serving, emits `nosniff`/no-referrer/cache headers, and allows credentialless CORS because the built-in browser loads public sites in an iframe with an opaque origin.
 
 ### 3. Media Object Storage
 
-`MediaObjectStorage` already supports local development and S3-compatible writes. S3 needs `getMediaObject` so the app can proxy public published files without signed URLs.
+`MediaObjectStorage` supplies local and S3-compatible reads/writes, presigned PUTs, `HEAD`, and deletion. File bodies bypass Fly on the direct-upload path; Fly still proxies public reads so it can resolve manifests, SPA fallbacks, MIME types, and room ownership consistently.
 
 ### 4. Code Agent Session Env
 
-`CodeAgentSessionService` should issue a per-turn publish token and pass these environment variables only to the runner process:
+`CodeAgentSessionService` issues a per-turn publish token and passes these environment variables only in the runner/daemon run environment:
 
 ```text
 ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH=true
@@ -148,11 +152,11 @@ roomtalk site unpublish --slug roomtalk-demo
 
 ### 5. RoomTalk CLI
 
-The runner exposes static-site management only through the shared `roomtalk` CLI. The previous native `PublishStaticSite` engine tool is removed so Coco, Codex CLI, and Codex app-server use one contract.
+The runner exposes static-site management only through the shared `roomtalk` CLI. The previous native `PublishStaticSite` engine tool is removed so Coco and Codex app-server use one contract. The legacy Codex CLI adapter retains the same CLI only for compatibility.
 
 `roomtalk site list --json` is read-only and uses the room-context broker, so it is available in every mode without exposing a publish token. `site publish` and `site unpublish` require all of:
 
-- Mode is Edit, Approve for me, or Full access (`acceptEdits` is treated as the legacy alias for Edit).
+- Mode is Ask (`edit`), Auto (`approveForMe`), or Full (`fullAccess`); `acceptEdits` remains a legacy alias for `edit`.
 - `ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH=true`.
 - Publish URL and token are present.
 
@@ -215,7 +219,7 @@ roomtalk site unpublish --slug roomtalk-demo
 
 ### Integration
 
-- `CodeAgentSessionService` passes the scoped publish env only to JSONL runner turns.
+- `CodeAgentSessionService` passes the scoped publish env only to the JSONL/daemon run request, never the browser or durable transcript.
 - The publish env includes room, client, turn, and mode-bound token claims.
 
 ## Deployment

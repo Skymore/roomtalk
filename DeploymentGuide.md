@@ -145,7 +145,7 @@ After deployment, set environment variables:
    ```bash
    fly secrets set NODE_ENV="production"
    fly secrets set CLIENT_URL="https://room.ruit.me"
-   fly secrets set CLIENT_URLS="https://room.ruit.me,https://room.ruit.me"
+   fly secrets set CLIENT_URLS="https://room.ruit.me"
    fly secrets set REDIS_URL="redis://default:password@fly-message-system-redis.upstash.io:6379"
    ```
    When you use the `fly secrets set` command, Fly.io automatically restarts your application to apply the new environment variables.
@@ -214,7 +214,7 @@ The application requires these environment variables:
 | ROOM_MESSAGES_CACHE_TTL_SECONDS | Redis message cache TTL in PostgreSQL mode; `0` disables cache writes | 30 |
 | NODE_ENV | Running environment | production |
 | CLIENT_URL | Primary client address, also used by public callback defaults | https://room.ruit.me |
-| CLIENT_URLS | Comma-separated CORS origin allowlist for multiple production domains | https://room.ruit.me,https://room.ruit.me |
+| CLIENT_URLS | Comma-separated CORS origin allowlist; use one value when production has one canonical origin | https://room.ruit.me |
 | DEEPSEEK_API_KEY | DeepSeek official API key for the default model | sk-... |
 | OPENROUTER_API_KEY | OpenRouter key for routed models and AI role drafts | sk-or-... |
 | ANTHROPIC_API_KEY | Optional Anthropic official API key | sk-ant-... |
@@ -228,7 +228,7 @@ The application requires these environment variables:
 
 ## PostgreSQL Rollout
 
-Redis-only persistence remains the default and is the safest rollback path. To cut over durable data to PostgreSQL:
+RoomTalk supports Redis durable + realtime (`R`) and PostgreSQL durable + Redis realtime (`R+P`); PostgreSQL-only is not supported. To cut over durable data from `R` to `R+P`:
 
 1. Keep the current Redis deployment running and create a PostgreSQL database.
 2. Preview migration without writing PostgreSQL:
@@ -248,7 +248,7 @@ Redis-only persistence remains the default and is the safest rollback path. To c
    ```
 5. Verify `/api/status` shows `persistenceStore: "postgres"` and the expected room count.
 
-Rollback is configuration-only: set `PERSISTENCE_STORE` back to `redis` and restart/redeploy:
+Configuration-only rollback is safe only while writes remain frozen and PostgreSQL has not accepted PostgreSQL-only writes. In that window, set `PERSISTENCE_STORE` back to `redis` and restart/redeploy:
 
 ```bash
 fly secrets set PERSISTENCE_STORE="redis"

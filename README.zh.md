@@ -43,7 +43,7 @@ RoomTalk 不只覆盖功能的 happy path，也系统处理了实时协作与 AI
 | AI 文本与工具事件顺序 | 在最早知道真实顺序的 engine/runner 层保留文本与工具边界，再持久化服务端单调递增的 `position`；客户端只展示顺序，不用 timestamp 猜测。 |
 | 多客户端一致性 | Socket.IO Redis adapter 配合单调 `roomVersion`、完整对象替换和 ack read-your-write，保证多实例、多客户端看到一致房间状态。 |
 | 移动端断连恢复 | 不信任浏览器连接状态：回到前台时健康检查、幂等 rejoin、in-flight 去重和延迟恢复提示，处理切后台与网络切换后的 presence 和房间恢复。 |
-| 持久层迁移 | Redis 与 PostgreSQL 实现同一 store contract；迁移工具幂等、支持 dry-run，并保留纯配置回滚路径，Redis 继续负责实时状态。 |
+| 持久层迁移 | Redis 与 PostgreSQL 实现同一 store contract；幂等、支持 dry-run 的 `R` 到 `R+P` 工具迁移当前全部 Redis 持久记录，纯配置回滚仅限写入冻结的切换窗口。 |
 | 缓存一致性 | 最近消息缓存以 `messageVersion` 分代，写回前再次校验版本，只在 mutation 成功后失效；缓存故障时降级直读 PostgreSQL。 |
 | Redis 并发写 | 用 Lua 原子处理 room version、消息删除和多 socket 成员引用计数；同一套行为 contract suite 同时验证 Redis 与 PostgreSQL。 |
 | 产品级移动体验 | 用锁定模式的手势状态机解决媒体手势冲突，以 `requestAnimationFrame` 批量更新 transform，组合 Object URL/Cache API/network 媒体缓存，并处理 IME 与 Visual Viewport。 |
@@ -172,8 +172,9 @@ npm run test:e2e:postgres
 
 `CompositeRoomStore` 分离持久与实时职责：
 
-- PostgreSQL 或 Redis 保存房间、消息、成员、认证、媒体 metadata、AI run、Code Agent turn 和 sandbox metadata。
-- Redis 始终负责 presence、socket session、pub/sub，以及可选的 PostgreSQL 消息短 TTL 缓存。
+- `PERSISTENCE_STORE=redis` 是 `R` 模型：持久数据和实时状态都由 Redis 保存。
+- `PERSISTENCE_STORE=postgres` 是 `R+P` 模型：PostgreSQL 保存持久记录，Redis 负责 presence、socket session、pub/sub、计数器和短 TTL 消息缓存。
+- 不支持纯 PostgreSQL（`P`）模型。`migrate:redis-to-postgres` 是支持 dry-run、可重复执行的 `R` 到 `R+P` 持久数据切换工具。
 - S3/Tigris 兼容存储保存私有媒体和版本化静态站点 artifact；开发环境可使用本地对象存储实现。
 
 迁移和上线参考：

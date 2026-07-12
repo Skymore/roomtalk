@@ -1,6 +1,6 @@
 # Migration Completion Audit
 
-Date: 2026-06-26
+Original audit: 2026-06-26. Storage-migration scope reverified: 2026-07-12.
 
 This audit records the current migration completion evidence after the Code Agent merge and legacy media migration restoration.
 
@@ -15,7 +15,7 @@ This audit records the current migration completion evidence after the Code Agen
 
 | Migration area | Current status | Evidence |
 | --- | --- | --- |
-| Redis durable store to PostgreSQL durable store | Implemented and previously executed for production cutover | `server/src/scripts/migrateRedisToPostgres.ts`, `server/src/scripts/migrateRedisToPostgres.test.ts`, `docs/postgres-rollout-runbook.md`, `docs/postgres-migration-development-summary.zh.md` |
+| Redis durable store to PostgreSQL durable store | Production was previously cut over with the historical room/message/cost scope; the reusable command now covers the full current `R` durable model for a future `R` to `R+P` cutover | `server/src/scripts/migrateRedisToPostgres.ts`, `server/src/scripts/migrateRedisToPostgres.test.ts`, `docs/postgres-rollout-runbook.md`, `docs/postgres-migration-development-summary.zh.md` |
 | PostgreSQL schema migrations | Implemented as startup DDL plus versioned one-time migrations | `server/src/repositories/postgresSchema.ts`, `server/src/repositories/postgresStore.ts`, `schema_migrations` tests in `server/src/repositories/postgresStore.test.ts` |
 | PostgreSQL app user provisioning | Implemented | `server/src/scripts/provisionPostgresAppUser.ts`, `docs/postgres-app-user-runbook.md` |
 | Legacy base64 image messages to object storage | Implemented in this audit cycle | `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`, `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.test.ts`, `docs/image-object-storage-migration-runbook.md` |

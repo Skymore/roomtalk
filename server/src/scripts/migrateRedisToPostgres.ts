@@ -1,10 +1,22 @@
 import dotenv from 'dotenv';
 import { createClient, RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { RedisStore } from '../repositories/redisStore';
 import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool, PostgresStore } from '../repositories/postgresStore';
-import { Message, Room, RoomAICostTotal } from '../types';
+import {
+  AssistantRunRecord,
+  AudioTranscriptionRecord,
+  ClientAccount,
+  ClientAuthTokenRecord,
+  OutboxEventRecord,
+  PendingMediaUpload,
+  PushSubscriptionRecord,
+} from '../repositories/store';
+import { MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember } from '../types';
+import { CodexConnectionRecord } from '../services/codexConnection';
+import { PostgresCodexConnectionStore } from '../services/codexConnectionStore';
+import { GitHubConnectionRecord } from '../services/githubConnection';
+import { PostgresGitHubConnectionStore } from '../services/githubConnectionStore';
 
 dotenv.config();
 
@@ -14,17 +26,61 @@ export interface RedisToPostgresMigrationSource {
   readRooms(): Promise<Room[]>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
+  readRoomMembers(roomId: string): Promise<RoomMember[]>;
+  readRoomAgentTurns(roomId: string): Promise<RoomAgentTurn[]>;
+  readRoomMediaAssets(roomId: string): Promise<MediaAsset[]>;
+  readRoomSaves(roomId: string): Promise<Array<{ clientId: string; savedAt: string }>>;
+  readRoomPasswordHash(roomId: string): Promise<string | null>;
+  readGlobalData(): Promise<RedisDurableGlobalData>;
 }
 
 export interface RedisToPostgresMigrationTarget {
   saveRoom(room: Room): Promise<Room | null>;
   saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null>;
   setRoomAICostTotal(roomId: string, totalUsd: number): Promise<RoomAICostTotal>;
+  saveRoomMember(member: RoomMember): Promise<void>;
+  saveRoomAgentTurn(turn: RoomAgentTurn): Promise<void>;
+  saveMediaAsset(asset: MediaAsset): Promise<void>;
+  saveRoomForUser(roomId: string, clientId: string, savedAt: string): Promise<void>;
+  saveRoomPasswordHash(roomId: string, passwordHash: string): Promise<void>;
+  saveGlobalData(data: RedisDurableGlobalData): Promise<Record<RedisDurableGlobalKind, number>>;
+}
+
+export const REDIS_DURABLE_GLOBAL_KINDS = [
+  'pendingMediaUploads',
+  'audioTranscriptions',
+  'assistantRuns',
+  'outboxEvents',
+  'pushSubscriptions',
+  'accounts',
+  'clientPasswords',
+  'clientAuthTokens',
+  'clientNicknames',
+  'codexConnections',
+  'githubConnections',
+] as const;
+
+export type RedisDurableGlobalKind = typeof REDIS_DURABLE_GLOBAL_KINDS[number];
+
+export type MigratedClientAuthToken = ClientAuthTokenRecord & { lastUsedAt?: string };
+
+export interface RedisDurableGlobalData {
+  pendingMediaUploads: PendingMediaUpload[];
+  audioTranscriptions: AudioTranscriptionRecord[];
+  assistantRuns: AssistantRunRecord[];
+  outboxEvents: OutboxEventRecord[];
+  pushSubscriptions: PushSubscriptionRecord[];
+  accounts: Array<{ account: ClientAccount; linkedClientIds: string[] }>;
+  clientPasswords: Array<{ clientId: string; passwordHash: string }>;
+  clientAuthTokens: MigratedClientAuthToken[];
+  clientNicknames: Array<{ clientId: string; nickname: string }>;
+  codexConnections: CodexConnectionRecord[];
+  githubConnections: GitHubConnectionRecord[];
 }
 
 export interface RedisToPostgresMigrationFailure {
   roomId?: string;
-  stage: 'read_rooms' | 'read_room_data' | 'save_room' | 'save_messages' | 'set_cost';
+  stage: 'read_rooms' | 'read_room_data' | 'read_global_data' | 'save_room' | 'save_messages' | 'save_room_related' | 'set_cost' | 'save_global_data';
   error: string;
 }
 
@@ -37,6 +93,18 @@ export interface RedisToPostgresMigrationStats {
   messagesWritten: number;
   costsRead: number;
   costsWritten: number;
+  membersRead: number;
+  membersWritten: number;
+  agentTurnsRead: number;
+  agentTurnsWritten: number;
+  mediaAssetsRead: number;
+  mediaAssetsWritten: number;
+  roomSavesRead: number;
+  roomSavesWritten: number;
+  roomPasswordsRead: number;
+  roomPasswordsWritten: number;
+  globalRecordsRead: Record<RedisDurableGlobalKind, number>;
+  globalRecordsWritten: Record<RedisDurableGlobalKind, number>;
   failures: RedisToPostgresMigrationFailure[];
 }
 
@@ -58,8 +126,24 @@ const createEmptyStats = (dryRun: boolean): RedisToPostgresMigrationStats => ({
   messagesWritten: 0,
   costsRead: 0,
   costsWritten: 0,
+  membersRead: 0,
+  membersWritten: 0,
+  agentTurnsRead: 0,
+  agentTurnsWritten: 0,
+  mediaAssetsRead: 0,
+  mediaAssetsWritten: 0,
+  roomSavesRead: 0,
+  roomSavesWritten: 0,
+  roomPasswordsRead: 0,
+  roomPasswordsWritten: 0,
+  globalRecordsRead: emptyGlobalCounts(),
+  globalRecordsWritten: emptyGlobalCounts(),
   failures: [],
 });
+
+const emptyGlobalCounts = (): Record<RedisDurableGlobalKind, number> => Object.fromEntries(
+  REDIS_DURABLE_GLOBAL_KINDS.map(kind => [kind, 0])
+) as Record<RedisDurableGlobalKind, number>;
 
 export async function migrateRedisToPostgres({
   source,
@@ -88,10 +172,22 @@ export async function migrateRedisToPostgres({
   for (const room of rooms) {
     let messages: Message[];
     let roomCost: RoomAICostTotal;
+    let members: RoomMember[];
+    let agentTurns: RoomAgentTurn[];
+    let mediaAssets: MediaAsset[];
+    let roomSaves: Array<{ clientId: string; savedAt: string }>;
+    let passwordHash: string | null;
 
     try {
-      messages = await source.readMessagesByRoom(room.id);
-      roomCost = await source.readRoomAICost(room.id);
+      [messages, roomCost, members, agentTurns, mediaAssets, roomSaves, passwordHash] = await Promise.all([
+        source.readMessagesByRoom(room.id),
+        source.readRoomAICost(room.id),
+        source.readRoomMembers(room.id),
+        source.readRoomAgentTurns(room.id),
+        source.readRoomMediaAssets(room.id),
+        source.readRoomSaves(room.id),
+        source.readRoomPasswordHash(room.id),
+      ]);
     } catch (error) {
       stats.roomsFailed++;
       stats.failures.push({ roomId: room.id, stage: 'read_room_data', error: errorMessage(error) });
@@ -101,6 +197,11 @@ export async function migrateRedisToPostgres({
 
     stats.messagesRead += messages.length;
     stats.costsRead++;
+    stats.membersRead += members.length;
+    stats.agentTurnsRead += agentTurns.length;
+    stats.mediaAssetsRead += mediaAssets.length;
+    stats.roomSavesRead += roomSaves.length;
+    stats.roomPasswordsRead += passwordHash ? 1 : 0;
 
     if (dryRun) {
       continue;
@@ -150,9 +251,48 @@ export async function migrateRedisToPostgres({
       continue;
     }
 
+    try {
+      for (const member of members) await migrationTarget.saveRoomMember(member);
+      for (const turn of agentTurns) await migrationTarget.saveRoomAgentTurn(turn);
+      for (const asset of mediaAssets) await migrationTarget.saveMediaAsset(asset);
+      for (const saved of roomSaves) await migrationTarget.saveRoomForUser(room.id, saved.clientId, saved.savedAt);
+      if (passwordHash) await migrationTarget.saveRoomPasswordHash(room.id, passwordHash);
+    } catch (error) {
+      stats.roomsFailed++;
+      stats.failures.push({ roomId: room.id, stage: 'save_room_related', error: errorMessage(error) });
+      logger?.error('Failed to save PostgreSQL related room data during migration', { error, roomId: room.id });
+      continue;
+    }
+
     stats.roomsWritten++;
     stats.messagesWritten += messages.length;
     stats.costsWritten++;
+    stats.membersWritten += members.length;
+    stats.agentTurnsWritten += agentTurns.length;
+    stats.mediaAssetsWritten += mediaAssets.length;
+    stats.roomSavesWritten += roomSaves.length;
+    stats.roomPasswordsWritten += passwordHash ? 1 : 0;
+  }
+
+  let globalData: RedisDurableGlobalData;
+  try {
+    globalData = await source.readGlobalData();
+    for (const kind of REDIS_DURABLE_GLOBAL_KINDS) {
+      stats.globalRecordsRead[kind] = globalData[kind].length;
+    }
+  } catch (error) {
+    stats.failures.push({ stage: 'read_global_data', error: errorMessage(error) });
+    logger?.error('Failed to read Redis global durable data for migration', { error });
+    return stats;
+  }
+
+  if (!dryRun) {
+    try {
+      stats.globalRecordsWritten = await target!.saveGlobalData(globalData);
+    } catch (error) {
+      stats.failures.push({ stage: 'save_global_data', error: errorMessage(error) });
+      logger?.error('Failed to save PostgreSQL global durable data during migration', { error });
+    }
   }
 
   return stats;
@@ -161,7 +301,6 @@ export async function migrateRedisToPostgres({
 export class RedisMigrationSource implements RedisToPostgresMigrationSource {
   constructor(
     private readonly redisClient: RedisClientType,
-    private readonly redisStore: RedisStore,
     private readonly logger: MigrationLogger
   ) {}
 
@@ -171,28 +310,26 @@ export class RedisMigrationSource implements RedisToPostgresMigrationSource {
       roomIds.map(async roomId => {
         const roomJson = await this.redisClient.hGet('rooms', roomId);
         if (!roomJson) {
-          return null;
+          throw new Error(`Missing Redis room payload for ${roomId}`);
         }
 
         try {
           return JSON.parse(roomJson) as Room;
         } catch (error) {
-          this.logger.warn('Skipping Redis room with invalid JSON during migration', { error, roomId });
-          return null;
+          throw new Error(`Invalid JSON for Redis room ${roomId}: ${errorMessage(error)}`);
         }
       })
     );
 
-    return rooms.filter((room): room is Room => Boolean(room));
+    return rooms;
   }
 
   private parseMessages(roomId: string, payloads: string[]): Message[] {
-    return payloads.flatMap((payload, index) => {
+    return payloads.map((payload, index) => {
       try {
-        return [JSON.parse(payload) as Message];
+        return JSON.parse(payload) as Message;
       } catch (error) {
-        this.logger.warn('Skipping Redis message with invalid JSON during migration', { error, roomId, index });
-        return [];
+        throw new Error(`Invalid JSON for Redis room message ${roomId}/${index}: ${errorMessage(error)}`);
       }
     });
   }
@@ -231,8 +368,329 @@ export class RedisMigrationSource implements RedisToPostgresMigrationSource {
     }
   }
 
-  readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
-    return this.redisStore.readRoomAICost(roomId);
+  async readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
+    const raw = await this.redisClient.get(`room:${roomId}:ai_cost_total_usd`);
+    const totalUsd = Number.parseFloat(raw || '0');
+    if (!Number.isFinite(totalUsd)) {
+      throw new Error(`Invalid Redis AI cost total for room ${roomId}: ${raw}`);
+    }
+    return { roomId, currency: 'USD', totalUsd };
+  }
+
+  async readRoomMembers(roomId: string) {
+    return this.readJsonHash<RoomMember>(`room:${roomId}:room_members`);
+  }
+
+  async readRoomAgentTurns(roomId: string) {
+    return this.readJsonHash<RoomAgentTurn>(`room:${roomId}:agent_turns`);
+  }
+
+  async readRoomMediaAssets(roomId: string) {
+    const assetIds = await this.redisClient.sMembers(`room:${roomId}:media_assets`);
+    return Promise.all(assetIds.map(async assetId => {
+      const raw = await this.redisClient.hGet('media_assets', assetId);
+      if (!raw) throw new Error(`Missing Redis media asset ${assetId} referenced by room ${roomId}`);
+      try {
+        return JSON.parse(raw) as MediaAsset;
+      } catch (error) {
+        throw new Error(`Invalid JSON for Redis media asset ${assetId}: ${errorMessage(error)}`);
+      }
+    }));
+  }
+
+  async readRoomSaves(roomId: string) {
+    const clientIds = await this.redisClient.sMembers(`room:${roomId}:saved_by`);
+    return Promise.all(clientIds.map(async clientId => {
+      const savedAt = await this.redisClient.hGet(`user:${clientId}:saved_rooms`, roomId);
+      if (!savedAt) {
+        throw new Error(`Missing savedAt for Redis room save ${roomId}/${clientId}`);
+      }
+      return { clientId, savedAt };
+    }));
+  }
+
+  readRoomPasswordHash(roomId: string) {
+    return this.redisClient.get(`room:${roomId}:password_hash`);
+  }
+
+  async readGlobalData(): Promise<RedisDurableGlobalData> {
+    const [
+      pendingMediaUploads,
+      audioTranscriptions,
+      assistantRuns,
+      outboxEvents,
+      pushSubscriptions,
+      accounts,
+      accountLinks,
+      clientPasswords,
+      clientAuthTokens,
+      clientNicknames,
+      codexConnections,
+      githubConnections,
+    ] = await Promise.all([
+      this.readJsonHash<PendingMediaUpload>('pending_media_uploads'),
+      this.readJsonHash<AudioTranscriptionRecord>('audio_transcriptions'),
+      this.readJsonHash<AssistantRunRecord>('assistant_runs'),
+      this.readJsonHash<OutboxEventRecord>('outbox_events'),
+      this.readJsonHash<PushSubscriptionRecord>('push_subscriptions'),
+      this.readJsonHash<ClientAccount>('client:accounts'),
+      this.redisClient.hGetAll('client:account_links'),
+      this.redisClient.hGetAll('client:passwords'),
+      this.readJsonHash<MigratedClientAuthToken>('client:auth_tokens'),
+      this.redisClient.hGetAll('client:nicknames'),
+      this.readJsonHash<CodexConnectionRecord>('codex:connections'),
+      this.readJsonHash<GitHubConnectionRecord>('github:connections'),
+    ]);
+
+    const linkedClientsByAccount = new Map<string, string[]>();
+    for (const [clientId, accountId] of Object.entries(accountLinks)) {
+      linkedClientsByAccount.set(accountId, [...(linkedClientsByAccount.get(accountId) || []), clientId]);
+    }
+
+    return {
+      pendingMediaUploads,
+      audioTranscriptions,
+      assistantRuns,
+      outboxEvents,
+      pushSubscriptions,
+      accounts: accounts.map(account => ({
+        account,
+        linkedClientIds: linkedClientsByAccount.get(account.accountId) || [account.primaryClientId],
+      })),
+      clientPasswords: Object.entries(clientPasswords).map(([clientId, passwordHash]) => ({ clientId, passwordHash })),
+      clientAuthTokens: clientAuthTokens.map(token => ({
+        clientId: token.clientId,
+        tokenHash: token.tokenHash,
+        createdAt: token.createdAt,
+        ...(token.accountId ? { accountId: token.accountId } : {}),
+        ...(token.authMethod ? { authMethod: token.authMethod } : {}),
+        ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+        ...(token.lastUsedAt ? { lastUsedAt: token.lastUsedAt } : {}),
+      })),
+      clientNicknames: Object.entries(clientNicknames).map(([clientId, nickname]) => ({ clientId, nickname })),
+      codexConnections: codexConnections.map(record => ({
+        ...record,
+        authRefreshOwnerId: undefined,
+        authRefreshLockedUntil: undefined,
+      })),
+      githubConnections,
+    };
+  }
+
+  private async readJsonHash<T>(key: string): Promise<T[]> {
+    const values = await this.redisClient.hGetAll(key);
+    return Object.entries(values).map(([field, raw]) => {
+      try {
+        return JSON.parse(raw) as T;
+      } catch (error) {
+        throw new Error(`Invalid JSON in Redis hash ${key} field ${field}: ${errorMessage(error)}`);
+      }
+    });
+  }
+}
+
+export class PostgresMigrationTarget implements RedisToPostgresMigrationTarget {
+  private readonly codexConnections: PostgresCodexConnectionStore;
+  private readonly githubConnections: PostgresGitHubConnectionStore;
+
+  constructor(private readonly pool: PostgresPool, private readonly store: PostgresStore) {
+    this.codexConnections = new PostgresCodexConnectionStore(pool);
+    this.githubConnections = new PostgresGitHubConnectionStore(pool);
+  }
+
+  saveRoom(room: Room) { return this.store.saveRoom(room); }
+  saveMessageHistory(roomId: string, messages: Message[]) { return this.store.saveMessageHistory(roomId, messages); }
+  async setRoomAICostTotal(roomId: string, totalUsd: number): Promise<RoomAICostTotal> {
+    if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
+      await this.pool.query('DELETE FROM room_ai_cost_totals WHERE room_id = $1', [roomId]);
+      return { roomId, currency: 'USD', totalUsd: 0 };
+    }
+    await this.pool.query(
+      `INSERT INTO room_ai_cost_totals (room_id,total_usd,updated_at) VALUES ($1,$2,NOW())
+      ON CONFLICT (room_id) DO UPDATE SET total_usd=EXCLUDED.total_usd,updated_at=EXCLUDED.updated_at`,
+      [roomId, totalUsd]
+    );
+    return { roomId, currency: 'USD', totalUsd };
+  }
+
+  async saveRoomMember(member: RoomMember) {
+    const saved = await this.store.updateRoomMemberRole(member.roomId, member.clientId, member.role, member.joinedAt);
+    if (!saved) throw new Error(`PostgreSQL rejected room member ${member.roomId}/${member.clientId}`);
+  }
+
+  async saveRoomAgentTurn(turn: RoomAgentTurn) {
+    if (!await this.store.upsertRoomAgentTurn(turn)) throw new Error(`PostgreSQL rejected room agent turn ${turn.id}`);
+  }
+
+  async saveMediaAsset(asset: MediaAsset) {
+    if (!await this.store.saveMediaAsset(asset)) throw new Error(`PostgreSQL rejected media asset ${asset.id}`);
+  }
+
+  async saveRoomForUser(roomId: string, clientId: string, savedAt: string) {
+    if (!await this.store.saveRoomForUser(roomId, clientId, savedAt)) throw new Error(`PostgreSQL rejected room save ${roomId}/${clientId}`);
+  }
+
+  async saveRoomPasswordHash(roomId: string, passwordHash: string) {
+    if (!await this.store.updateRoomSettings(roomId, { passwordHash })) {
+      throw new Error(`PostgreSQL rejected room password ${roomId}`);
+    }
+  }
+
+  async saveGlobalData(data: RedisDurableGlobalData) {
+    const counts = emptyGlobalCounts();
+    for (const upload of data.pendingMediaUploads) {
+      await this.store.savePendingMediaUpload(upload);
+      counts.pendingMediaUploads++;
+    }
+    for (const record of data.audioTranscriptions) {
+      await this.store.createAudioTranscription(record);
+      await this.store.updateAudioTranscription(record.assetId, {
+        status: record.status,
+        transcript: record.transcript ?? null,
+        languageCode: record.languageCode ?? null,
+        providerTranscriptId: record.providerTranscriptId ?? null,
+        error: record.error ?? null,
+        updatedAt: record.updatedAt,
+        completedAt: record.completedAt ?? null,
+      });
+      counts.audioTranscriptions++;
+    }
+    for (const run of data.assistantRuns) {
+      await this.upsertAssistantRun(run);
+      counts.assistantRuns++;
+    }
+    for (const event of data.outboxEvents) {
+      await this.upsertOutboxEvent(event);
+      counts.outboxEvents++;
+    }
+    for (const subscription of data.pushSubscriptions) {
+      await this.upsertPushSubscription(subscription);
+      counts.pushSubscriptions++;
+    }
+    for (const account of data.accounts) {
+      await this.upsertAccount(account.account, account.linkedClientIds);
+      counts.accounts++;
+    }
+    for (const password of data.clientPasswords) {
+      await this.upsertClientPassword(password.clientId, password.passwordHash);
+      counts.clientPasswords++;
+    }
+    for (const token of data.clientAuthTokens) {
+      await this.upsertClientAuthToken(token);
+      counts.clientAuthTokens++;
+    }
+    for (const profile of data.clientNicknames) {
+      await this.upsertClientNickname(profile.clientId, profile.nickname);
+      counts.clientNicknames++;
+    }
+    for (const record of data.codexConnections) {
+      await this.codexConnections.saveConnection(record);
+      counts.codexConnections++;
+    }
+    for (const record of data.githubConnections) {
+      await this.githubConnections.saveConnection(record);
+      counts.githubConnections++;
+    }
+    return counts;
+  }
+
+  private async upsertAssistantRun(run: AssistantRunRecord) {
+    await this.pool.query(
+      `INSERT INTO assistant_runs (
+        id, room_id, requested_by_client_id, user_message_id, ai_message_id, status,
+        model_id, api_model, provider, role_name, system_prompt, max_context_messages,
+        retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at,
+        started_at, completed_at, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+      ON CONFLICT (id) DO UPDATE SET
+        status=EXCLUDED.status, error=EXCLUDED.error, metadata=EXCLUDED.metadata,
+        started_at=EXCLUDED.started_at, completed_at=EXCLUDED.completed_at, updated_at=EXCLUDED.updated_at`,
+      [run.id, run.roomId, run.requestedByClientId, run.userMessageId || null, run.aiMessageId, run.status,
+        run.modelId, run.apiModel, run.provider, run.roleName || null, run.systemPrompt || null,
+        run.maxContextMessages || null, run.retryForMessageId || null, run.editedMessageId || null,
+        run.error || null, run.metadata || null, run.createdAt, run.queuedAt, run.startedAt || null,
+        run.completedAt || null, run.updatedAt]
+    );
+  }
+
+  private async upsertOutboxEvent(event: OutboxEventRecord) {
+    await this.pool.query(
+      `INSERT INTO outbox_events (
+        id,event_type,aggregate_type,aggregate_id,room_id,payload,status,attempts,available_at,
+        locked_at,locked_by,processed_at,last_error,created_at,updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ON CONFLICT (id) DO UPDATE SET
+        payload=EXCLUDED.payload,status=EXCLUDED.status,attempts=EXCLUDED.attempts,
+        available_at=EXCLUDED.available_at,locked_at=EXCLUDED.locked_at,locked_by=EXCLUDED.locked_by,
+        processed_at=EXCLUDED.processed_at,last_error=EXCLUDED.last_error,updated_at=EXCLUDED.updated_at`,
+      [event.id, event.eventType, event.aggregateType, event.aggregateId, event.roomId || null, event.payload,
+        event.status, event.attempts, event.availableAt, event.lockedAt || null, event.lockedBy || null,
+        event.processedAt || null, event.lastError || null, event.createdAt, event.updatedAt]
+    );
+  }
+
+  private async upsertPushSubscription(record: PushSubscriptionRecord) {
+    await this.pool.query(
+      `INSERT INTO push_subscriptions (endpoint,client_id,browser_instance_id,p256dh,auth,user_agent,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (endpoint) DO UPDATE SET client_id=EXCLUDED.client_id,browser_instance_id=EXCLUDED.browser_instance_id,
+        p256dh=EXCLUDED.p256dh,auth=EXCLUDED.auth,user_agent=EXCLUDED.user_agent,updated_at=EXCLUDED.updated_at`,
+      [record.endpoint, record.clientId, record.browserInstanceId || null, record.p256dh, record.auth,
+        record.userAgent || null, record.createdAt, record.updatedAt]
+    );
+  }
+
+  private async upsertAccount(account: ClientAccount, linkedClientIds: string[]) {
+    await this.pool.query(
+      `INSERT INTO accounts (id,primary_client_id,display_name,avatar_url,created_at,updated_at,last_login_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (id) DO UPDATE SET display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,
+        updated_at=EXCLUDED.updated_at,last_login_at=EXCLUDED.last_login_at`,
+      [account.accountId, account.primaryClientId, account.displayName || null, account.avatarUrl || null,
+        account.createdAt, account.updatedAt, account.lastLoginAt || null]
+    );
+    await this.pool.query(
+      `INSERT INTO account_identities (account_id,provider,provider_subject,email,email_verified,created_at,updated_at)
+      VALUES ($1,'google',$2,$3,$4,$5,$6)
+      ON CONFLICT (provider,provider_subject) DO UPDATE SET email=EXCLUDED.email,
+        email_verified=EXCLUDED.email_verified,updated_at=EXCLUDED.updated_at`,
+      [account.accountId, account.providerSubject, account.email || null, Boolean(account.emailVerified),
+        account.createdAt, account.updatedAt]
+    );
+    for (const clientId of linkedClientIds) {
+      await this.pool.query(
+        `INSERT INTO client_account_links (client_id,account_id,linked_at) VALUES ($1,$2,$3)
+        ON CONFLICT (client_id) DO UPDATE SET account_id=EXCLUDED.account_id`,
+        [clientId, account.accountId, account.createdAt]
+      );
+    }
+  }
+
+  private async upsertClientAuthToken(token: MigratedClientAuthToken) {
+    await this.pool.query(
+      `INSERT INTO client_auth_tokens (token_hash,client_id,account_id,auth_method,created_at,last_used_at,expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (token_hash) DO UPDATE SET client_id=EXCLUDED.client_id,account_id=EXCLUDED.account_id,
+        auth_method=EXCLUDED.auth_method,last_used_at=EXCLUDED.last_used_at,expires_at=EXCLUDED.expires_at`,
+      [token.tokenHash, token.clientId, token.accountId || null, token.authMethod || null,
+        token.createdAt, token.lastUsedAt || token.createdAt, token.expiresAt || null]
+    );
+  }
+
+  private async upsertClientPassword(clientId: string, passwordHash: string) {
+    await this.pool.query(
+      `INSERT INTO client_passwords (client_id,password_hash,created_at,updated_at) VALUES ($1,$2,NOW(),NOW())
+      ON CONFLICT (client_id) DO UPDATE SET password_hash=EXCLUDED.password_hash,updated_at=EXCLUDED.updated_at`,
+      [clientId, passwordHash]
+    );
+  }
+
+  private async upsertClientNickname(clientId: string, nickname: string) {
+    await this.pool.query(
+      `INSERT INTO client_profiles (client_id,nickname,updated_at) VALUES ($1,$2,NOW())
+      ON CONFLICT (client_id) DO UPDATE SET nickname=EXCLUDED.nickname,updated_at=EXCLUDED.updated_at`,
+      [clientId, nickname]
+    );
   }
 }
 
@@ -249,7 +707,6 @@ async function main() {
   }
 
   const redisClient: RedisClientType = createClient({ url: redisUrl });
-  const redisStore = new RedisStore(redisClient, logger);
   let postgresPool: PostgresPool | undefined;
   let postgresStore: PostgresStore | undefined;
 
@@ -262,8 +719,8 @@ async function main() {
     }
 
     const stats = await migrateRedisToPostgres({
-      source: new RedisMigrationSource(redisClient, redisStore, logger),
-      target: postgresStore,
+      source: new RedisMigrationSource(redisClient, logger),
+      target: postgresStore && postgresPool ? new PostgresMigrationTarget(postgresPool, postgresStore) : undefined,
       dryRun,
       logger,
     });

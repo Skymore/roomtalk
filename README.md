@@ -43,7 +43,7 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
 | Multi-client consistency | Combine Socket.IO's Redis adapter with monotonic `roomVersion`, full-object replacement, and acknowledgment-based read-your-write updates. |
 | Mobile reconnect recovery | Treat browser connection state as untrusted: foreground health checks, idempotent room rejoin, in-flight deduplication, and delayed recovery UI keep presence and rooms correct after backgrounding or network changes. |
-| Durable-store migration | Run Redis and PostgreSQL behind one store contract, migrate with an idempotent dry-run-capable tool, and retain a configuration-only rollback path while Redis continues to own realtime state. |
+| Durable-store migration | Run Redis and PostgreSQL behind one store contract and migrate every current durable Redis record with an idempotent dry-run-capable `R` to `R+P` tool; configuration-only rollback is limited to the frozen cutover window. |
 | Cache correctness | Key recent-message cache entries by `messageVersion`, double-check the version before write-back, invalidate only after successful mutations, and degrade to PostgreSQL on cache failure. |
 | Concurrent Redis writes | Use Lua scripts for atomic room versions, message deletion, and multi-socket member reference counting; run the same behavioral contract suite against both Redis and PostgreSQL implementations. |
 | Product-grade mobile UI | Resolve overlapping media gestures with a locked gesture-state machine, batch transforms through `requestAnimationFrame`, layer Object URL/Cache API/network media caching, and guard IME composition and visual viewport changes. |
@@ -172,8 +172,9 @@ Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Doc
 
 `CompositeRoomStore` separates durable and realtime concerns:
 
-- PostgreSQL or Redis stores rooms, messages, members, auth, media metadata, AI runs, code-agent turns, and sandbox metadata.
-- Redis always owns presence, socket sessions, pub/sub, and optional short-TTL PostgreSQL message caching.
+- `PERSISTENCE_STORE=redis` is the `R` model: Redis stores both durable and realtime state.
+- `PERSISTENCE_STORE=postgres` is the `R+P` model: PostgreSQL stores durable records while Redis owns presence, socket sessions, pub/sub, counters, and the short-TTL message cache.
+- PostgreSQL-only (`P`) is not supported. `migrate:redis-to-postgres` is the idempotent, dry-run-capable `R` to `R+P` durable-data cutover tool.
 - S3/Tigris-compatible storage holds private media and versioned static-site artifacts; development can use the local object-storage implementation.
 
 Migration and rollout references:

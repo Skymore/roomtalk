@@ -1,5 +1,7 @@
 # PostgreSQL 迁移开发复盘
 
+> 历史记录：本文下方的数据量、机器规格和 rooms/messages/costs 范围反映当时的首次生产切换，不是当前运行手册。2026-07-12 起，`migrate:redis-to-postgres` 已扩展为完整的 `R` 到 `R+P` durable-data bootstrap，覆盖当前 room-related、auth/account、media/AI/outbox 和 Codex/GitHub connection 记录；当前操作以 [PostgreSQL 上线 runbook](./postgres-rollout-runbook.md) 为准。
+
 ## 背景
 
 本轮目标是把原来只依赖 Redis 的房间、消息历史和 AI 成本数据，迁移到 PostgreSQL 作为持久事实来源，同时继续保留 Redis 负责 realtime/session/cache 类职责。

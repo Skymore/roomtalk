@@ -239,7 +239,7 @@ describe('PublishedStaticSiteService', () => {
   it('uses an allowed production client origin for publish URLs', () => {
     const { service } = createService({
       publicBaseUrl: 'https://room.ruit.me',
-      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://room.ruit.me'],
+      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://admin.room.ruit.me'],
       nodeEnv: 'production',
     });
 
@@ -302,7 +302,7 @@ describe('PublishedStaticSiteService', () => {
       env: {
         NODE_ENV: 'production',
         CLIENT_URL: 'https://room.ruit.me',
-        CLIENT_URLS: 'https://room.ruit.me, https://room.ruit.me',
+        CLIENT_URLS: 'https://room.ruit.me, https://admin.room.ruit.me',
         CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
         CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
       } as NodeJS.ProcessEnv,
