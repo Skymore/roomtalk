@@ -10,6 +10,18 @@ import { A2UIActionEvent, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
+import {
+  createSocketEventRateLimiter,
+  isBoundedJsonObject,
+  isBoundedSocketIdentifier,
+  MAX_A2UI_ACTION_STRING_LENGTH,
+  MAX_A2UI_CONTEXT_BYTES,
+  MAX_MESSAGE_AVATAR_COLOR_LENGTH,
+  MAX_MESSAGE_AVATAR_TEXT_LENGTH,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_MESSAGE_USERNAME_LENGTH,
+  utf8ByteLength,
+} from './socketPayloadValidation';
 
 const MAX_CLIENT_MESSAGE_ID_LENGTH = 128;
 
@@ -44,16 +56,33 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
 const isA2UIActionEvent = (value: unknown): value is A2UIActionEvent => (
   isRecord(value) &&
   typeof value.name === 'string' &&
-  value.name.trim().length > 0 &&
+  value.name.trim().length > 0 && value.name.length <= MAX_A2UI_ACTION_STRING_LENGTH &&
   typeof value.surfaceId === 'string' &&
-  value.surfaceId.trim().length > 0 &&
+  value.surfaceId.trim().length > 0 && value.surfaceId.length <= MAX_A2UI_ACTION_STRING_LENGTH &&
   typeof value.sourceComponentId === 'string' &&
-  value.sourceComponentId.trim().length > 0 &&
-  typeof value.timestamp === 'string' &&
-  (!('context' in value) || value.context === undefined || isRecord(value.context))
+  value.sourceComponentId.trim().length > 0 && value.sourceComponentId.length <= MAX_A2UI_ACTION_STRING_LENGTH &&
+  typeof value.timestamp === 'string' && value.timestamp.length <= 64 &&
+  (!('context' in value) || value.context === undefined || isBoundedJsonObject(value.context, {
+    maxBytes: MAX_A2UI_CONTEXT_BYTES,
+    maxDepth: 6,
+    maxEntries: 256,
+  }))
+);
+
+const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
+  (username === undefined || (typeof username === 'string' && username.length <= MAX_MESSAGE_USERNAME_LENGTH)) &&
+  (avatar === undefined || (
+    isRecord(avatar) &&
+    typeof avatar.text === 'string' &&
+    avatar.text.length <= MAX_MESSAGE_AVATAR_TEXT_LENGTH &&
+    typeof avatar.color === 'string' &&
+    avatar.color.length <= MAX_MESSAGE_AVATAR_COLOR_LENGTH
+  ))
 );
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
+  const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
+  const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
   socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number; baseHistoryVersion?: number }) => {
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
@@ -97,6 +126,14 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     },
     callback?: (response: { success: boolean; message?: Message; error?: string }) => void,
   ) => {
+    if (!allowMessageMutation()) {
+      callback?.({ success: false, error: 'Too many message requests' });
+      return;
+    }
+    if (!isRecord(messageData)) {
+      callback?.({ success: false, error: 'Invalid message payload' });
+      return;
+    }
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to send message', { socketId: socket.id });
@@ -105,10 +142,19 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
-    if (!messageData.roomId) {
+    if (!isBoundedSocketIdentifier(messageData.roomId)) {
       socketLogger.warn('Client tried to send message without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
       callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    if (!isValidMessageProfile(messageData.username, messageData.avatar)) {
+      callback?.({ success: false, error: 'Invalid message profile' });
+      return;
+    }
+    if (messageData.replyToMessageId !== undefined && !isBoundedSocketIdentifier(messageData.replyToMessageId)) {
+      callback?.({ success: false, error: 'Invalid quoted message ID' });
       return;
     }
 
@@ -152,6 +198,9 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       }
     } else if (typeof messageData.content !== 'string' || !messageData.content.trim()) {
       callback?.({ success: false, error: 'Message content is required' });
+      return;
+    } else if (utf8ByteLength(messageData.content) > MAX_MESSAGE_TEXT_BYTES) {
+      callback?.({ success: false, error: 'Message content is too large' });
       return;
     }
 
@@ -209,13 +258,19 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
   });
 
   socket.on('edit_message', async (data: { roomId: string; messageId: string; newContent: string }, callback?: (response: { success: boolean; updatedMessage?: Message; error?: string }) => void) => {
+    if (!allowMessageMutation()) {
+      return callback?.({ success: false, error: 'Too many message requests' });
+    }
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       return callback?.({ success: false, error: 'Not registered' });
     }
 
-    if (!data.roomId || !data.messageId || typeof data.newContent !== 'string') {
+    if (!isBoundedSocketIdentifier(data?.roomId) || !isBoundedSocketIdentifier(data?.messageId) || typeof data.newContent !== 'string') {
       return callback?.({ success: false, error: 'Missing required fields' });
+    }
+    if (utf8ByteLength(data.newContent) > MAX_MESSAGE_TEXT_BYTES) {
+      return callback?.({ success: false, error: 'Message content is too large' });
     }
 
     if (!(await hasRoomAccess(store, data.roomId, clientId))) {
@@ -374,13 +429,17 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     payload: unknown,
     callback?: (response: { success: boolean; error?: string }) => void,
   ) => {
+    if (!allowA2UIAction()) {
+      callback?.({ success: false, error: 'Too many A2UI action requests' });
+      return;
+    }
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
     }
 
-    if (!isRecord(payload) || typeof payload.roomId !== 'string' || typeof payload.messageId !== 'string' || !isA2UIActionEvent(payload.action)) {
+    if (!isRecord(payload) || !isBoundedSocketIdentifier(payload.roomId) || !isBoundedSocketIdentifier(payload.messageId) || !isA2UIActionEvent(payload.action)) {
       callback?.({ success: false, error: 'Invalid A2UI action payload' });
       return;
     }

@@ -224,14 +224,30 @@ const normalizeBrowserInstanceId = (value: unknown): string | undefined => {
   return BROWSER_INSTANCE_ID_PATTERN.test(trimmed) ? trimmed : undefined;
 };
 
-const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null; clientAuthToken?: string; browserInstanceId?: string } => {
+const parseRegisterPayload = (payload: unknown): {
+  clientId?: string;
+  username: string | null;
+  clientAuthToken?: string;
+  browserInstanceId?: string;
+  error?: string;
+} => {
   if (typeof payload === 'string') {
-    return { clientId: payload, username: null };
+    const parsed = parseTargetClientId(payload);
+    return parsed.ok
+      ? { clientId: parsed.clientId, username: null }
+      : { username: null, error: 'Invalid user ID' };
   }
   if (payload && typeof payload === 'object') {
     const data = payload as { clientId?: unknown; username?: unknown; clientAuthToken?: unknown; browserInstanceId?: unknown };
+    const parsedClientId = data.clientId === undefined ? null : parseTargetClientId(data.clientId);
+    if (parsedClientId && !parsedClientId.ok) {
+      return { username: normalizeNickname(data.username), error: 'Invalid user ID' };
+    }
+    if (typeof data.clientAuthToken === 'string' && data.clientAuthToken.length > 4096) {
+      return { username: normalizeNickname(data.username), error: 'Invalid client auth token' };
+    }
     return {
-      clientId: typeof data.clientId === 'string' ? data.clientId : undefined,
+      clientId: parsedClientId?.ok ? parsedClientId.clientId : undefined,
       username: normalizeNickname(data.username),
       browserInstanceId: normalizeBrowserInstanceId(data.browserInstanceId),
       clientAuthToken: typeof data.clientAuthToken === 'string' && data.clientAuthToken.trim()
@@ -276,7 +292,11 @@ export function registerRoomHandlers({
   };
 
   socket.on('register', (payload: unknown, callback?: (result: RegisterAck) => void) => serializeRoomMembershipMutation(async () => {
-    const { clientId, username, clientAuthToken, browserInstanceId } = parseRegisterPayload(payload);
+    const { clientId, username, clientAuthToken, browserInstanceId, error } = parseRegisterPayload(payload);
+    if (error) {
+      callback?.({ success: false, error });
+      return;
+    }
     const userId = clientId || uuidv4();
     try {
       if (!(await isClientRequestAuthorized(store, userId, clientAuthToken))) {

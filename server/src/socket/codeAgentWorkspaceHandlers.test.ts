@@ -1112,6 +1112,19 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(deleteWorkspaceEntryCalls, [{ sandboxId: 'sandbox-1', path: 'src/Main.tsx' }]);
   });
 
+  it('rejects workspace file writes larger than the bounded file payload', async () => {
+    const { socket, writeWorkspaceFileCalls } = createHarness();
+
+    const response = await socket.invoke<any>('write_code_workspace_file', {
+      roomId: 'room-1',
+      path: 'large.txt',
+      content: 'x'.repeat(10 * 1024 * 1024 + 1),
+    });
+
+    assert.deepEqual(response, { success: false, error: 'File content is too large' });
+    assert.deepEqual(writeWorkspaceFileCalls, []);
+  });
+
   it('routes queued input edit, steer, and cancel actions to the session scheduler', async () => {
     const calls: Array<{ action: string; args: unknown[] }> = [];
     const codeAgentSessionService = {

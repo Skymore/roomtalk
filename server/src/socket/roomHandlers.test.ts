@@ -392,6 +392,25 @@ describe('room socket handlers', () => {
     ]);
   });
 
+  it('rejects malformed or oversized client identities during registration', async () => {
+    const invalid = createHarness(null);
+    const responses: unknown[] = [];
+
+    await invalid.socket.invoke('register', '../invalid', (result: unknown) => responses.push(result));
+    await invalid.socket.invoke('register', { clientId: 'x'.repeat(129) }, (result: unknown) => responses.push(result));
+    await invalid.socket.invoke('register', {
+      clientId: 'client-1',
+      clientAuthToken: 'x'.repeat(4097),
+    }, (result: unknown) => responses.push(result));
+
+    assert.deepEqual(responses, [
+      { success: false, error: 'Invalid user ID' },
+      { success: false, error: 'Invalid user ID' },
+      { success: false, error: 'Invalid client auth token' },
+    ]);
+    assert.equal(invalid.store.clientId, null);
+  });
+
   it('seeds the nickname when registering with a username payload for a new client', async () => {
     const { socket, store } = createHarness(null);
     let response: unknown;

@@ -381,6 +381,33 @@ describe('message socket handlers', () => {
     assert.equal(h.store.appendedMessages.length, 0);
   });
 
+  it('rejects oversized message content and unbounded profile fields', async () => {
+    const h = createHarness('client-2');
+    const responses: unknown[] = [];
+
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'x'.repeat(64 * 1024 + 1),
+    }, (response: unknown) => responses.push(response));
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'valid',
+      username: 'x'.repeat(41),
+    }, (response: unknown) => responses.push(response));
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'valid',
+      avatar: { text: 'x'.repeat(17), color: 'primary' },
+    }, (response: unknown) => responses.push(response));
+
+    assert.deepEqual(responses, [
+      { success: false, error: 'Message content is too large' },
+      { success: false, error: 'Invalid message profile' },
+      { success: false, error: 'Invalid message profile' },
+    ]);
+    assert.equal(h.store.appendedMessages.length, 0);
+  });
+
   it('rejects new messages when the room posting schedule is closed', async () => {
     const closed = createHarness('client-2');
     closed.store.rooms = [
@@ -690,6 +717,33 @@ describe('message socket handlers', () => {
         action,
       }],
     });
+  });
+
+  it('rejects oversized or deeply nested A2UI action context', async () => {
+    const { socket } = createHarness('client-1');
+    const responses: unknown[] = [];
+    const baseAction = {
+      name: 'create_task',
+      surfaceId: 'task-1',
+      sourceComponentId: 'confirm',
+      timestamp: '2026-05-03T00:00:10.000Z',
+    };
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      action: { ...baseAction, context: { payload: 'x'.repeat(16 * 1024) } },
+    }, (response: unknown) => responses.push(response));
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      action: { ...baseAction, context: { a: { b: { c: { d: { e: { f: { g: 1 } } } } } } } },
+    }, (response: unknown) => responses.push(response));
+
+    assert.deepEqual(responses, [
+      { success: false, error: 'Invalid A2UI action payload' },
+      { success: false, error: 'Invalid A2UI action payload' },
+    ]);
   });
 });
 

@@ -1984,6 +1984,13 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'File encoding is invalid' });
         return;
       }
+      const contentBytes = encoding === 'base64'
+        ? Buffer.from(content, 'base64').byteLength
+        : Buffer.byteLength(content, 'utf8');
+      if (contentBytes > WORKSPACE_FILE_MAX_BYTES) {
+        callback?.({ success: false, error: 'File content is too large' });
+        return;
+      }
       if (!codeAgentSandboxService?.writeWorkspaceFile) {
         callback?.({ success: false, error: 'Workspace file writing is unavailable' });
         return;
