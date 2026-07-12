@@ -32,6 +32,7 @@ import {
 const STDERR_TAIL_CHARS = 4000;
 const DAEMON_READY_TIMEOUT_MS = 30_000;
 const DAEMON_TURN_RELEASE_TIMEOUT_MS = 10_000;
+const DAEMON_THREAD_QUERY_TIMEOUT_MS = 30_000;
 
 export type CodeAgentDaemonThreadQueryResult =
   | CodeAgentRunnerThreadListResultEvent
@@ -40,7 +41,10 @@ export type CodeAgentDaemonThreadQueryResult =
 export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
   private readonly connections = new WeakMap<CodeAgentRunnerProcess, DaemonConnection>();
 
-  constructor(private readonly turnReleaseTimeoutMs = DAEMON_TURN_RELEASE_TIMEOUT_MS) {}
+  constructor(
+    private readonly turnReleaseTimeoutMs = DAEMON_TURN_RELEASE_TIMEOUT_MS,
+    private readonly threadQueryTimeoutMs = DAEMON_THREAD_QUERY_TIMEOUT_MS
+  ) {}
 
   async run(
     request: CodeAgentRunnerRunRequest,
@@ -54,7 +58,7 @@ export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
 
     let connection = this.connections.get(process);
     if (!connection) {
-      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs);
+      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs, this.threadQueryTimeoutMs);
       this.connections.set(process, connection);
     }
     await connection.ready();
@@ -80,7 +84,7 @@ export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
 
     let connection = this.connections.get(process);
     if (!connection) {
-      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs);
+      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs, this.threadQueryTimeoutMs);
       this.connections.set(process, connection);
     }
     await connection.ready();
@@ -101,7 +105,8 @@ class DaemonConnection {
 
   constructor(
     private readonly process: CodeAgentRunnerProcess,
-    private readonly turnReleaseTimeoutMs: number
+    private readonly turnReleaseTimeoutMs: number,
+    private readonly threadQueryTimeoutMs: number
   ) {
     this.stderrTail = collectStderrTail(process.stderr);
     this.readyPromise = new Promise<void>((resolve, reject) => {
@@ -204,8 +209,23 @@ class DaemonConnection {
       ].filter(Boolean).join('; '));
     }
 
+    let timedOut = false;
     try {
-      return await activeQuery.result as T;
+      return await withTimeout(
+        activeQuery.result as Promise<T>,
+        this.threadQueryTimeoutMs,
+        () => {
+          timedOut = true;
+          return new Error(`sandbox daemon thread query timed out after ${this.threadQueryTimeoutMs}ms`);
+        }
+      );
+    } catch (error) {
+      if (timedOut) {
+        this.closed = true;
+        this.failActive(error instanceof Error ? error : new Error(String(error)));
+        await this.process.terminate?.().catch(() => undefined);
+      }
+      throw error;
     } finally {
       if (this.activeQuery === activeQuery) {
         this.activeQuery = undefined;

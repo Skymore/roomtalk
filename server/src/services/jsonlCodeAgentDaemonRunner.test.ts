@@ -74,6 +74,10 @@ class MemoryDaemonProcess implements CodeAgentRunnerProcess {
   async stop() {
     this.stopCalled = true;
   }
+
+  async terminate() {
+    await this.stop();
+  }
 }
 
 const createContext = (
@@ -275,6 +279,35 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     assert.equal(written.type, 'thread_list');
     assert.equal(written.backend, 'codex-app-server');
     assert.equal(written.env.ROOMTALK_CODEX_AUTH_JSON_PATH, '/tmp/thread-auth.json');
+  });
+
+  it('times out a stuck thread query and terminates the poisoned daemon', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient(10_000, 10);
+    const query = runner.query<CodeAgentRunnerThreadListResultEvent>(process, {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'thread_list',
+      roomId: 'room-1',
+      clientId: 'client-1',
+      workspace: '/workspace',
+      limit: 10,
+    }, 'thread_list_result');
+
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+
+    await assert.rejects(query, /thread query timed out after 10ms/);
+    assert.equal(process.stopCalled, true);
+    await assert.rejects(
+      runner.query(process, {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'thread_list',
+        roomId: 'room-1',
+        clientId: 'client-1',
+        workspace: '/workspace',
+      }, 'thread_list_result'),
+      /sandbox daemon is closed/
+    );
   });
 });
 

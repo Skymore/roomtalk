@@ -83,6 +83,26 @@ describe('CodeAgentDaemonProcessRegistry', () => {
     assert.equal(replacement.stopCalls(), 0);
   });
 
+  it('removes and replaces a daemon that is explicitly terminated', async () => {
+    const registry = new CodeAgentDaemonProcessRegistry();
+    const running = processFor('real daemon', new Promise(() => {}));
+    const input = {
+      handle: sandbox('sandbox-1'),
+      command: 'daemon',
+      env: {},
+      start: async () => running.process,
+    };
+
+    const exposed = await registry.ensure(input);
+    await exposed.terminate?.();
+    assert.equal(running.stopCalls(), 1);
+
+    const replacement = processFor('replacement daemon', new Promise(() => {}));
+    const next = await registry.ensure({ ...input, start: async () => replacement.process });
+    assert.notEqual(next, exposed);
+    assert.equal(replacement.stopCalls(), 0);
+  });
+
   it('stops every tracked daemon during service shutdown', async () => {
     const registry = new CodeAgentDaemonProcessRegistry();
     const first = processFor('daemon-1', new Promise(() => {}));

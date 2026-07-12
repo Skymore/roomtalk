@@ -20,6 +20,7 @@ export interface CodeAgentRunnerProcess {
   stderr?: Readable;
   completed?: Promise<CodeAgentRunnerProcessExit>;
   stop(): Promise<void>;
+  terminate?(): Promise<void>;
 }
 
 export interface CodeAgentRunnerProcessExit {

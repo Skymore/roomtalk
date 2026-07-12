@@ -28,13 +28,18 @@ export class CodeAgentDaemonProcessRegistry {
 
     let pending!: Promise<TrackedDaemonProcess>;
     pending = input.start(baseDaemonEnv(input.env)).then(realProcess => {
+      let tracked!: TrackedDaemonProcess;
       const exposedProcess: CodeAgentRunnerProcess = {
         ...realProcess,
         command: input.command,
         stop: async () => {},
+        terminate: async () => {
+          this.remove(input.handle.id, pending);
+          await tracked.stop();
+        },
       };
       let stopPromise: Promise<void> | undefined;
-      const tracked: TrackedDaemonProcess = {
+      tracked = {
         realProcess,
         exposedProcess,
         stop: () => {
