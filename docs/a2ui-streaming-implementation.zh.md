@@ -1,5 +1,10 @@
 # A2UI 流式渲染接入记录
 
+[English](a2ui-streaming-implementation.md)
+
+状态：重要实现复盘
+Reviewed: 2026-07-12
+
 ## 目标
 
 在现有 AI 消息流里接入 A2UI，让 LLM 可以通过结构化 tool/function call 逐步推送 UI 更新，而不是等 `ai_stream_end` 之后再统一水合。

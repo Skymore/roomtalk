@@ -1,5 +1,9 @@
 # Codex CLI Subscription Backend 分阶段实施计划
 
+[English](codex-cli-subscription-backend-plan.md)
+
+Reviewed: 2026-07-12
+
 > 状态：路线已收敛为实现路线 1：同一个 Code Agent engine / E2B template 内并行 `code_agent_cli` 与 `codex_cli`。独立 Codex worker artifact 及早期 POC/smoke 脚本已从本分支清理。Phase 5/6 的本地实现已完成：template 双 CLI skeleton、`codex_cli` wrapper、artifact metadata、context 校验、server-side Codex auth 注入和 refreshed auth 回写链路都已接上；本地 Docker build 和真实 Codex subscription smoke 已通过，真实 E2B template build/smoke 待本机 E2B 登录、临时 `E2B_API_KEY`，或 CI/生产侧凭据环境。
 > 日期：2026-07-04
 > 分支：`codex/codex-cli-integration-plan`

@@ -1,5 +1,9 @@
 # GitHub Connector 调研与实现建议
 
+[English](github-connector-research.md)
+
+Reviewed: 2026-07-12
+
 > 日期：2026-07-11
 > 状态：PAT + agent shell MVP 已实现；GitHub App 方案保留为长期方向
 > 范围：让 RoomTalk 的 sandbox-based cloud code agent 安全地读取 GitHub，并在明确授权后创建分支、提交和 PR。

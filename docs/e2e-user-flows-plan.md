@@ -1,5 +1,9 @@
 # E2E User Flows Plan
 
+[中文](e2e-user-flows-plan.zh.md)
+
+Reviewed: 2026-07-12
+
 > Status: implemented plan. This document records the original rollout plan and
 > the current local execution paths. Active scripts are in
 > `client-heroui/package.json`.

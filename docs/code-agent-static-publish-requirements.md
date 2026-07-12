@@ -1,5 +1,10 @@
 # Code Agent Static Publish Requirements
 
+[中文](code-agent-static-publish-requirements.zh.md)
+
+Status: Historical requirements; current behavior is in the implementation document
+Reviewed: 2026-07-12
+
 Date: 2026-06-30
 
 ## Problem
@@ -45,7 +50,7 @@ This is a RoomTalk capability exposed to Code Agent as a tool. Code Agent core s
 - The runner must deny common secret or private files such as `.env`, keys, certificates, `.git`, `node_modules`, and virtual environments.
 - Server-side validation must repeat path, file count, byte size, MIME type, and manifest checks. Runner validation is not trusted.
 - Server must set `X-Content-Type-Options: nosniff` and avoid serving unknown files as executable content.
-- Same-origin serving is acceptable for V1 only as a product tradeoff. Production should be able to set a separate public base URL such as `https://published.room.ruit.me`.
+- Serve published artifacts from the configured RoomTalk public base and isolate untrusted content through the serving policy.
 
 ## Limits
 

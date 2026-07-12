@@ -1,5 +1,9 @@
 # Code Agent Codex Backend Spike
 
+[中文](code-agent-codex-backend-spike.zh.md)
+
+Reviewed: 2026-07-12
+
 > Status: accepted as a docs-only spike; runtime remains disabled
 > Date: 2026-05-30
 > Scope: evaluate whether RoomTalk can support a future `codeAgentBackend = code-agent | codex | codex-app-server` without replacing Code Agent or weakening sandbox boundaries.

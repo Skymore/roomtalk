@@ -1,5 +1,10 @@
 # CI/CD 构建与 Fly 部署提速记录
 
+[English](ci-cd-build-optimization.md)
+
+状态：重要构建/发布复盘
+Reviewed: 2026-07-12
+
 本文记录 2026-07-12 对 RoomTalk GitHub Actions、Docker 构建和 Fly.io 部署链路所做的两阶段性能优化。它同时是后续 CI/CD 改动的性能基线和排障参考。
 
 ## 原始问题

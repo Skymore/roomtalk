@@ -1,5 +1,9 @@
 # Design System Inspired by Claude (Anthropic)
 
+[中文](DESIGN.zh.md)
+
+Reviewed: 2026-07-12
+
 > Status: visual reference, not the current RoomTalk design source of truth.
 > Use this as inspiration for tone, color, and spacing only. Current app UI is
 > implemented with HeroUI, Tailwind, and the components under

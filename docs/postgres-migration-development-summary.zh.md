@@ -1,5 +1,9 @@
 # PostgreSQL 迁移开发复盘
 
+[English](postgres-migration-development-summary.md)
+
+Reviewed: 2026-07-12
+
 > 历史记录：本文下方的数据量、机器规格和 rooms/messages/costs 范围反映当时的首次生产切换，不是当前运行手册。2026-07-12 起，`migrate:redis-to-postgres` 已扩展为完整的 `R` 到 `R+P` durable-data bootstrap，覆盖当前 room-related、auth/account、media/AI/outbox 和 Codex/GitHub connection 记录；当前操作以 [PostgreSQL 上线 runbook](./postgres-rollout-runbook.md) 为准。
 
 ## 背景

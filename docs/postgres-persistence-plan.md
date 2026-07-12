@@ -1,5 +1,9 @@
 # Redis/PostgreSQL 持久化重构计划
 
+[English](postgres-persistence-plan.en.md)
+
+Reviewed: 2026-07-12
+
 > 状态：已完成的历史计划。本文保留迁移设计和阶段验收记录；当前可操作步骤以
 > [postgres-rollout-runbook.md](./postgres-rollout-runbook.md)、`server/.env.example`
 > 和 `server/src/repositories/postgresSchema.ts` 为准。当前 PostgreSQL schema

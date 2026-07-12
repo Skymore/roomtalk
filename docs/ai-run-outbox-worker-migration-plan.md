@@ -1,5 +1,10 @@
 # AI Run / Outbox / Worker Migration Plan
 
+[中文](ai-run-outbox-worker-migration-plan.zh.md)
+
+Status: Historical migration plan with implemented foundations
+Reviewed: 2026-07-12
+
 ## Goal
 
 Move RoomTalk AI generation from a socket-handler-owned process to a durable, observable, retryable run model without changing the user-facing streaming experience.

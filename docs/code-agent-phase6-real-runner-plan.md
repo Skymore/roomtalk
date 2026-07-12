@@ -1,5 +1,10 @@
 # Code Agent Phase 6 Real Runner Plan
 
+[中文](code-agent-phase6-real-runner-plan.zh.md)
+
+Status: Historical completed phase plan
+Reviewed: 2026-07-12
+
 ## Goal
 
 Run the existing Code Agent coding assistant inside the file/process sandbox. RoomTalk must not reimplement Code Agent's agent loop. RoomTalk only owns:

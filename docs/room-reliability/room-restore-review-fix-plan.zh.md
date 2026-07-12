@@ -1,5 +1,9 @@
 # 房间恢复 Review 评价与修复计划
 
+[English](room-restore-review-fix-plan.md)
+
+Reviewed: 2026-07-12
+
 日期：2026-06-08
 
 > 状态：历史修复计划 + 评审记录。PR1-PR4 的恢复调度、in-flight 复用、

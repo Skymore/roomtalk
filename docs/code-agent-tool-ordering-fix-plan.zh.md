@@ -1,5 +1,10 @@
 # Code Agent AI/工具消息顺序修复方案
 
+[English](code-agent-tool-ordering-fix-plan.md)
+
+状态：重要工程复盘；主线已落地
+Reviewed: 2026-07-12
+
 日期：2026-06-27
 
 ## 背景

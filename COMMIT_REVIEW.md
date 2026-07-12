@@ -1,5 +1,9 @@
 # RoomTalk 全量 Commit Review（163 commits）
 
+[English](COMMIT_REVIEW.en.md)
+
+Reviewed: 2026-07-12
+
 > 当前状态：历史审查记录。本文覆盖 `5a991ae` → `7238ebe` 的 163 个
 > commit，不覆盖当前 `master` 后续提交。旧段落中的“疑似仍在现行代码中”
 > 已有后续“现行代码核验与修复跟进”说明，阅读时以后者为准。

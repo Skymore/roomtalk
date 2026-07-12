@@ -1,5 +1,10 @@
 # Code Agent App Server Integration Progress
 
+[English](code-agent-app-server-integration-progress.md)
+
+状态：重要实现进展记录；当前架构以 runtime architecture 为准
+Reviewed: 2026-07-12
+
 ## 目标
 
 在现有 Code Agent 和 Codex CLI backend 之外，实现第三个并行 backend：Codex app-server。Code Agent、Codex CLI、Codex app-server 必须共用一套 RoomTalk code-agent runner/session 接口，避免 Codex 继续复用 Code Agent 专属命名。

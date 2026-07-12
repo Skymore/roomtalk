@@ -1,5 +1,10 @@
 # RoomTalk Code Review — 2026-07-12
 
+[中文](code-review-2026-07-12.zh.md)
+
+Status: Dated review report
+Reviewed: 2026-07-12
+
 ## Scope
 
 This review covers the current `master` implementation at `5c961ce2`, organized by runtime boundary rather than commit history:

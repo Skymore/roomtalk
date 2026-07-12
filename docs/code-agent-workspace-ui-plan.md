@@ -1,5 +1,9 @@
 # Code Agent Workspace UI Plan
 
+[中文](code-agent-workspace-ui-plan.zh.md)
+
+Reviewed: 2026-07-12
+
 > Status: Phase 6 accepted; current plan complete
 > Date: 2026-05-26
 > Scope: turn RoomTalk Code Agent rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = code-agent | codex | codex-app-server` abstraction.

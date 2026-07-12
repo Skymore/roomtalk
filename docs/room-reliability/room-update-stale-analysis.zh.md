@@ -1,5 +1,9 @@
 # Room Update 不刷新问题:完整链路分析
 
+[English](room-update-stale-analysis.md)
+
+Reviewed: 2026-07-12
+
 日期:2026-06-09
 
 > 状态：已完成的历史根因分析。文中“现存 bug/设计缺口”描述的是修复前状态；

@@ -1,5 +1,9 @@
 # 移动浏览器恢复房间会话：彻底修复方案
 
+[English](mobile-room-restore-strategy.md)
+
+Reviewed: 2026-07-12
+
 > 状态：历史设计记录。主要客户端恢复方案已在后续 PR 中落地并由
 > `room-restore-review-fix-plan.zh.md` 与本目录 README 汇总；本文早期对
 > socket auto-join/register 竞态的描述不再代表当前实现。仍可作为背景阅读，

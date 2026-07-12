@@ -1,5 +1,10 @@
 # 身份标识、Code Agent 权限与上下文问题
 
+[English](identity-code-agent-permission-plan.en.md)
+
+状态：历史调查与实施记录
+Reviewed: 2026-07-12
+
 > 2026-06-29 调查记录
 
 ---

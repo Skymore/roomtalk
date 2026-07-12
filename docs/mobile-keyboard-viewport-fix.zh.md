@@ -1,5 +1,9 @@
 # iOS 键盘弹出导致聊天视口错位：修复记录
 
+[English](mobile-keyboard-viewport-fix.md)
+
+Reviewed: 2026-07-12
+
 > 状态：已落地的修复记录。当前实现还包含 `.roomtalk-keyboard-open`
 > 状态类、聚焦 editable 检测、移动底部导航隐藏和 modal viewport CSS 变量，
 > 这些补充共同维持键盘打开时的聊天可用区域。

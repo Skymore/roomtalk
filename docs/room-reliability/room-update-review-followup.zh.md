@@ -1,5 +1,9 @@
 # Room Update 修复的二次 Review 与跟进修复
 
+[English](room-update-review-followup.md)
+
+Reviewed: 2026-07-12
+
 日期:2026-06-10
 
 > 状态：已完成的历史跟进记录。前半部分的 `updatedAt` LWW 修复后来被
