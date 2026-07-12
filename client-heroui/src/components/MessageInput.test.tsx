@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
+import { clearRegisteredMediaUploadsForTests } from '../utils/mediaUploadTasks';
 import { MessageInput } from './MessageInput';
 
 const socketMocks = vi.hoisted(() => ({
@@ -13,6 +14,8 @@ const socketMocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendMessageAndAskAI: vi.fn(),
   sendSticker: vi.fn(),
+  prepareMediaUpload: vi.fn(),
+  completeMediaUpload: vi.fn(),
   uploadMediaMessage: vi.fn(),
 }));
 
@@ -249,7 +252,8 @@ const installVoiceRecordingMocks = () => {
 
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    clearRegisteredMediaUploadsForTests();
     stickerMocks.suggestions = [];
     disclosureMocks.isOpen = false;
     setNavigatorPlatform('Win32');
@@ -270,6 +274,32 @@ describe('MessageInput optimistic send flow', () => {
       aiMessageId: 'ai-message-1',
       aiStarted: true,
     });
+    let preparedAssetSequence = 0;
+    socketMocks.prepareMediaUpload.mockImplementation(async (params: any) => {
+      preparedAssetSequence += 1;
+      return {
+        assetId: `asset-${preparedAssetSequence}`,
+        objectKey: `rooms/${params.roomId}/media/${params.kind}/asset-${preparedAssetSequence}`,
+        roomId: params.roomId,
+        kind: params.kind,
+        mimeType: params.mimeType || params.file.type,
+        byteSize: params.file.size,
+        filename: params.filename,
+      };
+    });
+    socketMocks.completeMediaUpload.mockImplementation(async ({ upload, clientMessageId }: any) => message({
+      id: `message-${upload.assetId}`,
+      clientMessageId,
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: upload.assetId,
+        kind: upload.kind,
+        mimeType: upload.mimeType,
+        byteSize: upload.byteSize,
+        filename: upload.filename,
+      },
+    }));
   socketMocks.sendSticker.mockResolvedValue(message({
       id: 'sticker-message',
       content: 'sticker-1',
@@ -712,13 +742,7 @@ describe('MessageInput optimistic send flow', () => {
       configurable: true,
       value: vi.fn(),
     });
-    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({
-      id: 'image-message-1',
-      content: '',
-      messageType: 'media',
-      mediaAsset: { id: 'asset-image-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
-    }));
-    const { editor } = renderMessageInput({
+    const { editor, props } = renderMessageInput({
       isCodeAgentRoom: true,
       codeAgentBackend: 'codex-app-server',
     });
@@ -729,8 +753,13 @@ describe('MessageInput optimistic send flow', () => {
 
     fireEvent.click(screen.getByText('ask-ai'));
 
+    await waitFor(() => expect(props.onOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      messageType: 'media',
+      deliveryStatus: 'pending',
+      localMediaPreviewUrl: 'blob:agent-image',
+    })));
     await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
-    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledWith(expect.objectContaining({
+    expect(socketMocks.prepareMediaUpload).toHaveBeenCalledWith(expect.objectContaining({
       roomId: 'room-1',
       kind: 'image',
       mimeType: 'image/png',
@@ -738,8 +767,35 @@ describe('MessageInput optimistic send flow', () => {
     }));
     expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledWith(expect.objectContaining({
       content: 'inspect this screenshot',
-      imageMessageIds: ['image-message-1'],
+      imageMessageIds: ['message-asset-1'],
     }));
+  });
+
+  it('uses the same optimistic media pipeline for images sent with normal Ask AI', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:chat-ai-image'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const { editor, props } = renderMessageInput();
+    setEditorText(editor, 'consider this image');
+    const file = new File([new Uint8Array([1, 2, 3])], 'chat-ai.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(props.onOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      messageType: 'media',
+      localMediaPreviewUrl: 'blob:chat-ai-image',
+      deliveryStatus: 'pending',
+    })));
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'consider this image',
+    })));
   });
 
   it('queues an image-only code-agent turn with a durable image link', async () => {
@@ -751,12 +807,6 @@ describe('MessageInput optimistic send flow', () => {
       configurable: true,
       value: vi.fn(),
     });
-    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({
-      id: 'image-message-queued',
-      content: '',
-      messageType: 'media',
-      mediaAsset: { id: 'asset-image-queued', kind: 'image', mimeType: 'image/png', byteSize: 3 },
-    }));
     renderMessageInput({
       isCodeAgentRoom: true,
       isRoomAIProcessing: true,
@@ -771,7 +821,7 @@ describe('MessageInput optimistic send flow', () => {
     await waitFor(() => expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledTimes(1));
     expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledWith(expect.objectContaining({
       content: 'codeAgentInspectAttachedImages',
-      imageMessageIds: ['image-message-queued'],
+      imageMessageIds: ['message-asset-1'],
     }));
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();
   });
@@ -930,17 +980,19 @@ describe('MessageInput optimistic send flow', () => {
 
     expect(await screen.findByText('notes.md')).toBeTruthy();
     expect(screen.getByText(/7 B/)).toBeTruthy();
-    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+    expect(socketMocks.prepareMediaUpload).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText('send-message'));
 
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
+    expect(socketMocks.prepareMediaUpload.mock.calls[0][0]).toMatchObject({
       file,
       roomId: 'room-1',
       kind: 'file',
       mimeType: 'text/markdown',
       filename: 'notes.md',
+    });
+    expect(socketMocks.completeMediaUpload.mock.calls[0][0]).toMatchObject({
       username: 'Ada',
       avatar: { text: 'A', color: '#123456' },
       replyToMessageId: undefined,
@@ -957,19 +1009,19 @@ describe('MessageInput optimistic send flow', () => {
     });
 
     expect(await screen.findAllByTestId('attachment-draft')).toHaveLength(2);
-    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+    expect(socketMocks.prepareMediaUpload).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText('send-message'));
 
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2));
-    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(2));
+    expect(socketMocks.prepareMediaUpload.mock.calls[0][0]).toMatchObject({
       file: textFile,
       roomId: 'room-1',
       kind: 'file',
       mimeType: 'text/markdown',
       filename: 'notes.md',
     });
-    expect(socketMocks.uploadMediaMessage.mock.calls[1][0]).toMatchObject({
+    expect(socketMocks.prepareMediaUpload.mock.calls[1][0]).toMatchObject({
       file: movFile,
       roomId: 'room-1',
       kind: 'file',
@@ -988,12 +1040,12 @@ describe('MessageInput optimistic send flow', () => {
     });
 
     expect(await screen.findByText('IMG_0135.mov')).toBeTruthy();
-    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+    expect(socketMocks.prepareMediaUpload).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText('send-message'));
 
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
+    expect(socketMocks.prepareMediaUpload.mock.calls[0][0]).toMatchObject({
       file,
       roomId: 'room-1',
       kind: 'video',
@@ -1048,7 +1100,7 @@ describe('MessageInput optimistic send flow', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('keeps image drafts visible with a retry action when media upload fails', async () => {
+  it('moves images into the message stream immediately and marks failed uploads there', async () => {
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn(() => 'blob:image-preview'),
@@ -1057,9 +1109,9 @@ describe('MessageInput optimistic send flow', () => {
       configurable: true,
       value: vi.fn(),
     });
-    socketMocks.uploadMediaMessage.mockRejectedValue(new Error('upload failed'));
+    socketMocks.prepareMediaUpload.mockRejectedValueOnce(new Error('upload failed'));
 
-    const { editor } = renderMessageInput();
+    const { editor, props } = renderMessageInput();
     const file = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' });
 
     fireEvent.change(screen.getByTestId('image-upload-input'), {
@@ -1067,26 +1119,20 @@ describe('MessageInput optimistic send flow', () => {
     });
 
     expect(await screen.findByText('image.png')).toBeTruthy();
-    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
+    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBeNull();
 
     fireEvent.click(screen.getByText('send-message'));
 
-    await waitFor(() => {
-      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(screen.getByText(/attachmentBatchFailed/)).toBeTruthy();
-    });
-
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(props.onOptimisticMessageFailed).toHaveBeenCalledTimes(1));
     expect(editor.querySelectorAll('img')).toHaveLength(0);
-    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('failed');
-    expect(screen.getByLabelText('retryAttachment:image.png')).toBeTruthy();
+    expect(screen.queryByTestId('attachment-draft')).toBeNull();
+    expect(props.onOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      messageType: 'media',
+      deliveryStatus: 'pending',
+      localMediaPreviewUrl: 'blob:image-preview',
+    }));
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:image-preview');
-
-    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({ id: 'image-retry-saved' }));
-    fireEvent.click(screen.getByLabelText('retryAttachment:image.png'));
-    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:image-preview');
   });
 
   it('removes a staged attachment without uploading it', async () => {
@@ -1102,60 +1148,64 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
   });
 
-  it('shows per-item progress, continues after partial failure, and retries only the failed item', async () => {
-    let resolveFirstUpload!: (value: Message) => void;
-    socketMocks.uploadMediaMessage
-      .mockImplementationOnce((params: { onUploadProgress?: (progress: number) => void }) => {
-        params.onUploadProgress?.(37);
-        return new Promise<Message>(resolve => { resolveFirstUpload = resolve; });
-      })
-      .mockRejectedValueOnce(new Error('second upload failed'));
-    renderMessageInput();
+  it('prepares media concurrently but completes messages in selection order', async () => {
+    let resolveFirstPreparation!: (value: any) => void;
+    let resolveSecondPreparation!: (value: any) => void;
+    socketMocks.prepareMediaUpload
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirstPreparation = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecondPreparation = resolve; }));
+    const rendered = renderMessageInput();
     const first = new File(['first'], 'first.txt', { type: 'text/plain' });
     const second = new File(['second'], 'second.txt', { type: 'text/plain' });
 
     fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
     fireEvent.click(screen.getByText('send-message'));
 
-    const progressbar = await screen.findByRole('progressbar', { name: 'uploadProgress:first.txt' });
-    expect(progressbar.getAttribute('aria-valuenow')).toBe('37');
-    expect(screen.getByText('second.txt').closest('[data-attachment-status]')?.getAttribute('data-attachment-status')).toBe('ready');
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(2));
+    expect(rendered.props.onOptimisticMessage).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('attachment-draft')).toBeNull();
 
     await act(async () => {
-      resolveFirstUpload(message({ id: 'first-saved' }));
+      resolveSecondPreparation({
+        assetId: 'asset-second', objectKey: 'second', roomId: 'room-1', kind: 'file',
+        mimeType: 'text/plain', byteSize: second.size, filename: second.name,
+      });
     });
+    expect(socketMocks.completeMediaUpload).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getAllByTestId('attachment-draft')).toHaveLength(1));
-    expect(screen.queryByText('first.txt')).toBeNull();
-    expect(screen.getByText('second.txt').closest('[data-attachment-status]')?.getAttribute('data-attachment-status')).toBe('failed');
-
-    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({ id: 'second-saved' }));
-    fireEvent.click(screen.getByLabelText('retryAttachment:second.txt'));
-    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
-    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      resolveFirstPreparation({
+        assetId: 'asset-first', objectKey: 'first', roomId: 'room-1', kind: 'file',
+        mimeType: 'text/plain', byteSize: first.size, filename: first.name,
+      });
+    });
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(2));
+    expect(socketMocks.completeMediaUpload.mock.calls.map(call => call[0].upload.assetId)).toEqual([
+      'asset-first',
+      'asset-second',
+    ]);
   });
 
-  it('can cancel an attachment that has not started while an earlier upload is active', async () => {
-    let resolveFirstUpload!: (value: Message) => void;
-    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
-      resolveFirstUpload = resolve;
-    }));
-    renderMessageInput();
+  it('detaches all attachments from the composer while their parallel work is active', async () => {
+    let resolveFirst!: (value: any) => void;
+    let resolveSecond!: (value: any) => void;
+    socketMocks.prepareMediaUpload
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve; }));
+    const rendered = renderMessageInput();
     const first = new File(['first'], 'active.txt', { type: 'text/plain' });
     const second = new File(['second'], 'queued.txt', { type: 'text/plain' });
 
     fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
     fireEvent.click(screen.getByText('send-message'));
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(screen.getByLabelText('removeAttachment:queued.txt'));
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('attachment-draft')).toBeNull();
+    expect(rendered.props.onOptimisticMessage).toHaveBeenCalledTimes(2);
     await act(async () => {
-      resolveFirstUpload(message({ id: 'active-saved' }));
+      resolveFirst({ assetId: 'asset-active', objectKey: 'active', roomId: 'room-1', kind: 'file', mimeType: 'text/plain', byteSize: first.size });
+      resolveSecond({ assetId: 'asset-queued', objectKey: 'queued', roomId: 'room-1', kind: 'file', mimeType: 'text/plain', byteSize: second.size });
     });
-
-    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
-    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(2));
   });
 
   it('clears attachment drafts and revokes previews when the room changes', async () => {
@@ -1179,54 +1229,49 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
   });
 
-  it('never uploads queued attachments into the previous room after a room switch', async () => {
-    let resolveFirstUpload!: (value: Message) => void;
-    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
-      resolveFirstUpload = resolve;
-    }));
+  it('finishes already-sent media in its original room without updating the next room list', async () => {
+    let resolveFirstComplete!: (value: Message) => void;
+    socketMocks.completeMediaUpload
+      .mockImplementationOnce(() => new Promise<Message>(resolve => { resolveFirstComplete = resolve; }));
     const rendered = renderMessageInput();
     const first = new File(['first'], 'first-room-one.txt', { type: 'text/plain' });
     const second = new File(['second'], 'second-room-one.txt', { type: 'text/plain' });
 
     fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
     fireEvent.click(screen.getByText('send-message'));
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.uploadMediaMessage.mock.calls[0][0].roomId).toBe('room-1');
+    await waitFor(() => expect(socketMocks.prepareMediaUpload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(1));
+    expect(socketMocks.prepareMediaUpload.mock.calls.every(call => call[0].roomId === 'room-1')).toBe(true);
 
     rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
     await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
     await act(async () => {
-      resolveFirstUpload(message({ id: 'first-room-one-saved' }));
+      resolveFirstComplete(message({ id: 'first-room-one-saved', roomId: 'room-1' }));
     });
 
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(2));
+    expect(rendered.props.onOptimisticMessageSaved).not.toHaveBeenCalled();
   });
 
-  it('aborts an attachment upload and keeps the draft retryable when the same room session becomes unverified', async () => {
-    let resolveUpload!: (value: Message) => void;
-    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
-      resolveUpload = resolve;
+  it('does not write a completed media task into an unverified room session', async () => {
+    let resolveComplete!: (value: Message) => void;
+    socketMocks.completeMediaUpload.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveComplete = resolve;
     }));
     const rendered = renderMessageInput({ isRoomSessionReady: true });
     const file = new File(['session attachment'], 'session.txt', { type: 'text/plain' });
 
     fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [file] } });
     fireEvent.click(screen.getByText('send-message'));
-    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
-    const signal = socketMocks.uploadMediaMessage.mock.calls[0][0].signal as AbortSignal;
+    await waitFor(() => expect(socketMocks.completeMediaUpload).toHaveBeenCalledTimes(1));
 
     rendered.rerender(
       <MessageInput {...rendered.props} isRoomSessionReady={false} />
     );
 
-    expect(signal.aborted).toBe(true);
-    await waitFor(() => {
-      expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
-    });
-
-    await act(async () => resolveUpload(message({ id: 'late-session-attachment' })));
-    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
+    await act(async () => resolveComplete(message({ id: 'late-session-attachment' })));
+    expect(rendered.props.onOptimisticMessageSaved).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('attachment-draft')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

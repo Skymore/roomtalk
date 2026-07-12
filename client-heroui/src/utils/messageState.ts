@@ -39,10 +39,15 @@ export const upsertMessage = (messages: Message[], message: Message) => {
 
     if (clientMessageIndex !== -1) {
       const next = [...messages];
-      const optimisticAction = messages[clientMessageIndex].deliveryAction;
-      next[clientMessageIndex] = serverMessage.deliveryAction || !optimisticAction
-        ? serverMessage
-        : { ...serverMessage, deliveryAction: optimisticAction };
+      const optimisticMessage = messages[clientMessageIndex];
+      const optimisticAction = optimisticMessage.deliveryAction;
+      const localMediaPreviewUrl = optimisticMessage.localMediaPreviewUrl;
+      next[clientMessageIndex] = {
+        ...serverMessage,
+        ...(localMediaPreviewUrl ? { timestamp: optimisticMessage.timestamp } : {}),
+        ...(!serverMessage.deliveryAction && optimisticAction ? { deliveryAction: optimisticAction } : {}),
+        ...(localMediaPreviewUrl ? { localMediaPreviewUrl } : {}),
+      };
       return sortMessages(next);
     }
   }

@@ -26,6 +26,7 @@ import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { CodeAgentBackend, CodeAgentMode, getCodeAgentAssistantDisplayName } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import { hasRegisteredMediaUpload, retryRegisteredMediaUpload } from '../utils/mediaUploadTasks';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -795,7 +796,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       || failedMessage.roomId !== roomId
       || failedMessage.deliveryStatus !== 'failed'
       || !clientMessageId
-      || (failedMessage.messageType !== 'text' && failedMessage.messageType !== 'sticker')
+      || (
+        failedMessage.messageType !== 'text'
+        && failedMessage.messageType !== 'sticker'
+        && !(failedMessage.messageType === 'media' && hasRegisteredMediaUpload(clientMessageId))
+      )
       || failedMessage.deliveryAction === 'ask-ai'
       || retryingClientMessageIdsRef.current.has(clientMessageId)
     ) {
@@ -810,7 +815,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     )));
 
     try {
-      const savedMessage = failedMessage.messageType === 'sticker'
+      const savedMessage = failedMessage.messageType === 'media'
+        ? await retryRegisteredMediaUpload(clientMessageId)
+        : failedMessage.messageType === 'sticker'
         ? await sendSticker(
             failedMessage.content,
             roomId,

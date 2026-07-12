@@ -14,7 +14,6 @@ import { inlineStickerQuery, loadStickerCatalog } from '../utils/stickerCatalog'
 import { apiPath } from '../utils/apiBase';
 import { StickerPicker } from './StickerPicker';
 import { useTranslation } from 'react-i18next';
-import imageCompression from 'browser-image-compression';
 import {
   buildAIPrompt,
   buildOutgoingMessageItems,
@@ -68,6 +67,11 @@ import {
   type CodexPermissionMode,
   type CodexRunSettings,
 } from '../utils/codexSettings';
+import {
+  completeRegisteredMediaUpload,
+  prepareMediaUploadBatch,
+  registerMediaUploadTask,
+} from '../utils/mediaUploadTasks';
 
 interface MessageInputProps {
   roomId: string;
@@ -174,8 +178,6 @@ const getTranscriptionErrorKey = (error: unknown) => {
 type VoiceWorkflow = 'choice' | 'recording-voice' | 'recording-transcript' | 'voice-preview';
 type VoiceRecordingIntent = 'voice' | 'transcript';
 type VoiceStopAction = 'preview' | 'insert' | 'cancel';
-type AttachmentDraftStatus = 'ready' | 'compressing' | 'uploading' | 'failed';
-
 interface AttachmentDraft {
   id: string;
   file: File;
@@ -183,9 +185,6 @@ interface AttachmentDraft {
   mimeType: string;
   filename: string;
   previewUrl?: string;
-  status: AttachmentDraftStatus;
-  progress: number;
-  error?: string;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
@@ -216,8 +215,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
-  const isSendingRef = useRef(isSending);
-  isSendingRef.current = isSending;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isErrorPersistent, setIsErrorPersistent] = useState(false);
   const [shouldAnnounceError, setShouldAnnounceError] = useState(true);
@@ -237,8 +234,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const attachmentRoomIdRef = useRef(roomId);
   const attachmentRoomGenerationRef = useRef(0);
   const roomSessionSnapshotRef = useRef({ roomId, isReady: isRoomSessionReady });
-  const attachmentAbortControllersRef = useRef(new Map<string, AbortController>());
-  const cancelledAttachmentIdsRef = useRef(new Set<string>());
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
@@ -342,13 +337,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   React.useLayoutEffect(() => {
     if (attachmentRoomIdRef.current === roomId) return;
     attachmentRoomGenerationRef.current += 1;
-    attachmentDraftsRef.current.forEach(draft => {
-      cancelledAttachmentIdsRef.current.add(draft.id);
-    });
     attachmentRoomIdRef.current = roomId;
-    attachmentAbortControllersRef.current.forEach(controller => controller.abort());
-    attachmentAbortControllersRef.current.clear();
-    cancelledAttachmentIdsRef.current.clear();
     attachmentDraftsRef.current.forEach(draft => {
       if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
     });
@@ -427,17 +416,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
 
     attachmentRoomGenerationRef.current += 1;
-    attachmentAbortControllersRef.current.forEach(controller => controller.abort());
-    attachmentAbortControllersRef.current.clear();
-    cancelledAttachmentIdsRef.current.clear();
-    const resetDrafts = attachmentDraftsRef.current.map(draft => (
-      draft.status === 'compressing' || draft.status === 'uploading'
-        ? { ...draft, status: 'ready' as const, progress: 0, error: undefined }
-        : draft
-    ));
-    attachmentDraftsRef.current = resetDrafts;
-    setAttachmentDrafts(resetDrafts);
-
     recordingSessionRef.current += 1;
     recordingStopActionRef.current = 'cancel';
     if (recordingTimerRef.current) {
@@ -482,37 +460,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
   }, [isRoomSessionReady, roomId]);
 
-  const updateAttachmentDraft = useCallback((id: string, updates: Partial<AttachmentDraft>) => {
-    setAttachmentDrafts(current => current.map(draft => (
-      draft.id === id ? { ...draft, ...updates } : draft
-    )));
-  }, []);
-
   const removeAttachmentDraft = useCallback((id: string) => {
-    cancelledAttachmentIdsRef.current.add(id);
-    attachmentAbortControllersRef.current.get(id)?.abort();
-    attachmentAbortControllersRef.current.delete(id);
     setAttachmentDrafts(current => {
       const removed = current.find(draft => draft.id === id);
       if (removed?.previewUrl) {
         URL.revokeObjectURL(removed.previewUrl);
-      }
-      const next = current.filter(draft => draft.id !== id);
-      attachmentDraftsRef.current = next;
-      return next;
-    });
-    if (!isSendingRef.current) {
-      cancelledAttachmentIdsRef.current.delete(id);
-    }
-  }, []);
-
-  const completeAttachmentDraft = useCallback((id: string) => {
-    attachmentAbortControllersRef.current.delete(id);
-    cancelledAttachmentIdsRef.current.delete(id);
-    setAttachmentDrafts(current => {
-      const completed = current.find(draft => draft.id === id);
-      if (completed?.previewUrl) {
-        URL.revokeObjectURL(completed.previewUrl);
       }
       const next = current.filter(draft => draft.id !== id);
       attachmentDraftsRef.current = next;
@@ -627,6 +579,122 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     deliveryStatus: 'pending',
     deliveryAction: 'send',
   }), [buildReplyReference, clientId, roomId, username]);
+
+  const buildOptimisticMediaMessage = useCallback((
+    draft: AttachmentDraft,
+    clientMessageId: string,
+    avatar: { text: string; color: string },
+    replyTo: Message | null,
+    timestamp: string,
+  ): Message => ({
+    id: `temp-${clientMessageId}`,
+    clientMessageId,
+    clientId,
+    roomId,
+    content: '',
+    timestamp,
+    messageType: 'media',
+    username,
+    avatar,
+    replyTo: buildReplyReference(replyTo),
+    deliveryStatus: 'pending',
+    deliveryAction: 'send',
+    mediaAsset: {
+      id: `local-${clientMessageId}`,
+      kind: draft.kind,
+      mimeType: draft.mimeType,
+      byteSize: draft.file.size,
+      filename: draft.filename,
+    },
+    localMediaPreviewUrl: draft.previewUrl,
+    localMediaPending: true,
+  }), [buildReplyReference, clientId, roomId, username]);
+
+  const detachAttachmentDraftsForSend = useCallback((draftIds: readonly string[]) => {
+    const detachedIds = new Set(draftIds);
+    setAttachmentDrafts(current => {
+      const next = current.filter(draft => !detachedIds.has(draft.id));
+      attachmentDraftsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const startMediaUploadBatch = useCallback((
+    drafts: readonly AttachmentDraft[],
+    avatar: { text: string; color: string },
+    replyTo: Message | null,
+    completionBarrier?: Promise<unknown>,
+    baseTimestamp = Date.now(),
+  ): Promise<Message[]> => {
+    if (drafts.length === 0) return Promise.resolve([]);
+
+    const uploadRoomId = roomId;
+    const uploadRoomGeneration = attachmentRoomGenerationRef.current;
+    const isUploadRoomCurrent = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === uploadRoomId
+      && attachmentRoomGenerationRef.current === uploadRoomGeneration
+    );
+    const entries = drafts.map((draft, index) => {
+      const clientMessageId = createClientMessageId();
+      registerMediaUploadTask({
+        clientMessageId,
+        roomId,
+        file: draft.file,
+        kind: draft.kind,
+        mimeType: draft.mimeType,
+        filename: draft.filename,
+        previewUrl: draft.previewUrl,
+        username,
+        avatar,
+        replyToMessageId: index === 0 ? replyTo?.id : undefined,
+      });
+      onOptimisticMessage?.(buildOptimisticMediaMessage(
+        draft,
+        clientMessageId,
+        avatar,
+        index === 0 ? replyTo : null,
+        new Date(baseTimestamp + index).toISOString(),
+      ));
+      return { clientMessageId };
+    });
+
+    detachAttachmentDraftsForSend(drafts.map(draft => draft.id));
+    const preparations = prepareMediaUploadBatch(entries.map(entry => entry.clientMessageId));
+
+    return (async () => {
+      const savedMessages: Message[] = [];
+      let firstError: unknown;
+      if (completionBarrier) {
+        await completionBarrier.catch(() => undefined);
+      }
+      for (let index = 0; index < entries.length; index += 1) {
+        const { clientMessageId } = entries[index];
+        const preparation = await preparations[index];
+        if (!preparation.ok) {
+          firstError ??= preparation.error;
+          if (isUploadRoomCurrent()) {
+            onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(preparation.error, t('errorSendingMessage')));
+          }
+          continue;
+        }
+        try {
+          const savedMessage = await completeRegisteredMediaUpload(clientMessageId);
+          savedMessages.push(savedMessage);
+          if (isUploadRoomCurrent()) {
+            onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+          }
+        } catch (error) {
+          firstError ??= error;
+          if (isUploadRoomCurrent()) {
+            onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
+          }
+        }
+      }
+      if (firstError) throw firstError;
+      return savedMessages;
+    })();
+  }, [buildOptimisticMediaMessage, detachAttachmentDraftsForSend, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, roomId, t, username]);
 
   const handleSelectSticker = useCallback(async (stickerId: string) => {
     setIsStickerPickerOpen(false);
@@ -744,51 +812,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     };
   }, [parseEditorContent]);
 
-  const uploadCodeAgentImageMessages = async (
+  const uploadAIImageMessages = async (
     avatar: { text: string; color: string },
   ): Promise<string[]> => {
     const imageDrafts = attachmentDraftsRef.current.filter(draft => draft.kind === 'image');
     if (imageDrafts.length !== imageCountRef.current) {
       throw new Error('One or more attached images are unavailable');
     }
-
-    const imageMessageIds: string[] = [];
-    for (const draft of imageDrafts) {
-      const controller = new AbortController();
-      attachmentAbortControllersRef.current.set(draft.id, controller);
-      const supportedMimeType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(draft.file.type)
-        ? draft.file.type
-        : 'image/webp';
-      try {
-        updateAttachmentDraft(draft.id, { status: 'compressing', progress: 0, error: undefined });
-        const compressedFile = await imageCompression(draft.file, {
-          maxSizeMB: 2,
-          useWebWorker: true,
-          fileType: supportedMimeType,
-        });
-        updateAttachmentDraft(draft.id, { status: 'uploading', progress: 0, error: undefined });
-        const savedMessage = await uploadMediaMessage({
-          file: compressedFile,
-          roomId,
-          kind: 'image',
-          mimeType: compressedFile.type || supportedMimeType,
-          filename: draft.filename,
-          username,
-          avatar,
-          replyToMessageId: replyToMessage?.id,
-          signal: controller.signal,
-          onUploadProgress: progress => updateAttachmentDraft(draft.id, { status: 'uploading', progress }),
-        });
-        completeAttachmentDraft(draft.id);
-        imageMessageIds.push(savedMessage.id);
-      } catch (error) {
-        attachmentAbortControllersRef.current.delete(draft.id);
-        const failure = getErrorMessage(error, t('errorSendingAiRequest'));
-        updateAttachmentDraft(draft.id, { status: 'failed', error: failure });
-        throw error;
-      }
-    }
-    return imageMessageIds;
+    const savedMessages = await startMediaUploadBatch(imageDrafts, avatar, replyToMessage);
+    return savedMessages.map(message => message.id);
   };
 
   // 发送AI消息的新方法
@@ -851,8 +883,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             codexServiceTier: codexRunSettings.serviceTier,
           }
         : {};
-      const imageMessageIds = isCodeAgentRoom && imageCountRef.current > 0
-        ? await uploadCodeAgentImageMessages(avatar)
+      const imageMessageIds = imageCountRef.current > 0
+        ? await uploadAIImageMessages(avatar)
         : [];
       const promptForSend = basePromptForSend || (imageMessageIds.length > 0 ? t('codeAgentInspectAttachedImages') : '');
 
@@ -948,71 +980,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
   };
 
-  const uploadAttachmentDraft = async (
-    draft: AttachmentDraft,
-    avatar: { text: string; color: string },
-    replyToMessageId?: string,
-    targetRoomId = roomId,
-    roomGeneration = attachmentRoomGenerationRef.current,
-  ): Promise<boolean> => {
-    const isCurrentRoom = () => (
-      componentMountedRef.current
-      && attachmentRoomIdRef.current === targetRoomId
-      && attachmentRoomGenerationRef.current === roomGeneration
-    );
-    if (!isCurrentRoom() || cancelledAttachmentIdsRef.current.has(draft.id)) {
-      return false;
-    }
-    const controller = new AbortController();
-    attachmentAbortControllersRef.current.set(draft.id, controller);
-
-    try {
-      let file: Blob = draft.file;
-      let mimeType = draft.mimeType;
-      if (draft.kind === 'image') {
-        updateAttachmentDraft(draft.id, { status: 'compressing', progress: 0, error: undefined });
-        file = await imageCompression(draft.file, { maxSizeMB: 2, useWebWorker: true });
-        mimeType = file.type || draft.mimeType || 'image/webp';
-      }
-
-      if (!isCurrentRoom() || cancelledAttachmentIdsRef.current.has(draft.id)) {
-        return false;
-      }
-
-      updateAttachmentDraft(draft.id, { status: 'uploading', progress: 0, error: undefined });
-      await uploadMediaMessage({
-        file,
-        roomId: targetRoomId,
-        kind: draft.kind,
-        mimeType,
-        filename: draft.filename,
-        username,
-        avatar,
-        replyToMessageId,
-        signal: controller.signal,
-        onUploadProgress: progress => {
-          if (isCurrentRoom()) {
-            updateAttachmentDraft(draft.id, { status: 'uploading', progress });
-          }
-        },
-      });
-
-      if (!isCurrentRoom()) {
-        return false;
-      }
-      completeAttachmentDraft(draft.id);
-      return true;
-    } catch (error) {
-      attachmentAbortControllersRef.current.delete(draft.id);
-      if (!isCurrentRoom() || controller.signal.aborted || cancelledAttachmentIdsRef.current.has(draft.id)) {
-        return false;
-      }
-      const failure = getErrorMessage(error, t('errorSendingMessage'));
-      updateAttachmentDraft(draft.id, { status: 'failed', error: failure });
-      return false;
-    }
-  };
-
   // Handle regular message submission
   const handleSubmit = async () => {
     if (!isRoomSessionReady) return;
@@ -1085,90 +1052,66 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    setIsSending(true);
-    dismissError();
-    try {
-      let replyToMessageId = replyToMessage?.id;
-      let failedCount = 0;
-      let attemptedCount = 0;
-      let sentText = false;
+    if (currentAttachmentDrafts.length > 0) {
+      const textItem = outgoingItems.find(item => item.type === 'text');
+      const sendStartedAt = Date.now();
+      let textSendPromise: Promise<unknown> | undefined;
 
-      for (const item of outgoingItems) {
-        if (!isSubmitRoomCurrent()) return;
-        if (item.type === 'text') {
-          try {
-            attemptedCount += 1;
-            await sendMessage(item.content, submitRoomId, 'text', username, avatar, replyToMessageId);
-            if (!isSubmitRoomCurrent()) return;
-            sentText = true;
-            if (replyToMessageId) {
-              replyToMessageId = undefined;
-              onCancelReply();
-            }
-          } catch (error) {
-            failedCount += 1;
-            console.error('Error sending text in attachment batch:', error);
-          }
-        }
-      }
-
-      if (!isSubmitRoomCurrent()) return;
-      if (sentText) {
-        clearEditorImmediately();
-      }
-
-      for (const draft of currentAttachmentDrafts) {
-        if (!isSubmitRoomCurrent()) return;
-        if (cancelledAttachmentIdsRef.current.has(draft.id)) continue;
-        attemptedCount += 1;
-        const sent = await uploadAttachmentDraft(
-          draft,
-          avatar,
-          replyToMessageId,
+      if (textItem?.type === 'text') {
+        const clientMessageId = createClientMessageId();
+        const optimisticMessage = buildOptimisticTextMessage(textItem.content, clientMessageId, avatar, replyToMessage);
+        optimisticMessage.timestamp = new Date(sendStartedAt).toISOString();
+        onOptimisticMessage?.(optimisticMessage);
+        textSendPromise = sendMessage(
+          textItem.content,
           submitRoomId,
-          submitRoomGeneration,
-        );
-        if (!isSubmitRoomCurrent()) return;
-        if (sent) {
-          if (replyToMessageId) {
-            replyToMessageId = undefined;
-            onCancelReply();
-          }
-        } else if (!cancelledAttachmentIdsRef.current.has(draft.id)) {
-          failedCount += 1;
-        }
+          'text',
+          username,
+          avatar,
+          replyToMessage?.id,
+          clientMessageId,
+        ).then(savedMessage => {
+          onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+        }).catch(error => {
+          onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
+          throw error;
+        });
       }
 
-      if (!isSubmitRoomCurrent()) return;
-      if (failedCount > 0) {
-        showPersistentError(t('attachmentBatchFailed', { failed: failedCount, total: attemptedCount }));
-      } else {
-        dismissError();
-      }
-    } catch (error) {
-      if (!isSubmitRoomCurrent()) return;
-      console.error('Error sending message:', error);
-      showPersistentError(t('errorSendingMessage'));
-    } finally {
-      const liveDraftIds = new Set(attachmentDraftsRef.current.map(draft => draft.id));
-      currentAttachmentDrafts.forEach(draft => {
-        if (!liveDraftIds.has(draft.id)) {
-          cancelledAttachmentIdsRef.current.delete(draft.id);
+      const mediaPromise = startMediaUploadBatch(
+        currentAttachmentDrafts,
+        avatar,
+        textItem ? null : replyToMessage,
+        textSendPromise,
+        sendStartedAt + (textItem ? 1 : 0),
+      );
+      clearEditorImmediately();
+      onCancelReply();
+      void mediaPromise.catch(error => {
+        console.error('Error sending media batch:', error);
+        if (isSubmitRoomCurrent()) {
+          showPersistentError(t('errorSendingMessage'), { announce: !onOptimisticMessageFailed });
         }
       });
-      if (isSubmitRoomCurrent()) {
-        setIsSending(false);
-        if (focusTimerRef.current) {
-          clearTimeout(focusTimerRef.current);
-        }
-        focusTimerRef.current = setTimeout(() => {
+      if (textSendPromise) {
+        void textSendPromise.catch(error => {
+          console.error('Error sending text in media batch:', error);
           if (isSubmitRoomCurrent()) {
-            editorRef.current?.focus();
+            showPersistentError(t('errorSendingMessage'), { announce: !onOptimisticMessageFailed });
           }
-          focusTimerRef.current = null;
-        }, 0);
+        });
       }
+      focusTimerRef.current = setTimeout(() => {
+        if (isSubmitRoomCurrent()) editorRef.current?.focus();
+        focusTimerRef.current = null;
+      }, 0);
+      return;
     }
+
+    // buildOutgoingMessageItems currently collapses editor text to one item;
+    // keep this guard for future rich-text item types without reintroducing a
+    // blocking attachment send path.
+    return;
   };
 
   const setImageInputError = (error: ImageInputValidationError) => {
@@ -1178,41 +1121,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
 
     showTransientError(t(error.errorKey));
-  };
-
-  const handleRetryAttachment = async (draft: AttachmentDraft) => {
-    if (!isRoomSessionReady || isSending || isAIInputLocked || !canPost) return;
-    setIsSending(true);
-    dismissError();
-    const retryRoomId = roomId;
-    const retryRoomGeneration = attachmentRoomGenerationRef.current;
-    try {
-      const sent = await uploadAttachmentDraft(
-        draft,
-        { text: avatarText, color: avatarColor },
-        replyToMessage?.id,
-        retryRoomId,
-        retryRoomGeneration,
-      );
-      if (
-        !componentMountedRef.current
-        || attachmentRoomIdRef.current !== retryRoomId
-        || attachmentRoomGenerationRef.current !== retryRoomGeneration
-      ) return;
-      if (sent) {
-        onCancelReply();
-      } else if (!cancelledAttachmentIdsRef.current.has(draft.id)) {
-        showPersistentError(t('attachmentUploadFailed', { name: draft.filename }));
-      }
-    } finally {
-      if (
-        componentMountedRef.current
-        && attachmentRoomIdRef.current === retryRoomId
-        && attachmentRoomGenerationRef.current === retryRoomGeneration
-      ) {
-        setIsSending(false);
-      }
-    }
   };
 
   const resetVoiceDraft = useCallback(() => {
@@ -1525,7 +1433,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
-    const attachmentAbortControllers = attachmentAbortControllersRef.current;
     componentMountedRef.current = true;
     return () => {
       componentMountedRef.current = false;
@@ -1546,7 +1453,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         URL.revokeObjectURL(recordedVoiceUrlRef.current);
       }
       voiceUploadAbortControllerRef.current?.abort();
-      attachmentAbortControllers.forEach(controller => controller.abort());
       if (editorFocusFrameRef.current !== null) {
         window.cancelAnimationFrame(editorFocusFrameRef.current);
         editorFocusFrameRef.current = null;
@@ -1592,8 +1498,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         mimeType,
         filename: file.name || t(kind === 'image' ? 'sharedImage' : kind === 'video' ? 'videoMessage' : 'fileAttachment'),
         previewUrl,
-        status: 'ready',
-        progress: 0,
       },
     ]);
   };
@@ -1841,13 +1745,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ? t('fileAttachment')
           : t('sharedImage'))
     : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
-  const getAttachmentStatusLabel = (draft: AttachmentDraft) => {
-    if (draft.status === 'compressing') return t('compressingAttachment');
-    if (draft.status === 'uploading') return t('uploadingAttachment', { progress: draft.progress });
-    if (draft.status === 'failed') return t('attachmentUploadFailedShort');
-    return t('attachmentReady');
-  };
-
   return (
     <div className="relative w-full">
       {/* 错误消息显示 */}
@@ -1927,13 +1824,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   key={draft.id}
                   role="listitem"
                   data-testid="attachment-draft"
-                  data-attachment-status={draft.status}
-                  className={`flex min-w-[10rem] max-w-[13rem] items-center gap-2 rounded-xl border px-2 py-1.5 ${draft.status === 'failed'
-                    ? 'border-danger-300 bg-danger-50 text-danger-700 dark:border-danger-700 dark:bg-danger-950/40 dark:text-danger-200'
-                    : 'border-[#dedbd0] bg-[#f0eee6] text-[#141413] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5]'}`}
+                  className="flex min-w-[10rem] max-w-[13rem] items-center gap-2 rounded-xl border border-[#dedbd0] bg-[#f0eee6] px-2 py-1.5 text-[#141413] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5]"
                 >
                   {draft.previewUrl ? (
-                    <img src={draft.previewUrl} alt="" className="h-8 w-8 flex-shrink-0 rounded-md object-cover" />
+                    <img src={draft.previewUrl} alt="" decoding="async" className="h-8 w-8 flex-shrink-0 rounded-md object-cover" />
                   ) : (
                     <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
                       <Icon icon={draft.kind === 'video' ? 'lucide:video' : 'lucide:file'} className="h-4 w-4" />
@@ -1942,32 +1836,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium" title={draft.filename}>{draft.filename}</span>
                     <span className="block text-[10px] leading-4 opacity-75">
-                      {formatAttachmentSize(draft.file.size)} · {getAttachmentStatusLabel(draft)}
+                      {formatAttachmentSize(draft.file.size)}
                     </span>
-                    {draft.status === 'uploading' && (
-                      <span
-                        role="progressbar"
-                        aria-label={t('uploadProgress', { name: draft.filename })}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={draft.progress}
-                        className="mt-0.5 block h-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10"
-                      >
-                        <span className="block h-full rounded-full bg-secondary" style={{ width: `${draft.progress}%` }} />
-                      </span>
-                    )}
                   </span>
-                  {draft.status === 'failed' && (
-                    <button
-                      type="button"
-                      aria-label={t('retryAttachment', { name: draft.filename })}
-                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary dark:hover:bg-white/10"
-                      onClick={() => { void handleRetryAttachment(draft); }}
-                      disabled={isSending || isAIInputLocked || !canPost}
-                    >
-                      <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
-                    </button>
-                  )}
                   <button
                     type="button"
                     aria-label={t('removeAttachment', { name: draft.filename })}

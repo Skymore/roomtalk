@@ -1150,6 +1150,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const width = parseOptionalInteger(req.body?.width);
     const height = parseOptionalInteger(req.body?.height);
     const durationMs = parseOptionalInteger(req.body?.durationMs);
+    const clientMessageId = typeof req.body?.clientMessageId === 'string' ? req.body.clientMessageId.trim() : '';
     const filenameResult = sanitizeUploadFilename(req.body?.filename);
 
     if (!assetId || !clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize || !objectKey) {
@@ -1179,6 +1180,18 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     });
     if (!postAuth.ok) {
       return res.status(403).json({ error: postAuth.message });
+    }
+
+    if (clientMessageId) {
+      const existingMessage = (await store.readMessagesByRoom(roomId)).find(message => (
+        message.clientId === clientId && message.clientMessageId === clientMessageId
+      ));
+      if (existingMessage) {
+        if (existingMessage.messageType !== 'media') {
+          return res.status(409).json({ error: 'Client message ID is already used by another message' });
+        }
+        return res.status(200).json(existingMessage);
+      }
     }
 
     if (!isAllowedMediaMimeType(kind, mimeType)) {
@@ -1259,7 +1272,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       username: typeof req.body?.username === 'string' ? req.body.username : undefined,
       avatar: req.body?.avatar,
       replyTo,
-      clientMessageId: typeof req.body?.clientMessageId === 'string' ? req.body.clientMessageId : undefined,
+      clientMessageId: clientMessageId || undefined,
     });
 
     const asset: MediaAsset = {

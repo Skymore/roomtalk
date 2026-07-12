@@ -1060,6 +1060,16 @@ type CreateMediaUploadResponse = {
   expiresAt: string;
 };
 
+export type PreparedMediaUpload = {
+  assetId: string;
+  objectKey: string;
+  roomId: string;
+  kind: MediaKind;
+  mimeType: string;
+  byteSize: number;
+  filename?: string;
+};
+
 export { apiPath };
 
 const parseApiError = async (response: Response, fallback: string) => {
@@ -1222,23 +1232,17 @@ const putMediaObject = async (
   }
 };
 
-export const uploadMediaMessage = async (params: {
+export type PrepareMediaUploadParams = {
   file: Blob;
   roomId: string;
   kind: MediaKind;
   mimeType?: string;
-  username?: string;
-  avatar?: { text: string; color: string };
-  replyToMessageId?: string;
-  clientMessageId?: string;
-  caption?: string;
   filename?: string;
-  width?: number;
-  height?: number;
-  durationMs?: number;
   signal?: AbortSignal;
   onUploadProgress?: (progress: number) => void;
-}): Promise<Message> => {
+};
+
+export const prepareMediaUpload = async (params: PrepareMediaUploadParams): Promise<PreparedMediaUpload> => {
   const mimeType = (params.mimeType || params.file.type || `${params.kind}/octet-stream`).toLowerCase();
   const byteSize = params.file.size;
   const upload = await postJson<CreateMediaUploadResponse>('/api/media/uploads', withClientAuthBody({
@@ -1261,23 +1265,54 @@ export const uploadMediaMessage = async (params: {
     throw new DOMException('Media upload cancelled', 'AbortError');
   }
 
-  return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, withClientAuthBody({
-    clientId,
+  return {
+    assetId: upload.assetId,
+    objectKey: upload.objectKey,
     roomId: params.roomId,
     kind: params.kind,
     mimeType,
     byteSize,
+    filename: params.filename,
+  };
+};
+
+export type CompleteMediaUploadParams = {
+  upload: PreparedMediaUpload;
+  username?: string;
+  avatar?: { text: string; color: string };
+  replyToMessageId?: string;
+  clientMessageId?: string;
+  caption?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  signal?: AbortSignal;
+};
+
+export const completeMediaUpload = async (params: CompleteMediaUploadParams): Promise<Message> => {
+  const { upload } = params;
+  return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, withClientAuthBody({
+    clientId,
+    roomId: upload.roomId,
+    kind: upload.kind,
+    mimeType: upload.mimeType,
+    byteSize: upload.byteSize,
     objectKey: upload.objectKey,
     username: params.username,
     avatar: params.avatar,
     replyToMessageId: params.replyToMessageId,
     clientMessageId: params.clientMessageId,
     caption: params.caption,
-    filename: params.filename,
+    filename: upload.filename,
     width: params.width,
     height: params.height,
     durationMs: params.durationMs,
   }), { signal: params.signal });
+};
+
+export const uploadMediaMessage = async (params: PrepareMediaUploadParams & Omit<CompleteMediaUploadParams, 'upload'>): Promise<Message> => {
+  const upload = await prepareMediaUpload(params);
+  return completeMediaUpload({ ...params, upload });
 };
 
 export const requestAIResponse = (data: {

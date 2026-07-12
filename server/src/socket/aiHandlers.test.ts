@@ -1294,6 +1294,32 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages[1].content, expectedE2EFakeContent('fresh prompt'));
   });
 
+  it('keeps uploaded image references on normal chat Ask AI messages', async () => {
+    const imageMessage = message({
+      id: 'chat-image-message-1',
+      clientId: 'client-1',
+      messageType: 'media',
+      content: '',
+      mediaAsset: { id: 'chat-image-asset-1', kind: 'image', mimeType: 'image/png', byteSize: 3 },
+    });
+    const { socket, store } = createHarness({ messages: [imageMessage] });
+
+    let response: { success: boolean; userMessage?: Message } | undefined;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'inspect this image',
+      clientMessageId: 'chat-image-prompt-1',
+      model: selectedModel.id,
+      imageMessageIds: [imageMessage.id],
+    }, (ack: { success: boolean; userMessage?: Message }) => {
+      response = ack;
+    });
+
+    assert.equal(response?.success, true);
+    assert.deepEqual(store.appendedMessages[0].codeAgentImageMessageIds, [imageMessage.id]);
+    assert.deepEqual(response?.userMessage?.codeAgentImageMessageIds, [imageMessage.id]);
+  });
+
   it('rejects send-message-and-ask-ai before saving when posting is closed', async () => {
     const { io, socket, store } = createHarness({
       currentRoom: room({

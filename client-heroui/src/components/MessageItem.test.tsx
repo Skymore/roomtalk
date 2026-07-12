@@ -158,6 +158,55 @@ describe('MessageItem replies', () => {
     expect(article.getAttribute('aria-busy')).toBe('true');
   });
 
+  it('renders a local image immediately with sending and retry overlays', () => {
+    const onRetryDelivery = vi.fn();
+    const optimisticImage = {
+      ...message,
+      id: 'temp-image',
+      clientId: 'viewer',
+      clientMessageId: 'client-image',
+      messageType: 'media' as const,
+      content: '',
+      deliveryStatus: 'pending' as const,
+      localMediaPending: true,
+      localMediaPreviewUrl: 'blob:local-image',
+      mediaAsset: {
+        id: 'local-client-image',
+        kind: 'image' as const,
+        mimeType: 'image/png',
+        byteSize: 123,
+        filename: 'local.png',
+      },
+    };
+    const rendered = render(
+      <MessageItem
+        message={optimisticImage}
+        roomPermissions={{ canPost: true } as any}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+        onRetryDelivery={onRetryDelivery}
+      />
+    );
+
+    expect(screen.getByRole('img', { name: 'sharedImage' }).getAttribute('src')).toBe('blob:local-image');
+    expect(screen.getByRole('status', { name: 'messageSending' })).toBeTruthy();
+    expect(getMediaDownloadUrlMock).not.toHaveBeenCalled();
+
+    rendered.rerender(
+      <MessageItem
+        message={{ ...optimisticImage, deliveryStatus: 'failed', deliveryError: 'upload failed' }}
+        roomPermissions={{ canPost: true } as any}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+        onRetryDelivery={onRetryDelivery}
+      />
+    );
+    fireEvent.click(screen.getAllByLabelText('retry')[0]);
+    expect(onRetryDelivery).toHaveBeenCalled();
+  });
+
   it('leaves delivery and AI lifecycle announcements to the message list', () => {
     const rendered = render(
       <MessageItem

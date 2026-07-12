@@ -2089,9 +2089,12 @@ export function registerAIHandlers({
         return;
       }
     }
-    const imageMessageIds = roomForAIRequest.type === 'codeAgent'
-      ? await readCodeAgentImageMessageIds(store, data.roomId, clientId, data.imageMessageIds)
-      : { ok: true as const, ids: [] };
+    const imageMessageIds = await readCodeAgentImageMessageIds(
+      store,
+      data.roomId,
+      clientId,
+      data.imageMessageIds,
+    );
     if (!imageMessageIds.ok) {
       callback?.({ success: false, error: imageMessageIds.error });
       return;

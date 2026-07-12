@@ -323,7 +323,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const showsDeliveryRetry = isFailed
     && isMine
     && Boolean(message.clientMessageId)
-    && (isText || isSticker)
+    && (isText || isSticker || (isMedia && Boolean(message.localMediaPreviewUrl)))
     && message.deliveryAction !== 'ask-ai'
     && Boolean(onRetryDelivery);
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
@@ -446,6 +446,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl);
 
   const loadSignedMediaUrl = React.useCallback(() => {
+    if (message.localMediaPending) {
+      setSignedMediaUrl(null);
+      setMediaError(false);
+      setIsMediaUrlLoading(false);
+      setIsMediaElementLoading(false);
+      return () => {};
+    }
     if (!isMedia || !message.mediaAsset?.id) {
       setSignedMediaUrl(null);
       setMediaError(false);
@@ -505,7 +512,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       settled = true;
       window.clearTimeout(timeout);
     };
-  }, [isFile, isInteractionDisabled, isMedia, message.mediaAsset?.id, message.roomId]);
+  }, [isFile, isInteractionDisabled, isMedia, message.localMediaPending, message.mediaAsset?.id, message.roomId]);
 
   React.useEffect(() => {
     return loadSignedMediaUrl();
@@ -689,7 +696,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     byteSize: message.mediaAsset?.byteSize,
     cacheBodyFetchKey,
   });
-  const displayMediaUrl = isInteractionDisabled ? null : cachedDisplayMediaUrl;
+  const displayMediaUrl = isInteractionDisabled ? null : (cachedDisplayMediaUrl || message.localMediaPreviewUrl || null);
   const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
 
   const audioTranscriptionStatus = audioTranscription?.status || 'not_requested';
@@ -833,6 +840,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               src={displayMediaUrl}
               alt={t('sharedImage')}
               crossOrigin="anonymous"
+              decoding="async"
               className="block max-h-[300px] max-w-full object-contain"
               onLoad={handleMediaLoaded}
               onError={handleMediaError}
@@ -843,6 +851,30 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               <Icon icon="lucide:image" className="mr-1 h-4 w-4" />
               {t('loadingMedia')}
             </span>
+          )}
+          {isPending && message.localMediaPreviewUrl && (
+            <span
+              role="status"
+              aria-label={t('messageSending')}
+              className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/20"
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white shadow-lg">
+                <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin" />
+              </span>
+            </span>
+          )}
+          {isFailed && message.localMediaPreviewUrl && (
+            <button
+              type="button"
+              aria-label={t('retry')}
+              className="absolute inset-0 flex items-center justify-center bg-black/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+              onClick={() => onRetryDelivery?.(message)}
+              disabled={isInteractionDisabled || roomPermissions?.canPost !== true}
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-danger-600 text-white shadow-lg">
+                <Icon icon="lucide:rotate-ccw" className="h-5 w-5" />
+              </span>
+            </button>
           )}
         </div>
       );

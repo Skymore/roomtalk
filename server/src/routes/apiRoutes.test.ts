@@ -1978,6 +1978,46 @@ describe('API routes', () => {
     assert.equal(server.store.pendingMediaUploads.has(assetId), false);
   });
 
+  it('returns the existing media message when a completion response is retried', async () => {
+    server.store.members.add('room-1:client-2');
+    const existing = sampleMessage({
+      id: 'media-existing',
+      clientId: 'client-2',
+      clientMessageId: 'client-media-retry',
+      roomId: 'room-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'asset-original',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+      },
+    });
+    server.store.readMessagesByRoom = async () => [existing];
+    const assetId = 'asset-retried';
+    const objectKey = `rooms/room-1/media/image/${assetId}`;
+
+    const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        clientMessageId: 'client-media-retry',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        objectKey,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), existing);
+    assert.deepEqual(server.emitted, []);
+    assert.equal(server.store.appendedMessages.length, 0);
+  });
+
   it('does not emit ghost media messages and deletes uploaded objects when atomic persistence fails', async () => {
     server.store.members.add('room-1:client-2');
     server.store.appendMediaMessageWithAsset = async () => null;

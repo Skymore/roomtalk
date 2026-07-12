@@ -136,6 +136,10 @@ export interface Message {
   codeAgentImageMessageIds?: string[];
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
+  /** Browser-local preview used while an optimistic media message is being uploaded. */
+  localMediaPreviewUrl?: string;
+  /** Client-only marker preventing signed-URL loading before the media asset exists. */
+  localMediaPending?: boolean;
   uiPayload?: A2UIPayload;
 }
 
