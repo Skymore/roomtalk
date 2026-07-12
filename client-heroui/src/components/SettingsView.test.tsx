@@ -144,6 +144,20 @@ describe('SettingsView Codex connection controls', () => {
     expect(screen.queryByLabelText('githubToken')).toBeNull();
   });
 
+  it('links to a prefilled fine-grained GitHub token form', async () => {
+    render(<SettingsView {...baseProps} isGitHubConnectionsEnabled />);
+
+    const href = (await screen.findByText('githubCreateFineGrainedToken')).closest('a')?.getAttribute('href');
+    expect(href).toContain('github.com/settings/personal-access-tokens/new');
+    expect(href).toContain('administration=write');
+    expect(href).toContain('contents=write');
+    expect(href).toContain('pull_requests=write');
+    expect(href).toContain('issues=write');
+    expect(href).toContain('actions=write');
+    expect(href).toContain('workflows=write');
+    expect(href).toContain('statuses=read');
+  });
+
   it('starts device auth and renders the login code', async () => {
     render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
 
