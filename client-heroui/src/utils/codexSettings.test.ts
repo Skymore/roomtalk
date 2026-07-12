@@ -66,7 +66,7 @@ describe('room Codex settings', () => {
     });
   });
 
-  it('migrates the legacy default once without overriding later explicit choices', () => {
+  it('migrates legacy model defaults without changing the Codex approval preset', () => {
     localStorage.setItem('roomtalk:codex-settings:room-a', JSON.stringify({
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
@@ -77,7 +77,7 @@ describe('room Codex settings', () => {
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
       model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
-      permissionMode: 'edit',
+      permissionMode: 'approveForMe',
       serviceTier: 'default',
     });
 

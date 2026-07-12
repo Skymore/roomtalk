@@ -9,7 +9,7 @@ import sys
 import threading
 import base64
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TextIO
 from urllib import error as urllib_error
@@ -66,6 +66,14 @@ class CodexThreadQueryRequest:
     search_term: str | None = None
     thread_id: str | None = None
     include_turns: bool = False
+
+
+@dataclass(frozen=True)
+class _CodexAppServerPermissions:
+    mode: str
+    sandbox: str
+    approval_policy: str
+    approvals_reviewer: str
 
 
 @dataclass
@@ -862,6 +870,7 @@ def _thread_start_params(request: RunnerRequest, env: dict[str, str], workspace:
         "ephemeral": False,
         **_thread_permission_params(request, env, permission.sandbox),
         "approvalPolicy": permission.approval_policy,
+        "approvalsReviewer": permission.approvals_reviewer,
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
 
@@ -874,6 +883,7 @@ def _thread_resume_params(request: RunnerRequest, env: dict[str, str], workspace
         "cwd": str(workspace),
         **_thread_permission_params(request, env, permission.sandbox),
         "approvalPolicy": permission.approval_policy,
+        "approvalsReviewer": permission.approvals_reviewer,
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
 
@@ -893,6 +903,7 @@ def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: P
         "effort": _normalize_codex_reasoning_effort(request.codex_reasoning_effort),
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
         "approvalPolicy": permission.approval_policy,
+        "approvalsReviewer": permission.approvals_reviewer,
     }
     room_context_profile = _codex_room_context_permission_profile(request, env)
     if room_context_profile:
@@ -999,10 +1010,34 @@ def _sandbox_policy_for_permission(
 
 
 def _codex_app_server_permissions(request: RunnerRequest):
-    permission = _codex_exec_permissions(request)
-    if permission.mode == "edit":
-        return replace(permission, approval_policy="on-request")
-    return permission
+    mode = _codex_exec_permissions(request).mode
+    if mode == "plan":
+        return _CodexAppServerPermissions(
+            mode=mode,
+            sandbox="read-only",
+            approval_policy="on-request",
+            approvals_reviewer="user",
+        )
+    if mode == "edit":
+        return _CodexAppServerPermissions(
+            mode=mode,
+            sandbox="workspace-write",
+            approval_policy="on-request",
+            approvals_reviewer="user",
+        )
+    if mode == "fullAccess":
+        return _CodexAppServerPermissions(
+            mode=mode,
+            sandbox="danger-full-access",
+            approval_policy="never",
+            approvals_reviewer="user",
+        )
+    return _CodexAppServerPermissions(
+        mode="approveForMe",
+        sandbox="workspace-write",
+        approval_policy="on-request",
+        approvals_reviewer="auto_review",
+    )
 
 
 def _prompt_with_app_server_tools(request: RunnerRequest, env: dict[str, str]) -> str:

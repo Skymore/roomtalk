@@ -197,7 +197,6 @@ export const getStoredRoomCodexSettings = (
           model: DEFAULT_CODEX_MODEL,
           reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
         } : {}),
-        ...(parsed.permissionMode === 'approveForMe' ? { permissionMode: 'edit' } : {}),
       }, fallback);
       saveRoomCodexSettings(roomId, migrated);
       return migrated;

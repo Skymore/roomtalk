@@ -161,7 +161,7 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('Plan')).toBeTruthy();
+    expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByText('codexPermissionPlanDescription')).toBeTruthy();
     expect(screen.getByText('codeAgentTools')).toBeTruthy();
     expect(screen.getByText('codeAgentResults')).toBeTruthy();
@@ -330,7 +330,7 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('Edit')).toBeTruthy();
+    expect(screen.getByText('Ask')).toBeTruthy();
     expect(screen.getByText('codexPermissionEditDescription')).toBeTruthy();
 
     expect(screen.queryByText('codeAgentActivity')).toBeNull();
@@ -381,7 +381,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(details.getAttribute('hidden')).toBe('');
     expect(screen.queryByText('codeAgentWorkspace')).toBeNull();
-    expect(screen.getByText('Plan')).toBeTruthy();
+    expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
     expect(screen.getByText('codeAgentStatusIdle')).toBeTruthy();
     expect(screen.queryByText('codexPermissionPlanDescription')).toBeNull();

@@ -159,9 +159,9 @@ const backendShortLabels: Record<CodeAgentBackend, string> = {
 };
 
 const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> = {
-  plan: 'Plan',
-  edit: 'Edit',
-  approveForMe: 'Auto',
+  plan: 'Read',
+  edit: 'Ask',
+  approveForMe: 'Approve',
   fullAccess: 'Full',
 };
 

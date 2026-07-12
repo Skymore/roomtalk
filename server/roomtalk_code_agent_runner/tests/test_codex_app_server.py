@@ -338,48 +338,40 @@ def test_codex_app_server_uses_read_only_network_profile_when_room_context_is_av
     assert "sandboxPolicy" not in turn_start["params"]
 
 
-def test_codex_app_server_uses_workspace_write_for_approve_for_me_and_declines_approval_requests(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("permission_mode", "runner_mode", "sandbox", "sandbox_policy", "approval_policy", "approvals_reviewer"),
+    [
+        ("plan", "plan", "read-only", "readOnly", "on-request", "user"),
+        ("edit", "acceptEdits", "workspace-write", "workspaceWrite", "on-request", "user"),
+        ("approveForMe", "acceptEdits", "workspace-write", "workspaceWrite", "on-request", "auto_review"),
+        ("fullAccess", "acceptEdits", "danger-full-access", "dangerFullAccess", "never", "user"),
+    ],
+)
+def test_codex_app_server_matches_codex_cli_permission_presets(
+    tmp_path: Path,
+    permission_mode: str,
+    runner_mode: str,
+    sandbox: str,
+    sandbox_policy: str,
+    approval_policy: str,
+    approvals_reviewer: str,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    auth_json = tmp_path / "auth.json"
-    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
-    stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "result": {"thread": {"id": "thread-app-2"}}},
-        {"id": 2, "result": {"turn": {"id": "turn-app-2"}}},
-        {
-            "id": 99,
-            "method": "item/commandExecution/requestApproval",
-            "params": {
-                "threadId": "thread-app-2",
-                "turnId": "turn-app-2",
-                "itemId": "cmd-approval",
-                "command": "rm -rf demo",
-                "startedAtMs": 1,
-            },
-        },
-        {"method": "turn/completed", "params": {"threadId": "thread-app-2", "turn": {"id": "turn-app-2", "status": "completed", "items": []}}},
-    ])
-
-    codex_app_server.run_request(
-        codex_app_request(workspace, mode="acceptEdits", codexPermissionMode="approveForMe"),
-        emitter=EventEmitter(stdout),
-        config=codex_app_server.CodexCliRunConfig(
-            secret_parent=tmp_path / "secrets",
-            auth_json_path=auth_json,
-        ),
-        popen_factory=popen,
-        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    run_request = codex_app_request(
+        workspace,
+        mode=runner_mode,
+        codexPermissionMode=permission_mode,
     )
+    thread_params = codex_app_server._thread_start_params(run_request, {}, workspace)
+    turn_params = codex_app_server._turn_start_params(run_request, {}, workspace, "thread-app-2")
 
-    sent = jsonrpc_lines(popen.processes[0])
-    turn_start = next(message for message in sent if message.get("method") == "turn/start")
-    assert turn_start["params"]["approvalPolicy"] == "never"
-    assert turn_start["params"]["sandboxPolicy"]["type"] == "workspaceWrite"
-    assert turn_start["params"]["sandboxPolicy"]["networkAccess"] is True
-    approval_response = next(message for message in sent if message.get("id") == 99)
-    assert approval_response["result"]["decision"] == "decline"
+    assert thread_params["sandbox"] == sandbox
+    assert thread_params["approvalPolicy"] == approval_policy
+    assert thread_params["approvalsReviewer"] == approvals_reviewer
+    assert turn_params["sandboxPolicy"]["type"] == sandbox_policy
+    assert turn_params["approvalPolicy"] == approval_policy
+    assert turn_params["approvalsReviewer"] == approvals_reviewer
 
 
 def test_codex_app_server_falls_back_to_new_thread_when_resume_fails(tmp_path: Path):
