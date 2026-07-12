@@ -33,10 +33,52 @@ jobs:
               2>/dev/null || true
           )"
 
-          if [[ -z "$latest_successful_sha" || "$latest_successful_sha" != "$GITHUB_SHA" ]]; then
+          if [[ -z "$latest_successful_sha" ]]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$latest_successful_sha" == "$GITHUB_SHA" ]]; then
+            echo "No changes since the latest successful build ($GITHUB_SHA)."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          comparison_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/compare/${latest_successful_sha}...${GITHUB_SHA}" \
+              2>/dev/null || true
+          )"
+
+          if [[ -z "$comparison_json" ]]; then
+            echo "Unable to classify changes; building conservatively."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          comparison_status="$(jq -r '.status // ""' <<< "$comparison_json")"
+          changed_file_count="$(jq '.files | length' <<< "$comparison_json")"
+          if [[ "$comparison_status" != "ahead" || "$changed_file_count" -ge 300 ]]; then
+            echo "Comparison is incomplete or non-linear; building conservatively."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          should_build=false
+          while IFS= read -r changed_file; do
+            case "$changed_file" in
+              .dockerignore|Dockerfile|fly.toml|.github/workflows/fly-deploy.yml|client-heroui/*|server/*)
+                should_build=true
+                break
+                ;;
+            esac
+          done < <(jq -r '.files[].filename' <<< "$comparison_json")
+
+          if [[ "$should_build" == "true" ]]; then
+            echo "Application or deployment inputs changed."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No changes since the latest successful build ($GITHUB_SHA)."
+            echo "Only documentation or non-runtime files changed; skipping deployment."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -51,43 +93,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24.18.0
-          cache: npm
-          cache-dependency-path: |
-            server/package-lock.json
-            client-heroui/package-lock.json
-
-      - name: Install application dependencies
-        run: |
-          npm ci --prefix server &
-          server_pid=$!
-          npm ci --prefix client-heroui &
-          client_pid=$!
-
-          status=0
-          wait "$server_pid" || status=$?
-          wait "$client_pid" || status=$?
-          exit "$status"
-
-      - name: Check client translations
-        working-directory: client-heroui
-        run: npm run translate:i18n:dry
-
-      - name: Build applications
-        run: |
-          npm run build --prefix server &
-          server_pid=$!
-          npm run build --prefix client-heroui &
-          client_pid=$!
-
-          status=0
-          wait "$server_pid" || status=$?
-          wait "$client_pid" || status=$?
-          exit "$status"
 
       - name: Setup Fly
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -129,6 +134,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy to Fly
-        run: flyctl deploy --remote-only --build-arg USE_PREBUILT_APP=true -a message-system
+        run: flyctl deploy --remote-only -a message-system
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

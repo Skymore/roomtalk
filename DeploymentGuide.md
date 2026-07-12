@@ -33,48 +33,30 @@ This guide provides simplified instructions for deploying your chat application 
 
 ### Current Dockerfile
 
-The repository already includes the production `Dockerfile`. Keep deployment changes in that file rather than creating a second Dockerfile:
+The repository root `Dockerfile` is the single production build definition.
+Keep deployment changes there rather than creating a second Dockerfile. It uses
+independent stages so Docker can cache and schedule work efficiently:
 
-```dockerfile
-FROM node:24.18.0-alpine
+1. `client-build` installs client build dependencies, checks translations, and
+   runs the TypeScript/Vite production build.
+2. `server-build` installs server build dependencies, compiles TypeScript, and
+   packages the sticker catalog into `dist`.
+3. `server-runtime-deps` prunes development-only server dependencies.
+4. `runtime` installs the small host-side Codex CLI and copies only the client
+   output, server output, and production dependencies.
 
-WORKDIR /app
-
-# Copy package.json files
-COPY client-heroui/package*.json ./client-heroui/
-COPY server/package*.json ./server/
-
-# Install dependencies
-RUN cd client-heroui && npm ci
-RUN cd server && npm ci
-
-# Copy all source code
-COPY . .
-
-# Build frontend (using production env)
-RUN cd client-heroui && npm run build
-
-# Build backend
-RUN cd server && npm run build
-
-# Set working directory to server
-WORKDIR /app/server
-
-# Expose port
-EXPOSE 3012
-
-# Start server
-CMD ["npm", "start"]
-```
+GitHub Actions does not build the applications separately. A failed Docker
+builder stage stops `fly deploy` before any production Machine is updated.
 
 ## Deploying to Fly.io
 
-Current production deployment is CI-first. Pushes to `master` and manual
-`workflow_dispatch` runs use `.github/workflows/fly-deploy.yml` to build,
-verify required Fly secrets, and deploy `message-system` with `flyctl deploy
---remote-only`. Use `fly launch` only when bootstrapping a new Fly app, and do
-not run ad hoc `fly deploy` for the existing production app unless CI is
-unavailable and the incident owner explicitly chooses a manual deploy.
+Current production deployment is CI-first. Scheduled and manual
+`workflow_dispatch` runs use `.github/workflows/fly-deploy.yml` to verify
+required Fly secrets, build through the root multi-stage Dockerfile, and deploy
+`message-system` with `flyctl deploy --remote-only`. Scheduled runs skip
+documentation-only changes. Use `fly launch` only when bootstrapping a new Fly
+app, and do not run ad hoc `fly deploy` for the existing production app unless
+CI is unavailable and the incident owner explicitly chooses a manual deploy.
 
 ### 1. Install and Configure Fly CLI
 

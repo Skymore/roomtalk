@@ -6,10 +6,25 @@
 
 # Testing
 **/coverage
+client-heroui/e2e
+client-heroui/test-results
+server/test-results
+server/src/**/*.test.ts
 
-# CI intentionally sends production dist output for the prebuilt image path.
+# Production output is built inside Docker.
+client-heroui/dist
+server/dist
 **/client-heroui/build
 **/server/build
+
+# Files outside the production application build context
+.git
+.github
+docs
+ops
+output
+server/roomtalk_code_agent_runner
+server/scripts
 
 # Misc
 **/.DS_Store

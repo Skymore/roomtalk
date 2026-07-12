@@ -109,7 +109,7 @@ The browser workspace includes files/search/editing, asset previews, Git diff/re
 
 ## Deployment
 
-`master` is the release branch. CI/CD (`.github/workflows/fly-deploy.yml`) runs on its schedule or through manual dispatch; it builds server + client, checks translations, verifies Fly secrets, and deploys to Fly.io. A push alone does not immediately trigger this workflow. When an immediate production rollout is required, dispatch the workflow after pushing and verify both the workflow result and Fly health. Never run `fly deploy` manually.
+`master` is the release branch. CI/CD (`.github/workflows/fly-deploy.yml`) runs on its schedule or through manual dispatch; it verifies Fly secrets and deploys through the root multi-stage `Dockerfile`. The Docker client/server builder stages run translations and production builds, while the final runtime stage contains only compiled output and production dependencies. Scheduled runs skip deployment when only documentation or non-runtime files changed. A push alone does not immediately trigger this workflow. When an immediate production rollout is required, dispatch the workflow after pushing and verify both the workflow result and Fly health. Never run `fly deploy` manually.
 
 Production: Fly.io app `message-system` in `dfw` region, Node 24.18.0 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible), and per-room execution sandboxes on E2B.
 
