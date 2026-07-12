@@ -1267,7 +1267,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     <Modal
       isOpen={isCodexLoginModalOpen && Boolean(codexDeviceAuth)}
       onClose={handleCloseCodexLoginModal}
-      size="sm"
+      size="3xl"
       scrollBehavior="inside"
     >
       <ModalContent>
@@ -1279,6 +1279,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <p className="text-sm leading-6 text-[#5e5d59] dark:text-[#b0aea5]">
               {t("codexLoginModalDescription")}
             </p>
+            <section className="grid gap-3 rounded-xl border border-[#dedbd0] bg-[#f7f5ed] p-4 dark:border-[#30302e] dark:bg-[#1f1f1e]">
+              <div className="grid gap-1">
+                <h3 className="text-sm font-semibold text-[#30302e] dark:text-[#faf9f5]">
+                  {t("codexDeviceAuthorizationGuideTitle")}
+                </h3>
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                  {t("codexDeviceAuthorizationGuideIntro")}
+                </p>
+              </div>
+              <ol className="grid gap-4">
+                <li className="grid gap-2">
+                  <div className="flex items-start gap-2 text-sm leading-6 text-[#30302e] dark:text-[#faf9f5]">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">1</span>
+                    <span>{t("codexDeviceAuthorizationStepProfile")}</span>
+                  </div>
+                  <div className="ml-7 overflow-hidden rounded-lg border border-[#dedbd0] bg-black dark:border-[#3d3c39]">
+                    <img
+                      src="/help/codex-device-auth/profile-settings-redacted.png"
+                      alt={t("codexDeviceAuthorizationProfileAlt")}
+                      loading="lazy"
+                      className="mx-auto max-h-80 w-auto max-w-full object-contain"
+                    />
+                  </div>
+                </li>
+                <li className="grid gap-2">
+                  <div className="flex items-start gap-2 text-sm leading-6 text-[#30302e] dark:text-[#faf9f5]">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">2</span>
+                    <span>{t("codexDeviceAuthorizationStepSecurity")}</span>
+                  </div>
+                  <div className="ml-7 overflow-hidden rounded-lg border border-[#dedbd0] bg-black dark:border-[#3d3c39]">
+                    <img
+                      src="/help/codex-device-auth/security-and-login.png"
+                      alt={t("codexDeviceAuthorizationSecurityAlt")}
+                      loading="lazy"
+                      className="w-full object-contain"
+                    />
+                  </div>
+                </li>
+                <li className="flex items-start gap-2 text-sm leading-6 text-[#30302e] dark:text-[#faf9f5]">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">3</span>
+                  <span>{t("codexDeviceAuthorizationStepReturn")}</span>
+                </li>
+              </ol>
+            </section>
             {codexDeviceAuth && (
               <div className="grid gap-3 rounded-lg bg-[#e8e6dc] p-4 dark:bg-[#242423]">
                 <div className="grid gap-1">

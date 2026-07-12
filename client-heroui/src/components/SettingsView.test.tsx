@@ -153,6 +153,12 @@ describe('SettingsView Codex connection controls', () => {
     expect((await screen.findAllByText('ABCD-EFGH')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('codexDeviceCodeInstruction')).length).toBeGreaterThan(0);
     expect(screen.getByText('codexLoginTitle')).toBeTruthy();
+    expect(screen.getByText('codexDeviceAuthorizationGuideTitle')).toBeTruthy();
+    expect(screen.getByText('codexDeviceAuthorizationStepProfile')).toBeTruthy();
+    expect(screen.getByText('codexDeviceAuthorizationStepSecurity')).toBeTruthy();
+    expect(screen.getByText('codexDeviceAuthorizationStepReturn')).toBeTruthy();
+    expect(screen.getByAltText('codexDeviceAuthorizationProfileAlt').getAttribute('src')).toBe('/help/codex-device-auth/profile-settings-redacted.png');
+    expect(screen.getByAltText('codexDeviceAuthorizationSecurityAlt').getAttribute('src')).toBe('/help/codex-device-auth/security-and-login.png');
     expect(window.open).toHaveBeenCalledWith('https://auth.openai.com/codex/device', '_blank', 'noopener,noreferrer');
   });
 
