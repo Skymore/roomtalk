@@ -2981,8 +2981,9 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async deleteRoom(roomId: string, creatorId: string): Promise<void> {
+  async deleteRoom(roomId: string, creatorId: string): Promise<boolean> {
     let orphanedObjectKeys: string[] = [];
+    let deleted = false;
     try {
       await this.transaction(async client => {
         // Only the owner may delete; gate the media cleanup on the same check so
@@ -3003,13 +3004,19 @@ export class PostgresStore implements DurableRoomStore {
         );
         orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
 
-        await client.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
+        const removed = await client.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
+        deleted = (removed.rowCount || 0) > 0;
       });
 
+      if (!deleted) {
+        return false;
+      }
       await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
       this.logger.debug('Room deleted from PostgreSQL', { roomId, creatorId });
+      return true;
     } catch (error) {
       this.logger.error('Error deleting PostgreSQL room', { error, roomId, creatorId });
+      return false;
     }
   }
 

@@ -243,6 +243,16 @@ class MemoryRedis {
       return 1;
     }
 
+    if (script.includes('DELETE_ROOM_RECORD')) {
+      const [roomId, creatorId] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return 0;
+      const storedRoom = JSON.parse(roomJson) as Room;
+      if (storedRoom.creatorId !== creatorId) return 0;
+      this.hash('rooms').delete(roomId);
+      return 1;
+    }
+
     // WRITE_ROOM_RECORD_SCRIPT:原子写房间 + roomVersion 以存储值为准自增
     if (script.includes('local incomingJson')) {
       const [roomId, incomingJson] = options.arguments;
@@ -788,7 +798,7 @@ describe('RedisStore', () => {
     await store.writeRoomMessagesCache('room-1', [message()]);
     await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
-    await store.deleteRoom('room-1', 'client-1');
+    assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
 
     assert.equal(await store.countRooms(), 0);
     assert.equal(await store.getRoomById('room-1'), null);
@@ -915,11 +925,12 @@ describe('RedisStore', () => {
       },
     };
     const store = new RedisStore(new FailingDeleteRedis() as any, testLogger as any);
+    await store.saveRoom(room());
 
-    await assert.doesNotReject(() => store.deleteRoom('room-1', 'client-1'));
+    assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
 
     assert.equal(errors.length, 1);
-    assert.equal(errors[0].message, 'Error deleting room from Redis');
+    assert.equal(errors[0].message, 'Redis room metadata cleanup failed after the room record was deleted');
     assert.equal(errors[0].payload.roomId, 'room-1');
     assert.equal(errors[0].payload.creatorId, 'client-1');
   });

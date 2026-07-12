@@ -199,6 +199,29 @@ describe('PostgresStore', () => {
         },
       },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ '?column?': 1 }],
+        assertCall(call) {
+          assert.match(call.sql, /SELECT 1 FROM rooms/);
+          assert.deepEqual(call.params, ['room-1', 'client-1']);
+        },
+      },
+      {
+        rows: [],
+        assertCall(call) {
+          assert.match(call.sql, /DELETE FROM media_assets/);
+          assert.deepEqual(call.params, ['room-1']);
+        },
+      },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /DELETE FROM rooms/);
+          assert.deepEqual(call.params, ['room-1', 'client-1']);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
     ]);
     const pool = new ScriptedPool([
       {
@@ -211,13 +234,6 @@ describe('PostgresStore', () => {
       },
       { rows: [roomRow({ name: 'Saved Room', description: 'desc' })] },
       { rows: [{ count: '1' }] },
-      {
-        rowCount: 1,
-        assertCall(call) {
-          assert.match(call.sql, /DELETE FROM rooms/);
-          assert.deepEqual(call.params, ['room-1', 'client-1']);
-        },
-      },
     ], client);
     const store = new PostgresStore(pool, logger as any);
 
@@ -225,7 +241,7 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.readRoomsByUser('client-1'), [room({ name: 'Saved Room', description: 'desc' })]);
     assert.deepEqual(await store.getRoomById('room-1'), room({ name: 'Saved Room', description: 'desc' }));
     assert.equal(await store.countRooms(), 1);
-    await store.deleteRoom('room-1', 'client-1');
+    assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
   });
 
   it('saves code-agent room fields without letting legacy room saves clear them', async () => {

@@ -354,6 +354,7 @@ const createHarness = (
     async deleteRoom(roomId: string, creatorId: string) {
       this.deletedRooms.push({ roomId, creatorId });
       this.rooms = this.rooms.filter(item => item.id !== roomId);
+      return true;
     },
     async removeClientSession(socketId: string) {
       this.removedSessions.push(socketId);
@@ -1173,7 +1174,7 @@ describe('room socket handlers', () => {
     harness.store.deleteRoom = async (roomId: string, creatorId: string) => {
       markDeleteStalled();
       await deleteGate;
-      await deleteRoom(roomId, creatorId);
+      return deleteRoom(roomId, creatorId);
     };
 
     let joinResponse: unknown;
@@ -1193,7 +1194,7 @@ describe('room socket handlers', () => {
     assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), false);
   });
 
-  it('does not delete a room when published static site cleanup fails', async () => {
+  it('keeps a committed room deletion when published static site cleanup fails', async () => {
     const harness = createHarness('client-1', createCodeAgentAccessControl({ enabled: true }), {
       publishedStaticSiteService: {
         async deleteSitesForRoom() {
@@ -1207,9 +1208,9 @@ describe('room socket handlers', () => {
       response = result;
     });
 
-    assert.deepEqual(response, { success: false, message: 'Failed to delete room due to server error' });
-    assert.deepEqual(harness.store.deletedRooms, []);
-    assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), true);
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(harness.store.deletedRooms, [{ roomId: 'room-1', creatorId: 'client-1' }]);
+    assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), false);
   });
 
   it('updates posting schedules, stamps updatedAt, and broadcasts room_updated', async () => {

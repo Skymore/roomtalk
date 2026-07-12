@@ -2247,7 +2247,7 @@ describe('PostgresStore media object cleanup', () => {
     await store.saveRoom(room());
     const objectKey = await seedMediaMessage(store, 'media-1', 'asset-1');
 
-    await store.deleteRoom('room-1', 'client-1');
+    assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
     assert.deepEqual(deleted, [objectKey]);
   });
 
@@ -2256,7 +2256,7 @@ describe('PostgresStore media object cleanup', () => {
     await store.saveRoom(room());
     await seedMediaMessage(store, 'media-1', 'asset-1');
 
-    await store.deleteRoom('room-1', 'intruder');
+    assert.equal(await store.deleteRoom('room-1', 'intruder'), false);
 
     assert.deepEqual(deleted, []);
     assert.notEqual(await store.getMediaAsset('asset-1'), null);

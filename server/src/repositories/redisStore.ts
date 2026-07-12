@@ -771,6 +771,15 @@ end
 return redis.call('DEL', KEYS[1])
 `;
 
+const DELETE_ROOM_RECORD_SCRIPT = `
+-- DELETE_ROOM_RECORD
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then return 0 end
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok or room['creatorId'] ~= ARGV[2] then return 0 end
+return redis.call('HDEL', KEYS[1], ARGV[1])
+`;
+
 const DELETE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -3165,14 +3174,32 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async deleteRoom(roomId: string, creatorId: string): Promise<void> {
+  async deleteRoom(roomId: string, creatorId: string): Promise<boolean> {
+    let members: RoomMember[];
+    let activeBrowserInstanceIds: string[];
+    let mediaAssets: MediaAsset[];
+    let savedByClientIds: string[];
     try {
-      const members = await this.readRoomMembers(roomId);
-      const activeBrowserInstanceIds = await this.getRoomActiveBrowserInstanceIds(roomId);
-      const mediaAssets = await this.readMediaAssetsByRoom(roomId);
-      const savedByClientIds = await this.redisClient.sMembers(getRoomSavedByKey(roomId));
+      [members, activeBrowserInstanceIds, mediaAssets, savedByClientIds] = await Promise.all([
+        this.readRoomMembers(roomId),
+        this.getRoomActiveBrowserInstanceIds(roomId),
+        this.readMediaAssetsByRoom(roomId),
+        this.redisClient.sMembers(getRoomSavedByKey(roomId)),
+      ]);
+      const deleted = await (this.redisClient as any).eval(DELETE_ROOM_RECORD_SCRIPT, {
+        keys: ['rooms'],
+        arguments: [roomId, creatorId],
+      });
+      if (Number(deleted) !== 1) {
+        return false;
+      }
+    } catch (error) {
+      this.logger.error('Error committing Redis room deletion', { error, roomId, creatorId });
+      return false;
+    }
+
+    try {
       await Promise.all([
-        this.redisClient.hDel('rooms', roomId),
         this.redisClient.del(`room:${roomId}:messages`),
         this.redisClient.del(getRoomAgentTurnsKey(roomId)),
         this.redisClient.del(getCodeAgentRoomLeaseKey(roomId)),
@@ -3198,8 +3225,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       ]);
       this.logger.debug('Room deleted from Redis', { roomId, creatorId });
     } catch (error) {
-      this.logger.error('Error deleting room from Redis', { error, roomId, creatorId });
+      this.logger.error('Redis room metadata cleanup failed after the room record was deleted', { error, roomId, creatorId });
     }
+    return true;
   }
 
   async countRooms(): Promise<number> {

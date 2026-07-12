@@ -755,20 +755,8 @@ export function registerRoomHandlers({
 
       const subscribedSocketIds = await io.in(roomId).allSockets();
 
-      if (room.type === 'codeAgent' && room.sandboxId && codeAgentSandboxService) {
-        await codeAgentSandboxService.destroy(room.sandboxId).catch(error => {
-          socketLogger.warn('Failed to destroy code-agent sandbox while deleting room', {
-            error: error instanceof Error ? error.message : String(error),
-            socketId: socket.id,
-            clientId,
-            roomId,
-            sandboxId: room.sandboxId,
-          });
-        });
-      }
-      await publishedStaticSiteService?.deleteSitesForRoom(roomId);
-      await store.deleteRoom(roomId, clientId);
-      if (await store.getRoomById(roomId)) {
+      const deleted = await store.deleteRoom(roomId, clientId);
+      if (!deleted || await store.getRoomById(roomId)) {
         throw new Error('Room deletion did not commit');
       }
 
@@ -791,6 +779,26 @@ export function registerRoomHandlers({
         io.to(sid).emit('room_list', updatedRooms);
         io.to(sid).emit('saved_room_list', updatedSavedRooms);
       });
+
+      const cleanupResults = await Promise.allSettled([
+        ...(room.type === 'codeAgent' && room.sandboxId && codeAgentSandboxService
+          ? [codeAgentSandboxService.destroy(room.sandboxId)]
+          : []),
+        ...(publishedStaticSiteService
+          ? [publishedStaticSiteService.deleteSitesForRoom(roomId)]
+          : []),
+      ]);
+      for (const cleanup of cleanupResults) {
+        if (cleanup.status === 'rejected') {
+          socketLogger.warn('Post-commit room resource cleanup failed', {
+            error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
+            socketId: socket.id,
+            clientId,
+            roomId,
+            sandboxId: room.sandboxId,
+          });
+        }
+      }
 
       callback?.({ success: true });
     } catch (error) {

@@ -347,7 +347,7 @@ export interface DurableRoomStore {
   readSavedRoomsByUser(clientId: string): Promise<Room[]>;
   getRoomById(roomId: string): Promise<Room | null>;
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
-  deleteRoom(roomId: string, creatorId: string): Promise<void>;
+  deleteRoom(roomId: string, creatorId: string): Promise<boolean>;
   countRooms(): Promise<number>;
   compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
   replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement): Promise<Room | null>;
@@ -824,8 +824,9 @@ export class CompositeRoomStore implements RoomStore {
   }
 
   async deleteRoom(roomId: string, creatorId: string) {
-    await this.durableStore.deleteRoom(roomId, creatorId);
+    const deleted = await this.durableStore.deleteRoom(roomId, creatorId);
     await this.invalidateRoomMessagesCache(roomId);
+    return deleted;
   }
 
   countRooms() {

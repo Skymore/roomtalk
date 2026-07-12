@@ -383,7 +383,7 @@ describe('CompositeRoomStore', () => {
       async readSavedRoomsByUser(_clientId: string) { calls.push('durable.readSavedRoomsByUser'); return [room()]; },
       async getRoomById(_roomId: string) { calls.push('durable.getRoomById'); return room(); },
       async updateRoomName(_roomId: string, _creatorId: string, _name: string) { calls.push('durable.updateRoomName'); return room({ name: 'Renamed' }); },
-      async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); },
+      async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); return true; },
       async countRooms() { calls.push('durable.countRooms'); return 1; },
       async compareAndSetRoomSandboxStatus() { calls.push('durable.compareAndSetRoomSandboxStatus'); return room({ type: 'codeAgent', sandboxStatus: 'creating' }); },
       async replaceRoomSandbox() { calls.push('durable.replaceRoomSandbox'); return room({ type: 'codeAgent', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
@@ -642,7 +642,7 @@ describe('CompositeRoomStore', () => {
       async readRoomsByUser() { return []; },
       async getRoomById() { return room({ messageVersion: 1 }); },
       async updateRoomName() { return null; },
-      async deleteRoom() {},
+      async deleteRoom() { return true; },
       async countRooms() { return 0; },
     };
     const realtime: RealtimeRoomStore = {
@@ -699,7 +699,7 @@ describe('CompositeRoomStore', () => {
       async readRoomsByUser() { return []; },
       async getRoomById() { return room({ messageVersion: versions.shift() ?? 2 }); },
       async updateRoomName() { return null; },
-      async deleteRoom() {},
+      async deleteRoom() { return true; },
       async countRooms() { return 0; },
     };
     const realtime: RealtimeRoomStore = {
@@ -762,7 +762,7 @@ describe('CompositeRoomStore', () => {
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
-      async deleteRoom() { calls.push('durable.delete'); },
+      async deleteRoom() { calls.push('durable.delete'); return true; },
       async countRooms() { return 0; },
       async compareAndSetRoomSandboxStatus() { return null; },
       async replaceRoomSandbox() { return null; },
@@ -876,7 +876,7 @@ describe('CompositeRoomStore', () => {
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
-      async deleteRoom() {},
+      async deleteRoom() { return true; },
       async countRooms() { return 0; },
     };
     const realtime: RealtimeRoomStore = {
@@ -928,7 +928,7 @@ describe('CompositeRoomStore', () => {
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
-      async deleteRoom() {},
+      async deleteRoom() { return true; },
       async countRooms() { return 0; },
       async resetAllDataForTests() {
         calls.push('durable.reset');
