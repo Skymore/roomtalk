@@ -17,7 +17,7 @@ The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plan
 
 ### Sandboxed code-agent rooms
 
-- One shared E2B workspace per code-agent room, supporting Coco (RoomTalk's self-built CLI coding agent) and Codex. Users can connect their own Codex subscription and run it in the shared room through Codex CLI/app-server adapters.
+- One shared E2B workspace per code-agent room, supporting Coco (RoomTalk's self-built CLI coding agent) and Codex. Users can connect their own Codex subscription and run it in the shared room through Codex app-server.
 - A reusable sandbox-local JSONL daemon that executes sequential turns, streams text/tool/model-step events, accepts interrupt and steer controls, and is reclaimed during sandbox or server shutdown.
 - Four permission presets: Plan, Ask, Auto, and Full. They compose three Codex-aligned sandbox modes (`read-only`, `workspace-write`, and `danger-full-access`) with approval policy and reviewer selection; Auto keeps the workspace sandbox and sends only eligible escalation requests to Coco's native model reviewer.
 - Turn-scoped model-gateway, room-context, and static-publish credentials. Provider keys and RoomTalk service secrets stay outside the browser and agent prompt.
@@ -32,6 +32,22 @@ The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plan
 - Embedded browser previews for workspace files and detected dev servers, responsive viewport controls, screenshots, recordings, and preview-server status.
 - Durable static-site publishing to RoomTalk object storage. Published artifacts remain available after an E2B sandbox pauses or is replaced and appear in the workspace Artifacts view.
 - Idle/active sandbox TTLs, reconnect and stale-state recovery, per-user/global limits, Git baseline initialization, and archive-based workspace migration across pinned artifact upgrades.
+
+## Selected Engineering Decisions
+
+RoomTalk is also a study in building reliable realtime and AI systems beyond the happy path:
+
+| Problem | Design |
+| --- | --- |
+| Shared untrusted execution | Split the trusted RoomTalk control plane from a per-room E2B execution plane, connected by a versioned JSONL protocol and short-lived scoped capabilities. |
+| AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
+| Multi-client consistency | Combine Socket.IO's Redis adapter with monotonic `roomVersion`, full-object replacement, and acknowledgment-based read-your-write updates. |
+| Mobile reconnect recovery | Treat browser connection state as untrusted: foreground health checks, idempotent room rejoin, in-flight deduplication, and delayed recovery UI keep presence and rooms correct after backgrounding or network changes. |
+| Durable-store migration | Run Redis and PostgreSQL behind one store contract, migrate with an idempotent dry-run-capable tool, and retain a configuration-only rollback path while Redis continues to own realtime state. |
+| Cache correctness | Key recent-message cache entries by `messageVersion`, double-check the version before write-back, invalidate only after successful mutations, and degrade to PostgreSQL on cache failure. |
+| Concurrent Redis writes | Use Lua scripts for atomic room versions, message deletion, and multi-socket member reference counting; run the same behavioral contract suite against both Redis and PostgreSQL implementations. |
+| Product-grade mobile UI | Resolve overlapping media gestures with a locked gesture-state machine, batch transforms through `requestAnimationFrame`, layer Object URL/Cache API/network media caching, and guard IME composition and visual viewport changes. |
+| Model portability and context limits | Normalize providers through a model registry and client factory, then select history with semantic truncation, message caps, and a conservative CJK-aware token budget. |
 
 ## Architecture
 
@@ -49,7 +65,7 @@ flowchart LR
   Control --> Lifecycle["Sandbox lifecycle + access control"]
   Lifecycle --> E2B["Per-room E2B sandbox"]
   E2B --> Daemon["RoomTalk JSONL daemon"]
-  Daemon --> Backends["Coco | Codex CLI | Codex app-server"]
+  Daemon --> Backends["Coco | Codex app-server"]
   Daemon --> Workspace["/workspace\nfiles, Git, PTY, previews, processes"]
 
   Backends --> Broker["Turn-scoped RoomTalk broker\ncontext, model gateway, site publishing"]
@@ -176,7 +192,7 @@ The repository uses layered verification:
 - Playwright for desktop/mobile room flows, recovery, multi-client realtime behavior, media, AI, and PostgreSQL parity.
 - Real E2B smoke tests for pinned artifact metadata, daemon health, Coco/Codex execution, permissions, context access, publishing, and workspace behavior.
 
-Run focused tests next to changed code, then run both production builds before shipping.
+Run focused tests next to changed code and expand to the affected production builds or boundary smokes when the change's risk requires them.
 
 ## Deployment
 
