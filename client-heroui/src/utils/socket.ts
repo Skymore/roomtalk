@@ -1,4 +1,5 @@
 import { default as io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { clearStoredUsername, saveUsername } from './appPersistence';
 import { apiPath } from './apiBase';
@@ -19,7 +20,6 @@ import {
   RoomRoleMember,
   RoomType,
 } from './types';
-import { Socket } from 'socket.io-client';
 import type { CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from './codexSettings';
 
 // Get client ID from local storage or create a new one
@@ -337,7 +337,7 @@ const clientAuthHeaders = (id: string = getClientId()): Record<string, string> =
 };
 
 // Create and configure Socket connection
-const createSocketConnection = (): typeof Socket => {
+const createSocketConnection = (): Socket => {
   const socketUrl = import.meta.env.VITE_SOCKET_URL;
   // 强化的Socket.io配置，添加自动重连和超时设置
   const socket = io(socketUrl, {

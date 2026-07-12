@@ -25,7 +25,7 @@ export function downsampleBuffer(input: Float32Array, inputRate: number, targetR
 }
 
 // Convert Float32 [-1, 1] samples to signed 16-bit PCM little-endian.
-export function floatToPCM16(input: Float32Array): Int16Array {
+export function floatToPCM16(input: Float32Array): Int16Array<ArrayBuffer> {
   const output = new Int16Array(input.length);
   for (let i = 0; i < input.length; i++) {
     const s = Math.max(-1, Math.min(1, input[i]));
