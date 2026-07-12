@@ -1,5 +1,10 @@
 # Media Viewer Gesture Requirements
 
+[中文](media-viewer-gesture-requirements.zh.md)
+
+Status: Current requirements and implementation record
+Updated: 2026-07-12
+
 ## Goal
 
 The image and video viewer should feel closer to a native photo viewer than a web carousel. Gesture decisions must be predictable, reversible while the finger is still down, and committed only when the gesture ends.

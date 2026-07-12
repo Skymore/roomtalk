@@ -1,5 +1,8 @@
 # PostgreSQL Rollout Runbook
 
+[中文](postgres-rollout-runbook.zh.md)
+
+Status: Current runbook
 Verified against `master` and `https://room.ruit.me/api/status`: 2026-07-12
 
 Current production status: `PERSISTENCE_STORE=postgres`; Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, model-gateway counters, and the bounded recent-message cache.

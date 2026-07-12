@@ -1,5 +1,10 @@
 # PostgreSQL App User Runbook
 
+[中文](postgres-app-user-runbook.zh.md)
+
+Status: Current runbook
+Updated: 2026-07-12
+
 RoomTalk currently calls `PostgresStore.initializeSchema()` on startup in
 PostgreSQL mode. The runtime database role therefore needs enough ownership and
 schema privileges to run the idempotent startup DDL in

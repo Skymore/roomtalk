@@ -1,5 +1,8 @@
 # Code Agent Static Publish Implementation
 
+[中文](code-agent-static-publish-implementation.zh.md)
+
+Status: Current
 Verified against `master`: 2026-07-12
 
 ## Architecture
@@ -233,11 +236,3 @@ MEDIA_STORAGE_REGION=...
 CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL=https://room.ruit.me
 CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET=...
 ```
-
-Recommended later:
-
-```text
-CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL=https://published.room.ruit.me
-```
-
-Using a dedicated publish host isolates arbitrary static JavaScript from the main RoomTalk app origin.

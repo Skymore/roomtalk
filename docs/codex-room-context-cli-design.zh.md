@@ -1,5 +1,8 @@
 # Coco / Codex 房间上下文 CLI 与受限 Shell 设计
 
+[English](codex-room-context-cli-design.md)
+
+状态：当前实现
 已按 `master` 核对：2026-07-12
 
 ## 状态

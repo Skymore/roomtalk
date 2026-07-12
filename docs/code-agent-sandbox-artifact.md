@@ -1,5 +1,8 @@
 # Code Agent Sandbox Artifact
 
+[中文](code-agent-sandbox-artifact.zh.md)
+
+Status: Current release contract
 Verified against `master` and the production non-secret runtime pins: 2026-07-12
 
 ## Purpose

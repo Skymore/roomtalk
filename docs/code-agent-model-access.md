@@ -1,5 +1,10 @@
 # Code Agent Model Access Strategy
 
+[中文](code-agent-model-access.zh.md)
+
+Status: Current
+Updated: 2026-07-12
+
 ## Goal
 
 Code Agent runs inside a file/process sandbox. When the sandbox can write files or run shell commands, RoomTalk must not inject long-lived provider API keys into that process.

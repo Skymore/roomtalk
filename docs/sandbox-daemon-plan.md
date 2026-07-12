@@ -1,5 +1,8 @@
 # RoomTalk Sandbox Daemon Runtime and Protocol
 
+[中文](sandbox-daemon-plan.zh.md)
+
+Status: Current runtime; the historical filename is retained to preserve links.
 Verified against `master` and the production non-secret runtime configuration: 2026-07-12
 
 ## Goal

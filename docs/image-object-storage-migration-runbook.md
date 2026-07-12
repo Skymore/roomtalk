@@ -1,5 +1,10 @@
 # Legacy Image Media Object Storage Migration Runbook
 
+[中文](image-object-storage-migration-runbook.zh.md)
+
+Status: Current runbook
+Updated: 2026-07-12
+
 > Status: active runbook. The current migration entrypoint is
 > `cd server && npm run migrate:media-to-object-storage`.
 > Do not run stale `dist/...migrateImageMessagesToObjectStorage.js` commands

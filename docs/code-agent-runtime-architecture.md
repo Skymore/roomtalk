@@ -1,5 +1,8 @@
 # RoomTalk Code-Agent Runtime Architecture
 
+[中文](code-agent-runtime-architecture.zh.md)
+
+Status: Current
 Verified against `master`: 2026-07-12
 
 This document describes the current implementation. Earlier files under `docs/` may describe individual phases, spikes, or migration plans; use this file as the concise architecture entry point and use source/tests as the final authority.

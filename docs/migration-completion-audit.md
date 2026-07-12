@@ -1,5 +1,8 @@
 # Migration Completion Audit
 
+[中文](migration-completion-audit.zh.md)
+
+Status: Bounded audit; consult current runbooks before operating.
 Original audit: 2026-06-26. Storage-migration scope reverified: 2026-07-12.
 
 This audit records the current migration completion evidence after the Code Agent merge and legacy media migration restoration.
