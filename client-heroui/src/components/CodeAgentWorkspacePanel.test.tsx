@@ -339,6 +339,20 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.queryByText('codeAgentRefreshWorkspace')).toBeNull();
   });
 
+  it('abbreviates approve for me as Auto in the workspace header', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="approveForMe"
+        sessionCostUsd={0}
+      />
+    );
+
+    expect(screen.getByText('Auto')).toBeTruthy();
+    expect(screen.getByText('codexPermissionApproveForMeDescription')).toBeTruthy();
+  });
+
   it('allows workspace refresh and shows non-blocking refresh errors', async () => {
     const onRefreshWorkspace = vi.fn();
 

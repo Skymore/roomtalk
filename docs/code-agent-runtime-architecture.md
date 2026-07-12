@@ -161,14 +161,18 @@ Codex connection ownership is per RoomTalk client, not per room. Settings starts
 
 ### Permission modes
 
-| Mode | Workspace writes | Shell | Network | Background jobs | Approval behavior |
-| --- | ---: | --- | --- | ---: | --- |
-| Plan | No | OS-enforced read-only shell | Direct IP network blocked; turn broker Unix socket allowed | No | No write approvals |
-| Edit | Yes | Workspace shell | Allowed by sandbox policy | Yes | Agent applies permitted edits |
-| Approve for me | Yes | Workspace shell | Allowed by sandbox policy | Yes | RoomTalk can accept supported approvals for the turn |
-| Full access | Yes | Least restrictive sandbox profile | Allowed | Yes | Backend runs without additional RoomTalk approval gates |
+The four user-facing choices are presets over three independent permission parameters; they are not four sandbox implementations.
+
+| UI preset | `sandbox_mode` | `approval_policy` | `approvals_reviewer` | Behavior |
+| --- | --- | --- | --- | --- |
+| Plan / Read | `read-only` | `on-request` | `user` | Inspect only; no writable tools or background jobs |
+| Edit / Ask | `workspace-write` | `on-request` | `user` | Routine workspace work runs directly; eligible escalations ask the user |
+| Approve for me / Auto | `workspace-write` | `on-request` | `auto_review` | The native backend reviewer allows, denies, or escalates eligible requests to the user |
+| Full access / Full | `danger-full-access` | `never` | `user` | No backend approval prompts inside the isolated E2B sandbox |
 
 Plan mode is not implemented with a fragile shell-command allowlist. Coco uses a bubblewrap-backed read-only shell, while Codex backends use a matching read-only permission profile. `Write`, `Edit`, and `BackgroundShell` are absent in Plan.
+
+For Coco, this policy lives in Coco core. Built-in tools declare whether an invocation crosses the current permission boundary: routine workspace edits and tests do not prompt, while protected metadata, Git mutations, system-level access, and side-effecting `gh` operations enter the Ask/Auto path. Auto decisions use Coco's current model through its native reviewer; RoomTalk does not duplicate those decision rules. The RoomTalk runner only transports a remaining user approval request as JSONL/WebSocket events and routes the response back to Coco.
 
 The resolved mode is persisted on the turn/message as an execution fact. Room defaults and per-user model/context preferences remain separate from what actually ran.
 

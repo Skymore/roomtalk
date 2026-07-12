@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +19,8 @@ from roomtalk_code_agent_runner.runner import (
     RunnerError,
     RunnerRequest,
     UNBOUNDED_MODEL_STEPS,
+    _CodeAgentControlState,
+    _CocoApprovalState,
     _add_code_agent_source_to_path,
     _api_key_for,
     _base_url_for,
@@ -25,6 +28,7 @@ from roomtalk_code_agent_runner.runner import (
     _collect_static_publish_files,
     _partial_history_for_steer,
     _read_only_shell_argv,
+    _start_code_agent_control_dispatcher,
     _model_step_event_from_response,
     canonical_allowed_paths_for_engine,
     main,
@@ -232,6 +236,88 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
         "Shell",
         "BackgroundShell",
     )
+
+
+def test_coco_approval_state_emits_and_resolves_interactive_request():
+    stdout = io.StringIO()
+    approvals = _CocoApprovalState(EventEmitter(stdout), "turn-approval")
+    result: list[str] = []
+    tool = SimpleNamespace(spec=SimpleNamespace(name="Shell"))
+
+    thread = threading.Thread(
+        target=lambda: result.append(approvals.request(tool, {"command": "git add README.md"}, None)),
+    )
+    thread.start()
+    deadline = time.monotonic() + 2
+    approval_id = ""
+    while time.monotonic() < deadline:
+        events = event_lines(stdout)
+        request_event = next((event for event in events if event["type"] == "approval_request"), None)
+        if request_event:
+            approval_id = request_event["approvalId"]
+            break
+        time.sleep(0.01)
+
+    assert approval_id
+    assert approvals.resolve(approval_id, "accept") is True
+    thread.join(timeout=2)
+    assert result == ["accept"]
+    events = event_lines(stdout)
+    assert next(event for event in events if event["type"] == "approval_request")["command"] == "git add README.md"
+    assert next(event for event in events if event["type"] == "tool_result")["success"] is True
+
+
+def test_coco_control_dispatcher_routes_approval_response():
+    stdout = io.StringIO()
+    emitter = EventEmitter(stdout)
+    approvals = _CocoApprovalState(emitter, "turn-approval")
+    controls = _CodeAgentControlState()
+    control_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    dispatcher = _start_code_agent_control_dispatcher(
+        control_queue,
+        object(),
+        controls,
+        approvals,
+        emitter,
+        "turn-approval",
+    )
+    result: list[str] = []
+    tool = SimpleNamespace(spec=SimpleNamespace(name="Shell"))
+    requester = threading.Thread(
+        target=lambda: result.append(approvals.request(tool, {"command": "git add README.md"}, "needs review")),
+    )
+    requester.start()
+
+    deadline = time.monotonic() + 2
+    approval_id = ""
+    while time.monotonic() < deadline:
+        request_event = next(
+            (event for event in event_lines(stdout) if event["type"] == "approval_request"),
+            None,
+        )
+        if request_event:
+            approval_id = request_event["approvalId"]
+            break
+        time.sleep(0.01)
+    assert approval_id
+
+    control_queue.put({
+        "schemaVersion": 1,
+        "type": "approval_response",
+        "turnId": "turn-approval",
+        "controlId": "control-approval",
+        "approvalId": approval_id,
+        "decision": "accept",
+    })
+    requester.join(timeout=2)
+    controls.done.set()
+    approvals.close()
+    dispatcher.join(timeout=2)
+
+    assert result == ["accept"]
+    control_result = next(event for event in event_lines(stdout) if event["type"] == "control_result")
+    assert control_result["controlType"] == "approval_response"
+    assert control_result["accepted"] is True
 
 
 def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):

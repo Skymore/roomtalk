@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,7 @@ MAX_STATIC_PUBLISH_FILE_BYTES = 100 * 1024 * 1024
 UNBOUNDED_MODEL_STEPS = sys.maxsize
 
 ControlQueue = queue.Queue[dict[str, Any] | None]
+ApprovalHandler = Callable[[Any, dict[str, Any], str | None], str]
 
 
 class RunnerError(Exception):
@@ -345,12 +347,27 @@ def system_prompt_for_tools(
     }
     available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
     unavailable_line = ", ".join(unavailable) if unavailable else "none"
-    mode_guidance = (
-        "This run is read-only. Shell commands run in an OS sandbox with a read-only filesystem, no background processes, and no direct IP network access. RoomTalk context, when available, is reached through a turn-scoped local read-only broker. "
-        "Use Shell for inspection and validation, but do not attempt to modify files. If the user asks you to make changes, explain the proposed changes without applying them."
-        if mode == "plan"
-        else "This run may use only the available tools listed below. Do not call any unavailable tools."
-    )
+    normalized_mode = "edit" if mode == "acceptEdits" else mode
+    if normalized_mode == "plan":
+        mode_guidance = (
+            "This run is read-only. Shell commands run in an OS sandbox with a read-only filesystem, no background processes, and no direct IP network access. RoomTalk context, when available, is reached through a turn-scoped local read-only broker. "
+            "Use Shell for inspection and validation, but do not attempt to modify files. If the user asks you to make changes, explain the proposed changes without applying them."
+        )
+    elif normalized_mode == "edit":
+        mode_guidance = (
+            "This run has workspace-write access. Routine workspace edits and commands run directly; "
+            "requests for protected Git/config paths or external side effects require user approval."
+        )
+    elif normalized_mode == "approveForMe":
+        mode_guidance = (
+            "This run has workspace-write access. Coco automatically reviews permission requests and "
+            "only asks the user when an action appears potentially unsafe."
+        )
+    else:
+        mode_guidance = (
+            "This run has full access to the isolated sandbox and does not request approval. "
+            "Keep all work relevant to the user's request."
+        )
     room_context_guidance = (
         "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Use `roomtalk site list --json` to inspect sites published by this room. Do not load the full room history by default."
         if room_context_enabled and SHELL_TOOL in available
@@ -824,6 +841,7 @@ def create_code_agent_engine(
     request: RunnerRequest,
     env: dict[str, str] | None = None,
     on_model_response: Callable[[Any], None] | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ):
     if env is None:
         env = os.environ
@@ -832,7 +850,8 @@ def create_code_agent_engine(
     from core.engine import Engine
     from core.llm import LLMClient
     from core.models import AppSettings
-    from core.permissions import PermissionChecker
+    from core.permission_reviewer import ModelPermissionReviewer
+    from core.permissions import PermissionChecker, permission_preset
     from core.tools import FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, ShellTool
     from core.tools.shell import looks_like_background_command
     from core.tools.base import Tool, ToolOutcome, ToolSpec
@@ -843,6 +862,8 @@ def create_code_agent_engine(
 
     workspace = request.workspace.resolve(strict=False)
     engine_allowed_paths = canonical_allowed_paths_for_engine(workspace, request.allowed_paths)
+    permission_mode = "edit" if request.mode == "acceptEdits" else request.mode
+    permission_policy = permission_preset(permission_mode)
 
     tool_names = tool_names_for_mode(request.mode, env)
     if BackgroundShellTool is None:
@@ -859,22 +880,9 @@ def create_code_agent_engine(
     if "Edit" in tool_names:
         tools.append(FileEditTool())
     if "Shell" in tool_names:
-        if request.mode == "plan":
-            tools.append(_create_read_only_shell_tool(
-                Tool,
-                ToolOutcome,
-                ToolSpec,
-                workspace,
-                env,
-                looks_like_background_command,
-            ))
-        else:
-            # Writable shell is intentionally env-gated because PermissionChecker
-            # runs with auto-approve below. The Node caller must only enable this
-            # for trusted sandbox processes with scoped credentials.
-            tools.append(ShellTool(workspace))
+        tools.append(ShellTool(workspace, sandbox_mode=permission_policy.sandbox_mode))
     if "BackgroundShell" in tool_names and BackgroundShellTool is not None:
-        tools.append(BackgroundShellTool(workspace))
+        tools.append(BackgroundShellTool(workspace, sandbox_mode=permission_policy.sandbox_mode))
     settings = AppSettings(
         provider=_provider_for_code_agent_engine(request.provider),
         model=request.api_model,
@@ -885,10 +893,14 @@ def create_code_agent_engine(
     llm = LLMClient.from_settings(settings)
     if on_model_response is not None:
         llm = _ObservedLLMClient(llm, on_model_response)
-    # File access enforcement is delegated to engine tools plus the outer sandbox.
-    # This adapter validates requested roots but does not intercept each tool IO.
-    permissions = PermissionChecker(auto_approve=True, mode="plan" if request.mode == "plan" else "acceptEdits")
-    allowed_tools = set(tool_names) if request.mode == "plan" else None
+    reviewer = ModelPermissionReviewer(llm, on_response=on_model_response) if permission_mode == "approveForMe" else None
+    permissions = PermissionChecker(
+        auto_approve=False,
+        mode=permission_mode,
+        reviewer=reviewer,
+        approval_handler=approval_handler,
+    )
+    allowed_tools = set(tool_names) if permission_mode == "plan" else None
     max_steps, max_steps_complex = _coco_step_limits(env)
     return Engine(
         llm,
@@ -1148,6 +1160,89 @@ def _model_step_event_from_response(response: Any, turn_id: str, sequence: int) 
     }
 
 
+class _CocoApprovalState:
+    def __init__(self, emitter: EventEmitter, turn_id: str) -> None:
+        self._emitter = emitter
+        self._turn_id = turn_id
+        self._condition = threading.Condition()
+        self._pending: dict[str, str | None] = {}
+        self._closed = False
+
+    def request(self, tool: Any, inputs: dict[str, Any], reviewer_reason: str | None) -> str:
+        tool_name = str(getattr(getattr(tool, "spec", None), "name", "") or "Tool")
+        with self._condition:
+            if self._closed:
+                return "cancel"
+            approval_id = f"coco_{uuid.uuid4().hex[:16]}"
+            self._pending[approval_id] = None
+
+        approval_type = "command" if tool_name in {SHELL_TOOL, BACKGROUND_SHELL_TOOL} else "file_change"
+        command = str(inputs.get("command") or "").strip()
+        file_path = str(inputs.get("file_path") or inputs.get("path") or "").strip()
+        args: dict[str, Any] = {
+            "approvalId": approval_id,
+            "approvalType": approval_type,
+            "tool": tool_name,
+            "startedAtMs": int(time.time() * 1000),
+            "autoReviewFlagged": bool(reviewer_reason),
+        }
+        for key in ("action", "cwd", "name", "ports", "job_id", "jobId"):
+            if key in inputs:
+                args[key] = inputs[key]
+        if command:
+            args["command"] = command
+        if file_path:
+            args["filePath"] = file_path
+        event: dict[str, Any] = {
+            "type": "approval_request",
+            "turnId": self._turn_id,
+            "id": approval_id,
+            "approvalId": approval_id,
+            "approvalType": approval_type,
+            "title": "Coco wants to run a command" if approval_type == "command" else "Coco wants to change files",
+            "message": reviewer_reason or "Coco requests your approval for this action.",
+            "args": args,
+            "messageId": f"coco_approval_{approval_id}",
+        }
+        if command:
+            event["command"] = command
+        if "cwd" in args:
+            event["cwd"] = args["cwd"]
+        self._emitter.emit(event)
+
+        with self._condition:
+            while self._pending.get(approval_id) is None and not self._closed:
+                self._condition.wait(timeout=0.25)
+            decision = self._pending.pop(approval_id, None) or "cancel"
+
+        success = decision in {"accept", "acceptForSession"}
+        self._emitter.emit({
+            "type": "tool_result",
+            "turnId": self._turn_id,
+            "id": approval_id,
+            "name": "approval_request",
+            "success": success,
+            "output": "Approved." if success else ("Cancelled." if decision == "cancel" else "Declined."),
+            "messageId": f"coco_approval_result_{approval_id}",
+        })
+        return decision
+
+    def resolve(self, approval_id: str, decision: str) -> bool:
+        if decision not in {"accept", "acceptForSession", "decline", "cancel"}:
+            return False
+        with self._condition:
+            if approval_id not in self._pending or self._pending[approval_id] is not None:
+                return False
+            self._pending[approval_id] = decision
+            self._condition.notify_all()
+            return True
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+
 class _CodeAgentControlState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1197,6 +1292,7 @@ def _start_code_agent_control_dispatcher(
     control_queue: ControlQueue,
     engine: Any,
     state: _CodeAgentControlState,
+    approvals: _CocoApprovalState,
     emitter: EventEmitter,
     turn_id: str,
 ) -> threading.Thread:
@@ -1264,6 +1360,7 @@ def _start_code_agent_control_dispatcher(
                     "status": "running",
                     "message": "Coco interrupt queued",
                 })
+                approvals.close()
                 abort_active_run()
             elif control_type == "steer":
                 prompt = control.get("prompt")
@@ -1285,6 +1382,16 @@ def _start_code_agent_control_dispatcher(
                     "message": "Coco steer queued",
                 })
                 abort_active_run()
+            elif control_type == "approval_response":
+                approval_id = control.get("approvalId")
+                decision = control.get("decision")
+                if not isinstance(approval_id, str) or not approval_id:
+                    emit_control_result(control, control_type, False, "Approval id is required")
+                    continue
+                if not isinstance(decision, str) or not approvals.resolve(approval_id, decision):
+                    emit_control_result(control, control_type, False, "Approval request is no longer pending")
+                    continue
+                emit_control_result(control, control_type, True)
             else:
                 emit_control_result(control, str(control_type or "unknown"), False, "Unsupported control type")
 
@@ -1375,8 +1482,13 @@ def run_request(
             model_step_usage = _merge_runner_usage(model_step_usage, event["usage"])
             emitter.emit(event)
 
+        approvals = _CocoApprovalState(emitter, request.turn_id)
         engine = (
-            create_code_agent_engine(request, on_model_response=on_model_response)
+            create_code_agent_engine(
+                request,
+                on_model_response=on_model_response,
+                approval_handler=approvals.request if control_queue is not None else None,
+            )
             if engine_factory is create_code_agent_engine
             else engine_factory(request)
         )
@@ -1398,7 +1510,7 @@ def run_request(
             )
         controls = _CodeAgentControlState()
         control_thread = (
-            _start_code_agent_control_dispatcher(control_queue, engine, controls, emitter, request.turn_id)
+            _start_code_agent_control_dispatcher(control_queue, engine, controls, approvals, emitter, request.turn_id)
             if control_queue is not None
             else None
         )
@@ -1511,6 +1623,7 @@ def run_request(
                 break
         finally:
             controls.done.set()
+            approvals.close()
             if control_thread is not None:
                 control_thread.join(timeout=0.5)
 

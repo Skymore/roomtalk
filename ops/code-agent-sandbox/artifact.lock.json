@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-12-queued-input-materialization-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-12-coco-permissions-v3",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -12,11 +12,11 @@
     "packageName": "coco",
     "packageVersion": "0.1.3a0",
     "sourceRepo": "https://github.com/Venti0325/Coco.git",
-    "sourceRef": "d2335368c88329daf24bcf84970cd1d710b950fe"
+    "sourceRef": "0b5e44eb29ad1bec89b2143737f6917aafa79359"
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.29",
+    "packageVersion": "0.1.31",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
