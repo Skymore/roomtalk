@@ -15,7 +15,7 @@ type HtmlMediaReference = {
 
 type ZipFile = {
   name: string;
-  data: Uint8Array | string;
+  data: Uint8Array<ArrayBuffer> | string;
 };
 
 const textEncoder = new TextEncoder();

@@ -2,6 +2,7 @@ import { Message } from '../types';
 import { CodeAgentRunnerPriorMessage } from './codeAgentRunnerProtocol';
 
 type CodeAgentPriorBlock = Exclude<CodeAgentRunnerPriorMessage['content'], string>[number];
+type CodeAgentToolResultBlock = Extract<CodeAgentPriorBlock, { type: 'tool_result' }>;
 
 const isNonEmptyText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
@@ -16,7 +17,7 @@ const appendAssistantBlock = (messages: CodeAgentRunnerPriorMessage[], block: Co
   messages.push({ role: 'assistant', content: [block] });
 };
 
-const appendToolResultBlock = (messages: CodeAgentRunnerPriorMessage[], block: CodeAgentPriorBlock) => {
+const appendToolResultBlock = (messages: CodeAgentRunnerPriorMessage[], block: CodeAgentToolResultBlock) => {
   const last = messages[messages.length - 1];
   if (
     last?.role === 'user' &&
