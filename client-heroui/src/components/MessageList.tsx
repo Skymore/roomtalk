@@ -33,6 +33,7 @@ import { EditMessageModal } from './EditMessageModal';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 const LOAD_MORE_MESSAGE_COUNT = 80;
+const LOAD_MORE_SCROLL_THRESHOLD_PX = 240;
 const AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS = 160;
 
 type MessageTimelineItem =
@@ -189,6 +190,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const historyLoadSentinelRef = useRef<HTMLDivElement>(null);
+  const loadMoreInFlightRef = useRef(false);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryingClientMessageIdsRef = useRef(new Set<string>());
   const isNearBottomRef = useRef(true);
@@ -338,9 +341,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }), [scheduleScrollToBottom, scrollToBottom, updateMessages]);
 
   const handleLoadMore = useCallback(() => {
-    if (!roomSessionReadyRef.current || isLoadingMore || !hasMoreMessages || messages.length === 0) {
+    if (!roomSessionReadyRef.current || loadMoreInFlightRef.current || isLoadingMore || !hasMoreMessages || messages.length === 0) {
       return;
     }
+
+    loadMoreInFlightRef.current = true;
 
     const container = containerRef.current;
     if (container) {
@@ -358,6 +363,29 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       baseHistoryVersion: historyVersion,
     });
   }, [hasMoreMessages, historyVersion, isLoadingMore, messages, oldestMessageId, roomId]);
+
+  useEffect(() => {
+    if (!isLoadingMore) {
+      loadMoreInFlightRef.current = false;
+    }
+  }, [isLoadingMore]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const sentinel = historyLoadSentinelRef.current;
+    if (!container || !sentinel || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        handleLoadMore();
+      }
+    }, {
+      root: container,
+      rootMargin: `${LOAD_MORE_SCROLL_THRESHOLD_PX}px 0px 0px`,
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [handleLoadMore]);
 
   useEffect(() => {
     onScrollButtonVisibilityChange?.(showScrollButton);
@@ -887,6 +915,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
       isNearBottomRef.current = isAtBottom;
       setShowScrollButton(!isAtBottom && messages.length > 0);
+      if (container.scrollTop <= LOAD_MORE_SCROLL_THRESHOLD_PX) {
+        handleLoadMore();
+      }
     }
   };
 
@@ -1045,15 +1076,19 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         >
           <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
             {hasMoreMessages && (
-              <div className="mb-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={handleLoadMore}
-                  disabled={isLoadingMore || !isRoomSessionReady}
-                  className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
-                >
-                  {isLoadingMore ? t('loadingMore') : t('loadMoreHistory')}
-                </button>
+              <div
+                ref={historyLoadSentinelRef}
+                data-testid="history-load-sentinel"
+                className="mb-3 flex min-h-6 items-center justify-center"
+                role={isLoadingMore ? 'status' : undefined}
+                aria-live="polite"
+              >
+                {isLoadingMore && (
+                  <>
+                    <Icon icon="lucide:loader-circle" className="mr-1.5 h-4 w-4 animate-spin text-[#c96442] dark:text-[#d97757]" />
+                    <span className="text-xs font-medium text-[#5e5d59] dark:text-[#b0aea5]">{t('loadingMore')}</span>
+                  </>
+                )}
               </div>
             )}
             {isLoading && messages.length === 0 && (

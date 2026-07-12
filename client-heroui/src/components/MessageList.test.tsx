@@ -599,7 +599,7 @@ describe('MessageList optimistic messages', () => {
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith('src/App.tsx#L42');
   });
 
-  it('renders a recent message window and can load older messages', async () => {
+  it('automatically loads older messages when the user reaches the top', async () => {
     render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     const history = Array.from({ length: 85 }, (_, index) => {
@@ -629,7 +629,7 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByText('message 6')).toBeTruthy();
     expect(screen.getByText('message 85')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('loadMoreHistory'));
+    fireEvent.scroll(screen.getByTestId('message-list-scroll'));
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
       roomId: 'room-1',
       beforeMessageId: 'm-6',
@@ -680,7 +680,7 @@ describe('MessageList optimistic messages', () => {
     });
 
     await screen.findByText('timestamp oldest');
-    fireEvent.click(screen.getByText('loadMoreHistory'));
+    fireEvent.scroll(screen.getByTestId('message-list-scroll'));
 
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
       roomId: 'room-1',
@@ -985,7 +985,7 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
-  it('disables cached-history Load more until verification and enables it afterward', async () => {
+  it('does not auto-load cached history until the restored room session is verified', async () => {
     const rendered = render(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
     );
@@ -999,18 +999,16 @@ describe('MessageList optimistic messages', () => {
         mode: 'replace',
       });
     });
-    const loadMore = await screen.findByText('loadMoreHistory');
-    expect((loadMore as HTMLButtonElement).disabled).toBe(true);
+    await screen.findByTestId('history-load-sentinel');
     socketMock.emit.mockClear();
-    fireEvent.click(loadMore);
+    fireEvent.scroll(screen.getByTestId('message-list-scroll'));
     expect(socketMock.emit).not.toHaveBeenCalled();
 
     rendered.rerender(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
     );
-    await waitFor(() => expect((screen.getByText('loadMoreHistory') as HTMLButtonElement).disabled).toBe(false));
     socketMock.emit.mockClear();
-    fireEvent.click(screen.getByText('loadMoreHistory'));
+    fireEvent.scroll(screen.getByTestId('message-list-scroll'));
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
       roomId: 'room-1',
       beforeMessageId: 'cached-oldest',
