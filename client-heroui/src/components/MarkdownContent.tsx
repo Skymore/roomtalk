@@ -324,13 +324,6 @@ function extractCodeFenceTitle(props: Record<string, unknown>): string | null {
   return null;
 }
 
-/** 预处理：移除仅分割线行 */
-const removeSeparators = (content: string): string =>
-  content
-    .split("\n")
-    .filter((line) => !/^\s*[-=]+\s*$/.test(line.trim()))
-    .join("\n");
-
 /** 修复引用块：遇到单行引用后插入空行 */
 const fixQuoteBlocks = (content: string): string => {
   const lines = content.split("\n"),
@@ -360,8 +353,7 @@ const parseMath = (content: string): string => {
 
 /** 综合预处理 */
 const preprocessMarkdown = (content: string): string => {
-  let text = removeSeparators(content);
-  text = fixQuoteBlocks(text);
+  const text = fixQuoteBlocks(content);
   return normalizeCodeFenceTitles(text);
 };
 

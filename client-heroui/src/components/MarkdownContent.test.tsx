@@ -41,6 +41,15 @@ describe('MarkdownContent math rendering', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
   }, 15_000);
 
+  it('preserves horizontal rules and Setext headings', () => {
+    const { container, getByRole } = render(
+      <MarkdownContent content={'Release Notes\n===\n\n---\n\nDetails'} />,
+    );
+
+    expect(getByRole('heading', { level: 1, name: 'Release Notes' })).toBeTruthy();
+    expect(container.querySelector('hr')).toBeTruthy();
+  });
+
   it('reports markdown task marker offsets when checkboxes change', () => {
     const onTaskListChange = vi.fn();
     const { getAllByRole } = render(
