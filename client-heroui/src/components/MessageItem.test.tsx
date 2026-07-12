@@ -567,9 +567,13 @@ describe('MessageItem replies', () => {
     fireEvent.click(await screen.findByText('editMessage'));
     expect(onEditQueuedMessage).toHaveBeenCalledWith('queued-1');
 
+    await waitFor(() => expect(screen.queryByText('codeAgentSteerInstead')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentQueuedActions' }));
     fireEvent.click(await screen.findByText('codeAgentSteerInstead'));
     expect(onSteerQueuedMessage).toHaveBeenCalledWith('queued-1');
 
+    await waitFor(() => expect(screen.queryByText('codeAgentCancelQueued')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentQueuedActions' }));
     fireEvent.click(await screen.findByText('codeAgentCancelQueued'));
     expect(onCancelQueuedMessage).toHaveBeenCalledWith('queued-1');
   });
