@@ -99,7 +99,11 @@ class FakeE2BDriver implements E2BSandboxDriver {
             };
           }
           setTimeout(() => {
-            if (command.includes('__ROOMTALK_WORKSPACE_FILE_OK__')) {
+            if (command.includes('__ROOMTALK_WORKSPACE_MUTATION_OK__')) {
+              stdout.end(command.includes('/workspace/escape')
+                ? '__ROOMTALK_WORKSPACE_MUTATION_OUTSIDE__\n'
+                : '__ROOMTALK_WORKSPACE_MUTATION_OK__\n');
+            } else if (command.includes('__ROOMTALK_WORKSPACE_FILE_OK__')) {
               stdout.end(command.includes('/workspace/escape.html')
                 ? '__ROOMTALK_WORKSPACE_FILE_OUTSIDE__\n'
                 : '__ROOMTALK_WORKSPACE_FILE_OK__\n');
@@ -784,6 +788,34 @@ describe('E2BCodeAgentSandboxService', () => {
     );
 
     assert.equal(driver.fileReadRequests.length, 0);
+  });
+
+  it('rejects workspace mutations whose canonical path escapes through a symlink', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await assert.rejects(
+      () => service.writeWorkspaceFile(handle, { path: 'escape/file.txt', content: 'blocked' }),
+      /outside workspace root/
+    );
+    await assert.rejects(
+      () => service.createWorkspaceDirectory(handle, 'escape/new-directory'),
+      /outside workspace root/
+    );
+    await assert.rejects(
+      () => service.renameWorkspaceEntry(handle, { fromPath: 'escape/source.txt', toPath: 'safe.txt' }),
+      /outside workspace root/
+    );
+    await assert.rejects(
+      () => service.deleteWorkspaceEntry(handle, 'escape/source.txt'),
+      /outside workspace root/
+    );
+
+    assert.deepEqual(driver.fileWriteRequests, []);
+    assert.deepEqual(driver.fileMakeDirRequests, []);
+    assert.deepEqual(driver.fileRenameRequests, []);
+    assert.deepEqual(driver.fileRemoveRequests, []);
   });
 
   it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {

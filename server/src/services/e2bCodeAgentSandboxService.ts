@@ -799,6 +799,13 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
     const relativePath = normalizeWorkspaceInputPath(input.path, workspacePrefix);
     const absolutePath = `${workspacePrefix}/${relativePath}`;
+    await this.assertCanonicalWorkspaceMutationPath(
+      connected,
+      workspacePrefix,
+      absolutePath,
+      relativePath,
+      false
+    );
     const content = input.encoding === 'base64'
       ? Buffer.from(input.content, 'base64')
       : input.content;
@@ -866,7 +873,9 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
 
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
     const relativePath = normalizeWorkspaceInputPath(workspacePath, workspacePrefix);
-    await connected.files.makeDir(`${workspacePrefix}/${relativePath}`);
+    const absolutePath = `${workspacePrefix}/${relativePath}`;
+    await this.assertCanonicalWorkspaceMutationPath(connected, workspacePrefix, absolutePath, relativePath, false);
+    await connected.files.makeDir(absolutePath);
     return {
       path: relativePath,
       name: relativePath.split('/').pop() || relativePath,
@@ -883,7 +892,11 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
     const fromPath = normalizeWorkspaceInputPath(input.fromPath, workspacePrefix);
     const toPath = normalizeWorkspaceInputPath(input.toPath, workspacePrefix);
-    const result = await connected.files.rename(`${workspacePrefix}/${fromPath}`, `${workspacePrefix}/${toPath}`);
+    const absoluteFromPath = `${workspacePrefix}/${fromPath}`;
+    const absoluteToPath = `${workspacePrefix}/${toPath}`;
+    await this.assertCanonicalWorkspaceMutationPath(connected, workspacePrefix, absoluteFromPath, fromPath, true);
+    await this.assertCanonicalWorkspaceMutationPath(connected, workspacePrefix, absoluteToPath, toPath, false);
+    const result = await connected.files.rename(absoluteFromPath, absoluteToPath);
     const normalizedResult = result && typeof result === 'object' && 'path' in result
       ? normalizeWorkspaceEntry(result as E2BFileEntry, workspacePrefix)
       : null;
@@ -902,7 +915,9 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
 
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
     const relativePath = normalizeWorkspaceInputPath(workspacePath, workspacePrefix);
-    await connected.files.remove(`${workspacePrefix}/${relativePath}`);
+    const absolutePath = `${workspacePrefix}/${relativePath}`;
+    await this.assertCanonicalWorkspaceMutationPath(connected, workspacePrefix, absolutePath, relativePath, true);
+    await connected.files.remove(absolutePath);
   }
 
   private async loadIgnoredWorkspacePaths(
@@ -1001,6 +1016,62 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
       stdout,
     });
     throw new Error(`Unable to inspect workspace file path: ${relativePath}`);
+  }
+
+  private async assertCanonicalWorkspaceMutationPath(
+    connected: E2BSandboxDriverHandle,
+    workspacePrefix: string,
+    absolutePath: string,
+    relativePath: string,
+    requireExisting: boolean
+  ): Promise<void> {
+    if (!connected.commands?.run) {
+      throw new Error('E2B sandbox driver handle does not support canonical workspace mutation checks');
+    }
+    const command = [
+      'set -u',
+      `workspace=${shellQuote(workspacePrefix)}`,
+      `target=${shellQuote(absolutePath)}`,
+      `require_existing=${requireExisting ? '1' : '0'}`,
+      'if ! command -v realpath >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_WORKSPACE_MUTATION_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'root_real=$(realpath -e -- "$workspace" 2>/dev/null) || { printf "__ROOMTALK_WORKSPACE_MUTATION_UNAVAILABLE__\\n"; exit 0; }',
+      'probe="$target"',
+      'if [ "$require_existing" = "1" ]; then',
+      '  probe_real=$(realpath -e -- "$probe" 2>/dev/null) || { printf "__ROOMTALK_WORKSPACE_MUTATION_NOT_FOUND__\\n"; exit 0; }',
+      'else',
+      '  while [ ! -e "$probe" ] && [ ! -L "$probe" ]; do',
+      '    parent=$(dirname -- "$probe")',
+      '    [ "$parent" != "$probe" ] || { printf "__ROOMTALK_WORKSPACE_MUTATION_OUTSIDE__\\n"; exit 0; }',
+      '    probe="$parent"',
+      '  done',
+      '  probe_real=$(realpath -e -- "$probe" 2>/dev/null) || { printf "__ROOMTALK_WORKSPACE_MUTATION_NOT_FOUND__\\n"; exit 0; }',
+      'fi',
+      'case "$probe_real" in',
+      '  "$root_real"|"$root_real"/*) ;;',
+      '  *) printf "__ROOMTALK_WORKSPACE_MUTATION_OUTSIDE__\\n"; exit 0 ;;',
+      'esac',
+      'printf "__ROOMTALK_WORKSPACE_MUTATION_OK__\\n"',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 10_000 });
+    const stdout = await collectReadableText(result.stdout, 4096);
+    const completed = await result.completed;
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(`E2B workspace mutation inspection failed with exit code ${completed.exitCode}`);
+    }
+    if (stdout.includes('__ROOMTALK_WORKSPACE_MUTATION_OK__')) return;
+    if (stdout.includes('__ROOMTALK_WORKSPACE_MUTATION_OUTSIDE__')) {
+      throw new Error(`Workspace mutation path resolves outside workspace root: ${relativePath}`);
+    }
+    if (stdout.includes('__ROOMTALK_WORKSPACE_MUTATION_NOT_FOUND__')) {
+      throw new Error(`Workspace mutation path was not found: ${relativePath}`);
+    }
+    if (stdout.includes('__ROOMTALK_WORKSPACE_MUTATION_UNAVAILABLE__')) {
+      throw new Error('E2B sandbox does not support canonical workspace mutation checks');
+    }
+    throw new Error(`Unable to inspect workspace mutation path: ${relativePath}`);
   }
 
   async destroy(sandboxId: string): Promise<void> {
