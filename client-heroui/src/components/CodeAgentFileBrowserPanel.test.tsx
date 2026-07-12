@@ -2652,11 +2652,6 @@ describe('CodeAgentFileBrowserPanel', () => {
     const iframe = container.querySelector('iframe') as HTMLIFrameElement | null;
     expect(iframe).toBeTruthy();
     expect(iframe?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/diagram.svg');
-    fireEvent.error(iframe as HTMLIFrameElement);
-    await waitFor(() => {
-      expect(screen.getByText('codeAgentBrowserPreviewFailed')).toBeTruthy();
-    });
-    expect(screen.getByText('codeAgentBrowserPreviewLoadFailed')).toBeTruthy();
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
   });
 

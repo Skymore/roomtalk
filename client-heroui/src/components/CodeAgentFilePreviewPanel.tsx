@@ -474,6 +474,16 @@ export function WorkspaceBrowserAssetPreview({
     onPreviewStatusChange?.({ _tag: 'LoadFailed', code: 0, description });
   }, [onPreviewStatusChange, t]);
 
+  const setIframeRef = useCallback((iframe: HTMLIFrameElement | null) => {
+    if (iframeRef.current) {
+      iframeRef.current.onerror = null;
+    }
+    iframeRef.current = iframe;
+    if (iframe) {
+      iframe.onerror = handleError;
+    }
+  }, [handleError]);
+
   useEffect(() => {
     setIsLoading(true);
     setLoadError(null);
@@ -513,19 +523,6 @@ export function WorkspaceBrowserAssetPreview({
     return () => window.removeEventListener('resize', readSize);
   }, [onViewportContainerSizeChange]);
 
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe) {
-      return undefined;
-    }
-    iframe.addEventListener('load', handleLoad);
-    iframe.addEventListener('error', handleError);
-    return () => {
-      iframe.removeEventListener('load', handleLoad);
-      iframe.removeEventListener('error', handleError);
-    };
-  }, [handleError, handleLoad, src]);
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-white dark:bg-[#141413]">
       {loadError ? (
@@ -550,13 +547,12 @@ export function WorkspaceBrowserAssetPreview({
             style={fillZoomFrameStyle}
           >
             <iframe
-              ref={iframeRef}
+              ref={setIframeRef}
               src={src}
               title={title}
               className="h-full min-h-full w-full border-0 bg-white"
               sandbox="allow-scripts allow-forms allow-popups"
               onLoad={handleLoad}
-              onError={handleError}
             />
           </div>
         ) : (
@@ -580,13 +576,12 @@ export function WorkspaceBrowserAssetPreview({
               style={fixedZoomFrameStyle ?? undefined}
             >
               <iframe
-                ref={iframeRef}
+                ref={setIframeRef}
                 src={src}
                 title={title}
                 className="h-full w-full border-0 bg-white"
                 sandbox="allow-scripts allow-forms allow-popups"
                 onLoad={handleLoad}
-                onError={handleError}
               />
             </div>
             <CodeAgentBrowserViewportResizeHandles
