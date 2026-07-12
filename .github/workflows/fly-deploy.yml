@@ -56,26 +56,38 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client-heroui/package-lock.json
 
-      - name: Install server dependencies
-        working-directory: server
-        run: npm ci
+      - name: Install application dependencies
+        run: |
+          npm ci --prefix server &
+          server_pid=$!
+          npm ci --prefix client-heroui &
+          client_pid=$!
 
-      - name: Build server
-        working-directory: server
-        run: npm run build
-
-      - name: Install client dependencies
-        working-directory: client-heroui
-        run: npm ci
+          status=0
+          wait "$server_pid" || status=$?
+          wait "$client_pid" || status=$?
+          exit "$status"
 
       - name: Check client translations
         working-directory: client-heroui
         run: npm run translate:i18n:dry
 
-      - name: Build client
-        working-directory: client-heroui
-        run: npm run build
+      - name: Build applications
+        run: |
+          npm run build --prefix server &
+          server_pid=$!
+          npm run build --prefix client-heroui &
+          client_pid=$!
+
+          status=0
+          wait "$server_pid" || status=$?
+          wait "$client_pid" || status=$?
+          exit "$status"
 
       - name: Setup Fly
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -117,6 +129,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy to Fly
-        run: flyctl deploy --remote-only -a message-system
+        run: flyctl deploy --remote-only --build-arg USE_PREBUILT_APP=true -a message-system
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
