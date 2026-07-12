@@ -722,18 +722,21 @@ export class CodeAgentSessionService {
       ...message,
       codeAgentQueuedInput: queuedInput,
     };
-    const room = await this.store.appendMessage(queuedMessage);
-    if (!room) {
+    const appendResult = await this.store.appendMessageIdempotent(queuedMessage);
+    if (!appendResult) {
       return { success: false, error: 'Failed to save queued agent input' };
     }
-    this.emitter.to(room.creatorId).emit('room_updated', room);
-    this.emitter.to(input.roomId).emit('new_message', queuedMessage);
+    const persistedMessage = appendResult.message;
+    if (appendResult.inserted) {
+      this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      this.emitter.to(input.roomId).emit('new_message', persistedMessage);
+    }
 
     // Queue is also valid in the completion race: it becomes the next turn immediately.
     if (!this.activeTurns.has(input.roomId)) {
       this.scheduleQueuedTurn(input.roomId);
     }
-    return { success: true, message: queuedMessage };
+    return { success: true, message: persistedMessage };
   }
 
   async editQueuedTurn(roomId: string, clientId: string, messageId: string, content: string): Promise<CodeAgentControlAck> {

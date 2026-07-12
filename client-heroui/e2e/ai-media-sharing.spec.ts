@@ -51,7 +51,7 @@ test('requires both confirmations before switching to a premium model', async ({
 
   await page.getByRole('button', { name: 'AI Settings' }).click();
   const settingsDialog = page.getByRole('dialog', { name: 'AI Settings' });
-  await settingsDialog.getByTestId('ai-model-select').click();
+  await settingsDialog.getByRole('button', { name: /Select AI Model/ }).click();
   await page.getByRole('option', { name: /GPT-5\.5/ }).click();
 
   const pricingDialog = page.getByRole('dialog', { name: 'Confirm premium model pricing' });

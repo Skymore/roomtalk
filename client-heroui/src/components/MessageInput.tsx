@@ -873,7 +873,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         onOptimisticMessage?.(optimisticMessage);
         clearEditorImmediately({ blur: true });
         const savedMessage = await queueCodeAgentInput({
-          roomId,
+          roomId: requestRoomId,
           content: promptForSend,
           username,
           avatar,
@@ -884,6 +884,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ...codeAgentRunSettings,
           codeAgentMode,
         });
+        if (!isRequestRoomCurrent()) return;
         onOptimisticMessageSaved?.(clientMessageId, savedMessage);
         if (reviewComments.length > 0) {
           onClearReviewComments?.();

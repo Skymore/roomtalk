@@ -574,6 +574,43 @@ describe('MessageItem replies', () => {
     expect(onCancelQueuedMessage).toHaveBeenCalledWith('queued-1');
   });
 
+  it('does not expose queued actions while the restored room session is unverified', () => {
+    const onEditQueuedMessage = vi.fn();
+    const onSteerQueuedMessage = vi.fn();
+    const onCancelQueuedMessage = vi.fn();
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'cached-queued-1',
+          clientId: 'viewer',
+          codeAgentQueuedInput: {
+            state: 'queued',
+            queuedAt: '2026-07-10T00:00:00.000Z',
+            updatedAt: '2026-07-10T00:00:00.000Z',
+          },
+        }}
+        roomPermissions={null}
+        isInteractionDisabled
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onEditQueuedMessage={onEditQueuedMessage}
+        onSteerQueuedMessage={onSteerQueuedMessage}
+        onCancelQueuedMessage={onCancelQueuedMessage}
+        onReply={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByLabelText('codeAgentQueuedActions') as HTMLButtonElement;
+    expect(trigger.disabled).toBe(true);
+    fireEvent.click(trigger);
+    expect(screen.queryByText('editMessage')).toBeNull();
+    expect(onEditQueuedMessage).not.toHaveBeenCalled();
+    expect(onSteerQueuedMessage).not.toHaveBeenCalled();
+    expect(onCancelQueuedMessage).not.toHaveBeenCalled();
+  });
+
   it('shows optimistic pending and failed delivery states', () => {
     const { rerender } = render(
       <MessageItem

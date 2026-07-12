@@ -676,6 +676,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [roomId, messages, updateMessages, t]);
 
   const handleSteerQueuedMessage = useCallback(async (messageId: string) => {
+    if (!roomSessionReadyRef.current) return;
     try {
       await steerQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {
@@ -686,6 +687,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [roomId, t]);
 
   const handleCancelQueuedMessage = useCallback(async (messageId: string) => {
+    if (!roomSessionReadyRef.current) return;
     try {
       await cancelQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {

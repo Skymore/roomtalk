@@ -144,6 +144,20 @@ class MemoryCodeAgentStore {
     return this.appendMessageWithAtomicPosition(message);
   }
 
+  async appendMessageIdempotent(message: Message) {
+    const room = this.rooms.get(message.roomId);
+    if (!room) return null;
+    const messages = this.messages.get(message.roomId) || [];
+    const existingMessage = message.clientMessageId
+      ? messages.find(item => item.clientId === message.clientId && item.clientMessageId === message.clientMessageId)
+      : undefined;
+    if (existingMessage) {
+      return { room, message: existingMessage, inserted: false };
+    }
+    const updatedRoom = await this.appendMessage(message);
+    return updatedRoom ? { room: updatedRoom, message, inserted: true } : null;
+  }
+
   async updateCodeAgentQueuedMessage(roomId: string, messageId: string, update: any) {
     const room = this.rooms.get(roomId);
     const messages = this.messages.get(roomId);
@@ -1907,6 +1921,51 @@ describe('CodeAgentSessionService', () => {
 
     runner.release(1);
     await runner.waitForCompletions(2);
+  });
+
+  it('returns and broadcasts only the canonical queued message for an idempotent retry', async () => {
+    const runner = new BlockingRunner();
+    const { emitter, service, store } = createService({
+      runner,
+      ids: ['ai-1', 'turn-1'],
+    });
+    const activeTurn = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    const canonicalMessage: Message = {
+      id: 'queued-canonical',
+      clientId: 'client-1',
+      clientMessageId: 'queue-request-1',
+      content: 'run the tests next',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    };
+
+    const first = await service.queueTurn(
+      { roomId: 'room-1', clientId: 'client-1', selectedModel },
+      canonicalMessage,
+    );
+    const duplicate = await service.queueTurn(
+      { roomId: 'room-1', clientId: 'client-1', selectedModel },
+      { ...canonicalMessage, id: 'queued-ghost' },
+    );
+
+    assert.equal(first.message?.id, 'queued-canonical');
+    assert.equal(duplicate.message?.id, 'queued-canonical');
+    assert.equal(
+      store.messages.get('room-1')?.filter(item => item.clientMessageId === 'queue-request-1').length,
+      1,
+    );
+    const queuedMessageEmits = emitter.roomEmits.filter(event => (
+      event.event === 'new_message'
+      && (event.args[0] as Message).clientMessageId === 'queue-request-1'
+    ));
+    assert.equal(queuedMessageEmits.length, 1);
+    assert.equal((queuedMessageEmits[0].args[0] as Message).id, 'queued-canonical');
+
+    await service.cancelQueuedTurn('room-1', 'client-1', 'queued-canonical');
+    runner.release();
+    await activeTurn;
   });
 
   it('accepts Queue during the completion race and starts it immediately when no turn is active', async () => {

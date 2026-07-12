@@ -929,7 +929,13 @@ describe('MessageList optimistic messages', () => {
     act(() => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
-        messages: [message()],
+        messages: [message({
+          codeAgentQueuedInput: {
+            state: 'queued',
+            queuedAt: '2026-07-10T00:00:00.000Z',
+            updatedAt: '2026-07-10T00:00:00.000Z',
+          },
+        })],
         historyVersion: 1,
         hasMore: false,
         mode: 'replace',
@@ -939,6 +945,12 @@ describe('MessageList optimistic messages', () => {
     const item = await screen.findByTestId('message-item');
     expect(item.getAttribute('data-interaction-disabled')).toBe('true');
     expect((screen.getByRole('button', { name: 'exportChat' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText('edit-queued-m1'));
+    fireEvent.click(screen.getByText('steer-queued-m1'));
+    fireEvent.click(screen.getByText('cancel-queued-m1'));
+    expect(editQueuedCodeAgentInputMock).not.toHaveBeenCalled();
+    expect(steerQueuedCodeAgentInputMock).not.toHaveBeenCalled();
+    expect(cancelQueuedCodeAgentInputMock).not.toHaveBeenCalled();
   });
 
   it('does not request message history until the restored room session is verified', async () => {

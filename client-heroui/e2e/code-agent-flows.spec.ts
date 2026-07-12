@@ -64,7 +64,9 @@ test('runs a fake code agent turn and restores tool history after refresh', asyn
   await expect(page.getByText('Threads', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Artifacts', { exact: true })).toBeVisible();
   await expect(page.getByText('Changes', { exact: true })).toBeVisible();
-  await expectMessage(page, 'code agent fake runner received the task.').toBeVisible();
+  await expectMessage(page, 'Coco Agent fake runner received the task.').toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Expand earlier work', exact: true }).click();
   const toolCall = await expectCodeAgentToolCall(page);
   await toolCall.click();
   await expect(page.getByText('Command')).toBeVisible();
@@ -79,11 +81,12 @@ test('runs a fake code agent turn and restores tool history after refresh', asyn
   await page.reload();
   await expectChatRoom(page, roomName);
   await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible();
+  await page.getByRole('button', { name: 'Expand earlier work', exact: true }).click();
   await (await expectCodeAgentToolCall(page)).click();
   await expect(page.getByText('Tool failed')).toBeVisible();
 });
 
-test('exposes the interrupt control while a code agent turn is running', async ({ page, context, request }) => {
+test('exposes the stop control while a code agent turn is running', async ({ page, context, request }) => {
   await createCodeAgentRoom(page, context, request);
 
   const prompt = uniqueName('codeAgent-first');
@@ -93,7 +96,7 @@ test('exposes the interrupt control while a code agent turn is running', async (
   await editor.click();
   await page.keyboard.insertText(prompt);
   await askButton.click();
-  await expect(page.getByRole('button', { name: 'Interrupt turn', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
   await expectMessage(page, prompt).toBeVisible();
 
   await expectCodeAgentToolCall(page);

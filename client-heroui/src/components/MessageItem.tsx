@@ -1280,6 +1280,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                       variant="light"
                       aria-label={t('codeAgentQueuedActions')}
                       className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                      isDisabled={isInteractionDisabled}
                     >
                       <Icon icon="lucide:more-horizontal" width={12} height={12} />
                     </Button>
@@ -1288,16 +1289,20 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     <DropdownItem
                       key="edit-queued"
                       startContent={<Icon icon="lucide:pencil" />}
-                      onPress={() => onEditQueuedMessage?.(message.id)}
-                      isDisabled={!canControlQueuedInput}
+                      onPress={() => {
+                        if (!isInteractionDisabled) onEditQueuedMessage?.(message.id);
+                      }}
+                      isDisabled={isInteractionDisabled || !canControlQueuedInput}
                     >
                       {t('editMessage')}
                     </DropdownItem>
                     <DropdownItem
                       key="steer-queued"
                       startContent={<Icon icon="lucide:corner-down-right" />}
-                      onPress={() => onSteerQueuedMessage?.(message.id)}
-                      isDisabled={!canSteerQueuedInput}
+                      onPress={() => {
+                        if (!isInteractionDisabled) onSteerQueuedMessage?.(message.id);
+                      }}
+                      isDisabled={isInteractionDisabled || !canSteerQueuedInput}
                     >
                       {t('codeAgentSteerInstead')}
                     </DropdownItem>
@@ -1306,8 +1311,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                       color="danger"
                       className="text-danger"
                       startContent={<Icon icon="lucide:trash-2" />}
-                      onPress={() => onCancelQueuedMessage?.(message.id)}
-                      isDisabled={!canControlQueuedInput}
+                      onPress={() => {
+                        if (!isInteractionDisabled) onCancelQueuedMessage?.(message.id);
+                      }}
+                      isDisabled={isInteractionDisabled || !canControlQueuedInput}
                     >
                       {t('codeAgentCancelQueued')}
                     </DropdownItem>

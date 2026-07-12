@@ -1298,6 +1298,51 @@ describe('MessageInput optimistic send flow', () => {
     expect(rendered.props.onOptimisticMessageFailed).not.toHaveBeenCalled();
   });
 
+  it('ignores a queued agent success that arrives after switching rooms', async () => {
+    let resolveQueue!: (value: Message) => void;
+    socketMocks.queueCodeAgentInput.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveQueue = resolve;
+    }));
+    const onClearReviewComments = vi.fn();
+    const rendered = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+      reviewComments: [{
+        id: 'stale-comment',
+        sectionId: 'file:src/App.tsx',
+        sectionTitle: 'File comment',
+        filePath: 'src/App.tsx',
+        startIndex: 0,
+        endIndex: 0,
+        rangeLabel: 'L1',
+        text: 'Keep this for the current room.',
+        diff: 'const value = 1;',
+        fenceLanguage: 'tsx',
+      }],
+      onClearReviewComments,
+    });
+    setEditorText(rendered.editor, 'old room queued task');
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledTimes(1));
+    expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledWith(expect.objectContaining({ roomId: 'room-1' }));
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await act(async () => resolveQueue(message({
+      id: 'room-one-queued-message',
+      clientMessageId: 'room-one-queue-request',
+      codeAgentQueuedInput: {
+        state: 'queued',
+        queuedAt: '2026-07-10T00:00:00.000Z',
+        updatedAt: '2026-07-10T00:00:00.000Z',
+      },
+    })));
+
+    expect(rendered.props.onOptimisticMessageSaved).not.toHaveBeenCalled();
+    expect(onClearReviewComments).not.toHaveBeenCalled();
+    expect(rendered.props.onCancelReply).not.toHaveBeenCalled();
+  });
+
   it('stops an active recording and clears the voice editor snapshot when the room changes', async () => {
     const { trackStop } = installVoiceRecordingMocks();
     const rendered = renderMessageInput();
