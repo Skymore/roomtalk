@@ -44,7 +44,11 @@ export const upsertMessage = (messages: Message[], message: Message) => {
       const localMediaPreviewUrl = optimisticMessage.localMediaPreviewUrl;
       next[clientMessageIndex] = {
         ...serverMessage,
-        ...(localMediaPreviewUrl ? { timestamp: optimisticMessage.timestamp } : {}),
+        // The optimistic timestamp is also the sender's stable display order.
+        // Server acknowledgements for text and media finish at different times;
+        // replacing it with the acknowledgement timestamp makes a mixed send
+        // visibly reorder while it is settling.
+        timestamp: optimisticMessage.timestamp,
         ...(!serverMessage.deliveryAction && optimisticAction ? { deliveryAction: optimisticAction } : {}),
         ...(localMediaPreviewUrl ? { localMediaPreviewUrl } : {}),
       };
