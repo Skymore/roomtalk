@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-12-coco-permissions-v3",
+  "artifactVersion": "roomtalk-code-agent-2026-07-12-codex-0-145-alpha4-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -25,15 +25,15 @@
       },
       "codex_cli": {
         "command": "python -m roomtalk_code_agent_runner.codex_cli",
-        "codexCliVersion": "0.144.1"
+        "codexCliVersion": "0.145.0-alpha.4"
       },
       "codex_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_app_server",
-        "codexCliVersion": "0.144.1"
+        "codexCliVersion": "0.145.0-alpha.4"
       },
       "codex_sdk_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_sdk_app_server",
-        "codexCliVersion": "0.144.1",
+        "codexCliVersion": "0.145.0-alpha.4",
         "pythonSdkVersion": "0.1.0b3"
       },
       "daemon": {
