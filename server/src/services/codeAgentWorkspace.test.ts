@@ -125,6 +125,18 @@ describe('code-agent workspace snapshots', () => {
     assert.equal(snapshot.commands[0].id, 'tool-25');
   });
 
+  it('bounds secret redaction work for very large tool output previews', () => {
+    const adversarialOutput = '"api" '.repeat(50_000);
+    const startedAt = Date.now();
+    const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
+      toolCall(),
+      toolResult({ toolOutputPreview: adversarialOutput }),
+    ], new Date());
+
+    assert.ok(Date.now() - startedAt < 1_000);
+    assert.ok((snapshot.commands[0].preview?.length || 0) <= 240);
+  });
+
   it('redacts common secret-shaped values from command previews', () => {
     const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
       toolCall({ toolArgs: { command: 'echo API_KEY=sk-testsecretvalue123456 token=e2b_testsecretvalue123456' } }),

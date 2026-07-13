@@ -63,6 +63,7 @@ export interface CodeAgentWorkspaceSnapshot {
 
 const MAX_COMMANDS = 20;
 const MAX_PREVIEW_LENGTH = 240;
+const MAX_PREVIEW_REDACTION_LENGTH = 4_096;
 const SECRET_VALUE = '[redacted]';
 
 const truncateMiddle = (value: string, maxLength: number) => {
@@ -78,7 +79,8 @@ const truncatePreview = (value: string | undefined) => {
   if (!value) {
     return undefined;
   }
-  const singleLine = redactSecretLikeText(value).replace(/\s+/g, ' ').trim();
+  const bounded = truncateMiddle(value, MAX_PREVIEW_REDACTION_LENGTH);
+  const singleLine = redactSecretLikeText(bounded).replace(/\s+/g, ' ').trim();
   return truncateMiddle(singleLine, MAX_PREVIEW_LENGTH);
 };
 
@@ -88,9 +90,23 @@ export const redactSecretLikeText = (value: string): string => value
   .replace(/\b(sk-[A-Za-z0-9_-]{16,}|e2b_[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9]{16,})\b/g, SECRET_VALUE);
 
 const buildCommandHistory = (messages: Message[]): CodeAgentWorkspaceCommand[] => {
+  const commandOrder: string[] = [];
+  const seenCommandIds = new Set<string>();
+  for (const message of messages) {
+    if (
+      (message.messageType === 'tool_call' || message.messageType === 'tool_result') &&
+      message.toolCallId &&
+      !seenCommandIds.has(message.toolCallId)
+    ) {
+      seenCommandIds.add(message.toolCallId);
+      commandOrder.push(message.toolCallId);
+    }
+  }
+  const selectedCommandIds = new Set(commandOrder.slice(-MAX_COMMANDS));
   const commands = new Map<string, CodeAgentWorkspaceCommand>();
 
   for (const message of messages) {
+    if (!message.toolCallId || !selectedCommandIds.has(message.toolCallId)) continue;
     if (message.messageType === 'tool_call' && message.toolCallId) {
       commands.set(message.toolCallId, {
         id: message.toolCallId,
@@ -115,7 +131,10 @@ const buildCommandHistory = (messages: Message[]): CodeAgentWorkspaceCommand[] =
     }
   }
 
-  return Array.from(commands.values()).slice(-MAX_COMMANDS);
+  return commandOrder
+    .slice(-MAX_COMMANDS)
+    .map(toolCallId => commands.get(toolCallId))
+    .filter((command): command is CodeAgentWorkspaceCommand => Boolean(command));
 };
 
 export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorkspaceSummary => {
