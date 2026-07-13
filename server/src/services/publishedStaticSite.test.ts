@@ -94,6 +94,8 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(result.slug, 'roomtalk-demo');
     assert.equal(result.fileCount, 2);
     assert.equal(storage.objects.has('published-sites/roomtalk-demo/manifest.json'), true);
+    assert.equal(storage.objects.has('published-sites/roomtalk-demo/versions.json'), true);
+    assert.equal(storage.objects.has(`published-sites/roomtalk-demo/version-manifests/${result.versionId}.json`), true);
     assert.equal(storage.objects.has('published-sites/by-room/cm9vbS0x/index.json'), true);
 
     const index = await service.readFile('roomtalk-demo', '');
@@ -106,6 +108,95 @@ describe('PublishedStaticSiteService', () => {
 
     const spaFallback = await service.readFile('roomtalk-demo', 'unknown/route');
     assert.equal(spaFallback?.file.path, 'index.html');
+  });
+
+  it('keeps immutable manifests for every publish and reads each version independently', async () => {
+    let now = Date.parse('2026-06-30T12:00:00.000Z');
+    const ids = [
+      'token000-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version1-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version2-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service } = createService({
+      nowMs: () => now,
+      createId: () => ids.shift() || 'fallback-bbbb-cccc-dddd-eeeeeeeeeeee',
+    });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    }))!;
+
+    const first = await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'versioned-demo',
+      files: [textFile('index.html', '<!doctype html>first')],
+    }, claims);
+    now += 60_000;
+    const second = await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'versioned-demo',
+      files: [textFile('index.html', '<!doctype html>second')],
+    }, claims);
+
+    const [artifact] = await service.listSitesForRoom('room-1');
+    assert.equal(artifact.versionId, second.versionId);
+    assert.deepEqual(artifact.versions.map(version => version.versionId), [second.versionId, first.versionId]);
+    assert.equal(artifact.versions[0].isCurrent, true);
+    assert.equal(artifact.versions[1].isCurrent, false);
+    assert.equal(artifact.versions[1].url, `https://room.example/p/versioned-demo/__versions/${first.versionId}/`);
+    assert.match((await service.readFile('versioned-demo', ''))!.body.toString('utf8'), /second/);
+    assert.match((await service.readFile('versioned-demo', '', first.versionId))!.body.toString('utf8'), /first/);
+    assert.match((await service.readFile('versioned-demo', '', second.versionId))!.body.toString('utf8'), /second/);
+  });
+
+  it('restores the previous version when the room index commit fails', async () => {
+    class FailingRoomIndexStorage extends MemoryMediaObjectStorage {
+      failRoomIndex = false;
+
+      override async putMediaObject(input: { objectKey: string; body: Buffer; mimeType: string; byteSize: number }) {
+        if (this.failRoomIndex && input.objectKey.startsWith('published-sites/by-room/')) {
+          throw new Error('room index unavailable');
+        }
+        return super.putMediaObject(input);
+      }
+    }
+
+    const storage = new FailingRoomIndexStorage();
+    const ids = [
+      'token000-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version1-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version2-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service } = createService({ storage, createId: () => ids.shift() || 'fallback' });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    }))!;
+    const first = await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'rollback-demo',
+      files: [textFile('index.html', '<!doctype html>first')],
+    }, claims);
+
+    storage.failRoomIndex = true;
+    await assert.rejects(() => service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'rollback-demo',
+      files: [textFile('index.html', '<!doctype html>second')],
+    }, claims), /room index unavailable/);
+
+    assert.equal((await service.readManifest('rollback-demo'))?.versionId, first.versionId);
+    assert.match((await service.readFile('rollback-demo', ''))!.body.toString('utf8'), /first/);
+    assert.deepEqual((await service.listSitesForRoom('room-1'))[0].versions.map(version => version.versionId), [first.versionId]);
+    assert.equal([...storage.objects.keys()].some(key => key.includes('version2')), false);
   });
 
   it('prepares direct object-storage uploads up to 100 MB and finalizes only verified objects', async () => {
@@ -357,7 +448,7 @@ describe('PublishedStaticSiteService', () => {
 
     const result = await service.deleteSitesForRoom('room-1');
 
-    assert.deepEqual(result, { slugCount: 1, objectCount: 6 });
+    assert.deepEqual(result, { slugCount: 1, objectCount: 9 });
     assert.deepEqual([...storage.objects.keys()].filter(key => key.startsWith('published-sites/')), []);
     assert.equal(storage.deletedObjectKeys.includes('published-sites/by-room/cm9vbS0x/index.json'), true);
   });
@@ -398,13 +489,13 @@ describe('PublishedStaticSiteService', () => {
 
     assert.equal(result.url, 'https://room.example/p/roomtalk-demo/');
     assert.equal(result.slug, 'roomtalk-demo');
-    assert.equal(result.objectCount, 3);
+    assert.equal(result.objectCount, 6);
     assert.equal(await service.readManifest('roomtalk-demo'), null);
     assert.equal([...storage.objects.keys()].some(key => key.startsWith('published-sites/roomtalk-demo/')), false);
     assert.deepEqual((await service.listSitesForRoom('room-1')).map(site => site.slug), ['keep-demo']);
 
     const finalResult = await service.unpublish({ slug: 'keep-demo' }, claims);
-    assert.equal(finalResult.objectCount, 3);
+    assert.equal(finalResult.objectCount, 5);
     assert.deepEqual([...storage.objects.keys()].filter(key => key.startsWith('published-sites/')), []);
   });
 

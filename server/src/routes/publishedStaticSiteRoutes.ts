@@ -167,17 +167,17 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
     }
   });
 
-  app.get([
-    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug`,
-    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/*`,
-  ], async (req: Request, res: Response) => {
-    const slug = normalizePublishedSiteSlug(req.params.slug, '');
-    if (!slug || slug !== req.params.slug) {
-      return res.status(404).send('Published site not found');
-    }
-
+  const servePublishedFile = async (
+    req: Request,
+    res: Response,
+    slug: string,
+    requestPath: string,
+    versionId?: string
+  ) => {
     try {
-      const result = await service.readFile(slug, publishedPathFromRequest(req));
+      const result = versionId
+        ? await service.readFile(slug, requestPath, versionId)
+        : await service.readFile(slug, requestPath);
       if (!result) {
         return res.status(404).send('Published site not found');
       }
@@ -194,13 +194,39 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
       res.removeHeader('Access-Control-Allow-Credentials');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
-      res.setHeader('Cache-Control', result.file.mimeType.startsWith('text/html')
-        ? 'public, max-age=0, must-revalidate'
-        : 'public, max-age=60');
+      res.setHeader('Cache-Control', versionId
+        ? 'public, max-age=31536000, immutable'
+        : (result.file.mimeType.startsWith('text/html')
+          ? 'public, max-age=0, must-revalidate'
+          : 'public, max-age=60'));
       return res.send(result.body);
     } catch (error) {
-      logger.error('Failed to serve published static site', { error, slug, path: req.path });
+      logger.error('Failed to serve published static site', { error, slug, versionId, path: req.path });
       return res.status(500).send('Failed to serve published site');
     }
+  };
+
+  app.get([
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/__versions/:versionId`,
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/__versions/:versionId/*`,
+  ], async (req: Request, res: Response) => {
+    const slug = normalizePublishedSiteSlug(req.params.slug, '');
+    const versionId = req.params.versionId;
+    if (!slug || slug !== req.params.slug || !versionId) {
+      return res.status(404).send('Published site not found');
+    }
+    return servePublishedFile(req, res, slug, publishedPathFromRequest(req), versionId);
+  });
+
+  app.get([
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug`,
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/*`,
+  ], async (req: Request, res: Response) => {
+    const slug = normalizePublishedSiteSlug(req.params.slug, '');
+    if (!slug || slug !== req.params.slug) {
+      return res.status(404).send('Published site not found');
+    }
+
+    return servePublishedFile(req, res, slug, publishedPathFromRequest(req));
   });
 }

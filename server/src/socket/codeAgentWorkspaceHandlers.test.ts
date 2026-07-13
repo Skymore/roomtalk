@@ -438,6 +438,15 @@ describe('code-agent workspace socket handlers', () => {
           totalBytes: 128,
           createdAt: '2026-06-30T12:00:00.000Z',
           updatedAt: '2026-06-30T12:00:00.000Z',
+          versions: [{
+            versionId: '20260630T120000Z_aaaaaaaa',
+            url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260630T120000Z_aaaaaaaa/',
+            entry: 'index.html',
+            fileCount: 1,
+            totalBytes: 128,
+            publishedAt: '2026-06-30T12:00:00.000Z',
+            isCurrent: true,
+          }],
         },
       ],
       messages: [
@@ -486,6 +495,15 @@ describe('code-agent workspace socket handlers', () => {
         totalBytes: 128,
         createdAt: '2026-06-30T12:00:00.000Z',
         updatedAt: '2026-06-30T12:00:00.000Z',
+        versions: [{
+          versionId: '20260630T120000Z_aaaaaaaa',
+          url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260630T120000Z_aaaaaaaa/',
+          entry: 'index.html',
+          fileCount: 1,
+          totalBytes: 128,
+          publishedAt: '2026-06-30T12:00:00.000Z',
+          isCurrent: true,
+        }],
       },
     ]);
     assert.deepEqual(response.snapshot.commands, [{ id: 'tool-1', name: 'Read', status: 'succeeded', exitCode: undefined, preview: 'ok' }]);

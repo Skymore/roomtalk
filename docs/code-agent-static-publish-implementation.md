@@ -56,6 +56,9 @@ Object layout:
 published-sites/
   <slug>/
     manifest.json
+    versions.json
+    version-manifests/
+      <versionId>.json
     versions/
       <versionId>/
         index.html
@@ -63,7 +66,7 @@ published-sites/
         assets/style.css
 ```
 
-The room index lives at `published-sites/by-room/<base64url-room-id>/index.json`; it tracks the slugs and version object keys owned by a room so unpublish and room deletion can clean them without listing the bucket.
+`manifest.json` is the mutable pointer used by the stable site URL. Every publish also writes an immutable manifest under `version-manifests/`; `versions.json` records the ordered version history. The room index lives at `published-sites/by-room/<base64url-room-id>/index.json`; it tracks the slugs and all version object keys owned by a room so unpublish and room deletion can clean them without listing the bucket. Existing sites without a version index are treated as a one-version history and are upgraded on their next publish.
 
 Manifest shape:
 
@@ -126,6 +129,12 @@ Routes:
   - No path means the manifest entry file.
   - Directory paths fall back to `<dir>/index.html`, then manifest entry for SPA-style routes.
   - The route confirms the owning room still exists before serving, emits `nosniff`/no-referrer/cache headers, and allows credentialless CORS because the built-in browser loads public sites in an iframe with an opaque origin.
+
+- `GET /p/:slug/__versions/:versionId/*`
+  - Reads the immutable manifest for one published version.
+  - Relative HTML/CSS/JS assets remain inside the same version URL, so an old preview never mixes files from the latest publish.
+
+Workspace Artifacts include the ordered version list. Selecting a version changes only that user's preview URL; the stable `/p/:slug/` URL continues to follow the latest successful publish.
 
 ### 3. Media Object Storage
 

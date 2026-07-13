@@ -27,7 +27,10 @@ const createTestServer = async (): Promise<TestServer> => {
     logger: new Logger('PublishedStaticSiteRoutesTest'),
     tokenSecret: 'static-publish-secret',
     nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
-    createId: () => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    createId: (() => {
+      let sequence = 0;
+      return () => `${String(++sequence).padStart(8, '0')}-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    })(),
   });
   registerPublishedStaticSiteRoutes(app, {
     service,
@@ -142,7 +145,7 @@ describe('published static site routes', () => {
     const unpublished = await unpublishResponse.json() as { url: string; slug: string; objectCount: number };
     assert.equal(unpublished.url, `${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(unpublished.slug, 'roomtalk-demo');
-    assert.equal(unpublished.objectCount, 4);
+    assert.equal(unpublished.objectCount, 6);
 
     const unpublishedResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(unpublishedResponse.status, 404);
@@ -175,6 +178,46 @@ describe('published static site routes', () => {
       body: JSON.stringify({}),
     });
     assert.equal(staleAccess.status, 409);
+  });
+
+  it('serves immutable version URLs while the stable URL follows the latest publish', async () => {
+    const token = server.service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+    });
+    const publish = async (content: string) => {
+      const response = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          roomId: 'room-1',
+          turnId: 'turn-1',
+          slug: 'versioned-demo',
+          files: [textFile('index.html', `<!doctype html>${content}`)],
+        }),
+      });
+      assert.equal(response.status, 201);
+      return await response.json() as { versionId: string };
+    };
+
+    const first = await publish('first');
+    const second = await publish('second');
+    assert.notEqual(first.versionId, second.versionId);
+
+    const stable = await fetch(`${server.baseUrl}/p/versioned-demo/`);
+    assert.match(await stable.text(), /second/);
+    const firstVersion = await fetch(`${server.baseUrl}/p/versioned-demo/__versions/${first.versionId}/`);
+    assert.equal(firstVersion.status, 200);
+    assert.equal(firstVersion.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.match(await firstVersion.text(), /first/);
+    const secondVersion = await fetch(`${server.baseUrl}/p/versioned-demo/__versions/${second.versionId}/`);
+    assert.equal(secondVersion.status, 200);
+    assert.match(await secondVersion.text(), /second/);
   });
 
   it('prepares direct uploads and finalizes after object storage receives the files', async () => {

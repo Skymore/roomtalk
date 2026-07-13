@@ -37,6 +37,17 @@ export interface CodeAgentWorkspaceArtifact {
   createdAt: string;
   updatedAt: string;
   title?: string;
+  versions: CodeAgentWorkspaceArtifactVersion[];
+}
+
+export interface CodeAgentWorkspaceArtifactVersion {
+  versionId: string;
+  url: string;
+  entry: string;
+  fileCount: number;
+  totalBytes: number;
+  publishedAt: string;
+  isCurrent: boolean;
 }
 
 export interface CodeAgentWorkspaceDiff {

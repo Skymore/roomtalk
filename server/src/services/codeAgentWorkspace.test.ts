@@ -155,6 +155,15 @@ describe('code-agent workspace snapshots', () => {
         totalBytes: 128,
         createdAt: '2026-06-30T12:00:00.000Z',
         updatedAt: '2026-06-30T12:00:00.000Z',
+        versions: [{
+          versionId: '20260630T120000Z_aaaaaaaa',
+          url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260630T120000Z_aaaaaaaa/',
+          entry: 'index.html',
+          fileCount: 1,
+          totalBytes: 128,
+          publishedAt: '2026-06-30T12:00:00.000Z',
+          isCurrent: true,
+        }],
       }]
     );
 
@@ -168,6 +177,15 @@ describe('code-agent workspace snapshots', () => {
       totalBytes: 128,
       createdAt: '2026-06-30T12:00:00.000Z',
       updatedAt: '2026-06-30T12:00:00.000Z',
+      versions: [{
+        versionId: '20260630T120000Z_aaaaaaaa',
+        url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260630T120000Z_aaaaaaaa/',
+        entry: 'index.html',
+        fileCount: 1,
+        totalBytes: 128,
+        publishedAt: '2026-06-30T12:00:00.000Z',
+        isCurrent: true,
+      }],
     }]);
   });
 

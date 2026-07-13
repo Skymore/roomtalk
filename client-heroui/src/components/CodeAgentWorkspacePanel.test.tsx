@@ -25,6 +25,7 @@ vi.mock('../utils/socket', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
+    i18n: { language: 'en' },
   }),
 }));
 
@@ -407,7 +408,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentOverview')).toBeTruthy();
   });
 
-  it('renders command history from refreshed workspace snapshots', () => {
+  it('renders command history and switches published artifact versions', async () => {
     render(
       <CodeAgentWorkspacePanel
         room={room}
@@ -437,6 +438,23 @@ describe('CodeAgentWorkspacePanel', () => {
               totalBytes: 128,
               createdAt: '2026-06-30T12:00:00.000Z',
               updatedAt: '2026-06-30T12:00:00.000Z',
+              versions: [{
+                versionId: '20260630T120000Z_aaaaaaaa',
+                url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260630T120000Z_aaaaaaaa/',
+                entry: 'index.html',
+                fileCount: 1,
+                totalBytes: 128,
+                publishedAt: '2026-06-30T12:00:00.000Z',
+                isCurrent: true,
+              }, {
+                versionId: '20260629T120000Z_bbbbbbbb',
+                url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260629T120000Z_bbbbbbbb/',
+                entry: 'index.html',
+                fileCount: 1,
+                totalBytes: 120,
+                publishedAt: '2026-06-29T12:00:00.000Z',
+                isCurrent: false,
+              }],
             },
           ],
           changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
@@ -469,14 +487,17 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     const link = screen.getByText('RoomTalk Demo').closest('a');
     expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/');
+    fireEvent.click(screen.getByLabelText('codeAgentArtifactVersions'));
+    fireEvent.click(await screen.findByText('bbbbbbbb'));
+    expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/__versions/20260629T120000Z_bbbbbbbb/');
     fireEvent.click(link!);
     expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
       isOpen: true,
-      activeSurfaceId: 'browser:url:https%3A%2F%2Froom.ruit.me%2Fp%2Froomtalk-demo%2F',
+      activeSurfaceId: 'browser:url:https%3A%2F%2Froom.ruit.me%2Fp%2Froomtalk-demo%2F__versions%2F20260629T120000Z_bbbbbbbb%2F',
       surfaces: [{
         kind: 'preview',
         relativePath: null,
-        url: 'https://room.ruit.me/p/roomtalk-demo/',
+        url: 'https://room.ruit.me/p/roomtalk-demo/__versions/20260629T120000Z_bbbbbbbb/',
       }],
     });
   });

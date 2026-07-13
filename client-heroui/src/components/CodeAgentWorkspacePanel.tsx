@@ -78,6 +78,17 @@ const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = 
 const MOBILE_WORKSPACE_QUERY = '(max-width: 1023px)';
 const SHOW_AGENT_ACTIVITY_AND_THREADS = false;
 
+const formatArtifactVersionDate = (value: string, locale: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+};
+
 type ScopedDiffFileSummaries = {
   scopeKey: string;
   summaries: readonly CodeAgentWorkspaceDiffFileSummary[];
@@ -246,7 +257,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   onAddReviewComment,
   onRemoveReviewComment,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const resolvedTheme = useResolvedTheme();
   const isMobileWorkspaceLayout = useMobileWorkspaceLayout();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
@@ -258,6 +269,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const [selectedCodexThreadId, setSelectedCodexThreadId] = React.useState<string | null>(null);
   const [selectedCodexThread, setSelectedCodexThread] = React.useState<unknown | null>(null);
   const [isLoadingSelectedCodexThread, setIsLoadingSelectedCodexThread] = React.useState(false);
+  const [selectedArtifactVersionIds, setSelectedArtifactVersionIds] = React.useState<Record<string, string>>({});
   const diffPanelSelection = useCodeAgentDiffPanelSelection(room.id);
   const [diffFileSummaries, setDiffFileSummaries] = React.useState<ScopedDiffFileSummaries>(() => ({
     scopeKey: '',
@@ -699,29 +711,94 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentNoArtifacts')}</p>
               ) : (
                 <div className="space-y-1.5">
-                  {publishedArtifacts.map((artifact) => (
-                    <a
-                      key={artifact.slug}
-                      href={artifact.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => {
-                        const handled = onOpenWorkspaceArtifact
-                          ? onOpenWorkspaceArtifact(artifact.url)
-                          : openCodeAgentRightPanelPreviewUrl(room.id, artifact.url);
-                        if (handled) {
-                          event.preventDefault();
-                        }
-                      }}
-                      className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[#ead6cc] bg-[#fff7f2] px-2.5 py-2 text-xs text-[#4d4c48] transition-colors hover:border-[#d66a43] hover:text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#e8e6dc] dark:hover:border-[#ff9b78] dark:hover:text-[#ffb69e]"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <Icon icon="lucide:globe-2" className="h-3.5 w-3.5 flex-shrink-0 text-[#c96442] dark:text-[#ff9b78]" />
-                        <span className="truncate font-semibold">{artifact.title || artifact.slug}</span>
-                      </span>
-                      <Icon icon="lucide:external-link" className="h-3.5 w-3.5 flex-shrink-0" />
-                    </a>
-                  ))}
+                  {publishedArtifacts.map((artifact) => {
+                    const artifactVersions = artifact.versions?.length > 0
+                      ? artifact.versions
+                      : [{
+                        versionId: artifact.versionId,
+                        url: artifact.url,
+                        entry: artifact.entry,
+                        fileCount: artifact.fileCount,
+                        totalBytes: artifact.totalBytes,
+                        publishedAt: artifact.updatedAt,
+                        isCurrent: true,
+                      }];
+                    const selectedVersionId = selectedArtifactVersionIds[artifact.slug] || artifact.versionId;
+                    const selectedVersion = artifactVersions.find(version => version.versionId === selectedVersionId)
+                      || artifactVersions.find(version => version.isCurrent)
+                      || artifactVersions[0];
+                    const previewUrl = selectedVersion?.isCurrent ? artifact.url : (selectedVersion?.url || artifact.url);
+                    const versionLabel = selectedVersion?.isCurrent
+                      ? t('codeAgentArtifactLatest')
+                      : formatArtifactVersionDate(selectedVersion?.publishedAt || artifact.updatedAt, i18n.language);
+                    return (
+                      <div
+                        key={artifact.slug}
+                        className="flex min-w-0 items-center gap-1 rounded-lg border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-1.5 text-xs text-[#4d4c48] transition-colors hover:border-[#d66a43] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#e8e6dc] dark:hover:border-[#ff9b78]"
+                      >
+                        <a
+                          href={previewUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => {
+                            const handled = onOpenWorkspaceArtifact
+                              ? onOpenWorkspaceArtifact(previewUrl)
+                              : openCodeAgentRightPanelPreviewUrl(room.id, previewUrl);
+                            if (handled) event.preventDefault();
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 hover:text-[#9f462c] dark:hover:text-[#ffb69e]"
+                        >
+                          <Icon icon="lucide:globe-2" className="h-3.5 w-3.5 flex-shrink-0 text-[#c96442] dark:text-[#ff9b78]" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-semibold">{artifact.title || artifact.slug}</span>
+                            <span className="block truncate text-[10px] text-[#77756e] dark:text-[#aaa79e]">{versionLabel}</span>
+                          </span>
+                          <Icon icon="lucide:external-link" className="h-3.5 w-3.5 flex-shrink-0" />
+                        </a>
+                        <Dropdown placement="bottom-end">
+                          <DropdownTrigger>
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              variant="light"
+                              title={t('codeAgentArtifactVersions')}
+                              aria-label={t('codeAgentArtifactVersions')}
+                              className="h-7 min-w-7 text-[#77756e] dark:text-[#aaa79e]"
+                            >
+                              <Icon icon="lucide:history" className="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownTrigger>
+                          <DropdownMenu
+                            aria-label={t('codeAgentArtifactVersions')}
+                            selectionMode="single"
+                            selectedKeys={new Set([selectedVersion?.versionId || artifact.versionId])}
+                            onAction={(key) => setSelectedArtifactVersionIds(current => {
+                              const versionId = String(key);
+                              if (artifactVersions.find(version => version.versionId === versionId)?.isCurrent) {
+                                const next = { ...current };
+                                delete next[artifact.slug];
+                                return next;
+                              }
+                              return { ...current, [artifact.slug]: versionId };
+                            })}
+                          >
+                            {artifactVersions.map(version => (
+                              <DropdownItem key={version.versionId} textValue={version.versionId}>
+                                <span className="flex min-w-0 items-center justify-between gap-3">
+                                  <span className="truncate">
+                                    {version.isCurrent
+                                      ? t('codeAgentArtifactLatest')
+                                      : formatArtifactVersionDate(version.publishedAt, i18n.language)}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-default-400">{version.versionId.slice(-8)}</span>
+                                </span>
+                              </DropdownItem>
+                            ))}
+                          </DropdownMenu>
+                        </Dropdown>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
