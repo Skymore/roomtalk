@@ -66,7 +66,7 @@ published-sites/
         assets/style.css
 ```
 
-`manifest.json` is the mutable pointer used by the stable site URL. Every publish also writes an immutable manifest under `version-manifests/`; `versions.json` records the ordered version history. The room index lives at `published-sites/by-room/<base64url-room-id>/index.json`; it tracks the slugs and all version object keys owned by a room so unpublish and room deletion can clean them without listing the bucket. Existing sites without a version index are treated as a one-version history and are upgraded on their next publish.
+`manifest.json` is the mutable pointer used by the stable site URL. Every publish also writes an immutable manifest under `version-manifests/`; `versions.json` records the ordered version history. The room index lives at `published-sites/by-room/<base64url-room-id>/index.json`; it tracks the slugs and all version object keys owned by a room so unpublish and room deletion can clean them without listing the bucket. Existing sites without a version index are rebuilt from their retained room-index object keys on the first version-history read, without uploading file bodies again.
 
 Manifest shape:
 
@@ -108,6 +108,10 @@ Routes:
 - `POST /api/code-agent/publish-static-site/finalize`
   - Accepts the signed upload token returned by `prepare`.
   - Verifies every object exists in Tigris with the declared byte size before atomically publishing the new manifest.
+
+- `POST /api/code-agent/publish-static-site/activate`
+  - Accepts `{ slug, versionId }` with the same active-turn write authorization as publishing.
+  - Points the stable site URL at an immutable retained version without copying its files.
 
 - `POST /api/code-agent/publish-static-site`
   - Protected by `Authorization: Bearer <scoped token>`.
@@ -157,10 +161,12 @@ The RoomTalk CLI exposes the capability symmetrically:
 
 ```bash
 roomtalk site publish --root dist --entry index.html --slug roomtalk-demo
+roomtalk site versions --slug roomtalk-demo --json
+roomtalk site activate --slug roomtalk-demo --version 20260630T120000Z_abcd1234
 roomtalk site unpublish --slug roomtalk-demo
 ```
 
-`roomtalk publish-static-site` remains as a compatibility alias for `roomtalk site publish`.
+`--slug` is required for publishing. Reusing the same slug creates a new version of that stable site; choosing another slug creates a separate site. `roomtalk publish-static-site` remains as a compatibility alias for `roomtalk site publish` and follows the same required-slug rule.
 
 ### 5. RoomTalk CLI
 

@@ -88,6 +88,7 @@ export interface PublishedStaticSiteManifest {
   totalBytes: number;
   createdAt: string;
   updatedAt: string;
+  activatedAt?: string;
   files: PublishedStaticSiteFileManifest[];
 }
 
@@ -116,6 +117,18 @@ export interface PublishedStaticSiteUnpublishResult {
   url: string;
   slug: string;
   objectCount: number;
+}
+
+export interface PublishedStaticSiteActivateInput {
+  slug: string;
+  versionId: string;
+}
+
+export interface PublishedStaticSiteActivateResult {
+  url: string;
+  versionUrl: string;
+  slug: string;
+  versionId: string;
 }
 
 export interface PublishedStaticSiteArtifact {
@@ -389,6 +402,14 @@ const versionSummaryFromManifest = (manifest: PublishedStaticSiteManifest): Publ
   totalBytes: manifest.totalBytes,
   publishedAt: manifest.updatedAt,
 });
+
+const publishedAtFromVersionId = (versionId: string, fallback: string) => {
+  const match = versionId.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z_/);
+  if (!match) return fallback;
+  const [, year, month, day, hour, minute, second] = match;
+  const parsed = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+};
 
 const parseVersionIndex = (
   value: Buffer,
@@ -901,6 +922,77 @@ export class PublishedStaticSiteService {
     };
   }
 
+  async activateVersion(
+    input: PublishedStaticSiteActivateInput,
+    claims: PublishedStaticSiteTokenClaims,
+    requestBaseUrl?: string
+  ): Promise<PublishedStaticSiteActivateResult> {
+    if (!this.isConfigured()) {
+      throw new PublishedStaticSiteError('Static site management is not configured', 503);
+    }
+    if (!codeAgentModeAllowsStaticPublish(claims.mode)) {
+      throw new PublishedStaticSiteError('Static site version activation requires a writable agent mode', 403);
+    }
+    const slug = normalizePublishedSiteSlug(input.slug, '');
+    if (!slug || slug !== input.slug) {
+      throw new PublishedStaticSiteError('A valid slug is required');
+    }
+    if (typeof input.versionId !== 'string' || !isPublishedSiteVersionId(input.versionId)) {
+      throw new PublishedStaticSiteError('A valid versionId is required');
+    }
+    const currentManifest = await this.readManifest(slug);
+    if (!currentManifest) {
+      throw new PublishedStaticSiteError('Published site not found', 404);
+    }
+    if (currentManifest.roomId !== claims.roomId) {
+      throw new PublishedStaticSiteError('Published site belongs to another room', 403);
+    }
+    const targetManifest = await this.readVersionManifest(slug, input.versionId);
+    if (!targetManifest || targetManifest.roomId !== claims.roomId) {
+      throw new PublishedStaticSiteError('Published site version not found', 404);
+    }
+    const previousIndex = await this.ensureVersionHistory(currentManifest);
+    if (!previousIndex) {
+      throw new PublishedStaticSiteError('Published site version history is unavailable', 503);
+    }
+    const now = new Date(this.nowMs()).toISOString();
+    const nextIndex: PublishedStaticSiteVersionIndex = {
+      ...previousIndex,
+      currentVersionId: targetManifest.versionId,
+      updatedAt: now,
+    };
+    const indexKey = versionIndexObjectKey(slug);
+    await this.writeJsonObject(indexKey, nextIndex);
+    try {
+      await this.writeJsonObject(manifestObjectKey(slug), {
+        ...targetManifest,
+        activatedAt: now,
+      });
+    } catch (error) {
+      await this.writeJsonObject(indexKey, previousIndex).catch(rollbackError => {
+        this.options.logger.error('Failed to roll back static site version index after activation failed', {
+          error: rollbackError,
+          roomId: claims.roomId,
+          slug,
+          versionId: input.versionId,
+        });
+      });
+      throw error;
+    }
+    this.options.logger.info('Activated published static site version', {
+      roomId: claims.roomId,
+      turnId: claims.turnId,
+      slug,
+      versionId: targetManifest.versionId,
+    });
+    return {
+      url: this.publicUrlForSlug(slug, requestBaseUrl),
+      versionUrl: this.publicUrlForVersion(slug, targetManifest.versionId, requestBaseUrl),
+      slug,
+      versionId: targetManifest.versionId,
+    };
+  }
+
   async readManifest(slug: string): Promise<PublishedStaticSiteManifest | null> {
     if (!this.options.mediaObjectStorage.getMediaObject) {
       return null;
@@ -939,7 +1031,13 @@ export class PublishedStaticSiteService {
         return manifest?.slug === slug && manifest.versionId === versionId ? manifest : null;
       }
       const current = await this.readManifest(slug);
-      return current?.versionId === versionId ? current : null;
+      if (!current) return null;
+      if (current.versionId === versionId) return current;
+      await this.ensureVersionHistory(current);
+      const migratedHead = await this.options.mediaObjectStorage.headObject({ objectKey });
+      if (!migratedHead.exists) return null;
+      const migrated = parseManifest((await this.options.mediaObjectStorage.getMediaObject(objectKey)).body);
+      return migrated?.slug === slug && migrated.versionId === versionId ? migrated : null;
     } catch (error) {
       this.options.logger.warn('Failed to read published static site version manifest', { error, slug, versionId });
       return null;
@@ -954,7 +1052,7 @@ export class PublishedStaticSiteService {
 
     const manifests = (await Promise.all(index.slugs.map(slug => this.readManifest(slug))))
       .filter((manifest): manifest is PublishedStaticSiteManifest => Boolean(manifest && manifest.roomId === roomId))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      .sort((left, right) => (right.activatedAt || right.updatedAt).localeCompare(left.activatedAt || left.updatedAt));
     return await Promise.all(manifests.map(async manifest => ({
       slug: manifest.slug,
       url: this.publicUrlForSlug(manifest.slug, requestBaseUrl),
@@ -963,7 +1061,7 @@ export class PublishedStaticSiteService {
       fileCount: manifest.fileCount,
       totalBytes: manifest.totalBytes,
       createdAt: manifest.createdAt,
-      updatedAt: manifest.updatedAt,
+      updatedAt: manifest.activatedAt || manifest.updatedAt,
       ...(manifest.title ? { title: manifest.title } : {}),
       versions: await this.listVersionsForManifest(manifest, requestBaseUrl),
     })));
@@ -1100,7 +1198,9 @@ export class PublishedStaticSiteService {
   ) {
     const metadataKeys = new Set<string>();
     const rollbackDeleteKeys = new Set<string>();
-    const existingIndex = await this.readVersionIndex(manifest.slug, manifest.roomId);
+    const existingIndex = existingManifest
+      ? await this.ensureVersionHistory(existingManifest)
+      : await this.readVersionIndex(manifest.slug, manifest.roomId);
     const versionsById = new Map<string, PublishedStaticSiteVersionSummary>();
     for (const version of existingIndex?.versions || []) {
       versionsById.set(version.versionId, version);
@@ -1163,7 +1263,7 @@ export class PublishedStaticSiteService {
     manifest: PublishedStaticSiteManifest,
     requestBaseUrl?: string
   ): Promise<PublishedStaticSiteVersion[]> {
-    const index = await this.readVersionIndex(manifest.slug, manifest.roomId);
+    const index = await this.ensureVersionHistory(manifest);
     const versionsById = new Map<string, PublishedStaticSiteVersionSummary>();
     for (const version of index?.versions || []) {
       versionsById.set(version.versionId, version);
@@ -1176,6 +1276,124 @@ export class PublishedStaticSiteService {
         url: this.publicUrlForVersion(manifest.slug, version.versionId, requestBaseUrl),
         isCurrent: version.versionId === manifest.versionId,
       }));
+  }
+
+  private async ensureVersionHistory(
+    currentManifest: PublishedStaticSiteManifest
+  ): Promise<PublishedStaticSiteVersionIndex | null> {
+    const [existingIndex, roomIndex] = await Promise.all([
+      this.readVersionIndex(currentManifest.slug, currentManifest.roomId),
+      this.readRoomIndex(currentManifest.roomId),
+    ]);
+    const versionsById = new Map<string, PublishedStaticSiteVersionSummary>();
+    for (const version of existingIndex?.versions || []) {
+      versionsById.set(version.versionId, version);
+    }
+
+    const versionFiles = new Map<string, Array<{ path: string; objectKey: string }>>();
+    const prefix = `published-sites/${currentManifest.slug}/versions/`;
+    for (const objectKey of roomIndex?.objectKeys || []) {
+      if (!objectKey.startsWith(prefix)) continue;
+      const relative = objectKey.slice(prefix.length);
+      const separator = relative.indexOf('/');
+      if (separator <= 0) continue;
+      const versionId = relative.slice(0, separator);
+      const filePath = relative.slice(separator + 1);
+      if (!isPublishedSiteVersionId(versionId) || !normalizePublishedSitePath(filePath)) continue;
+      const files = versionFiles.get(versionId) || [];
+      files.push({ path: filePath, objectKey });
+      versionFiles.set(versionId, files);
+    }
+    if (!versionFiles.has(currentManifest.versionId)) {
+      versionFiles.set(currentManifest.versionId, currentManifest.files.map(file => ({
+        path: file.path,
+        objectKey: file.objectKey,
+      })));
+    }
+
+    let changed = !existingIndex;
+    const metadataKeys = new Set<string>();
+    for (const [versionId, indexedFiles] of versionFiles) {
+      const versionManifestKey = versionManifestObjectKey(currentManifest.slug, versionId);
+      const manifestHead = await this.options.mediaObjectStorage.headObject({ objectKey: versionManifestKey });
+      if (versionsById.has(versionId) && manifestHead.exists) {
+        metadataKeys.add(versionManifestKey);
+        continue;
+      }
+
+      let manifest: PublishedStaticSiteManifest;
+      if (versionId === currentManifest.versionId) {
+        manifest = currentManifest;
+      } else {
+        const files = (await Promise.all(indexedFiles.map(async indexedFile => {
+          const head = await this.options.mediaObjectStorage.headObject({ objectKey: indexedFile.objectKey });
+          if (!head.exists) return null;
+          const mimeType = head.mimeType || guessPublishedSiteMimeType(indexedFile.path);
+          if (!mimeType) return null;
+          return {
+            path: indexedFile.path,
+            mimeType,
+            byteSize: typeof head.byteSize === 'number' ? head.byteSize : 0,
+            objectKey: indexedFile.objectKey,
+          };
+        }))).filter((file): file is PublishedStaticSiteFileManifest => Boolean(file));
+        if (files.length === 0) continue;
+        const filePaths = new Set(files.map(file => file.path));
+        const entry = filePaths.has(currentManifest.entry)
+          ? currentManifest.entry
+          : (filePaths.has('index.html') ? 'index.html' : files.find(file => file.mimeType.startsWith('text/html'))?.path || files[0].path);
+        const publishedAt = publishedAtFromVersionId(versionId, currentManifest.createdAt);
+        manifest = {
+          schemaVersion: 1,
+          slug: currentManifest.slug,
+          roomId: currentManifest.roomId,
+          clientId: currentManifest.clientId,
+          turnId: currentManifest.turnId,
+          ...(currentManifest.title ? { title: currentManifest.title } : {}),
+          entry,
+          versionId,
+          fileCount: files.length,
+          totalBytes: files.reduce((sum, file) => sum + file.byteSize, 0),
+          createdAt: currentManifest.createdAt,
+          updatedAt: publishedAt,
+          files,
+        };
+      }
+      await this.writeJsonObject(versionManifestKey, manifest);
+      metadataKeys.add(versionManifestKey);
+      versionsById.set(versionId, versionSummaryFromManifest(manifest));
+      changed = true;
+    }
+
+    versionsById.set(currentManifest.versionId, versionSummaryFromManifest(currentManifest));
+    if (!changed && existingIndex) return existingIndex;
+
+    const versionIndex: PublishedStaticSiteVersionIndex = {
+      schemaVersion: 1,
+      slug: currentManifest.slug,
+      roomId: currentManifest.roomId,
+      currentVersionId: currentManifest.versionId,
+      versions: Array.from(versionsById.values()).sort((left, right) => right.publishedAt.localeCompare(left.publishedAt)),
+      updatedAt: new Date(this.nowMs()).toISOString(),
+    };
+    const indexKey = versionIndexObjectKey(currentManifest.slug);
+    await this.writeJsonObject(indexKey, versionIndex);
+    metadataKeys.add(indexKey);
+    try {
+      await this.recordRoomPublish(currentManifest.roomId, currentManifest.slug, Array.from(metadataKeys), new Date(this.nowMs()));
+    } catch (error) {
+      this.options.logger.warn('Version history was rebuilt but the room index metadata update failed', {
+        error,
+        roomId: currentManifest.roomId,
+        slug: currentManifest.slug,
+      });
+    }
+    this.options.logger.info('Rebuilt published static site version history', {
+      roomId: currentManifest.roomId,
+      slug: currentManifest.slug,
+      versionCount: versionIndex.versions.length,
+    });
+    return versionIndex;
   }
 
   private async readVersionIndex(slug: string, roomId: string): Promise<PublishedStaticSiteVersionIndex | null> {

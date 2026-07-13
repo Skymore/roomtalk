@@ -4,6 +4,7 @@ import { CodeAgentRoomContextService } from '../services/codeAgentRoomContext';
 import {
   CODE_AGENT_STATIC_PUBLISH_API_PATH,
   CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX,
+  PublishedStaticSiteActivateInput,
   PublishedStaticSiteError,
   PublishedStaticSiteFinalizeInput,
   PublishedStaticSitePrepareInput,
@@ -144,6 +145,24 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
     } catch (error) {
       return sendPublishError(res, error, logger, {
         endpoint: `${CODE_AGENT_STATIC_PUBLISH_API_PATH}/finalize`,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
+    }
+  });
+
+  app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/activate`, jsonParser, async (req: Request, res: Response) => {
+    const claims = await authorizePublish(req, res);
+    if (!claims) return;
+    try {
+      return res.json(await service.activateVersion(
+        req.body as PublishedStaticSiteActivateInput,
+        claims,
+        requestBaseUrl(req)
+      ));
+    } catch (error) {
+      return sendPublishError(res, error, logger, {
+        endpoint: `${CODE_AGENT_STATIC_PUBLISH_API_PATH}/activate`,
         roomId: claims.roomId,
         turnId: claims.turnId,
       });

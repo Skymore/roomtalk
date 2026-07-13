@@ -30,6 +30,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _publish_static_site(args, env)
         elif args.command == "site" and args.site_command == "list":
             result = _list_static_sites(env)
+        elif args.command == "site" and args.site_command == "versions":
+            result = _list_static_site_versions(args, env)
+        elif args.command == "site" and args.site_command == "activate":
+            _require_write_access(env)
+            result = _activate_static_site_version(args, env)
         elif args.command == "site" and args.site_command == "unpublish":
             _require_write_access(env)
             result = _unpublish_static_site(args, env)
@@ -69,12 +74,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_publish_arguments(legacy_publish)
 
-    site = subparsers.add_parser("site", help="Publish or unpublish a RoomTalk static site.")
+    site = subparsers.add_parser("site", help="Publish and manage versioned RoomTalk static sites.")
     site_subparsers = site.add_subparsers(dest="site_command", required=True)
     site_list = site_subparsers.add_parser("list", help="List static sites published by the current room.")
     site_list.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     site_publish = site_subparsers.add_parser("publish", help="Publish a static HTML/CSS/JS directory.")
     _add_publish_arguments(site_publish)
+    site_versions = site_subparsers.add_parser("versions", help="List every retained version of one published site.")
+    site_versions.add_argument("--slug", required=True, help="Stable site slug whose versions should be listed.")
+    site_versions.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    site_activate = site_subparsers.add_parser("activate", help="Point a site's stable URL at a retained version.")
+    site_activate.add_argument("--slug", required=True, help="Stable site slug to update.")
+    site_activate.add_argument("--version", required=True, help="Version ID to activate at the stable site URL.")
+    site_activate.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
@@ -107,7 +119,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def _add_publish_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--root", default=".", help="Static site directory, relative to the workspace.")
     parser.add_argument("--entry", default="index.html", help="Entry file relative to --root.")
-    parser.add_argument("--slug", default="", help="Optional URL slug.")
+    parser.add_argument(
+        "--slug",
+        required=True,
+        help="Required stable URL slug. Reuse the same slug to publish a new version of an existing site.",
+    )
     parser.add_argument("--title", default="", help="Optional display title.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
@@ -145,6 +161,28 @@ def _read_room_context_path(path: str, env: dict[str, str]) -> dict[str, Any]:
 def _list_static_sites(env: dict[str, str]) -> dict[str, Any]:
     result = _read_room_context_path("/sites", env)
     return {**result, "tool": "ListStaticSites"}
+
+
+def _list_static_site_versions(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    result = _read_room_context_path("/sites", env)
+    sites = result.get("sites")
+    if not isinstance(sites, list):
+        raise RunnerError("Published site list response was incomplete", code="invalid_site_list_response")
+    slug = str(args.slug).strip()
+    site = next((item for item in sites if isinstance(item, dict) and item.get("slug") == slug), None)
+    if not isinstance(site, dict):
+        raise RunnerError(f"Published site not found: {slug}", code="published_site_not_found")
+    versions = site.get("versions")
+    if not isinstance(versions, list):
+        raise RunnerError("Published site version history was unavailable", code="site_versions_unavailable")
+    return {
+        "success": True,
+        "tool": "ListStaticSiteVersions",
+        "slug": slug,
+        "url": site.get("url") or "",
+        "currentVersionId": site.get("versionId") or "",
+        "versions": versions,
+    }
 
 
 def _get_room_context_from_broker(socket_path: str, path: str) -> dict[str, Any]:
@@ -323,6 +361,32 @@ def _unpublish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dic
     }
 
 
+def _activate_static_site_version(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    publish_url = (env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip()
+    if not publish_url or not _has_static_publish_credentials(env):
+        raise RunnerError("Static site management is not available for this turn", code="activate_version_unavailable")
+
+    publish_token = _resolve_static_publish_token(env)
+    response = _post_static_publish_payload(
+        f"{publish_url.rstrip('/')}/activate",
+        publish_token,
+        {"slug": str(args.slug).strip(), "versionId": str(args.version).strip()},
+    )
+    slug = response.get("slug")
+    version_id = response.get("versionId")
+    url = response.get("url")
+    if not isinstance(slug, str) or not slug or not isinstance(version_id, str) or not version_id or not isinstance(url, str) or not url:
+        raise RunnerError("Static site version activation response was incomplete", code="invalid_activate_version_response")
+    return {
+        "success": True,
+        "tool": "ActivateStaticSiteVersion",
+        "url": url,
+        "versionUrl": response.get("versionUrl") or "",
+        "slug": slug,
+        "versionId": version_id,
+    }
+
+
 def _has_static_publish_credentials(env: dict[str, str]) -> bool:
     access_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
     refresh_url = (env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_URL") or "").strip()
@@ -398,6 +462,16 @@ def _print_result(result: dict[str, Any], *, json_output: bool) -> None:
             return
         if result.get("tool") == "ListStaticSites":
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        if result.get("tool") == "ListStaticSiteVersions":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        if result.get("tool") == "ActivateStaticSiteVersion":
+            print(
+                "Activated static site version: {url}\n"
+                "Slug: {slug}\n"
+                "Version: {versionId}".format(**result)
+            )
             return
         if result.get("tool") == "PublishStaticSite":
             print(

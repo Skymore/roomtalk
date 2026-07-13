@@ -144,13 +144,54 @@ describe('PublishedStaticSiteService', () => {
 
     const [artifact] = await service.listSitesForRoom('room-1');
     assert.equal(artifact.versionId, second.versionId);
-    assert.deepEqual(artifact.versions.map(version => version.versionId), [second.versionId, first.versionId]);
+    assert.deepEqual(
+      new Set(artifact.versions.map(version => version.versionId)),
+      new Set([second.versionId, first.versionId])
+    );
     assert.equal(artifact.versions[0].isCurrent, true);
     assert.equal(artifact.versions[1].isCurrent, false);
     assert.equal(artifact.versions[1].url, `https://room.example/p/versioned-demo/__versions/${first.versionId}/`);
     assert.match((await service.readFile('versioned-demo', ''))!.body.toString('utf8'), /second/);
     assert.match((await service.readFile('versioned-demo', '', first.versionId))!.body.toString('utf8'), /first/);
     assert.match((await service.readFile('versioned-demo', '', second.versionId))!.body.toString('utf8'), /second/);
+
+    const activated = await service.activateVersion({ slug: 'versioned-demo', versionId: first.versionId }, claims);
+    assert.equal(activated.url, 'https://room.example/p/versioned-demo/');
+    assert.equal(activated.versionUrl, `https://room.example/p/versioned-demo/__versions/${first.versionId}/`);
+    assert.match((await service.readFile('versioned-demo', ''))!.body.toString('utf8'), /first/);
+    const [afterActivation] = await service.listSitesForRoom('room-1');
+    assert.equal(afterActivation.versionId, first.versionId);
+    assert.equal(afterActivation.versions.find(version => version.versionId === first.versionId)?.isCurrent, true);
+  });
+
+  it('rebuilds pre-version-index history from retained room object keys', async () => {
+    const ids = [
+      'token000-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version1-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version2-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service, storage } = createService({ createId: () => ids.shift() || 'fallback' });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1', mode: 'fullAccess',
+    }))!;
+    const first = await service.publish({
+      roomId: 'room-1', turnId: 'turn-1', slug: 'legacy-demo', files: [textFile('index.html', 'first')],
+    }, claims);
+    const second = await service.publish({
+      roomId: 'room-1', turnId: 'turn-1', slug: 'legacy-demo', files: [textFile('index.html', 'second')],
+    }, claims);
+    storage.objects.delete('published-sites/legacy-demo/versions.json');
+    for (const key of [...storage.objects.keys()]) {
+      if (key.startsWith('published-sites/legacy-demo/version-manifests/')) storage.objects.delete(key);
+    }
+
+    const [artifact] = await service.listSitesForRoom('room-1');
+    assert.deepEqual(
+      new Set(artifact.versions.map(version => version.versionId)),
+      new Set([second.versionId, first.versionId])
+    );
+    assert.equal(storage.objects.has('published-sites/legacy-demo/versions.json'), true);
+    assert.match((await service.readFile('legacy-demo', '', first.versionId))!.body.toString('utf8'), /first/);
   });
 
   it('restores the previous version when the room index commit fails', async () => {

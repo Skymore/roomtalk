@@ -103,6 +103,8 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
         "site",
         "--entry",
         "index.html",
+        "--slug",
+        "codex-demo",
         "--title",
         "Codex demo",
         "--json",
@@ -125,6 +127,7 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     assert posted[1]["payload"]["roomId"] == "room-1"
     assert posted[1]["payload"]["turnId"] == "turn-1"
     assert posted[1]["payload"]["entry"] == "index.html"
+    assert posted[1]["payload"]["slug"] == "codex-demo"
     assert posted[1]["payload"]["title"] == "Codex demo"
     assert posted[1]["payload"]["files"] == [{"path": "index.html", "byteSize": 29}]
     assert posted[2]["payload"] == {"uploadToken": "upload-token"}
@@ -139,7 +142,7 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
 def test_publish_static_site_is_rejected_by_read_only_cli_access(monkeypatch, capsys):
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
 
-    assert platform_tools.main(["publish-static-site", "--json"]) == 1
+    assert platform_tools.main(["publish-static-site", "--slug", "demo", "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
 
 
@@ -161,7 +164,7 @@ def test_site_publish_command_uses_the_publish_implementation(monkeypatch, capsy
 
     monkeypatch.setattr(platform_tools, "_publish_static_site", fake_publish)
 
-    assert platform_tools.main(["site", "publish", "--root", "dist", "--json"]) == 0
+    assert platform_tools.main(["site", "publish", "--root", "dist", "--slug", "demo", "--json"]) == 0
     assert called == {"root": "dist"}
     assert json.loads(capsys.readouterr().out)["tool"] == "PublishStaticSite"
 
@@ -265,6 +268,62 @@ def test_site_list_uses_read_only_room_context_capability(monkeypatch, capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["tool"] == "ListStaticSites"
     assert output["sites"][0]["slug"] == "coffee"
+
+
+def test_site_versions_filters_one_site_from_read_only_context(monkeypatch, capsys):
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, _env: {
+        "success": True,
+        "sites": [{
+            "slug": "coffee",
+            "url": "https://room.example/p/coffee/",
+            "versionId": "version-2",
+            "versions": [
+                {"versionId": "version-2", "isCurrent": True},
+                {"versionId": "version-1", "isCurrent": False},
+            ],
+        }],
+    })
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+
+    assert platform_tools.main(["site", "versions", "--slug", "coffee", "--json"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["tool"] == "ListStaticSiteVersions"
+    assert output["currentVersionId"] == "version-2"
+    assert [version["versionId"] for version in output["versions"]] == ["version-2", "version-1"]
+
+
+def test_site_activate_uses_scoped_publish_api(monkeypatch, capsys):
+    posted: dict[str, Any] = {}
+
+    def fake_post(url: str, token: str, payload: dict[str, Any]):
+        posted.update({"url": url, "token": token, "payload": payload})
+        return {
+            "url": "https://room.example/p/coffee/",
+            "versionUrl": "https://room.example/p/coffee/__versions/version-1/",
+            "slug": "coffee",
+            "versionId": "version-1",
+        }
+
+    monkeypatch.setattr(platform_tools, "_post_static_publish_payload", fake_post)
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_URL", "https://room.example/api/code-agent/publish-static-site")
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_TOKEN", "turn-token")
+
+    assert platform_tools.main([
+        "site", "activate", "--slug", "coffee", "--version", "version-1", "--json",
+    ]) == 0
+    assert posted == {
+        "url": "https://room.example/api/code-agent/publish-static-site/activate",
+        "token": "turn-token",
+        "payload": {"slug": "coffee", "versionId": "version-1"},
+    }
+    assert json.loads(capsys.readouterr().out)["tool"] == "ActivateStaticSiteVersion"
+
+
+def test_site_publish_requires_stable_slug(capsys):
+    with pytest.raises(SystemExit) as exc:
+        platform_tools.main(["site", "publish", "--root", "dist"])
+    assert exc.value.code == 2
+    assert "--slug" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(("argv", "expected_suffix"), [

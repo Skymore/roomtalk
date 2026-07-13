@@ -362,7 +362,10 @@ def test_system_prompt_matches_the_actual_tool_set():
     )
     assert "PublishStaticSite" not in site_prompt
     assert "roomtalk site list --json" in site_prompt
-    assert "roomtalk site publish --root <dir>" in site_prompt
+    assert "roomtalk site publish --root <dir> --entry index.html --slug <slug>" in site_prompt
+    assert "reuse exactly the same slug" in site_prompt
+    assert "roomtalk site versions --slug <slug> --json" in site_prompt
+    assert "roomtalk site activate --slug <slug> --version <version-id>" in site_prompt
     assert "roomtalk site unpublish --slug <slug>" in site_prompt
 
 

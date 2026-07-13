@@ -218,6 +218,18 @@ describe('published static site routes', () => {
     const secondVersion = await fetch(`${server.baseUrl}/p/versioned-demo/__versions/${second.versionId}/`);
     assert.equal(secondVersion.status, 200);
     assert.match(await secondVersion.text(), /second/);
+
+    const activate = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/activate`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ slug: 'versioned-demo', versionId: first.versionId }),
+    });
+    assert.equal(activate.status, 200);
+    assert.equal((await activate.json() as { versionId: string }).versionId, first.versionId);
+    assert.match(await (await fetch(`${server.baseUrl}/p/versioned-demo/`)).text(), /first/);
   });
 
   it('prepares direct uploads and finalizes after object storage receives the files', async () => {

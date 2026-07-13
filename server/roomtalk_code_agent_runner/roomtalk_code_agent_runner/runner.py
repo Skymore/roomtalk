@@ -374,12 +374,12 @@ def system_prompt_for_tools(
             "Keep all work relevant to the user's request."
         )
     room_context_guidance = (
-        "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Use `roomtalk site list --json` to inspect sites published by this room. Do not load the full room history by default."
+        "\nRoomTalk is the source of truth for the room conversation. When earlier discussion is needed, use Shell to run `roomtalk room history --limit 20 --json`; use `roomtalk room search --query <text> --limit 20 --json` for older discussion. Use `roomtalk site list --json` to inspect sites published by this room, and `roomtalk site versions --slug <slug> --json` to inspect one site's retained versions. Do not load the full room history by default."
         if room_context_enabled and SHELL_TOOL in available
         else ""
     )
     static_site_guidance = (
-        "\nUse Shell to run `roomtalk site publish --root <dir> --entry index.html` for plain HTML/CSS/JS output. Use `roomtalk site unpublish --slug <slug>` to take a site offline without deleting workspace files. Do not use static publishing for Flask, Node, Python, databases, or any server-side app."
+        "\nUse Shell to run `roomtalk site publish --root <dir> --entry index.html --slug <slug>` for plain HTML/CSS/JS output. `--slug` is required: choose a short stable URL slug, then reuse exactly the same slug when publishing updates so RoomTalk creates a new version of that site; a different slug creates a separate site. Use `roomtalk site versions --slug <slug> --json` to list versions, `roomtalk site activate --slug <slug> --version <version-id>` to point the stable URL at a retained version, and `roomtalk site unpublish --slug <slug>` to take every version offline without deleting workspace files. Do not use static publishing for Flask, Node, Python, databases, or any server-side app."
         if static_site_write_enabled and SHELL_TOOL in available
         else ""
     )

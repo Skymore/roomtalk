@@ -582,11 +582,14 @@ def _prompt_with_roomtalk_tools(request: RunnerRequest, env: dict[str, str]) -> 
             "- When prior discussion is needed, run `roomtalk room history --limit 20 --json`. Do not read the full room history by default.",
             "- To find older discussion, run `roomtalk room search --query <text> --limit 20 --json`; use `roomtalk room delta --since <message-id> --json` for messages after a known point.",
             "- To inspect sites published by this room, run `roomtalk site list --json`.",
+            "- To inspect one site's retained versions, run `roomtalk site versions --slug <slug> --json`.",
         ])
     if _codex_static_publish_enabled(env):
         tool_lines.extend([
-            "- To publish a plain static site or frontend build output, run `roomtalk site publish --root <dir> --entry index.html` after creating the site directory.",
-            "- To take a site offline, run `roomtalk site unpublish --slug <slug>`. This removes the published site; it does not delete workspace files.",
+            "- To publish a plain static site or frontend build output, run `roomtalk site publish --root <dir> --entry index.html --slug <slug>` after creating the site directory.",
+            "- `--slug` is required. Choose a short stable URL slug and reuse exactly the same slug for later updates; reusing it creates a new version, while changing it creates a separate site.",
+            "- To list retained versions, run `roomtalk site versions --slug <slug> --json`. To point the stable URL at an older or newer retained version, run `roomtalk site activate --slug <slug> --version <version-id>`.",
+            "- To take a site offline, run `roomtalk site unpublish --slug <slug>`. This removes every published version; it does not delete workspace files.",
             "- Use static publishing for HTML/CSS/JS sites and frontend apps that produce static build output.",
             "- Do not use static publishing for apps that require a long-running server process, database, backend API, WebSocket server, or runtime-only framework behavior.",
         ])
