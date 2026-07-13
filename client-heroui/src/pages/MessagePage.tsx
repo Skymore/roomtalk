@@ -94,8 +94,9 @@ export const MessagePage: React.FC = () => {
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const reconnectIndicatorTimerRef = useRef<number | null>(null);
-  const appliedRoomSessionResultRef = useRef<RoomJoinResult | null>(null);
+  const appliedRoomSessionResultRef = useRef<{ roomId: string; result: RoomJoinResult } | null>(null);
   const handledUnavailableErrorRef = useRef<Error | null>(null);
+  const foregroundRoomSessionCountsRef = useRef<Map<string, number>>(new Map());
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
@@ -327,6 +328,32 @@ export const MessagePage: React.FC = () => {
     return joinedRoom;
   }, [refreshRoomPermissions]);
 
+  // Foreground joins, lifecycle resumes, and socket replacement all converge on
+  // the controller snapshot. A result object represents one acknowledged join
+  // and must update the page shell/cache window exactly once, regardless of
+  // which caller observes it first.
+  const consumeRoomSessionResult = useCallback((
+    roomId: string,
+    result: RoomJoinResult,
+    fallbackRoom?: Room | null,
+  ) => {
+    const applied = appliedRoomSessionResultRef.current;
+    if (applied?.roomId === roomId && applied.result === result) {
+      return currentRoomRef.current?.id === roomId
+        ? currentRoomRef.current
+        : result.room || fallbackRoom || null;
+    }
+
+    const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
+    if (!joinedRoom) return null;
+
+    appliedRoomSessionResultRef.current = { roomId, result };
+    handledUnavailableErrorRef.current = null;
+    reactivateCachedRoomMessageWindow(roomId);
+    setError(null);
+    return currentRoomRef.current?.id === roomId ? currentRoomRef.current : joinedRoom;
+  }, [applyRoomSessionResult]);
+
   const runActiveRoomSession = useCallback(async (options: {
     roomId: string;
     password?: string;
@@ -363,14 +390,15 @@ export const MessagePage: React.FC = () => {
       setMemberCount(null);
     }
 
+    const foregroundCounts = foregroundRoomSessionCountsRef.current;
+    foregroundCounts.set(roomId, (foregroundCounts.get(roomId) ?? 0) + 1);
     try {
       const result = await roomSessionController.selectRoom({ roomId, password, source });
       const settledSession = roomSessionController.getSnapshot();
       if (settledSession.roomId !== roomId || settledSession.phase !== "ready") return null;
 
-      const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
+      const joinedRoom = consumeRoomSessionResult(roomId, result, fallbackRoom);
       if (joinedRoom) {
-        reactivateCachedRoomMessageWindow(roomId);
         logRoomSessionDiagnostic("join-ready", {
           roomId,
           source,
@@ -380,12 +408,22 @@ export const MessagePage: React.FC = () => {
           socketId: socket.id ?? null,
           socketConnected: socket.connected,
         });
-        setError(null);
       }
       return joinedRoom;
     } catch (error) {
       if (error instanceof RoomSessionSupersededError || (error instanceof Error && error.name === "RoomSessionSupersededError")) {
         return null;
+      }
+
+      const failedSession = roomSessionController.getSnapshot();
+      if (
+        error instanceof Error
+        && failedSession.phase === "unavailable"
+        && failedSession.roomId === roomId
+        && failedSession.error === error
+      ) {
+        if (handledUnavailableErrorRef.current === error) return null;
+        handledUnavailableErrorRef.current = error;
       }
 
       const message = error instanceof Error ? error.message : translationRef.current("errorLoading");
@@ -399,8 +437,8 @@ export const MessagePage: React.FC = () => {
       });
       console.error(`Failed to ensure active room session from ${source}:`, error);
 
-      if (/room not found/i.test(message)) {
-        leaveRoom(roomId);
+      const definitiveRemoval = /room not found|room access was removed/i.test(message);
+      if (definitiveRemoval) {
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
         void invalidatePersistentRoomCache(roomId);
@@ -412,7 +450,7 @@ export const MessagePage: React.FC = () => {
             roomId: previousRoom.id,
             source: "retry",
           });
-          applyRoomSessionResult(previousRoom.id, rollbackResult, previousRoom);
+          consumeRoomSessionResult(previousRoom.id, rollbackResult, previousRoom);
         } catch (rollbackError) {
           console.error("Failed to restore the previous room after a rejected room switch:", rollbackError);
         }
@@ -424,7 +462,7 @@ export const MessagePage: React.FC = () => {
         return null;
       }
 
-      if (/room not found/i.test(message)) {
+      if (definitiveRemoval) {
         leaveRoom(roomId);
         currentRoomRef.current = null;
         setCurrentRoom(null);
@@ -439,8 +477,15 @@ export const MessagePage: React.FC = () => {
       }
 
       return null;
+    } finally {
+      const remaining = (foregroundCounts.get(roomId) ?? 1) - 1;
+      if (remaining > 0) {
+        foregroundCounts.set(roomId, remaining);
+      } else {
+        foregroundCounts.delete(roomId);
+      }
     }
-  }, [applyRoomSessionResult, clearRoomUrlParam]);
+  }, [clearRoomUrlParam, consumeRoomSessionResult]);
 
   const ensureActiveRoomSession = useCallback((options: {
     roomId: string;
@@ -468,17 +513,14 @@ export const MessagePage: React.FC = () => {
       socketConnected: socket.connected,
     });
     return roomSessionController.resume(source)
-      .then((result) => {
-        if (result) applyRoomSessionResult(activeRoom.id, result, activeRoom);
-        return result?.room || activeRoom;
-      })
+      .then((result) => result?.room || activeRoom)
       .catch((error) => {
         if (!(error instanceof RoomSessionSupersededError) && (!(error instanceof Error) || error.name !== "RoomSessionSupersededError")) {
           console.error(`Scheduled room restore failed from ${source}:`, error);
         }
         return null;
       });
-  }, [applyRoomSessionResult]);
+  }, []);
 
   // Socket replacement is recovered inside the controller, so there may be no
   // page-level caller waiting on the new join acknowledgement. Consume each new
@@ -488,22 +530,19 @@ export const MessagePage: React.FC = () => {
       roomSession.phase !== "ready"
       || !roomSession.roomId
       || !roomSession.result
-      || appliedRoomSessionResultRef.current === roomSession.result
+      || (
+        appliedRoomSessionResultRef.current?.roomId === roomSession.roomId
+        && appliedRoomSessionResultRef.current.result === roomSession.result
+      )
     ) {
       return;
     }
 
-    appliedRoomSessionResultRef.current = roomSession.result;
-    handledUnavailableErrorRef.current = null;
     const fallbackRoom = currentRoomRef.current?.id === roomSession.roomId
       ? currentRoomRef.current
       : null;
-    const joinedRoom = applyRoomSessionResult(roomSession.roomId, roomSession.result, fallbackRoom);
-    if (joinedRoom) {
-      reactivateCachedRoomMessageWindow(roomSession.roomId);
-      setError(null);
-    }
-  }, [applyRoomSessionResult, roomSession.phase, roomSession.result, roomSession.roomId]);
+    consumeRoomSessionResult(roomSession.roomId, roomSession.result, fallbackRoom);
+  }, [consumeRoomSessionResult, roomSession.phase, roomSession.result, roomSession.roomId]);
 
   // A background reconnect has no awaiting page promise either. Surface its
   // terminal failure from the same controller snapshot and clean up only when
@@ -513,6 +552,7 @@ export const MessagePage: React.FC = () => {
       roomSession.phase !== "unavailable"
       || !roomSession.roomId
       || !roomSession.error
+      || (foregroundRoomSessionCountsRef.current.get(roomSession.roomId) ?? 0) > 0
       || handledUnavailableErrorRef.current === roomSession.error
       || currentRoomRef.current?.id !== roomSession.roomId
     ) {
@@ -810,9 +850,8 @@ export const MessagePage: React.FC = () => {
       }
     };
     const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) {
-        console.log("Page restored from BFCache, refreshing active room session...");
-      }
+      if (!event.persisted) return;
+      console.log("Page restored from BFCache, refreshing active room session...");
       restoreCurrentRoom("pageshow");
     };
     const handleOnline = () => restoreCurrentRoom("online");

@@ -135,7 +135,7 @@ const roomSessionMock = vi.hoisted(() => {
       });
       void selectRoom({ roomId, source: 'socket-connect' });
     },
-    fail: (error: Error) => publish({ phase: 'unavailable', error }),
+    fail: (error: Error, source = 'socket-connect') => publish({ phase: 'unavailable', source, error }),
     reset: () => {
       operationVersion += 1;
       inFlight = null;
@@ -474,9 +474,9 @@ const renderPage = (initialEntries = ['/']) => render(
   </MemoryRouter>
 );
 
-const dispatchPageShow = () => {
+const dispatchPageShow = (persisted = true) => {
   const event = new Event('pageshow') as Event & { persisted: boolean };
-  Object.defineProperty(event, 'persisted', { value: true });
+  Object.defineProperty(event, 'persisted', { value: persisted });
   window.dispatchEvent(event);
 };
 
@@ -500,11 +500,11 @@ describe('MessagePage room session restore', () => {
         writeText: vi.fn().mockResolvedValue(undefined),
       },
     });
-    socketApiMock.joinRoom.mockResolvedValue({
+    socketApiMock.joinRoom.mockImplementation(async () => ({
       room: room(),
       permissions: permissions(),
       memberCount: 5,
-    });
+    }));
     roomSessionMock.setJoinImplementation((roomId, password) => socketApiMock.joinRoom(roomId, password));
     socketApiMock.leaveRoom.mockImplementation((roomId: string) => roomSessionMock.leaveRoom(roomId));
     socketApiMock.getRoomById.mockResolvedValue(room());
@@ -531,6 +531,7 @@ describe('MessagePage room session restore', () => {
     });
     expect((await screen.findByTestId('chat-room-view')).getAttribute('data-member-count')).toBe('5');
     expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+    expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledTimes(1);
   });
 
   it('prioritizes URL joins over stale stored rooms and passes the confirmed password', async () => {
@@ -704,6 +705,23 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
     });
+    expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores the ordinary non-BFCache pageshow fired during initial load', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    roomSessionMock.resume.mockClear();
+
+    act(() => dispatchPageShow(false));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(roomSessionMock.resume).not.toHaveBeenCalled();
   });
 
   it('routes mobile, BFCache, and online resume signals without issuing another join', async () => {
@@ -721,6 +739,7 @@ describe('MessagePage room session restore', () => {
 
     await waitFor(() => expect(roomSessionMock.resume).toHaveBeenCalledTimes(3));
     expect(socketApiMock.joinRoom).not.toHaveBeenCalled();
+    expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledTimes(1);
   });
 
   it('rejoins the current room on socket connect after transport recovery', async () => {
@@ -734,6 +753,9 @@ describe('MessagePage room session restore', () => {
 
     await waitFor(() => {
       expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
+    });
+    await waitFor(() => {
+      expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -865,6 +887,7 @@ describe('MessagePage room session restore', () => {
       expect(localStorage.getItem('roomtalk_current_room')).toBeNull();
     });
     expect(socketApiMock.leaveRoom).toHaveBeenCalledWith('room-1');
+    expect(socketApiMock.leaveRoom).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('chat-room-view')).toBeNull();
     expect(screen.getByTestId('room-list')).toBeTruthy();
     expect(await screen.findByText('errorRoomNoLongerExists')).toBeTruthy();

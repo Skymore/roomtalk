@@ -325,8 +325,7 @@ const createSocketConnection = (): Socket => {
   // Register client ID when socket connection is established
   // This associates the persistent clientId with the temporary socket.id
   socket.on('connect', () => {
-    console.log('Connected to WebSocket server, socket ID:', socket.id);
-    logRoomSessionDiagnostic('socket-connected', {
+    logRoomSessionDiagnostic('transport-connected', {
       socketId: socket.id ?? null,
       socketConnected: socket.connected,
       transport: socket.io.engine?.transport?.name ?? null,
@@ -338,7 +337,7 @@ const createSocketConnection = (): Socket => {
   // Handle connection errors
   socket.on('connect_error', (error: Error) => {
     console.error('Socket connection error:', error);
-    logRoomSessionDiagnostic('socket-connect-error', {
+    logRoomSessionDiagnostic('transport-connect-error', {
       socketId: socket.id ?? null,
       socketConnected: socket.connected,
       error: error.message,
@@ -347,8 +346,7 @@ const createSocketConnection = (): Socket => {
   
   // Handle disconnection
   socket.on('disconnect', (reason: string) => {
-    console.log('Socket disconnected:', reason);
-    logRoomSessionDiagnostic('socket-disconnected', {
+    logRoomSessionDiagnostic('transport-disconnected', {
       socketId: socket.id ?? null,
       socketConnected: socket.connected,
       reason,
@@ -356,20 +354,35 @@ const createSocketConnection = (): Socket => {
   });
 
   // Handle reconnection events
-  socket.on('reconnect', (attemptNumber: number) => {
-    console.log('Socket reconnected after', attemptNumber, 'attempts');
+  socket.io.on('reconnect', (attemptNumber: number) => {
+    logRoomSessionDiagnostic('transport-reconnected', {
+      attemptNumber,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
   });
 
-  socket.on('reconnect_attempt', (attemptNumber: number) => {
-    console.log('Socket reconnection attempt:', attemptNumber);
+  socket.io.on('reconnect_attempt', (attemptNumber: number) => {
+    logRoomSessionDiagnostic('transport-reconnect-attempt', {
+      attemptNumber,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
   });
 
-  socket.on('reconnect_error', (error: Error) => {
-    console.error('Socket reconnection error:', error);
+  socket.io.on('reconnect_error', (error: Error) => {
+    logRoomSessionDiagnostic('transport-reconnect-error', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      error: error.message,
+    });
   });
 
-  socket.on('reconnect_failed', () => {
-    console.error('Socket reconnection failed');
+  socket.io.on('reconnect_failed', () => {
+    logRoomSessionDiagnostic('transport-reconnect-failed', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
   });
 
   // Handle room member changes (join/leave events)

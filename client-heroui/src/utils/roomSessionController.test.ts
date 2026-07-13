@@ -134,6 +134,42 @@ describe('RoomSessionController', () => {
     });
   });
 
+  it('coalesces lifecycle resumes into the initial disconnected storage restore', async () => {
+    const joining = controller.selectRoom({ roomId: 'room-1', source: 'storage' });
+    const pageShown = controller.resume('pageshow');
+    const visible = controller.resume('visibility');
+
+    expect(pageShown).toBe(joining);
+    expect(visible).toBe(joining);
+    expect(transport.connectCalls).toBe(1);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'connecting',
+      roomId: 'room-1',
+      source: 'storage',
+      sessionEpoch: 1,
+    });
+
+    transport.establish('socket-1');
+    await flushPromises();
+    expect(transport.registerCallbacks).toHaveLength(1);
+    transport.registerCallbacks[0]({ success: true });
+    await flushPromises();
+    expect(transport.joins).toHaveLength(1);
+
+    transport.joins[0].callback({ success: true, room: room('room-1') });
+    await expect(Promise.all([joining, pageShown, visible])).resolves.toHaveLength(3);
+    expect(transport.registerCallbacks).toHaveLength(1);
+    expect(transport.joins).toHaveLength(1);
+    expect(transport.leaves).toHaveLength(0);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      roomId: 'room-1',
+      source: 'storage',
+      sessionEpoch: 1,
+      resyncRevision: 1,
+    });
+  });
+
   it('restarts registration and join on a new socket after disconnecting before register ack', async () => {
     transport.establish('socket-1');
     const joining = controller.selectRoom({ roomId: 'room-1' });
@@ -189,6 +225,54 @@ describe('RoomSessionController', () => {
       phase: 'ready',
       socketId: 'socket-2',
       sessionEpoch: 2,
+    });
+  });
+
+  it('keeps the active registration drive alive when a same-room resume arrives before its ack', async () => {
+    transport.establish('socket-1');
+    const joining = controller.selectRoom({ roomId: 'room-1', source: 'storage' });
+    await flushPromises();
+    expect(transport.registerCallbacks).toHaveLength(1);
+
+    const resumed = controller.resume('pageshow');
+    expect(resumed).toBe(joining);
+
+    transport.registerCallbacks[0]({ success: true });
+    await flushPromises();
+    expect(transport.registerCallbacks).toHaveLength(1);
+    expect(transport.joins).toHaveLength(1);
+
+    transport.joins[0].callback({ success: true, room: room('room-1') });
+    await expect(Promise.all([joining, resumed])).resolves.toHaveLength(2);
+    expect(transport.leaves).toHaveLength(0);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      roomId: 'room-1',
+      sessionEpoch: 1,
+      resyncRevision: 1,
+    });
+  });
+
+  it('accepts a pending join ack after a same-room resume without leaving the room', async () => {
+    transport.establish('socket-1');
+    const joining = controller.selectRoom({ roomId: 'room-1', source: 'storage' });
+    await flushPromises();
+    transport.registerCallbacks[0]({ success: true });
+    await flushPromises();
+    expect(transport.joins).toHaveLength(1);
+
+    const resumed = controller.resume('visibility');
+    expect(resumed).toBe(joining);
+
+    transport.joins[0].callback({ success: true, room: room('room-1') });
+    await expect(Promise.all([joining, resumed])).resolves.toHaveLength(2);
+    expect(transport.joins).toHaveLength(1);
+    expect(transport.leaves).toHaveLength(0);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      roomId: 'room-1',
+      sessionEpoch: 1,
+      resyncRevision: 1,
     });
   });
 

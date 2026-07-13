@@ -7,6 +7,7 @@ type AckResponse = Record<string, unknown>;
 
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
+  const managerHandlers = new Map<string, Set<(...args: any[]) => void>>();
   const ackResponses = new Map<string, AckResponse>();
   let nextSocketId = 1;
   function defaultEmit(event: string, _payload?: unknown, callback?: (response: AckResponse) => void) {
@@ -20,7 +21,16 @@ const socketMock = vi.hoisted(() => {
     id: 'socket-1',
     connected: true,
     active: true,
+    io: {
+      engine: { transport: { name: 'websocket' } },
+      on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+        const eventHandlers = managerHandlers.get(event) || new Set();
+        eventHandlers.add(handler);
+        managerHandlers.set(event, eventHandlers);
+      }),
+    },
     handlers,
+    managerHandlers,
     ackResponses,
     on: vi.fn((event: string, handler: (...args: any[]) => void) => {
       const eventHandlers = handlers.get(event) || new Set();
@@ -160,6 +170,17 @@ describe('socket message acknowledgement helpers', () => {
     localStorage.removeItem('clientAuthToken');
     localStorage.removeItem('roomtalk_username');
     resetRoomJoinStateForTests();
+  });
+
+  it('listens for reconnect lifecycle events on the Socket.IO manager', () => {
+    expect(Array.from(socketMock.managerHandlers.keys())).toEqual(expect.arrayContaining([
+      'reconnect',
+      'reconnect_attempt',
+      'reconnect_error',
+      'reconnect_failed',
+    ]));
+    expect(socketMock.handlers.has('reconnect')).toBe(false);
+    expect(socketMock.handlers.has('reconnect_attempt')).toBe(false);
   });
 
   it('returns the saved message from send_message acknowledgements', async () => {

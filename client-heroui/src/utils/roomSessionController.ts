@@ -97,7 +97,6 @@ type Completion = {
 };
 
 type PendingAck = {
-  socketId: string;
   cancel: (error: Error) => void;
 };
 
@@ -269,12 +268,16 @@ export class RoomSessionController {
         attempt: 0,
       }, 'room-selected');
     } else if (this.desiredRoom) {
-      this.desiredRoom = {
-        ...this.desiredRoom,
-        password: input.password ?? this.desiredRoom.password,
-        source,
-      };
-      this.setSnapshot({ source, error: null }, 'room-retry-requested');
+      // Keep the desired-room identity stable within one epoch. The active
+      // drive uses object identity to reject work from superseded rooms; if a
+      // same-room lifecycle signal replaced this object while register/join
+      // was pending, the coalesced drive would reject its own acknowledgement
+      // as stale and leave the completion unresolved.
+      this.desiredRoom.password = input.password ?? this.desiredRoom.password;
+      // The initiating source also owns foreground error handling for this
+      // completion. Lifecycle nudges are diagnostics, not a transfer of that
+      // ownership to the background recovery path.
+      this.setSnapshot({ error: null }, 'room-retry-requested', { requestedSource: source });
     }
 
     const desired = this.desiredRoom;
@@ -295,9 +298,6 @@ export class RoomSessionController {
 
   resume = (source: Extract<RoomSessionSource, 'visibility' | 'pageshow' | 'online'>) => {
     if (!this.desiredRoom) {
-      if (!this.transport.isConnected() && !this.transport.isActive()) {
-        this.transport.connect();
-      }
       return this.ensureRegistered().then(() => null);
     }
 
@@ -619,7 +619,6 @@ export class RoomSessionController {
     return new Promise<TResponse>((resolve, reject) => {
       let settled = false;
       const pending: PendingAck = {
-        socketId: input.socketId,
         cancel: error => settle(() => reject(error)),
       };
       const timer = setTimeout(() => {
