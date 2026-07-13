@@ -175,6 +175,16 @@ vi.mock('../components/DesktopSidebar', async () => {
       'aside',
       { 'data-testid': 'desktop-sidebar' },
       React.createElement('button', {
+        'data-testid': 'sidebar-select-room-1',
+        onClick: () => onRoomSelect?.({
+          id: 'room-1',
+          name: 'Room 1',
+          description: '',
+          createdAt: '2026-05-03T00:00:00.000Z',
+          creatorId: 'client-1',
+        }),
+      }),
+      React.createElement('button', {
         'data-testid': 'sidebar-select-room-2',
         onClick: () => onRoomSelect?.({
           id: 'room-2',
@@ -729,6 +739,26 @@ describe('MessagePage room session restore', () => {
     });
   });
 
+  it('treats navigation back to an already verified room as navigation rather than another join', async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-membership-ack-revision')).toBe('1');
+    });
+    expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('navigate-settings'));
+    expect(await screen.findByTestId('settings-view')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('sidebar-select-room-1'));
+
+    expect(await screen.findByTestId('chat-room-view')).toBeTruthy();
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-membership-ack-revision')).toBe('1');
+    expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+  });
+
   it('locks the room on disconnect and unlocks only after the new socket rejoins', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
@@ -1014,6 +1044,7 @@ describe('MessagePage room session restore', () => {
     });
 
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
     expect(await screen.findByText('errorRestoringRoom')).toBeTruthy();
   });
 
@@ -1124,6 +1155,7 @@ describe('MessagePage room session restore', () => {
 
     const roomView = await screen.findByTestId('chat-room-view');
     expect(roomView.getAttribute('data-session-ready')).toBe('false');
+    expect(roomView.getAttribute('data-restoring')).toBe('true');
     fireEvent.click(screen.getByTestId('share-room'));
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
 

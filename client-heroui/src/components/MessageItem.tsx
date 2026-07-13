@@ -321,6 +321,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const accessibilityLabelId = React.useId();
   const isMedia = message.messageType === "media";
   const mediaKind = message.mediaAsset?.kind;
+  const mediaAssetId = message.mediaAsset?.id;
+  const mediaAssetByteSize = message.mediaAsset?.byteSize;
   const isImage = isMedia && mediaKind === "image";
   const isAudio = isMedia && mediaKind === "audio";
   const isVideo = isMedia && mediaKind === "video";
@@ -470,7 +472,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       setIsMediaElementLoading(false);
       return () => {};
     }
-    if (!isMedia || !message.mediaAsset?.id) {
+    if (!isMedia || !mediaAssetId) {
       setSignedMediaUrl(null);
       setLocalCachedMediaUrl(null);
       setMediaError(false);
@@ -515,9 +517,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     void (async () => {
       const cachedUrl = playableKind
         ? await getCachedMediaObjectUrlFromCache({
-            assetId: message.mediaAsset!.id,
+            assetId: mediaAssetId,
             kind: playableKind,
-            byteSize: message.mediaAsset?.byteSize,
+            byteSize: mediaAssetByteSize,
             roomId: message.roomId,
           })
         : null;
@@ -529,7 +531,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         return;
       }
 
-      const { url } = await getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset!.id });
+      const { url } = await getMediaDownloadUrl({ roomId: message.roomId, assetId: mediaAssetId });
       if (settled) return;
       settled = true;
       clearLoadTimeout();
@@ -549,7 +551,19 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       settled = true;
       clearLoadTimeout();
     };
-  }, [isAudio, isFile, isImage, isInteractionDisabled, isMedia, isVideo, message.localMediaPending, message.localMediaPreviewUrl, message.mediaAsset, message.roomId]);
+  }, [
+    isAudio,
+    isFile,
+    isImage,
+    isInteractionDisabled,
+    isMedia,
+    isVideo,
+    message.localMediaPending,
+    message.localMediaPreviewUrl,
+    mediaAssetByteSize,
+    mediaAssetId,
+    message.roomId,
+  ]);
 
   React.useEffect(() => {
     return loadSignedMediaUrl();

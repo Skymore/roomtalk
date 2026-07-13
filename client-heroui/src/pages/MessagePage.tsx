@@ -1082,6 +1082,31 @@ export const MessagePage: React.FC = () => {
     setRoomToJoin(null);
     clearBackgroundRestoreState(room.id);
     setError(null);
+
+    const currentSession = activeRoomSessionRef.current;
+    if (
+      socket.connected
+      && currentRoomRef.current?.id === room.id
+      && currentSession?.roomId === room.id
+      && currentSession.status === "ready"
+    ) {
+      // Returning from the room list to the room that is already verified on
+      // this socket is navigation, not a new membership epoch. Rejoining here
+      // briefly locked the shell and forced every visible media item to throw
+      // away its display URL even though membership never changed.
+      logRoomSessionDiagnostic("join-skipped-already-ready", {
+        roomId: room.id,
+        source: searchParams.get("room") === room.id ? "url" : "manual",
+        generation: roomSessionGenerationRef.current,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
+      applyServerRoom(room);
+      setView("chat");
+      clearRoomUrlParam();
+      return;
+    }
+
     try {
       const joinedRoom = await ensureActiveRoomSession({
         roomId: room.id,
@@ -1291,8 +1316,11 @@ export const MessagePage: React.FC = () => {
   const isCurrentRoomSessionReady = Boolean(
     currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "ready"
   );
+  const isCurrentRoomSessionUnavailable = Boolean(
+    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "unavailable"
+  );
   const isCurrentRoomSessionRestoring = Boolean(
-    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "restoring"
+    currentRoom && !isCurrentRoomSessionReady && !isCurrentRoomSessionUnavailable
   );
 
   const handleRetryRoomSession = useCallback(() => {

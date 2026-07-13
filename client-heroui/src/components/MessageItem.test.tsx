@@ -981,6 +981,40 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('does not reload unchanged media when history reconciliation replaces the media asset object', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/stable-history.webp' });
+    const mediaMessage: Message = {
+      ...message,
+      id: 'stable-history-image-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: { id: 'stable-history-image', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+    };
+    const props = {
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+    const rendered = render(<MessageItem {...props} message={mediaMessage} />);
+
+    const image = await screen.findByAltText('sharedImage');
+    fireEvent.load(image);
+    expect(screen.queryByText('loadingMedia')).toBeNull();
+    expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <MessageItem
+        {...props}
+        message={{ ...mediaMessage, mediaAsset: { ...mediaMessage.mediaAsset! } }}
+      />
+    );
+    await act(async () => {});
+
+    expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('loadingMedia')).toBeNull();
+  });
+
   it('loads signed URLs for asset-backed images without using legacy base64 content', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
