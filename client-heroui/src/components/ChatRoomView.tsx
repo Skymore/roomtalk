@@ -16,6 +16,7 @@ interface ChatRoomViewProps {
   memberCount: number | null;
   isRestoringRoom: boolean;
   isRoomSessionReady: boolean;
+  roomMembershipAckRevision?: number;
   onRetryRoomSession: () => void;
   username: string;
   clientId: string;
@@ -38,6 +39,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   memberCount,
   isRestoringRoom,
   isRoomSessionReady,
+  roomMembershipAckRevision = 0,
   onRetryRoomSession,
   username,
   clientId,
@@ -125,6 +127,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onReply={setReplyToMessage}
             roomPermissions={effectiveRoomPermissions}
             isRoomSessionReady={isRoomSessionReady}
+            roomMembershipAckRevision={roomMembershipAckRevision}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />

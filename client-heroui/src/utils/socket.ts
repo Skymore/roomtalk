@@ -22,6 +22,7 @@ import {
 } from './types';
 import type { CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from './codexSettings';
 import { clearPersistentCachesForClient } from './persistentCacheLifecycle';
+import { logRoomSessionDiagnostic } from './roomDiagnostics';
 
 // Get client ID from local storage or create a new one
 // This ID persists across browser sessions and uniquely identifies the user
@@ -355,6 +356,13 @@ const createSocketConnection = (): Socket => {
   // This associates the persistent clientId with the temporary socket.id
   socket.on('connect', () => {
     console.log('Connected to WebSocket server, socket ID:', socket.id);
+    logRoomSessionDiagnostic('socket-connected', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      transport: socket.io.engine?.transport?.name ?? null,
+      clientId: getClientId(),
+      browserInstanceId: getBrowserInstanceId(),
+    });
     registeredSocketId = null;
     ensureRegisteredSocket()
       .catch((error) => {
@@ -365,11 +373,21 @@ const createSocketConnection = (): Socket => {
   // Handle connection errors
   socket.on('connect_error', (error: Error) => {
     console.error('Socket connection error:', error);
+    logRoomSessionDiagnostic('socket-connect-error', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      error: error.message,
+    });
   });
   
   // Handle disconnection
   socket.on('disconnect', (reason: string) => {
     console.log('Socket disconnected:', reason);
+    logRoomSessionDiagnostic('socket-disconnected', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      reason,
+    });
     registeredSocketId = null;
   });
 
@@ -402,6 +420,11 @@ const createSocketConnection = (): Socket => {
 
 export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => {
   if (pendingRegistration) {
+    logRoomSessionDiagnostic('registration-coalesced', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      socketActive: socket.active,
+    });
     return pendingRegistration;
   }
 
@@ -409,9 +432,21 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
     const socketId = socket.id || '';
 
     if (socketId && registeredSocketId === socketId) {
+      logRoomSessionDiagnostic('registration-already-ready', {
+        socketId,
+        socketConnected: socket.connected,
+      });
       return Promise.resolve();
     }
   }
+
+  logRoomSessionDiagnostic('registration-start', {
+    socketId: socket.id ?? null,
+    socketConnected: socket.connected,
+    socketActive: socket.active,
+    connectWaitTimeoutMs: SOCKET_CONNECT_WAIT_TIMEOUT_MS,
+    acknowledgementTimeoutMs: timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS,
+  });
 
   let startRegistration: () => void = () => {};
   const registrationPromise = new Promise<void>((resolve, reject) => {
@@ -446,6 +481,12 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
         window.clearTimeout(connectTimeoutId);
       }
       connectTimeoutId = window.setTimeout(() => {
+        logRoomSessionDiagnostic('registration-connect-timeout', {
+          socketId: socket.id ?? null,
+          socketConnected: socket.connected,
+          socketActive: socket.active,
+          timeoutMs: SOCKET_CONNECT_WAIT_TIMEOUT_MS,
+        });
         settle(() => reject(new Error('Timed out while connecting to server')));
       }, SOCKET_CONNECT_WAIT_TIMEOUT_MS);
     }
@@ -469,6 +510,11 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       socket.off('connect', handleConnect);
       socket.on('connect', handleConnect);
       armConnectionTimeout();
+      logRoomSessionDiagnostic('registration-waiting-for-connect', {
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+        socketActive: socket.active,
+      });
       // socket.active means Socket.IO already owns an automatic connection or
       // reconnection attempt. Calling connect() again while it is active can
       // create an extra restore edge during mobile resume.
@@ -487,6 +533,11 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
     }
 
     function handleDisconnect() {
+      logRoomSessionDiagnostic('registration-interrupted-by-disconnect', {
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+        attempt: registerAttempt,
+      });
       registeredSocketId = null;
       registerAttempt += 1;
       clearAcknowledgementTimeout();
@@ -515,15 +566,36 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       socket.on('disconnect', handleDisconnect);
       clearAcknowledgementTimeout();
       acknowledgementTimeoutId = window.setTimeout(() => {
+        logRoomSessionDiagnostic('registration-ack-timeout', {
+          socketId: socket.id ?? null,
+          socketConnected: socket.connected,
+          attempt: attemptId,
+          timeoutMs: timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS,
+        });
         settle(() => reject(new Error('Timed out while registering client')));
       }, timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS);
+      const registeringClientId = getClientId();
+      const registeringBrowserInstanceId = getBrowserInstanceId();
+      logRoomSessionDiagnostic('registration-emitted', {
+        socketId,
+        socketConnected: socket.connected,
+        attempt: attemptId,
+        clientId: registeringClientId,
+        browserInstanceId: registeringBrowserInstanceId,
+      });
       socket.emit('register', {
-        clientId: getClientId(),
-        browserInstanceId: getBrowserInstanceId(),
+        clientId: registeringClientId,
+        browserInstanceId: registeringBrowserInstanceId,
         username: currentUsername || undefined,
         clientAuthToken: getClientAuthToken() || undefined,
       }, (response: RegisterAckResponse) => {
         if (settled || attemptId !== registerAttempt) {
+          logRoomSessionDiagnostic('registration-stale-ack', {
+            socketId: socket.id ?? null,
+            socketConnected: socket.connected,
+            attempt: attemptId,
+            currentAttempt: registerAttempt,
+          });
           return;
         }
         clearAcknowledgementTimeout();
@@ -535,6 +607,13 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
         settle(() => {
           if (response?.success) {
             registeredSocketId = socketId || socket.id || null;
+            logRoomSessionDiagnostic('registration-ready', {
+              socketId: registeredSocketId,
+              socketConnected: socket.connected,
+              attempt: attemptId,
+              clientId: registeringClientId,
+              browserInstanceId: registeringBrowserInstanceId,
+            });
             const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
             if (adopted && adopted !== currentUsername) {
               currentUsername = adopted;
@@ -546,7 +625,14 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
           }
 
           const message = typeof response?.message === 'string' ? response.message : undefined;
-          reject(new Error(response?.error || message || 'Failed to register client'));
+          const registrationError = response?.error || message || 'Failed to register client';
+          logRoomSessionDiagnostic('registration-rejected', {
+            socketId: socket.id ?? null,
+            socketConnected: socket.connected,
+            attempt: attemptId,
+            error: registrationError,
+          });
+          reject(new Error(registrationError));
         });
       });
     }
@@ -659,8 +745,15 @@ const emitJoinRoomRaw = (
   roomId: string,
   password?: string,
   options: EmitJoinRoomRawOptions = {},
-): Promise<RoomJoinResult> => (
-  emitWithAck<JoinRoomAckResponse>(
+): Promise<RoomJoinResult> => {
+  logRoomSessionDiagnostic('join-emitted', {
+    roomId,
+    socketId: socket.id ?? null,
+    socketConnected: socket.connected,
+    hasPassword: Boolean(password),
+    reconcileLateResponse: options.reconcileLateResponse !== false,
+  });
+  return emitWithAck<JoinRoomAckResponse>(
     'join_room',
     { roomId, password },
     'Timed out while joining room',
@@ -686,16 +779,33 @@ const emitJoinRoomRaw = (
         },
     },
   ).then((response) => ({
-    room: response.room,
-    permissions: response.permissions,
-    memberCount: response.memberCount,
-  })).then((result) => {
-    if (typeof result.memberCount === 'number') {
-      roomMemberCounts.set(roomId, result.memberCount);
-    }
-    return result;
-  })
-);
+      room: response.room,
+      permissions: response.permissions,
+      memberCount: response.memberCount,
+    }))
+    .then((result) => {
+      if (typeof result.memberCount === 'number') {
+        roomMemberCounts.set(roomId, result.memberCount);
+      }
+      logRoomSessionDiagnostic('join-acknowledged', {
+        roomId,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+        memberCount: result.memberCount ?? null,
+        hasPermissions: Boolean(result.permissions),
+      });
+      return result;
+    })
+    .catch(error => {
+      logRoomSessionDiagnostic('join-ack-failed', {
+        roomId,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    });
+};
 
 const requestRoomJoinReconciliation = (staleRoomId: string) => {
   staleSettledRoomIds.add(staleRoomId);
@@ -795,9 +905,23 @@ export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinRes
   desiredRoomJoin = intent;
   activeRoomId = roomId;
   activeRoomPassword = password || null;
+  logRoomSessionDiagnostic('join-intent-created', {
+    roomId,
+    intentVersion: intent.version,
+    socketId: socket.id ?? null,
+    socketConnected: socket.connected,
+    hasPassword: Boolean(password),
+  });
 
   const promise = emitJoinRoomRaw(roomId, password).then((result) => {
     intent.state = 'success';
+    logRoomSessionDiagnostic('join-intent-ready', {
+      roomId,
+      intentVersion: intent.version,
+      isLatestIntent: desiredRoomJoin === intent,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
     if (desiredRoomJoin !== intent) {
       requestRoomJoinReconciliation(roomId);
     }
@@ -807,6 +931,15 @@ export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinRes
     const joinError = error instanceof Error ? error : new Error('Failed to join room');
     intent.error = joinError;
     const outcomeIsUncertain = isUncertainRoomJoinError(joinError);
+    logRoomSessionDiagnostic('join-intent-failed', {
+      roomId,
+      intentVersion: intent.version,
+      isLatestIntent: desiredRoomJoin === intent,
+      outcomeIsUncertain,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      error: joinError.message,
+    });
     if (desiredRoomJoin !== intent || outcomeIsUncertain) {
       requestRoomJoinReconciliation(roomId);
     }

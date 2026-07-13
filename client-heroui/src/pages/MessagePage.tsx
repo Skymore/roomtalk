@@ -36,6 +36,7 @@ import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../util
 import { getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode } from "../utils/codeAgent";
 import { reactivateCachedRoomMessageWindow } from "../utils/messageHistoryCache";
 import { invalidatePersistentRoomCache } from "../utils/persistentCacheLifecycle";
+import { logRoomSessionDiagnostic } from "../utils/roomDiagnostics";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -100,6 +101,7 @@ export const MessagePage: React.FC = () => {
   const [activeRoomSession, setActiveRoomSession] = useState<ActiveRoomSessionState | null>(null);
   const activeRoomSessionRef = useRef<ActiveRoomSessionState | null>(null);
   const roomSessionGenerationRef = useRef(0);
+  const [roomMembershipAckRevision, setRoomMembershipAckRevision] = useState(0);
   // Room metadata lookups are their own intent stream. A late response from an
   // older URL/manual lookup must never reopen its modal or start a stale join.
   const roomLookupGenerationRef = useRef(0);
@@ -242,6 +244,13 @@ export const MessagePage: React.FC = () => {
   }, [clearReconnectIndicator]);
 
   const commitActiveRoomSession = useCallback((next: ActiveRoomSessionState | null) => {
+    logRoomSessionDiagnostic("state", {
+      roomId: next?.roomId ?? null,
+      status: next?.status ?? "none",
+      generation: roomSessionGenerationRef.current,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
     activeRoomSessionRef.current = next;
     setActiveRoomSession(next);
   }, []);
@@ -372,6 +381,15 @@ export const MessagePage: React.FC = () => {
     const previousSession = activeRoomSessionRef.current;
     const shouldGuardRoomShell = showRestoreIndicator || previousSession?.roomId !== roomId || previousSession.status !== "ready";
     roomSessionGenerationRef.current = generation;
+    logRoomSessionDiagnostic("join-start", {
+      roomId,
+      source,
+      generation,
+      previousRoomId,
+      previousStatus: previousSession?.status ?? "none",
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
     pendingRestoreRoomIdRef.current = roomId;
     if (shouldGuardRoomShell) {
       commitActiveRoomSession({ roomId, status: "restoring" });
@@ -400,6 +418,14 @@ export const MessagePage: React.FC = () => {
         ? await ensureRoomJoined(roomId)
         : await joinRoom(roomId, password);
       if (roomSessionGenerationRef.current !== generation) {
+        logRoomSessionDiagnostic("join-stale-ack", {
+          roomId,
+          source,
+          generation,
+          currentGeneration: roomSessionGenerationRef.current,
+          socketId: socket.id ?? null,
+          socketConnected: socket.connected,
+        });
         return null;
       }
 
@@ -407,7 +433,16 @@ export const MessagePage: React.FC = () => {
       pendingRestoreRoomIdRef.current = null;
       if (joinedRoom) {
         reactivateCachedRoomMessageWindow(roomId);
+        setRoomMembershipAckRevision(generation);
         commitActiveRoomSession({ roomId, status: "ready" });
+        logRoomSessionDiagnostic("join-ready", {
+          roomId,
+          source,
+          generation,
+          memberCount: result.memberCount ?? null,
+          socketId: socket.id ?? null,
+          socketConnected: socket.connected,
+        });
         setError(null);
       }
       return joinedRoom;
@@ -417,6 +452,14 @@ export const MessagePage: React.FC = () => {
       }
 
       const message = error instanceof Error ? error.message : translationRef.current("errorLoading");
+      logRoomSessionDiagnostic("join-failed", {
+        roomId,
+        source,
+        generation,
+        error: message,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
       const outcomeIsUncertain = /timed out while joining room|socket disconnected/i.test(message);
       const canRollbackToPreviousRoom = Boolean(
         isSwitchingRoom
@@ -526,17 +569,38 @@ export const MessagePage: React.FC = () => {
   const scheduleRoomRestore = useCallback((source: RoomRestoreSource) => {
     const activeRoom = currentRoomRef.current;
     if (!activeRoom) {
+      logRoomSessionDiagnostic("restore-skipped-no-room", {
+        source,
+        generation: roomSessionGenerationRef.current,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
       return null;
     }
 
     const inFlightRestore = inFlightBackgroundRestoreRef.current;
     if (inFlightRestore?.roomId === activeRoom.id) {
+      logRoomSessionDiagnostic("restore-coalesced", {
+        roomId: activeRoom.id,
+        source,
+        generation: roomSessionGenerationRef.current,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
       return inFlightRestore.promise;
     }
 
     const now = Date.now();
     const suppressedUntil = backgroundRestoreSuppressUntilByRoomRef.current.get(activeRoom.id) ?? 0;
     if (now < suppressedUntil) {
+      logRoomSessionDiagnostic("restore-suppressed", {
+        roomId: activeRoom.id,
+        source,
+        generation: roomSessionGenerationRef.current,
+        remainingMs: suppressedUntil - now,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
       return null;
     }
 
@@ -544,6 +608,13 @@ export const MessagePage: React.FC = () => {
       activeRoom.id,
       now + BACKGROUND_RESTORE_SUPPRESSION_MS,
     );
+    logRoomSessionDiagnostic("restore-scheduled", {
+      roomId: activeRoom.id,
+      source,
+      generation: roomSessionGenerationRef.current,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+    });
     reconnectSocket();
 
     // 延迟指示器:rejoin 超过宽限期仍未完成才显示,健康场景零闪烁
@@ -906,9 +977,23 @@ export const MessagePage: React.FC = () => {
       restoreCurrentRoom("pageshow");
     };
     const handleOnline = () => restoreCurrentRoom("online");
-    const handleSocketConnect = () => restoreCurrentRoom("socket-connect");
+    const handleSocketConnect = () => {
+      logRoomSessionDiagnostic("active-room-connect-observed", {
+        roomId: currentRoomRef.current?.id ?? null,
+        generation: roomSessionGenerationRef.current,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
+      restoreCurrentRoom("socket-connect");
+    };
     const handleSocketDisconnect = () => {
       const activeRoom = currentRoomRef.current;
+      logRoomSessionDiagnostic("active-room-disconnect-observed", {
+        roomId: activeRoom?.id ?? null,
+        generation: roomSessionGenerationRef.current,
+        socketId: socket.id ?? null,
+        socketConnected: socket.connected,
+      });
       clearBackgroundRestoreState(activeRoom?.id ?? null);
       // A reconnect gets a new Socket.IO membership. Invalidate any restore
       // tied to the old transport immediately and keep room side effects locked
@@ -1302,6 +1387,7 @@ export const MessagePage: React.FC = () => {
               memberCount={memberCount}
               isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
               isRoomSessionReady={isCurrentRoomSessionReady}
+              roomMembershipAckRevision={roomMembershipAckRevision}
               onRetryRoomSession={handleRetryRoomSession}
               onRoomUpdated={applyServerRoom}
               username={username}
@@ -1330,6 +1416,7 @@ export const MessagePage: React.FC = () => {
             memberCount={memberCount}
             isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
             isRoomSessionReady={isCurrentRoomSessionReady}
+            roomMembershipAckRevision={roomMembershipAckRevision}
             onRetryRoomSession={handleRetryRoomSession}
             onRoomUpdated={applyServerRoom}
             username={username}

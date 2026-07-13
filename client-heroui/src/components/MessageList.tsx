@@ -134,6 +134,7 @@ interface MessageListProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   isRoomSessionReady?: boolean;
+  roomMembershipAckRevision?: number;
 }
 
 export interface MessageListHandle {
@@ -165,6 +166,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onAddReviewComment,
   onRemoveReviewComment,
   isRoomSessionReady = true,
+  roomMembershipAckRevision = 0,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -901,6 +903,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useRoomMessageEvents({
     roomId,
     isRoomSessionReady,
+    roomMembershipAckRevision,
     containerRef,
     getCurrentMessages,
     getCurrentAgentTurns,

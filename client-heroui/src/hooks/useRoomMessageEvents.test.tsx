@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { Dispatch, SetStateAction, useCallback, useRef, useState } from 'react';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Message, RoomAgentTurn } from '../utils/types';
 import { useRoomMessageEvents } from './useRoomMessageEvents';
@@ -65,6 +65,8 @@ const EMPTY_MESSAGES: Message[] = [];
 
 type HarnessProps = {
   roomId?: string;
+  isRoomSessionReady?: boolean;
+  roomMembershipAckRevision?: number;
   messageToDeleteId?: string;
   messageToEditId?: string;
   currentMessages?: Message[];
@@ -97,6 +99,8 @@ type HarnessTestProps = Omit<HarnessProps, 'roomId' | 'messageToDeleteId' | 'mes
 
 const Harness = ({
   roomId = 'room-1',
+  isRoomSessionReady = true,
+  roomMembershipAckRevision = 0,
   messageToDeleteId,
   messageToEditId,
   currentMessages = EMPTY_MESSAGES,
@@ -118,6 +122,8 @@ const Harness = ({
 
   useRoomMessageEvents({
     roomId,
+    isRoomSessionReady,
+    roomMembershipAckRevision,
     containerRef,
     getCurrentMessages,
     updateMessages,
@@ -169,9 +175,13 @@ describe('useRoomMessageEvents', () => {
     vi.useRealTimers();
   });
 
-  it('does not reset subscriptions or close modals when the active edit/delete target changes', () => {
+  it('does not reset subscriptions or close modals when the active edit/delete target changes', async () => {
     const props = createHarnessProps();
     const { rerender } = render(<Harness {...props} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(props.closeEditModal).toHaveBeenCalledTimes(1);
     expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
@@ -198,7 +208,7 @@ describe('useRoomMessageEvents', () => {
     expect(socketMock.off).not.toHaveBeenCalled();
   });
 
-  it('renders instantly from the in-memory cache without a loading flash', () => {
+  it('renders instantly from the in-memory cache without a loading flash', async () => {
     cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
       roomId: 'room-1',
       messages: [message({ id: 'cached-1', content: 'cached' })],
@@ -216,7 +226,100 @@ describe('useRoomMessageEvents', () => {
     expect(props.setHasMoreMessages).toHaveBeenCalledWith(true);
     expect(props.setHistoryVersion).toHaveBeenCalledWith(7);
     expect(cacheMock.readCachedRoomMessageWindow).not.toHaveBeenCalled();
-    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 7 });
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 7 });
+    });
+  });
+
+  it('hydrates the persistent cache before requesting authoritative history', async () => {
+    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
+    cacheMock.readCachedRoomMessageWindow.mockResolvedValue({
+      roomId: 'room-1',
+      messages: [cachedMessage],
+      historyVersion: 7,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      cachedAt: 1,
+    });
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+
+    expect(socketMock.emit).not.toHaveBeenCalledWith(
+      'get_room_messages',
+      expect.objectContaining({ roomId: 'room-1', baseHistoryVersion: 0 }),
+    );
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+        roomId: 'room-1',
+        limit: 80,
+        baseHistoryVersion: 7,
+      });
+    });
+
+    props.updateMessages.mockClear();
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [cachedMessage, message({ id: 'missed-live-message', content: 'new' })],
+      historyVersion: 8,
+      requestedHistoryVersion: 7,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      mode: 'replace',
+    });
+
+    expect(props.updateMessages).toHaveBeenCalledWith([
+      cachedMessage,
+      message({ id: 'missed-live-message', content: 'new' }),
+    ]);
+  });
+
+  it('requests history again after a new verified membership ack without resetting subscriptions', async () => {
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
+      roomId: 'room-1',
+      messages: [message({ id: 'cached-1' })],
+      historyVersion: 7,
+      hasMore: false,
+      oldestMessageId: 'cached-1',
+      cachedAt: 1,
+    });
+    const props = createHarnessProps();
+    const rendered = render(<Harness {...props} roomMembershipAckRevision={1} />);
+
+    socketMock.emit.mockClear();
+    socketMock.on.mockClear();
+    socketMock.off.mockClear();
+    props.closeEditModal.mockClear();
+    props.closeDeleteModal.mockClear();
+
+    rendered.rerender(<Harness {...props} roomMembershipAckRevision={2} />);
+
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+        roomId: 'room-1',
+        limit: 80,
+        baseHistoryVersion: 7,
+      });
+    });
+    expect(socketMock.on).not.toHaveBeenCalled();
+    expect(socketMock.off).not.toHaveBeenCalled();
+    expect(props.closeEditModal).not.toHaveBeenCalled();
+    expect(props.closeDeleteModal).not.toHaveBeenCalled();
+  });
+
+  it('does not request history merely because the socket connected before room rejoin was acknowledged', async () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} isRoomSessionReady={false} roomMembershipAckRevision={1} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    socketMock.emit.mockClear();
+
+    socketMock.trigger('connect');
+
+    expect(socketMock.emit).not.toHaveBeenCalledWith(
+      'get_room_messages',
+      expect.objectContaining({ roomId: 'room-1' }),
+    );
   });
 
   it('does not replace or scroll again when server history matches the displayed cached window', () => {
@@ -343,6 +446,62 @@ describe('useRoomMessageEvents', () => {
     expect(props.updateMessages).not.toHaveBeenCalled();
     expect(cacheMock.writeCachedRoomMessageWindow).not.toHaveBeenCalled();
     expect(props.setIsLoadingMore).toHaveBeenLastCalledWith(false);
+  });
+
+  it('retries history reconciliation when a live message changes the window during a request', async () => {
+    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
+    const liveMessage = message({ id: 'live-3', content: 'live' });
+    const missedMessage = message({ id: 'missed-2', content: 'missed' });
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
+      roomId: 'room-1',
+      messages: [cachedMessage],
+      historyVersion: 7,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      cachedAt: 1,
+    });
+    const props = createHarnessProps();
+    render(<Harness {...props} roomMembershipAckRevision={1} />);
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+        roomId: 'room-1',
+        limit: 80,
+        baseHistoryVersion: 7,
+      });
+    });
+    socketMock.emit.mockClear();
+
+    socketMock.trigger('new_message', liveMessage);
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [cachedMessage, liveMessage],
+      historyVersion: 8,
+      requestedHistoryVersion: 7,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      mode: 'replace',
+    });
+
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+        roomId: 'room-1',
+        limit: 80,
+        baseHistoryVersion: 8,
+      });
+    });
+    props.updateMessages.mockClear();
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [cachedMessage, missedMessage, liveMessage],
+      historyVersion: 9,
+      requestedHistoryVersion: 8,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      mode: 'replace',
+    });
+
+    expect(props.updateMessages).toHaveBeenCalledWith([cachedMessage, missedMessage, liveMessage]);
   });
 
   it('does not prepend a page requested before the room history was cleared', () => {

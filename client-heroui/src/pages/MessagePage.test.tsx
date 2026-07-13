@@ -196,11 +196,12 @@ vi.mock('../components/WelcomeView', async () => {
 vi.mock('../components/ChatRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, isRoomSessionReady, roomPermissions, handleShareRoom, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
+    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, isRoomSessionReady, roomMembershipAckRevision, roomPermissions, handleShareRoom, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
       currentRoom: Room;
       memberCount: number | null;
       isRestoringRoom: boolean;
       isRoomSessionReady: boolean;
+      roomMembershipAckRevision?: number;
       roomPermissions?: RoomPermissions | null;
       handleShareRoom?: () => void;
       handleDeleteRoom?: (roomId: string) => void;
@@ -215,6 +216,7 @@ vi.mock('../components/ChatRoomView', async () => {
         'data-member-count': memberCount == null ? 'unknown' : String(memberCount),
         'data-restoring': String(isRestoringRoom),
         'data-session-ready': String(isRoomSessionReady),
+        'data-membership-ack-revision': String(roomMembershipAckRevision ?? 0),
         'data-permission-room-id': roomPermissions?.roomId || 'none',
         'data-can-post': String(Boolean(roomPermissions?.canPost)),
         'data-posting-enabled': String(Boolean(currentRoom.postingSchedule?.enabled)),
@@ -706,6 +708,25 @@ describe('MessagePage room session restore', () => {
       expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
     });
     expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledWith('room-1');
+  });
+
+  it('advances the verified room membership ack revision after a background rejoin', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-membership-ack-revision')).toBe('1');
+    });
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-membership-ack-revision')).toBe('2');
+    });
   });
 
   it('locks the room on disconnect and unlocks only after the new socket rejoins', async () => {
