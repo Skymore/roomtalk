@@ -1399,7 +1399,7 @@ describe('MessageItem replies', () => {
     appRoot.remove();
   });
 
-  it('closes media access and discards the signed URL when the room session locks', async () => {
+  it('keeps already displayed media and its viewer open when the room session locks', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/session-locked.webp' });
     const props = {
       message: {
@@ -1421,9 +1421,9 @@ describe('MessageItem replies', () => {
 
     rendered.rerender(<MessageItem {...props} isInteractionDisabled />);
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull());
-    expect(screen.queryByLabelText('openMediaViewer')).toBeNull();
-    expect(screen.queryByLabelText('downloadMedia')).toBeNull();
+    expect(await screen.findByRole('dialog', { name: 'mediaViewer' })).toBeTruthy();
+    expect(screen.getByLabelText('openMediaViewer').querySelector('img')?.getAttribute('src'))
+      .toBe('https://signed.example/session-locked.webp');
     expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2221,11 +2221,12 @@ describe('MessageItem replies', () => {
       onReply: vi.fn(),
     };
     const rendered = render(<MessageItem {...props} />);
-    const transcribe = await screen.findByText('transcribeAudio');
+    await screen.findByText('transcribeAudio');
 
     rendered.rerender(<MessageItem {...props} isInteractionDisabled />);
-    await waitFor(() => expect(screen.queryByText('transcribeAudio')).toBeNull());
-    fireEvent.click(transcribe);
+    const lockedTranscribe = await screen.findByText('transcribeAudio');
+    expect(lockedTranscribe.closest('button')?.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(lockedTranscribe);
 
     expect(requestAudioTranscriptionMock).not.toHaveBeenCalled();
     expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);

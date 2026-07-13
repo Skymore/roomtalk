@@ -48,8 +48,9 @@ interface CodeAgentRoomViewProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
-  roomMembershipAckRevision?: number;
+  roomResyncRevision?: number;
   onRetryRoomSession: () => void;
   username: string;
   clientId: string;
@@ -112,8 +113,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
-  roomMembershipAckRevision = 0,
+  roomResyncRevision = 0,
   onRetryRoomSession,
   username,
   clientId,
@@ -436,6 +438,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       currentRoom={currentRoom}
       memberCount={memberCount}
       isRestoringRoom={isRestoringRoom}
+      showRoomSessionSpinner={showRoomSessionSpinner}
       isRoomSessionReady={isRoomSessionReady}
       onRetryRoomSession={onRetryRoomSession}
       handleCopyToClipboard={handleCopyToClipboard}
@@ -559,7 +562,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onReply={setReplyToMessage}
               roomPermissions={effectiveRoomPermissions}
               isRoomSessionReady={isRoomSessionReady}
-              roomMembershipAckRevision={roomMembershipAckRevision}
+              roomResyncRevision={roomResyncRevision}
               bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
               onScrollButtonVisibilityChange={setShowScrollButton}
             />

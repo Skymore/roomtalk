@@ -90,7 +90,6 @@ const {
   leaveRoom,
   loginWithClientPassword,
   loginWithGoogleCredential,
-  onRoomMembershipRepairFailure,
   onUsernameAdopted,
   removeRoomMember,
   saveRoomToServer,
@@ -103,7 +102,6 @@ const {
   requestResolveCodeWorkspacePreviewTarget,
   requestCodeWorkspaceRefs,
   resetRoomJoinStateForTests,
-  reconnectSocket,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -238,7 +236,7 @@ describe('socket message acknowledgement helpers', () => {
 
     await expect(sendMessage('hello', 'room-1')).rejects.toThrow('register failed');
 
-    expect(socketMock.emit).toHaveBeenCalledTimes(1);
+    expect(socketMock.emit).toHaveBeenCalledTimes(3);
     expect(socketMock.emit).toHaveBeenCalledWith(
       'register',
       { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
@@ -330,19 +328,14 @@ describe('socket message acknowledgement helpers', () => {
       await vi.advanceTimersByTimeAsync(14999);
       expect(socketMock.emit).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
+      expect(socketMock.emit).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(15250);
+      expect(socketMock.emit).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(15000);
       await rejection;
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('does not start a second connection while Socket.IO is already reconnecting', () => {
-    socketMock.connected = false;
-    socketMock.active = true;
-
-    reconnectSocket();
-
-    expect(socketMock.connect).not.toHaveBeenCalled();
   });
 
   it('retries registration when the socket disconnects before the register acknowledgement', async () => {
@@ -1339,7 +1332,7 @@ describe('socket message acknowledgement helpers', () => {
     );
   });
 
-  it('reuses the active room password through ensureRoomJoined', async () => {
+  it('reuses the active room password after a socket replacement', async () => {
     const joinedRoom = room();
     socketMock.ackResponses.set('join_room', {
       success: true,
@@ -1350,280 +1343,53 @@ describe('socket message acknowledgement helpers', () => {
     await joinRoom(joinedRoom.id, 'secret');
     socketMock.emit.mockClear();
 
-    await expect(ensureRoomJoined(joinedRoom.id)).resolves.toEqual({
-      room: joinedRoom,
-      permissions: undefined,
-      memberCount: 3,
-    });
+    socketMock.connected = false;
+    Array.from(socketMock.handlers.get('disconnect') || []).forEach(handler => handler('transport close'));
+    socketMock.id = 'socket-reconnected-with-password';
+    socketMock.connected = true;
+    socketMock.active = true;
+    Array.from(socketMock.handlers.get('connect') || []).forEach(handler => handler());
 
-    expect(socketMock.emit).toHaveBeenCalledWith(
-      'join_room',
-      { roomId: joinedRoom.id, password: 'secret' },
-      expect.any(Function)
-    );
+    await vi.waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith(
+        'join_room',
+        { roomId: joinedRoom.id, password: 'secret' },
+        expect.any(Function)
+      );
+    });
   });
 
-  it('repairs the latest room when an older join acknowledgement arrives last', async () => {
+  it('supersedes an older room target without issuing a repair join', async () => {
     const { joins, leaves } = deferRoomJoinAcknowledgements();
     const roomA = room({ id: 'room-a', name: 'Room A' });
     const roomB = room({ id: 'room-b', name: 'Room B' });
 
     const joinA = joinRoom(roomA.id, 'a-secret');
+    await vi.waitFor(() => expect(joins).toHaveLength(1));
     const joinB = joinRoom(roomB.id, 'b-secret');
+    await expect(joinA).rejects.toThrow('superseded');
     await vi.waitFor(() => expect(joins).toHaveLength(2));
 
     joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
     await expect(joinB).resolves.toMatchObject({ room: roomB });
     joins[0].acknowledge({ success: true, room: roomA, memberCount: 1 });
-    await expect(joinA).resolves.toMatchObject({ room: roomA });
 
-    await vi.waitFor(() => expect(joins).toHaveLength(3));
-    expect(leaves).toEqual([roomA.id]);
-    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: 'b-secret' });
-    joins[2].acknowledge({ success: true, room: roomB, memberCount: 4 });
-    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(4));
-  });
-
-  it('repairs after the latest join settles because ack order does not prove mutation order', async () => {
-    const { joins, leaves } = deferRoomJoinAcknowledgements();
-    const roomA = room({ id: 'room-a', name: 'Room A' });
-    const roomB = room({ id: 'room-b', name: 'Room B' });
-
-    const joinA = joinRoom(roomA.id);
-    const joinB = joinRoom(roomB.id);
-    await vi.waitFor(() => expect(joins).toHaveLength(2));
-
-    joins[0].acknowledge({ success: true, room: roomA });
-    await expect(joinA).resolves.toMatchObject({ room: roomA });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(leaves).toEqual([roomA.id]));
     expect(joins).toHaveLength(2);
-
-    joins[1].acknowledge({ success: true, room: roomB });
-    await expect(joinB).resolves.toMatchObject({ room: roomB });
-    await vi.waitFor(() => expect(joins).toHaveLength(3));
-    expect(leaves).toEqual([roomA.id]);
-    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: undefined });
-    joins[2].acknowledge({ success: true, room: roomB, memberCount: 3 });
-    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(3));
+    expect(getRoomMemberCount(roomB.id)).toBe(2);
   });
 
-  it('repairs the latest room after a stale join fails because the server outcome may be partial', async () => {
-    const { joins, leaves } = deferRoomJoinAcknowledgements();
-    const roomA = room({ id: 'room-a', name: 'Room A' });
-    const roomB = room({ id: 'room-b', name: 'Room B' });
-
-    const joinA = joinRoom(roomA.id);
-    const joinB = joinRoom(roomB.id);
-    await vi.waitFor(() => expect(joins).toHaveLength(2));
-
-    joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
-    await expect(joinB).resolves.toMatchObject({ room: roomB });
-    joins[0].acknowledge({ success: false, error: 'stale join failed' });
-    await expect(joinA).rejects.toThrow('stale join failed');
-
-    await vi.waitFor(() => expect(joins).toHaveLength(3));
-    expect(leaves).toEqual([roomA.id]);
-    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: undefined });
-    joins[2].acknowledge({ success: true, room: roomB, memberCount: 4 });
-    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(4));
-  });
-
-  it('leaves a room again when its join acknowledgement arrives after leave', async () => {
+  it('cleans up a late successful join after the room was left', async () => {
     const { joins, leaves } = deferRoomJoinAcknowledgements();
     const roomA = room({ id: 'room-a', name: 'Room A' });
 
     const pendingJoin = joinRoom(roomA.id);
     await vi.waitFor(() => expect(joins).toHaveLength(1));
     leaveRoom(roomA.id);
+    await expect(pendingJoin).rejects.toThrow('superseded');
     expect(leaves).toEqual([roomA.id]);
 
     joins[0].acknowledge({ success: true, room: roomA });
-    await expect(pendingJoin).resolves.toMatchObject({ room: roomA });
     await vi.waitFor(() => expect(leaves).toEqual([roomA.id, roomA.id]));
-  });
-
-  it('keeps the latest failed intent and password for an explicit retry', async () => {
-    const { joins } = deferRoomJoinAcknowledgements();
-    const roomB = room({ id: 'room-b', name: 'Room B' });
-
-    const failedJoin = joinRoom(roomB.id, 'b-secret');
-    await vi.waitFor(() => expect(joins).toHaveLength(1));
-    joins[0].acknowledge({ success: false, error: 'temporary failure' });
-    await expect(failedJoin).rejects.toThrow('temporary failure');
-
-    const retry = ensureRoomJoined(roomB.id);
-    await vi.waitFor(() => expect(joins).toHaveLength(2));
-    expect(joins[1].payload).toEqual({ roomId: roomB.id, password: 'b-secret' });
-    joins[1].acknowledge({ success: true, room: roomB });
-    await expect(retry).resolves.toMatchObject({ room: roomB });
-  });
-
-  it('leaves a latest join whose timeout has an uncertain server outcome even without a late ack', async () => {
-    vi.useFakeTimers();
-    try {
-      const { joins, leaves } = deferRoomJoinAcknowledgements();
-      const onRepairFailure = vi.fn();
-      onRoomMembershipRepairFailure(onRepairFailure);
-      const roomB = room({ id: 'room-b', name: 'Room B' });
-      const timedOutJoin = joinRoom(roomB.id);
-      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
-      await vi.advanceTimersByTimeAsync(0);
-      expect(joins).toHaveLength(1);
-
-      await vi.advanceTimersByTimeAsync(15000);
-      await timeoutExpectation;
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(leaves).toEqual([roomB.id]);
-      expect(joins).toHaveLength(1);
-      expect(onRepairFailure).toHaveBeenCalledOnce();
-      expect(onRepairFailure).toHaveBeenCalledWith(
-        roomB.id,
-        expect.objectContaining({ message: 'Timed out while joining room' }),
-      );
-
-      const explicitRetry = ensureRoomJoined(roomB.id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(joins).toHaveLength(2);
-      joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
-      await expect(explicitRetry).resolves.toMatchObject({ room: roomB });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('reconciles a join acknowledgement that arrives after the client timeout', async () => {
-    vi.useFakeTimers();
-    try {
-      const { joins, leaves } = deferRoomJoinAcknowledgements();
-      const onRepairFailure = vi.fn();
-      onRoomMembershipRepairFailure(onRepairFailure);
-      const roomA = room({ id: 'room-a', name: 'Room A' });
-      const timedOutJoin = joinRoom(roomA.id);
-      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
-      await vi.advanceTimersByTimeAsync(0);
-      expect(joins).toHaveLength(1);
-
-      await vi.advanceTimersByTimeAsync(15000);
-      await timeoutExpectation;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(leaves).toEqual([roomA.id]);
-
-      joins[0].acknowledge({ success: true, room: roomA });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(leaves).toEqual([roomA.id, roomA.id]);
-      expect(onRepairFailure).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('propagates a definitive late room-not-found acknowledgement after an earlier timeout', async () => {
-    vi.useFakeTimers();
-    try {
-      const { joins } = deferRoomJoinAcknowledgements();
-      const onRepairFailure = vi.fn();
-      onRoomMembershipRepairFailure(onRepairFailure);
-      const missingRoom = room({ id: 'missing-late-room', name: 'Missing Room' });
-      const timedOutJoin = joinRoom(missingRoom.id);
-      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
-      await vi.advanceTimersByTimeAsync(0);
-
-      await vi.advanceTimersByTimeAsync(15000);
-      await timeoutExpectation;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(onRepairFailure).toHaveBeenCalledWith(
-        missingRoom.id,
-        expect.objectContaining({ message: 'Timed out while joining room' }),
-      );
-
-      joins[0].acknowledge({ success: false, error: 'Room not found' });
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(onRepairFailure).toHaveBeenLastCalledWith(
-        missingRoom.id,
-        expect.objectContaining({ message: 'Room not found' }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('does not let late repair acknowledgements reopen the bounded repair budget', async () => {
-    vi.useFakeTimers();
-    try {
-      const { joins, leaves } = deferRoomJoinAcknowledgements();
-      const onRepairFailure = vi.fn();
-      onRoomMembershipRepairFailure(onRepairFailure);
-      const roomA = room({ id: 'room-a', name: 'Room A' });
-      const roomB = room({ id: 'room-b', name: 'Room B' });
-
-      const joinA = joinRoom(roomA.id);
-      const joinB = joinRoom(roomB.id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(joins).toHaveLength(2);
-
-      joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
-      await joinB;
-      joins[0].acknowledge({ success: true, room: roomA, memberCount: 1 });
-      await joinA;
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(leaves).toEqual([roomA.id]);
-      expect(joins).toHaveLength(3);
-
-      await vi.advanceTimersByTimeAsync(15000);
-      expect(joins).toHaveLength(4);
-      await vi.advanceTimersByTimeAsync(15000);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(onRepairFailure).toHaveBeenCalledTimes(1);
-      expect(onRepairFailure).toHaveBeenCalledWith(
-        roomB.id,
-        expect.objectContaining({ message: 'Timed out while joining room' }),
-      );
-      expect(joins).toHaveLength(4);
-
-      joins[2].acknowledge({ success: true, room: roomB, memberCount: 3 });
-      joins[3].acknowledge({ success: true, room: roomB, memberCount: 4 });
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(joins).toHaveLength(4);
-      expect(onRepairFailure).toHaveBeenCalledTimes(1);
-
-      const explicitRetry = ensureRoomJoined(roomB.id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(joins).toHaveLength(5);
-      joins[4].acknowledge({ success: true, room: roomB, memberCount: 5 });
-      await expect(explicitRetry).resolves.toMatchObject({ room: roomB });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('reports a bounded repair failure instead of silently keeping the room ready', async () => {
-    const { joins } = deferRoomJoinAcknowledgements();
-    const onRepairFailure = vi.fn();
-    onRoomMembershipRepairFailure(onRepairFailure);
-    const roomA = room({ id: 'room-a', name: 'Room A' });
-    const roomB = room({ id: 'room-b', name: 'Room B' });
-
-    const joinA = joinRoom(roomA.id);
-    const joinB = joinRoom(roomB.id);
-    await vi.waitFor(() => expect(joins).toHaveLength(2));
-    joins[1].acknowledge({ success: true, room: roomB });
-    await joinB;
-    joins[0].acknowledge({ success: true, room: roomA });
-    await joinA;
-
-    await vi.waitFor(() => expect(joins).toHaveLength(3));
-    joins[2].acknowledge({ success: false, error: 'repair one failed' });
-    await vi.waitFor(() => expect(joins).toHaveLength(4));
-    joins[3].acknowledge({ success: false, error: 'repair two failed' });
-
-    await vi.waitFor(() => {
-      expect(onRepairFailure).toHaveBeenCalledWith(roomB.id, expect.objectContaining({ message: 'repair two failed' }));
-    });
-    expect(joins).toHaveLength(4);
   });
 });

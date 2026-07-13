@@ -13,7 +13,7 @@ const getEmptyAgentTurns = () => [] as RoomAgentTurn[];
 interface UseRoomMessageEventsArgs {
   roomId: string;
   isRoomSessionReady?: boolean;
-  roomMembershipAckRevision?: number;
+  roomResyncRevision?: number;
   containerRef: RefObject<HTMLDivElement>;
   getCurrentMessages: () => Message[];
   getCurrentAgentTurns?: () => RoomAgentTurn[];
@@ -38,7 +38,7 @@ interface UseRoomMessageEventsArgs {
 export const useRoomMessageEvents = ({
   roomId,
   isRoomSessionReady = true,
-  roomMembershipAckRevision = 0,
+  roomResyncRevision = 0,
   containerRef,
   getCurrentMessages,
   getCurrentAgentTurns = getEmptyAgentTurns,
@@ -64,8 +64,8 @@ export const useRoomMessageEvents = ({
   const historyVersionRef = useRef(0);
   const hasMoreMessagesRef = useRef(false);
   const oldestMessageIdRef = useRef<string | undefined>();
-  const roomMembershipAckRevisionRef = useRef(roomMembershipAckRevision);
-  roomMembershipAckRevisionRef.current = roomMembershipAckRevision;
+  const roomResyncRevisionRef = useRef(roomResyncRevision);
+  roomResyncRevisionRef.current = roomResyncRevision;
   const cacheHydrationRef = useRef<{ roomId: string; promise: Promise<void> }>({
     roomId,
     promise: Promise.resolve(),
@@ -94,7 +94,7 @@ export const useRoomMessageEvents = ({
     let serverHistoryLoaded = false;
     let cacheHydrationPromise = Promise.resolve();
 
-    const memoryWindow = isRoomSessionReady ? readMemoryRoomMessageWindow(roomId) : null;
+    const memoryWindow = readMemoryRoomMessageWindow(roomId);
     const filterRoomMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
     const memoryMessages = memoryWindow ? filterRoomMessages(memoryWindow.messages) : [];
     const memoryTurns = memoryWindow?.turns?.filter(turn => turn.roomId === roomId) || [];
@@ -161,20 +161,10 @@ export const useRoomMessageEvents = ({
       }, delayMs);
     };
 
-    if (!isRoomSessionReady) {
-      logRoomMessageDiagnostic('session-unverified', {
-        roomId,
-        roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      updateMessages([]);
-      setAgentTurns([]);
-      setIsLoading(true);
-    } else if (memoryWindow) {
+    if (memoryWindow) {
       logRoomMessageDiagnostic('memory-cache-hit', {
         roomId,
-        roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+        roomResyncRevision: roomResyncRevisionRef.current,
         historyVersion: memoryWindow.historyVersion,
         messageCount: memoryMessages.length,
         socketId: socket.id ?? null,
@@ -191,7 +181,7 @@ export const useRoomMessageEvents = ({
     } else {
       logRoomMessageDiagnostic('persistent-cache-read-start', {
         roomId,
-        roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+        roomResyncRevision: roomResyncRevisionRef.current,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
       });
@@ -203,14 +193,14 @@ export const useRoomMessageEvents = ({
           if (!cachedWindow) {
             logRoomMessageDiagnostic('persistent-cache-miss', {
               roomId,
-              roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+              roomResyncRevision: roomResyncRevisionRef.current,
             });
             return;
           }
           if (cancelled || serverHistoryLoaded) {
             logRoomMessageDiagnostic('persistent-cache-skipped', {
               roomId,
-              roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+              roomResyncRevision: roomResyncRevisionRef.current,
               cancelled,
               serverHistoryLoaded,
               historyVersion: cachedWindow.historyVersion,
@@ -222,7 +212,7 @@ export const useRoomMessageEvents = ({
           const cachedMessages = filterRoomMessages(cachedWindow.messages);
           logRoomMessageDiagnostic('persistent-cache-hit', {
             roomId,
-            roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+            roomResyncRevision: roomResyncRevisionRef.current,
             historyVersion: cachedWindow.historyVersion,
             messageCount: cachedMessages.length,
           });
@@ -237,7 +227,7 @@ export const useRoomMessageEvents = ({
         .catch(error => {
           logRoomMessageDiagnostic('persistent-cache-read-failed', {
             roomId,
-            roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+            roomResyncRevision: roomResyncRevisionRef.current,
             error: error instanceof Error ? error.message : String(error),
           });
         });
@@ -253,7 +243,7 @@ export const useRoomMessageEvents = ({
       const serverWindowIsOlder = historyPayload.historyVersion < historyVersionRef.current;
       logRoomMessageDiagnostic('history-response', {
         roomId,
-        roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+        roomResyncRevision: roomResyncRevisionRef.current,
         requestedHistoryVersion: historyPayload.requestedHistoryVersion ?? null,
         currentHistoryVersion: historyVersionRef.current,
         serverHistoryVersion: historyPayload.historyVersion,
@@ -274,7 +264,7 @@ export const useRoomMessageEvents = ({
           historyRetryCountRef.current += 1;
           logRoomMessageDiagnostic('history-resync-scheduled', {
             roomId,
-            roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+            roomResyncRevision: roomResyncRevisionRef.current,
             retry: historyRetryCountRef.current,
             retryLimit: ROOM_HISTORY_RESYNC_RETRY_LIMIT,
             nextBaseHistoryVersion: historyVersionRef.current,
@@ -288,7 +278,7 @@ export const useRoomMessageEvents = ({
         } else if (historyRetryCountRef.current >= ROOM_HISTORY_RESYNC_RETRY_LIMIT) {
           logRoomMessageDiagnostic('history-resync-exhausted', {
             roomId,
-            roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+            roomResyncRevision: roomResyncRevisionRef.current,
             retryLimit: ROOM_HISTORY_RESYNC_RETRY_LIMIT,
             currentHistoryVersion: historyVersionRef.current,
             serverHistoryVersion: historyPayload.historyVersion,
@@ -344,7 +334,7 @@ export const useRoomMessageEvents = ({
       const nextHistoryVersion = bumpLocalHistoryVersion();
       logRoomMessageDiagnostic('new-message', {
         roomId,
-        roomMembershipAckRevision: roomMembershipAckRevisionRef.current,
+        roomResyncRevision: roomResyncRevisionRef.current,
         messageId: message.id,
         messageType: message.messageType,
         nextHistoryVersion,
@@ -577,13 +567,12 @@ export const useRoomMessageEvents = ({
     closeEditModal,
     onAIStreamSettled,
     warningPrefix,
-    isRoomSessionReady,
   ]);
 
   useEffect(() => {
     if (!isRoomSessionReady) return;
 
-    const retryContext = `${roomId}:${roomMembershipAckRevision}`;
+    const retryContext = `${roomId}:${roomResyncRevision}`;
     if (historyRetryContextRef.current !== retryContext) {
       historyRetryContextRef.current = retryContext;
       historyRetryCountRef.current = 0;
@@ -599,9 +588,9 @@ export const useRoomMessageEvents = ({
       const baseHistoryVersion = historyVersionRef.current;
       logRoomMessageDiagnostic('history-request', {
         roomId,
-        roomMembershipAckRevision,
+        roomResyncRevision,
         historyRefreshNonce,
-        reason: historyRetryCountRef.current > 0 ? 'version-reconciliation' : 'membership-ack',
+        reason: historyRetryCountRef.current > 0 ? 'version-reconciliation' : 'session-resync',
         baseHistoryVersion,
         limit: ROOM_MESSAGE_PAGE_LIMIT,
         socketId: socket.id ?? null,
@@ -617,5 +606,5 @@ export const useRoomMessageEvents = ({
     return () => {
       cancelled = true;
     };
-  }, [historyRefreshNonce, isRoomSessionReady, roomId, roomMembershipAckRevision]);
+  }, [historyRefreshNonce, isRoomSessionReady, roomId, roomResyncRevision]);
 };

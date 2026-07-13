@@ -134,7 +134,7 @@ interface MessageListProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   isRoomSessionReady?: boolean;
-  roomMembershipAckRevision?: number;
+  roomResyncRevision?: number;
 }
 
 export interface MessageListHandle {
@@ -166,7 +166,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onAddReviewComment,
   onRemoveReviewComment,
   isRoomSessionReady = true,
-  roomMembershipAckRevision = 0,
+  roomResyncRevision = 0,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -176,18 +176,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // already shows the cached window (requires the `key={roomId}` remount in the
   // parent so these run per room).
   const [messages, setMessages] = useState<Message[]>(() => {
-    if (!isRoomSessionReady) return [];
     const cached = readMemoryRoomMessageWindow(roomId);
     return cached ? cached.messages.filter(msg => msg.roomId === roomId) : [];
   });
   const [agentTurns, setAgentTurns] = useState<RoomAgentTurn[]>(() => (
-    isRoomSessionReady ? readMemoryRoomMessageWindow(roomId)?.turns || [] : []
+    readMemoryRoomMessageWindow(roomId)?.turns || []
   ));
-  const [isLoading, setIsLoading] = useState(() => !isRoomSessionReady || !readMemoryRoomMessageWindow(roomId));
+  const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMoreMessages, setHasMoreMessages] = useState(() => isRoomSessionReady ? readMemoryRoomMessageWindow(roomId)?.hasMore ?? false : false);
-  const [historyVersion, setHistoryVersion] = useState(() => isRoomSessionReady ? readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0 : 0);
-  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => isRoomSessionReady ? readMemoryRoomMessageWindow(roomId)?.oldestMessageId : undefined);
+  const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
+  const [historyVersion, setHistoryVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0);
+  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
   // Always points at the latest messages so item handlers can stay reference-stable.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -903,7 +902,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useRoomMessageEvents({
     roomId,
     isRoomSessionReady,
-    roomMembershipAckRevision,
+    roomResyncRevision,
     containerRef,
     getCurrentMessages,
     getCurrentAgentTurns,

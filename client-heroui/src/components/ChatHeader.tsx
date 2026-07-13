@@ -29,6 +29,7 @@ interface ChatHeaderProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
   onRetryRoomSession: () => void;
   handleCopyToClipboard: (text: string) => void;
@@ -52,6 +53,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
   onRetryRoomSession,
   handleCopyToClipboard,
@@ -137,7 +139,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <Icon icon="lucide:chevron-left" className="h-4 w-4" />
         </Button>
         <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap">
-          {isRestoringRoom ? (
+          {showRoomSessionSpinner ? (
             <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
           ) : null}
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>

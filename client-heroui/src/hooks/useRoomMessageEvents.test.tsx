@@ -66,7 +66,7 @@ const EMPTY_MESSAGES: Message[] = [];
 type HarnessProps = {
   roomId?: string;
   isRoomSessionReady?: boolean;
-  roomMembershipAckRevision?: number;
+  roomResyncRevision?: number;
   messageToDeleteId?: string;
   messageToEditId?: string;
   currentMessages?: Message[];
@@ -100,7 +100,7 @@ type HarnessTestProps = Omit<HarnessProps, 'roomId' | 'messageToDeleteId' | 'mes
 const Harness = ({
   roomId = 'room-1',
   isRoomSessionReady = true,
-  roomMembershipAckRevision = 0,
+  roomResyncRevision = 0,
   messageToDeleteId,
   messageToEditId,
   currentMessages = EMPTY_MESSAGES,
@@ -123,7 +123,7 @@ const Harness = ({
   useRoomMessageEvents({
     roomId,
     isRoomSessionReady,
-    roomMembershipAckRevision,
+    roomResyncRevision,
     containerRef,
     getCurrentMessages,
     updateMessages,
@@ -273,7 +273,7 @@ describe('useRoomMessageEvents', () => {
     ]);
   });
 
-  it('requests history again after a new verified membership ack without resetting subscriptions', async () => {
+  it('requests history for a new resync revision without resetting subscriptions', async () => {
     cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
       roomId: 'room-1',
       messages: [message({ id: 'cached-1' })],
@@ -283,7 +283,7 @@ describe('useRoomMessageEvents', () => {
       cachedAt: 1,
     });
     const props = createHarnessProps();
-    const rendered = render(<Harness {...props} roomMembershipAckRevision={1} />);
+    const rendered = render(<Harness {...props} roomResyncRevision={1} />);
 
     socketMock.emit.mockClear();
     socketMock.on.mockClear();
@@ -291,7 +291,7 @@ describe('useRoomMessageEvents', () => {
     props.closeEditModal.mockClear();
     props.closeDeleteModal.mockClear();
 
-    rendered.rerender(<Harness {...props} roomMembershipAckRevision={2} />);
+    rendered.rerender(<Harness {...props} roomResyncRevision={2} />);
 
     await waitFor(() => {
       expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
@@ -306,12 +306,22 @@ describe('useRoomMessageEvents', () => {
     expect(props.closeDeleteModal).not.toHaveBeenCalled();
   });
 
-  it('does not request history merely because the socket connected before room rejoin was acknowledged', async () => {
+  it('keeps cached messages visible but does not request history before the room session is ready', async () => {
+    const cachedMessage = message({ id: 'cached-during-reconnect', content: 'still visible' });
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
+      roomId: 'room-1',
+      messages: [cachedMessage],
+      historyVersion: 7,
+      hasMore: false,
+      oldestMessageId: cachedMessage.id,
+      cachedAt: 1,
+    });
     const props = createHarnessProps();
-    render(<Harness {...props} isRoomSessionReady={false} roomMembershipAckRevision={1} />);
+    render(<Harness {...props} isRoomSessionReady={false} roomResyncRevision={1} />);
     await act(async () => {
       await Promise.resolve();
     });
+    expect(props.updateMessages).toHaveBeenCalledWith([cachedMessage]);
     socketMock.emit.mockClear();
 
     socketMock.trigger('connect');
@@ -461,7 +471,7 @@ describe('useRoomMessageEvents', () => {
       cachedAt: 1,
     });
     const props = createHarnessProps();
-    render(<Harness {...props} roomMembershipAckRevision={1} />);
+    render(<Harness {...props} roomResyncRevision={1} />);
     await waitFor(() => {
       expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
         roomId: 'room-1',

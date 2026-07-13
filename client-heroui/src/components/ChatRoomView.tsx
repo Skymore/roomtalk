@@ -15,8 +15,9 @@ interface ChatRoomViewProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
-  roomMembershipAckRevision?: number;
+  roomResyncRevision?: number;
   onRetryRoomSession: () => void;
   username: string;
   clientId: string;
@@ -38,8 +39,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
-  roomMembershipAckRevision = 0,
+  roomResyncRevision = 0,
   onRetryRoomSession,
   username,
   clientId,
@@ -96,6 +98,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         currentRoom={currentRoom}
         memberCount={memberCount}
         isRestoringRoom={isRestoringRoom}
+        showRoomSessionSpinner={showRoomSessionSpinner}
         isRoomSessionReady={isRoomSessionReady}
         onRetryRoomSession={onRetryRoomSession}
         handleCopyToClipboard={handleCopyToClipboard}
@@ -127,7 +130,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onReply={setReplyToMessage}
             roomPermissions={effectiveRoomPermissions}
             isRoomSessionReady={isRoomSessionReady}
-            roomMembershipAckRevision={roomMembershipAckRevision}
+            roomResyncRevision={roomResyncRevision}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />

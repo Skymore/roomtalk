@@ -5,17 +5,14 @@ import { RoomList } from "../components/RoomList";
 import { SavedRoomList } from "../components/SavedRoomList";
 import {
   socket,
-  joinRoom,
-  ensureRoomJoined,
+  roomSessionController,
   leaveRoom,
   getRoomById,
   clientId,
   getRoomMemberCount,
   onRoomMemberChange,
-  onRoomMembershipRepairFailure,
   onUsernameAdopted,
   setUsername as emitUsername,
-  reconnectSocket,
   renameRoom,
   saveRoomToServer,
   unsaveRoomFromServer,
@@ -25,6 +22,7 @@ import {
   clearRoomMessages as clearRoomMessagesFromServer,
   type RoomJoinResult,
 } from "../utils/socket";
+import { RoomSessionSupersededError, type RoomSessionSource } from "../utils/roomSessionController";
 import {
   Room, RoomMemberEvent, RoomPermissions,
 } from "../utils/types";
@@ -47,43 +45,24 @@ import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
 import { CodeAgentRoomView } from "../components/CodeAgentRoomView";
 import { StatusMessage } from "../components/StatusMessage";
+import { useRoomSession } from "../hooks/useRoomSession";
 
 const isDesktopLayout = () => (
   typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
 );
 
-type RoomRestoreSource = "storage" | "manual" | "url" | "visibility" | "pageshow" | "online" | "socket-connect";
+type RoomRestoreSource = RoomSessionSource;
 const VISIBLE_RESTORE_SOURCES = new Set<RoomRestoreSource>(["storage", "manual", "url"]);
-const BACKGROUND_RESTORE_SUPPRESSION_MS = 250;
 // 后台 rejoin 超过这个时长仍未完成才显示"重连中"转圈:
 // 健康连接下的 rejoin 是毫秒级的,立即显示会在每次切前台时闪一下(回归 #6)
 const RECONNECT_INDICATOR_DELAY_MS = 400;
 const ERROR_AUTO_DISMISS_MS = 8000;
-
-type ActiveRoomSessionState = {
-  roomId: string;
-  status: "restoring" | "ready" | "unavailable";
-};
-
-type InFlightBackgroundRestore = {
-  roomId: string;
-  promise: Promise<Room | null>;
-};
-
-type InFlightRoomSessionRequest = {
-  roomId: string;
-  password?: string;
-  source: RoomRestoreSource;
-  generation: number;
-  promise: Promise<Room | null>;
-};
 
 
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
   const isInitialMount = useRef(true);
-  const pendingRestoreRoomIdRef = useRef<string | null>(null);
   // 页面高度由 App shell 的 visual viewport 变量控制
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme(
@@ -98,10 +77,7 @@ export const MessagePage: React.FC = () => {
   const [isLoadingSavedRooms, setIsLoadingSavedRooms] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const currentRoomRef = useRef<Room | null>(null);
-  const [activeRoomSession, setActiveRoomSession] = useState<ActiveRoomSessionState | null>(null);
-  const activeRoomSessionRef = useRef<ActiveRoomSessionState | null>(null);
-  const roomSessionGenerationRef = useRef(0);
-  const [roomMembershipAckRevision, setRoomMembershipAckRevision] = useState(0);
+  const roomSession = useRoomSession();
   // Room metadata lookups are their own intent stream. A late response from an
   // older URL/manual lookup must never reopen its modal or start a stale join.
   const roomLookupGenerationRef = useRef(0);
@@ -116,16 +92,12 @@ export const MessagePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const visibleRestoreGenerationRef = useRef<number | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const reconnectIndicatorTimerRef = useRef<number | null>(null);
-  const reconnectIndicatorOwnerRef = useRef<symbol | null>(null);
-  const inFlightBackgroundRestoreRef = useRef<InFlightBackgroundRestore | null>(null);
-  const inFlightRoomSessionRequestRef = useRef<InFlightRoomSessionRequest | null>(null);
-  const backgroundRestoreSuppressUntilByRoomRef = useRef(new Map<string, number>());
+  const appliedRoomSessionResultRef = useRef<RoomJoinResult | null>(null);
+  const handledUnavailableErrorRef = useRef<Error | null>(null);
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
-  const [isRestoringRoom, setIsRestoringRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
   const [roomToJoin, setRoomToJoin] = useState<Room | null>(null);
   // 添加房间成员数量状态
@@ -215,45 +187,33 @@ export const MessagePage: React.FC = () => {
     };
   }, []);
 
-  // 重连指示器有 owner:只有当前 owner(最近一次启动的恢复)能撤销它,
-  // 旧恢复迟到的 finally 不得清掉新恢复刚 arm 的计时器/已显示的 spinner。
-  const clearReconnectIndicator = useCallback((owner?: symbol) => {
-    if (owner !== undefined && reconnectIndicatorOwnerRef.current !== owner) {
+  useEffect(() => {
+    const shouldDelayReconnectIndicator = Boolean(
+      currentRoom
+      && roomSession.roomId === currentRoom.id
+      && roomSession.result
+      && (roomSession.phase === "retrying" || roomSession.phase === "registering" || roomSession.phase === "joining")
+    );
+    if (!shouldDelayReconnectIndicator) {
+      if (reconnectIndicatorTimerRef.current !== null) {
+        window.clearTimeout(reconnectIndicatorTimerRef.current);
+        reconnectIndicatorTimerRef.current = null;
+      }
+      setIsReconnecting(false);
       return;
     }
-    reconnectIndicatorOwnerRef.current = null;
-    if (reconnectIndicatorTimerRef.current !== null) {
-      window.clearTimeout(reconnectIndicatorTimerRef.current);
+
+    reconnectIndicatorTimerRef.current = window.setTimeout(() => {
       reconnectIndicatorTimerRef.current = null;
-    }
-    setIsReconnecting(false);
-  }, []);
-
-  const clearBackgroundRestoreState = useCallback((roomId?: string | null) => {
-    if (roomId) {
-      backgroundRestoreSuppressUntilByRoomRef.current.delete(roomId);
-    } else {
-      backgroundRestoreSuppressUntilByRoomRef.current.clear();
-    }
-
-    if (!roomId || inFlightBackgroundRestoreRef.current?.roomId === roomId) {
-      inFlightBackgroundRestoreRef.current = null;
-    }
-    // 手动切房/离开/断连时,后台恢复的指示器一并让位
-    clearReconnectIndicator();
-  }, [clearReconnectIndicator]);
-
-  const commitActiveRoomSession = useCallback((next: ActiveRoomSessionState | null) => {
-    logRoomSessionDiagnostic("state", {
-      roomId: next?.roomId ?? null,
-      status: next?.status ?? "none",
-      generation: roomSessionGenerationRef.current,
-      socketId: socket.id ?? null,
-      socketConnected: socket.connected,
-    });
-    activeRoomSessionRef.current = next;
-    setActiveRoomSession(next);
-  }, []);
+      setIsReconnecting(true);
+    }, RECONNECT_INDICATOR_DELAY_MS);
+    return () => {
+      if (reconnectIndicatorTimerRef.current !== null) {
+        window.clearTimeout(reconnectIndicatorTimerRef.current);
+        reconnectIndicatorTimerRef.current = null;
+      }
+    };
+  }, [currentRoom, roomSession.phase, roomSession.result, roomSession.roomId]);
 
   // 服务端返回的房间对象是完整真值(room_updated 广播、join/settings/rename ack)。
   // 必须整体替换而不能 spread 合并:被清除的字段(关闭排期后的 postingSchedule、
@@ -374,29 +334,19 @@ export const MessagePage: React.FC = () => {
     source: RoomRestoreSource;
   }) => {
     const { roomId, password, fallbackRoom, source } = options;
-    const generation = roomSessionGenerationRef.current + 1;
     const previousRoomId = currentRoomRef.current?.id ?? null;
     const previousRoom = currentRoomRef.current;
     const showRestoreIndicator = VISIBLE_RESTORE_SOURCES.has(source);
-    const previousSession = activeRoomSessionRef.current;
-    const shouldGuardRoomShell = showRestoreIndicator || previousSession?.roomId !== roomId || previousSession.status !== "ready";
-    roomSessionGenerationRef.current = generation;
     logRoomSessionDiagnostic("join-start", {
       roomId,
       source,
-      generation,
+      sessionEpoch: roomSessionController.getSnapshot().sessionEpoch,
       previousRoomId,
-      previousStatus: previousSession?.status ?? "none",
+      previousStatus: roomSessionController.getSnapshot().phase,
       socketId: socket.id ?? null,
       socketConnected: socket.connected,
     });
-    pendingRestoreRoomIdRef.current = roomId;
-    if (shouldGuardRoomShell) {
-      commitActiveRoomSession({ roomId, status: "restoring" });
-    }
     if (showRestoreIndicator) {
-      visibleRestoreGenerationRef.current = generation;
-      setIsRestoringRoom(true);
       setError(null);
     }
 
@@ -414,31 +364,18 @@ export const MessagePage: React.FC = () => {
     }
 
     try {
-      const result = typeof password === "undefined"
-        ? await ensureRoomJoined(roomId)
-        : await joinRoom(roomId, password);
-      if (roomSessionGenerationRef.current !== generation) {
-        logRoomSessionDiagnostic("join-stale-ack", {
-          roomId,
-          source,
-          generation,
-          currentGeneration: roomSessionGenerationRef.current,
-          socketId: socket.id ?? null,
-          socketConnected: socket.connected,
-        });
-        return null;
-      }
+      const result = await roomSessionController.selectRoom({ roomId, password, source });
+      const settledSession = roomSessionController.getSnapshot();
+      if (settledSession.roomId !== roomId || settledSession.phase !== "ready") return null;
 
       const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
-      pendingRestoreRoomIdRef.current = null;
       if (joinedRoom) {
         reactivateCachedRoomMessageWindow(roomId);
-        setRoomMembershipAckRevision(generation);
-        commitActiveRoomSession({ roomId, status: "ready" });
         logRoomSessionDiagnostic("join-ready", {
           roomId,
           source,
-          generation,
+          sessionEpoch: settledSession.sessionEpoch,
+          resyncRevision: settledSession.resyncRevision,
           memberCount: result.memberCount ?? null,
           socketId: socket.id ?? null,
           socketConnected: socket.connected,
@@ -447,7 +384,7 @@ export const MessagePage: React.FC = () => {
       }
       return joinedRoom;
     } catch (error) {
-      if (roomSessionGenerationRef.current !== generation) {
+      if (error instanceof RoomSessionSupersededError || (error instanceof Error && error.name === "RoomSessionSupersededError")) {
         return null;
       }
 
@@ -455,19 +392,11 @@ export const MessagePage: React.FC = () => {
       logRoomSessionDiagnostic("join-failed", {
         roomId,
         source,
-        generation,
+        sessionEpoch: roomSessionController.getSnapshot().sessionEpoch,
         error: message,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
       });
-      const outcomeIsUncertain = /timed out while joining room|socket disconnected/i.test(message);
-      const canRollbackToPreviousRoom = Boolean(
-        isSwitchingRoom
-        && previousRoom
-        && previousSession?.roomId === previousRoom.id
-        && previousSession?.status === "ready"
-        && !outcomeIsUncertain
-      );
       console.error(`Failed to ensure active room session from ${source}:`, error);
 
       if (/room not found/i.test(message)) {
@@ -475,187 +404,142 @@ export const MessagePage: React.FC = () => {
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
         void invalidatePersistentRoomCache(roomId);
-        if (canRollbackToPreviousRoom && previousRoom && previousSession) {
-          currentRoomRef.current = previousRoom;
-          setCurrentRoom(previousRoom);
-          commitActiveRoomSession(previousSession);
-          clearRoomUrlParam();
-          setError(message);
-        } else {
-          currentRoomRef.current = null;
-          setCurrentRoom(null);
-          setRoomPermissions(null);
-          setMemberCount(null);
-          commitActiveRoomSession(null);
-          setView("rooms");
-          saveCurrentRoom(null);
-          clearRoomUrlParam();
-          setError(translationRef.current("errorRoomNoLongerExists"));
+      }
+
+      if (isSwitchingRoom && previousRoom) {
+        try {
+          const rollbackResult = await roomSessionController.selectRoom({
+            roomId: previousRoom.id,
+            source: "retry",
+          });
+          applyRoomSessionResult(previousRoom.id, rollbackResult, previousRoom);
+        } catch (rollbackError) {
+          console.error("Failed to restore the previous room after a rejected room switch:", rollbackError);
         }
-      } else if (canRollbackToPreviousRoom && previousRoom && previousSession) {
-        currentRoomRef.current = previousRoom;
-        setCurrentRoom(previousRoom);
-        commitActiveRoomSession(previousSession);
         if (/password is required or incorrect/i.test(message) && fallbackRoom) {
           setRoomToJoin(fallbackRoom);
         }
+        clearRoomUrlParam();
         setError(message);
-      } else if (showRestoreIndicator) {
-        if (fallbackRoom && isSwitchingRoom) {
-          currentRoomRef.current = fallbackRoom;
-          setCurrentRoom(fallbackRoom);
-          setRoomPermissions(null);
-        }
-        setError(source === "storage" ? translationRef.current("errorRestoringRoom") : message);
+        return null;
       }
-      if (!/room not found/i.test(message) && !canRollbackToPreviousRoom) {
-        const latestSession = activeRoomSessionRef.current;
-        if (latestSession?.roomId === roomId && latestSession.status !== "ready") {
-          commitActiveRoomSession({ roomId, status: "unavailable" });
-        }
+
+      if (/room not found/i.test(message)) {
+        leaveRoom(roomId);
+        currentRoomRef.current = null;
+        setCurrentRoom(null);
+        setRoomPermissions(null);
+        setMemberCount(null);
+        setView("rooms");
+        saveCurrentRoom(null);
+        clearRoomUrlParam();
+        setError(translationRef.current("errorRoomNoLongerExists"));
+      } else if (showRestoreIndicator) {
+        setError(source === "storage" ? translationRef.current("errorRestoringRoom") : message);
       }
 
       return null;
-    } finally {
-      if (roomSessionGenerationRef.current === generation) {
-        pendingRestoreRoomIdRef.current = null;
-      }
-      if (visibleRestoreGenerationRef.current === generation) {
-        visibleRestoreGenerationRef.current = null;
-        setIsRestoringRoom(false);
-      }
     }
-  }, [applyRoomSessionResult, clearRoomUrlParam, commitActiveRoomSession]);
+  }, [applyRoomSessionResult, clearRoomUrlParam]);
 
   const ensureActiveRoomSession = useCallback((options: {
     roomId: string;
     password?: string;
     fallbackRoom?: Room | null;
     source: RoomRestoreSource;
-  }): Promise<Room | null> => {
-    const existing = inFlightRoomSessionRequestRef.current;
-    const sameRequest = Boolean(
-      existing
-      && existing.roomId === options.roomId
-      && existing.password === options.password
-      && existing.generation === roomSessionGenerationRef.current
-    );
-    const existingIsVisible = existing ? VISIBLE_RESTORE_SOURCES.has(existing.source) : false;
-    const incomingIsBackground = !VISIBLE_RESTORE_SOURCES.has(options.source);
+  }): Promise<Room | null> => runActiveRoomSession(options), [runActiveRoomSession]);
 
-    // Every automatic resume signal and the initial storage restore converge
-    // on one room-session request. A new visible/manual request may supersede a
-    // background request, but background events never duplicate a visible one.
-    if (existing && sameRequest && (existingIsVisible || incomingIsBackground)) {
-      return existing.promise;
-    }
-
-    let promise: Promise<Room | null>;
-    promise = runActiveRoomSession(options).finally(() => {
-      if (inFlightRoomSessionRequestRef.current?.promise === promise) {
-        inFlightRoomSessionRequestRef.current = null;
-      }
-    });
-    inFlightRoomSessionRequestRef.current = {
-      roomId: options.roomId,
-      password: options.password,
-      source: options.source,
-      generation: roomSessionGenerationRef.current,
-      promise,
-    };
-    return promise;
-  }, [runActiveRoomSession]);
-
-  const scheduleRoomRestore = useCallback((source: RoomRestoreSource) => {
+  const scheduleRoomRestore = useCallback((source: "visibility" | "pageshow" | "online") => {
     const activeRoom = currentRoomRef.current;
     if (!activeRoom) {
       logRoomSessionDiagnostic("restore-skipped-no-room", {
         source,
-        generation: roomSessionGenerationRef.current,
+        sessionEpoch: roomSessionController.getSnapshot().sessionEpoch,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
       });
       return null;
     }
-
-    const inFlightRestore = inFlightBackgroundRestoreRef.current;
-    if (inFlightRestore?.roomId === activeRoom.id) {
-      logRoomSessionDiagnostic("restore-coalesced", {
-        roomId: activeRoom.id,
-        source,
-        generation: roomSessionGenerationRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      return inFlightRestore.promise;
-    }
-
-    const now = Date.now();
-    const suppressedUntil = backgroundRestoreSuppressUntilByRoomRef.current.get(activeRoom.id) ?? 0;
-    if (now < suppressedUntil) {
-      logRoomSessionDiagnostic("restore-suppressed", {
-        roomId: activeRoom.id,
-        source,
-        generation: roomSessionGenerationRef.current,
-        remainingMs: suppressedUntil - now,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      return null;
-    }
-
-    backgroundRestoreSuppressUntilByRoomRef.current.set(
-      activeRoom.id,
-      now + BACKGROUND_RESTORE_SUPPRESSION_MS,
-    );
     logRoomSessionDiagnostic("restore-scheduled", {
       roomId: activeRoom.id,
       source,
-      generation: roomSessionGenerationRef.current,
+      sessionEpoch: roomSessionController.getSnapshot().sessionEpoch,
       socketId: socket.id ?? null,
       socketConnected: socket.connected,
     });
-    reconnectSocket();
+    return roomSessionController.resume(source)
+      .then((result) => {
+        if (result) applyRoomSessionResult(activeRoom.id, result, activeRoom);
+        return result?.room || activeRoom;
+      })
+      .catch((error) => {
+        if (!(error instanceof RoomSessionSupersededError) && (!(error instanceof Error) || error.name !== "RoomSessionSupersededError")) {
+          console.error(`Scheduled room restore failed from ${source}:`, error);
+        }
+        return null;
+      });
+  }, [applyRoomSessionResult]);
 
-    // 延迟指示器:rejoin 超过宽限期仍未完成才显示,健康场景零闪烁
-    const indicatorOwner = Symbol('reconnect-indicator');
-    reconnectIndicatorOwnerRef.current = indicatorOwner;
-    if (reconnectIndicatorTimerRef.current !== null) {
-      window.clearTimeout(reconnectIndicatorTimerRef.current);
+  // Socket replacement is recovered inside the controller, so there may be no
+  // page-level caller waiting on the new join acknowledgement. Consume each new
+  // ready result once and project it into the room shell here.
+  useEffect(() => {
+    if (
+      roomSession.phase !== "ready"
+      || !roomSession.roomId
+      || !roomSession.result
+      || appliedRoomSessionResultRef.current === roomSession.result
+    ) {
+      return;
     }
-    reconnectIndicatorTimerRef.current = window.setTimeout(() => {
-      reconnectIndicatorTimerRef.current = null;
-      if (reconnectIndicatorOwnerRef.current === indicatorOwner) {
-        setIsReconnecting(true);
-      }
-    }, RECONNECT_INDICATOR_DELAY_MS);
 
-    const promise = ensureActiveRoomSession({
-      roomId: activeRoom.id,
-      fallbackRoom: activeRoom,
-      source,
-    }).then((joinedRoom) => {
-      if (!joinedRoom) {
-        backgroundRestoreSuppressUntilByRoomRef.current.delete(activeRoom.id);
-      }
-      return joinedRoom;
-    }).catch((error) => {
-      backgroundRestoreSuppressUntilByRoomRef.current.delete(activeRoom.id);
-      console.error(`Scheduled room restore failed from ${source}:`, error);
-      return null;
-    }).finally(() => {
-      clearReconnectIndicator(indicatorOwner);
-      if (inFlightBackgroundRestoreRef.current?.promise === promise) {
-        inFlightBackgroundRestoreRef.current = null;
-      }
-    });
+    appliedRoomSessionResultRef.current = roomSession.result;
+    handledUnavailableErrorRef.current = null;
+    const fallbackRoom = currentRoomRef.current?.id === roomSession.roomId
+      ? currentRoomRef.current
+      : null;
+    const joinedRoom = applyRoomSessionResult(roomSession.roomId, roomSession.result, fallbackRoom);
+    if (joinedRoom) {
+      reactivateCachedRoomMessageWindow(roomSession.roomId);
+      setError(null);
+    }
+  }, [applyRoomSessionResult, roomSession.phase, roomSession.result, roomSession.roomId]);
 
-    inFlightBackgroundRestoreRef.current = {
-      roomId: activeRoom.id,
-      promise,
-    };
-    return promise;
-  }, [clearReconnectIndicator, ensureActiveRoomSession]);
+  // A background reconnect has no awaiting page promise either. Surface its
+  // terminal failure from the same controller snapshot and clean up only when
+  // the room itself is definitively gone or access was revoked.
+  useEffect(() => {
+    if (
+      roomSession.phase !== "unavailable"
+      || !roomSession.roomId
+      || !roomSession.error
+      || handledUnavailableErrorRef.current === roomSession.error
+      || currentRoomRef.current?.id !== roomSession.roomId
+    ) {
+      return;
+    }
+
+    handledUnavailableErrorRef.current = roomSession.error;
+    setRoomPermissions(null);
+    const definitiveRemoval = /room not found|room access was removed/i.test(roomSession.error.message);
+    if (!definitiveRemoval) {
+      setError(translationRef.current("errorRestoringRoom"));
+      return;
+    }
+
+    const removedRoomId = roomSession.roomId;
+    leaveRoom(removedRoomId);
+    setRooms((previous) => previous.filter(room => room.id !== removedRoomId));
+    setSavedRooms((previous) => previous.filter(room => room.id !== removedRoomId));
+    void invalidatePersistentRoomCache(removedRoomId);
+    currentRoomRef.current = null;
+    setCurrentRoom(null);
+    setMemberCount(null);
+    setView("rooms");
+    saveCurrentRoom(null);
+    clearRoomUrlParam();
+    setError(translationRef.current("errorRoomNoLongerExists"));
+  }, [clearRoomUrlParam, roomSession.error, roomSession.phase, roomSession.roomId]);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -841,30 +725,19 @@ export const MessagePage: React.FC = () => {
       setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
       void invalidatePersistentRoomCache(roomId);
       const currentRoomAtRemoval = currentRoomRef.current;
-      const removedPendingTarget = pendingRestoreRoomIdRef.current === roomId;
+      const removedPendingTarget = roomSessionController.getSnapshot().roomId === roomId;
       if (currentRoomAtRemoval?.id !== roomId && !removedPendingTarget) {
         return;
       }
 
-      clearBackgroundRestoreState(roomId);
-      roomSessionGenerationRef.current += 1;
-      pendingRestoreRoomIdRef.current = null;
-      visibleRestoreGenerationRef.current = null;
+      leaveRoom(roomId);
       setRoomPermissions(null);
-      setIsRestoringRoom(false);
       clearRoomUrlParam();
       setError(translationRef.current("roomAccessRemoved"));
-      if (removedPendingTarget) {
-        leaveRoom(roomId);
-      }
 
       if (removedPendingTarget && currentRoomAtRemoval && currentRoomAtRemoval.id !== roomId) {
-        // A cross-worker delete/remove can be broadcast after the target join's
-        // final durable read but before its acknowledgement. Cancel that join
-        // generation and repair the previously active room: the target handler
-        // may already have left its old Socket.IO membership before the late
-        // success ack reaches this client.
-        commitActiveRoomSession({ roomId: currentRoomAtRemoval.id, status: "restoring" });
+        // The controller owns the canonical target. Selecting the previous room
+        // makes that rollback the final serialized membership mutation.
         void ensureActiveRoomSession({
           roomId: currentRoomAtRemoval.id,
           fallbackRoom: currentRoomAtRemoval,
@@ -880,7 +753,6 @@ export const MessagePage: React.FC = () => {
       currentRoomRef.current = null;
       setCurrentRoom(null);
       setMemberCount(null);
-      commitActiveRoomSession(null);
       setView("rooms");
       saveCurrentRoom(null);
     };
@@ -904,44 +776,12 @@ export const MessagePage: React.FC = () => {
     socket.on("room_permissions", handleRoomPermissions);
     socket.on("room_permissions_invalidated", handleRoomPermissionsInvalidated);
     socket.on("room_removed", handleRoomRemoved);
-    const unsubscribeRepairFailure = onRoomMembershipRepairFailure((roomId, repairError) => {
-      const roomIsMissing = /room not found/i.test(repairError.message);
-      if (roomIsMissing) {
-        leaveRoom(roomId);
-        setRooms((previous) => previous.filter(room => room.id !== roomId));
-        setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
-        void invalidatePersistentRoomCache(roomId);
-      }
-      if (currentRoomRef.current?.id !== roomId) return;
-      clearBackgroundRestoreState(roomId);
-      if (roomIsMissing) {
-        roomSessionGenerationRef.current += 1;
-        pendingRestoreRoomIdRef.current = null;
-        visibleRestoreGenerationRef.current = null;
-        currentRoomRef.current = null;
-        setCurrentRoom(null);
-        setRoomPermissions(null);
-        setMemberCount(null);
-        commitActiveRoomSession(null);
-        setIsRestoringRoom(false);
-        setView("rooms");
-        saveCurrentRoom(null);
-        clearRoomUrlParam();
-        setError(translationRef.current("errorRoomNoLongerExists"));
-        return;
-      }
-      commitActiveRoomSession({ roomId, status: "unavailable" });
-      setRoomPermissions(null);
-      setIsRestoringRoom(false);
-      setError(translationRef.current("errorRestoringRoom"));
-    });
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
       const memberUpdate = getRoomMemberUpdate(currentRoomRef.current, event);
       if (memberUpdate) {
         setMemberCount(memberUpdate.count);
-        setIsRestoringRoom(false);
       }
     });
 
@@ -953,14 +793,13 @@ export const MessagePage: React.FC = () => {
       socket.off("room_permissions", handleRoomPermissions);
       socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
       socket.off("room_removed", handleRoomRemoved);
-      unsubscribeRepairFailure();
       unsubscribe();
     };
-  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, commitActiveRoomSession, ensureActiveRoomSession, refreshRoomPermissions]);
+  }, [applyServerRoom, clearRoomUrlParam, ensureActiveRoomSession, refreshRoomPermissions]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
-    const restoreCurrentRoom = (source: RoomRestoreSource) => {
+    const restoreCurrentRoom = (source: "visibility" | "pageshow" | "online") => {
       void scheduleRoomRestore(source);
     };
 
@@ -977,51 +816,17 @@ export const MessagePage: React.FC = () => {
       restoreCurrentRoom("pageshow");
     };
     const handleOnline = () => restoreCurrentRoom("online");
-    const handleSocketConnect = () => {
-      logRoomSessionDiagnostic("active-room-connect-observed", {
-        roomId: currentRoomRef.current?.id ?? null,
-        generation: roomSessionGenerationRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      restoreCurrentRoom("socket-connect");
-    };
-    const handleSocketDisconnect = () => {
-      const activeRoom = currentRoomRef.current;
-      logRoomSessionDiagnostic("active-room-disconnect-observed", {
-        roomId: activeRoom?.id ?? null,
-        generation: roomSessionGenerationRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      clearBackgroundRestoreState(activeRoom?.id ?? null);
-      // A reconnect gets a new Socket.IO membership. Invalidate any restore
-      // tied to the old transport immediately and keep room side effects locked
-      // until the new socket's join acknowledgement succeeds.
-      roomSessionGenerationRef.current += 1;
-      pendingRestoreRoomIdRef.current = null;
-      visibleRestoreGenerationRef.current = null;
-      setIsRestoringRoom(false);
-      setRoomPermissions(null);
-      if (activeRoom) {
-        commitActiveRoomSession({ roomId: activeRoom.id, status: "restoring" });
-      }
-    };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("online", handleOnline);
-    socket.on("connect", handleSocketConnect);
-    socket.on("disconnect", handleSocketDisconnect);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("online", handleOnline);
-      socket.off("connect", handleSocketConnect);
-      socket.off("disconnect", handleSocketDisconnect);
     };
-  }, [clearBackgroundRestoreState, commitActiveRoomSession, scheduleRoomRestore]);
+  }, [scheduleRoomRestore]);
 
   // posting 窗口跨越边界时,本地排期数据足以算出边界时刻;到点后向服务端
   // 重新拉取权限快照,让输入框的 canPost 状态自动翻转(真值仍由服务端判定)。
@@ -1055,7 +860,7 @@ export const MessagePage: React.FC = () => {
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
   const handleClearChatMessages = useCallback(async (confirmation: string) => {
     if (currentRoom) {
-      if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+      if (!roomSessionController.isReady(currentRoom.id)) {
         const message = t('errorRestoringRoom');
         setError(message);
         throw new Error(message);
@@ -1080,32 +885,7 @@ export const MessagePage: React.FC = () => {
     roomLookupGenerationRef.current += 1;
     setIsLoadingRoom(false);
     setRoomToJoin(null);
-    clearBackgroundRestoreState(room.id);
     setError(null);
-
-    const currentSession = activeRoomSessionRef.current;
-    if (
-      socket.connected
-      && currentRoomRef.current?.id === room.id
-      && currentSession?.roomId === room.id
-      && currentSession.status === "ready"
-    ) {
-      // Returning from the room list to the room that is already verified on
-      // this socket is navigation, not a new membership epoch. Rejoining here
-      // briefly locked the shell and forced every visible media item to throw
-      // away its display URL even though membership never changed.
-      logRoomSessionDiagnostic("join-skipped-already-ready", {
-        roomId: room.id,
-        source: searchParams.get("room") === room.id ? "url" : "manual",
-        generation: roomSessionGenerationRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      applyServerRoom(room);
-      setView("chat");
-      clearRoomUrlParam();
-      return;
-    }
 
     try {
       const joinedRoom = await ensureActiveRoomSession({
@@ -1166,12 +946,6 @@ export const MessagePage: React.FC = () => {
 
   // 离开当前房间
   const handleLeaveRoom = () => {
-    clearBackgroundRestoreState(currentRoom?.id ?? currentRoomRef.current?.id ?? null);
-    roomSessionGenerationRef.current += 1;
-    pendingRestoreRoomIdRef.current = null;
-    visibleRestoreGenerationRef.current = null;
-    setIsRestoringRoom(false);
-    commitActiveRoomSession(null);
     setError(null);
 
     if (currentRoom) {
@@ -1190,7 +964,7 @@ export const MessagePage: React.FC = () => {
   // 分享当前房间链接
   const handleShareRoom = () => {
     if (!currentRoom) return;
-    if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+    if (!roomSessionController.isReady(currentRoom.id)) {
       setError(t("errorRestoringRoom"));
       return;
     }
@@ -1211,7 +985,7 @@ export const MessagePage: React.FC = () => {
   // 切换保存/取消保存房间
   const handleToggleSave = async () => {
     if (!currentRoom) return;
-    if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+    if (!roomSessionController.isReady(currentRoom.id)) {
       setError(t("errorRestoringRoom"));
       return;
     }
@@ -1278,13 +1052,11 @@ export const MessagePage: React.FC = () => {
 
         // If currently in the deleted room, navigate away
         if (currentRoomRef.current?.id === roomId) {
-          clearBackgroundRestoreState(roomId);
-          roomSessionGenerationRef.current += 1;
+          leaveRoom(roomId);
           setCurrentRoom(null);
           currentRoomRef.current = null;
-          commitActiveRoomSession(null);
           setView('rooms');
-          setIsRestoringRoom(false);
+          setRoomPermissions(null);
           setMemberCount(null);
           saveCurrentRoom(null);
           clearRoomUrlParam();
@@ -1295,12 +1067,10 @@ export const MessagePage: React.FC = () => {
         setError(response.message || t('errorDeletingRoom')); // Use a new key? e.g., errorDeletingRoomPermanently
       }
     });
-  }, [clearBackgroundRestoreState, commitActiveRoomSession, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
+  }, [setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
 
   const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
-    if (currentRoomRef.current?.id === roomId && (
-      activeRoomSessionRef.current?.roomId !== roomId || activeRoomSessionRef.current.status !== "ready"
-    )) {
+    if (currentRoomRef.current?.id === roomId && !roomSessionController.isReady(roomId)) {
       throw new Error(t('errorRestoringRoom'));
     }
     try {
@@ -1314,10 +1084,10 @@ export const MessagePage: React.FC = () => {
   }, [applyServerRoom, showSuccess, t]);
 
   const isCurrentRoomSessionReady = Boolean(
-    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "ready"
+    currentRoom && roomSession.roomId === currentRoom.id && roomSession.phase === "ready"
   );
   const isCurrentRoomSessionUnavailable = Boolean(
-    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "unavailable"
+    currentRoom && roomSession.roomId === currentRoom.id && roomSession.phase === "unavailable"
   );
   const isCurrentRoomSessionRestoring = Boolean(
     currentRoom && !isCurrentRoomSessionReady && !isCurrentRoomSessionUnavailable
@@ -1326,14 +1096,13 @@ export const MessagePage: React.FC = () => {
   const handleRetryRoomSession = useCallback(() => {
     const room = currentRoomRef.current;
     if (!room) return;
-    clearBackgroundRestoreState(room.id);
     setError(null);
     void ensureActiveRoomSession({
       roomId: room.id,
       fallbackRoom: room,
       source: "manual",
     });
-  }, [clearBackgroundRestoreState, ensureActiveRoomSession]);
+  }, [ensureActiveRoomSession]);
 
   const mainViewTitle = view === "rooms"
     ? t("chatRooms")
@@ -1413,9 +1182,10 @@ export const MessagePage: React.FC = () => {
             <CodeAgentRoomView
               currentRoom={currentRoom}
               memberCount={memberCount}
-              isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
+              isRestoringRoom={isCurrentRoomSessionRestoring}
+              showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
               isRoomSessionReady={isCurrentRoomSessionReady}
-              roomMembershipAckRevision={roomMembershipAckRevision}
+              roomResyncRevision={roomSession.resyncRevision}
               onRetryRoomSession={handleRetryRoomSession}
               onRoomUpdated={applyServerRoom}
               username={username}
@@ -1442,9 +1212,10 @@ export const MessagePage: React.FC = () => {
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
-            isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
+            isRestoringRoom={isCurrentRoomSessionRestoring}
+            showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
             isRoomSessionReady={isCurrentRoomSessionReady}
-            roomMembershipAckRevision={roomMembershipAckRevision}
+            roomResyncRevision={roomSession.resyncRevision}
             onRetryRoomSession={handleRetryRoomSession}
             onRoomUpdated={applyServerRoom}
             username={username}

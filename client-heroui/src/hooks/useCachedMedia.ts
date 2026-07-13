@@ -16,10 +16,16 @@ export const useCachedMedia = (input: {
   const [cachedUrl, setCachedUrl] = React.useState<string | null>(null);
   const [posterUrl, setPosterUrl] = React.useState<string | null>(null);
 
+  // Identity/retry changes invalidate displayed cache state. A temporary loss
+  // of room verification does not: already rendered object URLs remain safe to
+  // display while new cache/network reads are paused.
   React.useEffect(() => {
-    let cancelled = false;
     setCachedUrl(null);
     setPosterUrl(null);
+  }, [assetId, cacheLookupKey, kind, roomId]);
+
+  React.useEffect(() => {
+    let cancelled = false;
 
     if (!assetId || !kind || !isAccessVerified) {
       return () => {

@@ -186,19 +186,24 @@ const ReplyReference: React.FC<{
     roomId,
     isAccessVerified: !isInteractionDisabled,
   });
-  const displayMediaUrl = isInteractionDisabled ? null : (localCachedUrl || cachedDisplayMediaUrl);
+  const displayMediaUrl = localCachedUrl || cachedDisplayMediaUrl;
 
   React.useEffect(() => {
-    if (isInteractionDisabled || !canRenderMedia || !mediaAsset?.id) {
+    setSignedUrl(null);
+    setLocalCachedUrl(null);
+    setMediaError(false);
+  }, [mediaAsset?.id, roomId]);
+
+  React.useEffect(() => {
+    if (!canRenderMedia || !mediaAsset?.id) {
       setSignedUrl(null);
       setLocalCachedUrl(null);
       setMediaError(false);
       return () => {};
     }
+    if (isInteractionDisabled || signedUrl || localCachedUrl) return () => {};
 
     let cancelled = false;
-    setSignedUrl(null);
-    setLocalCachedUrl(null);
     setMediaError(false);
 
     void (async () => {
@@ -228,7 +233,7 @@ const ReplyReference: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [canRenderMedia, isInteractionDisabled, mediaAsset?.byteSize, mediaAsset?.id, playableMediaKind, roomId]);
+  }, [canRenderMedia, isInteractionDisabled, localCachedUrl, mediaAsset?.byteSize, mediaAsset?.id, playableMediaKind, roomId, signedUrl]);
 
   let content: React.ReactNode = <div className="truncate">{fallbackPreview}</div>;
   if (canRenderMedia && displayMediaUrl && !mediaError) {
@@ -444,6 +449,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
   React.useEffect(() => {
     setFileDownloadStatus('idle');
+    setSignedMediaUrl(null);
+    setLocalCachedMediaUrl(null);
+    setMediaError(false);
+    setVideoPreviewError(false);
+    setIsMediaElementLoading(false);
+    setIsMediaViewerOpen(false);
     if (fileDownloadResetTimerRef.current) {
       clearTimeout(fileDownloadResetTimerRef.current);
       fileDownloadResetTimerRef.current = null;
@@ -457,10 +468,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }, [isInteractionDisabled, message.uiPayload]);
 
   React.useEffect(() => {
-    if (isInteractionDisabled || !(signedMediaUrl || localCachedMediaUrl) || mediaError || (!isImage && !isVideo)) {
+    if (!(signedMediaUrl || localCachedMediaUrl) || mediaError || (!isImage && !isVideo)) {
       setIsMediaViewerOpen(false);
     }
-  }, [isImage, isInteractionDisabled, isVideo, localCachedMediaUrl, mediaError, signedMediaUrl]);
+  }, [isImage, isVideo, localCachedMediaUrl, mediaError, signedMediaUrl]);
 
   const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl || localCachedMediaUrl);
 
@@ -485,19 +496,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     // callback dependency below makes the ready transition start the first
     // load (or retry after a reconnect) exactly once.
     if (isInteractionDisabled) {
-      setSignedMediaUrl(null);
-      setLocalCachedMediaUrl(null);
-      setIsMediaViewerOpen(false);
-      setFileDownloadStatus('idle');
-      setMediaError(false);
-      setIsMediaElementLoading(false);
       return () => {};
     }
+    if (signedMediaUrl || localCachedMediaUrl) return () => {};
 
     let settled = false;
     const hasLocalPreview = Boolean(message.localMediaPreviewUrl);
-    setSignedMediaUrl(null);
-    setLocalCachedMediaUrl(null);
     setMediaError(false);
     setVideoPreviewError(false);
     setIsMediaElementLoading(!hasLocalPreview);
@@ -563,6 +567,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     mediaAssetByteSize,
     mediaAssetId,
     message.roomId,
+    localCachedMediaUrl,
+    signedMediaUrl,
   ]);
 
   React.useEffect(() => {
@@ -655,6 +661,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
+      setSignedMediaUrl(null);
       setMediaLoadAttempt(value => value + 1);
       return;
     }
@@ -673,6 +680,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       });
       return;
     }
+    setSignedMediaUrl(null);
     setMediaLoadAttempt(value => value + 1);
   };
 
@@ -684,6 +692,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const handleVideoPreviewError = () => {
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
+      setSignedMediaUrl(null);
       setMediaLoadAttempt(value => value + 1);
       return;
     }
@@ -765,7 +774,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     isAccessVerified: !isInteractionDisabled && !message.localMediaPending,
     cacheLookupKey: mediaLoadAttempt,
   });
-  const displayMediaUrl = isInteractionDisabled ? null : (localCachedMediaUrl || cachedDisplayMediaUrl || message.localMediaPreviewUrl || null);
+  const displayMediaUrl = localCachedMediaUrl || cachedDisplayMediaUrl || message.localMediaPreviewUrl || null;
   const canOpenMediaViewer = Boolean(displayMediaUrl && !mediaError && (isImage || isVideo));
   const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
 

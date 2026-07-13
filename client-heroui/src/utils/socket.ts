@@ -23,6 +23,12 @@ import {
 import type { CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from './codexSettings';
 import { clearPersistentCachesForClient } from './persistentCacheLifecycle';
 import { logRoomSessionDiagnostic } from './roomDiagnostics';
+import {
+  RoomSessionController,
+  type RoomSessionRegisterAck,
+  type RoomSessionResult,
+  type RoomSessionSource,
+} from './roomSessionController';
 
 // Get client ID from local storage or create a new one
 // This ID persists across browser sessions and uniquely identifies the user
@@ -52,40 +58,14 @@ const roomMemberCounts = new Map<string, number>();
 // Store callbacks for room member change events
 const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 const usernameAdoptedCallbacks: ((username: string) => void)[] = [];
-const roomMembershipRepairFailureCallbacks: ((roomId: string, error: Error) => void)[] = [];
-
-// Store current active room to rejoin after reconnection
-let activeRoomId: string | null = null;
-let activeRoomPassword: string | null = null;
-type RoomJoinIntent = {
-  version: number;
-  roomId: string;
-  password?: string;
-  state: 'pending' | 'success' | 'failed';
-  promise?: Promise<RoomJoinResult>;
-  error?: Error;
-  failureNotified?: boolean;
-};
-let roomJoinIntentVersion = 0;
-let desiredRoomJoin: RoomJoinIntent | null = null;
-let roomJoinRepairPromise: Promise<void> | null = null;
-const staleSettledRoomIds = new Set<string>();
 // Store the latest username so it can be re-sent on every (re)connection
 let currentUsername = '';
-let registeredSocketId: string | null = null;
-let pendingRegistration: Promise<void> | null = null;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SOCKET_CONNECT_WAIT_TIMEOUT_MS = 45000;
 const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 10 * 60 * 1000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
-const ROOM_MEMBERSHIP_REPAIR_ATTEMPTS = 2;
-
-export type RoomJoinResult = {
-  room?: Room;
-  permissions?: RoomPermissions;
-  memberCount?: number;
-};
+export type RoomJoinResult = RoomSessionResult;
 
 type SocketAckResponse = {
   success: boolean;
@@ -183,16 +163,6 @@ type RoomListAckResponse = SocketAckResponse & {
   rooms?: Room[];
 };
 
-type JoinRoomAckResponse = RoomAckResponse & {
-  permissions?: RoomPermissions;
-  memberCount?: number;
-};
-
-type RegisterAckResponse = SocketAckResponse & {
-  clientId?: string;
-  nickname?: string;
-};
-
 export type ClientAuthStatus = {
   clientId: string;
   hasPassword: boolean;
@@ -260,8 +230,8 @@ export const getRoomMemberCount = (roomId: string): number | null => {
   return roomMemberCounts.get(roomId) ?? null;
 };
 
-// Update the username and notify the server. The value is cached so it can be
-// re-sent automatically on reconnection (see the 'connect' handler).
+// Update the username and notify the server. The value is cached so the room
+// session controller includes it in registration on a replacement socket.
 export const setUsername = (username: string): void => {
   currentUsername = username;
   if (username && socket.connected) {
@@ -363,11 +333,6 @@ const createSocketConnection = (): Socket => {
       clientId: getClientId(),
       browserInstanceId: getBrowserInstanceId(),
     });
-    registeredSocketId = null;
-    ensureRegisteredSocket()
-      .catch((error) => {
-        console.error('Failed to register socket session after connection:', error);
-      });
   });
   
   // Handle connection errors
@@ -388,7 +353,6 @@ const createSocketConnection = (): Socket => {
       socketConnected: socket.connected,
       reason,
     });
-    registeredSocketId = null;
   });
 
   // Handle reconnection events
@@ -418,234 +382,9 @@ const createSocketConnection = (): Socket => {
   return socket;
 };
 
-export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => {
-  if (pendingRegistration) {
-    logRoomSessionDiagnostic('registration-coalesced', {
-      socketId: socket.id ?? null,
-      socketConnected: socket.connected,
-      socketActive: socket.active,
-    });
-    return pendingRegistration;
-  }
-
-  if (socket.connected) {
-    const socketId = socket.id || '';
-
-    if (socketId && registeredSocketId === socketId) {
-      logRoomSessionDiagnostic('registration-already-ready', {
-        socketId,
-        socketConnected: socket.connected,
-      });
-      return Promise.resolve();
-    }
-  }
-
-  logRoomSessionDiagnostic('registration-start', {
-    socketId: socket.id ?? null,
-    socketConnected: socket.connected,
-    socketActive: socket.active,
-    connectWaitTimeoutMs: SOCKET_CONNECT_WAIT_TIMEOUT_MS,
-    acknowledgementTimeoutMs: timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS,
-  });
-
-  let startRegistration: () => void = () => {};
-  const registrationPromise = new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let connectTimeoutId: number | undefined;
-    let acknowledgementTimeoutId: number | undefined;
-    let registerAttempt = 0;
-
-    function cleanup() {
-      if (connectTimeoutId !== undefined) {
-        window.clearTimeout(connectTimeoutId);
-      }
-      if (acknowledgementTimeoutId !== undefined) {
-        window.clearTimeout(acknowledgementTimeoutId);
-      }
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-    }
-
-    function settle(fn: () => void) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      pendingRegistration = null;
-      fn();
-    }
-
-    function armConnectionTimeout() {
-      if (connectTimeoutId !== undefined) {
-        window.clearTimeout(connectTimeoutId);
-      }
-      connectTimeoutId = window.setTimeout(() => {
-        logRoomSessionDiagnostic('registration-connect-timeout', {
-          socketId: socket.id ?? null,
-          socketConnected: socket.connected,
-          socketActive: socket.active,
-          timeoutMs: SOCKET_CONNECT_WAIT_TIMEOUT_MS,
-        });
-        settle(() => reject(new Error('Timed out while connecting to server')));
-      }, SOCKET_CONNECT_WAIT_TIMEOUT_MS);
-    }
-
-    function clearAcknowledgementTimeout() {
-      if (acknowledgementTimeoutId === undefined) {
-        return;
-      }
-      window.clearTimeout(acknowledgementTimeoutId);
-      acknowledgementTimeoutId = undefined;
-    }
-
-    function waitForReconnect() {
-      if (settled) {
-        return;
-      }
-      if (socket.connected) {
-        attemptRegister();
-        return;
-      }
-      socket.off('connect', handleConnect);
-      socket.on('connect', handleConnect);
-      armConnectionTimeout();
-      logRoomSessionDiagnostic('registration-waiting-for-connect', {
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-        socketActive: socket.active,
-      });
-      // socket.active means Socket.IO already owns an automatic connection or
-      // reconnection attempt. Calling connect() again while it is active can
-      // create an extra restore edge during mobile resume.
-      if (!socket.active) {
-        socket.connect();
-      }
-    }
-
-    function handleConnect() {
-      socket.off('connect', handleConnect);
-      if (connectTimeoutId !== undefined) {
-        window.clearTimeout(connectTimeoutId);
-        connectTimeoutId = undefined;
-      }
-      attemptRegister();
-    }
-
-    function handleDisconnect() {
-      logRoomSessionDiagnostic('registration-interrupted-by-disconnect', {
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-        attempt: registerAttempt,
-      });
-      registeredSocketId = null;
-      registerAttempt += 1;
-      clearAcknowledgementTimeout();
-      socket.off('disconnect', handleDisconnect);
-      waitForReconnect();
-    }
-
-    function attemptRegister() {
-      if (settled) {
-        return;
-      }
-      if (!socket.connected) {
-        waitForReconnect();
-        return;
-      }
-
-      const socketId = socket.id || '';
-      if (socketId && registeredSocketId === socketId) {
-        settle(resolve);
-        return;
-      }
-
-      const attemptId = registerAttempt + 1;
-      registerAttempt = attemptId;
-      socket.off('disconnect', handleDisconnect);
-      socket.on('disconnect', handleDisconnect);
-      clearAcknowledgementTimeout();
-      acknowledgementTimeoutId = window.setTimeout(() => {
-        logRoomSessionDiagnostic('registration-ack-timeout', {
-          socketId: socket.id ?? null,
-          socketConnected: socket.connected,
-          attempt: attemptId,
-          timeoutMs: timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS,
-        });
-        settle(() => reject(new Error('Timed out while registering client')));
-      }, timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS);
-      const registeringClientId = getClientId();
-      const registeringBrowserInstanceId = getBrowserInstanceId();
-      logRoomSessionDiagnostic('registration-emitted', {
-        socketId,
-        socketConnected: socket.connected,
-        attempt: attemptId,
-        clientId: registeringClientId,
-        browserInstanceId: registeringBrowserInstanceId,
-      });
-      socket.emit('register', {
-        clientId: registeringClientId,
-        browserInstanceId: registeringBrowserInstanceId,
-        username: currentUsername || undefined,
-        clientAuthToken: getClientAuthToken() || undefined,
-      }, (response: RegisterAckResponse) => {
-        if (settled || attemptId !== registerAttempt) {
-          logRoomSessionDiagnostic('registration-stale-ack', {
-            socketId: socket.id ?? null,
-            socketConnected: socket.connected,
-            attempt: attemptId,
-            currentAttempt: registerAttempt,
-          });
-          return;
-        }
-        clearAcknowledgementTimeout();
-        socket.off('disconnect', handleDisconnect);
-        if (!socket.connected) {
-          handleDisconnect();
-          return;
-        }
-        settle(() => {
-          if (response?.success) {
-            registeredSocketId = socketId || socket.id || null;
-            logRoomSessionDiagnostic('registration-ready', {
-              socketId: registeredSocketId,
-              socketConnected: socket.connected,
-              attempt: attemptId,
-              clientId: registeringClientId,
-              browserInstanceId: registeringBrowserInstanceId,
-            });
-            const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
-            if (adopted && adopted !== currentUsername) {
-              currentUsername = adopted;
-              saveUsername(adopted);
-              usernameAdoptedCallbacks.forEach(callback => callback(adopted));
-            }
-            resolve();
-            return;
-          }
-
-          const message = typeof response?.message === 'string' ? response.message : undefined;
-          const registrationError = response?.error || message || 'Failed to register client';
-          logRoomSessionDiagnostic('registration-rejected', {
-            socketId: socket.id ?? null,
-            socketConnected: socket.connected,
-            attempt: attemptId,
-            error: registrationError,
-          });
-          reject(new Error(registrationError));
-        });
-      });
-    }
-
-    startRegistration = () => {
-      attemptRegister();
-    };
-  });
-
-  pendingRegistration = registrationPromise;
-  startRegistration();
-  return registrationPromise;
-};
+export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => (
+  roomSessionController.ensureRegistered(timeoutMs)
+);
 
 type EmitWithAckOptions = {
   retryOnSocketReconnect?: boolean;
@@ -726,268 +465,20 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
   });
 };
 
-type EmitJoinRoomRawOptions = {
-  reconcileLateResponse?: boolean;
-};
-
-const roomJoinAckError = (response: SocketAckResponse, fallback = 'Failed to join room') => {
-  const message = typeof response?.message === 'string' ? response.message : undefined;
-  return new Error(response?.error || message || fallback);
-};
-
-const isUncertainRoomJoinError = (error?: Error) => Boolean(error && (
-  error.message === 'Timed out while joining room'
-  || error.message === 'Socket disconnected before sending message'
-  || error.message === 'Socket disconnected while waiting for server acknowledgement'
-));
-
-const emitJoinRoomRaw = (
+export const joinRoom = (
   roomId: string,
   password?: string,
-  options: EmitJoinRoomRawOptions = {},
-): Promise<RoomJoinResult> => {
-  logRoomSessionDiagnostic('join-emitted', {
-    roomId,
-    socketId: socket.id ?? null,
-    socketConnected: socket.connected,
-    hasPassword: Boolean(password),
-    reconcileLateResponse: options.reconcileLateResponse !== false,
-  });
-  return emitWithAck<JoinRoomAckResponse>(
-    'join_room',
-    { roomId, password },
-    'Timed out while joining room',
-    'Failed to join room',
-    {
-      onLateResponse: options.reconcileLateResponse === false
-        ? undefined
-        : (response) => {
-          if (!response?.success) {
-            const intent = desiredRoomJoin;
-            if (
-              intent?.roomId === roomId
-              && intent.state === 'failed'
-              && isUncertainRoomJoinError(intent.error)
-            ) {
-              // Replace the earlier uncertain timeout/disconnect with the
-              // server's definitive late answer and notify session owners again.
-              intent.error = roomJoinAckError(response);
-              intent.failureNotified = false;
-            }
-          }
-          requestRoomJoinReconciliation(roomId);
-        },
-    },
-  ).then((response) => ({
-      room: response.room,
-      permissions: response.permissions,
-      memberCount: response.memberCount,
-    }))
-    .then((result) => {
-      if (typeof result.memberCount === 'number') {
-        roomMemberCounts.set(roomId, result.memberCount);
-      }
-      logRoomSessionDiagnostic('join-acknowledged', {
-        roomId,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-        memberCount: result.memberCount ?? null,
-        hasPermissions: Boolean(result.permissions),
-      });
-      return result;
-    })
-    .catch(error => {
-      logRoomSessionDiagnostic('join-ack-failed', {
-        roomId,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    });
-};
+  source: RoomSessionSource = 'manual',
+): Promise<RoomJoinResult> => roomSessionController.selectRoom({ roomId, password, source });
 
-const requestRoomJoinReconciliation = (staleRoomId: string) => {
-  staleSettledRoomIds.add(staleRoomId);
-  if (roomJoinRepairPromise) return;
+export const ensureRoomJoined = (
+  roomId: string,
+  source: RoomSessionSource = 'retry',
+): Promise<RoomJoinResult> => roomSessionController.ensureRoom(roomId, source);
 
-  roomJoinRepairPromise = Promise.resolve().then(async () => {
-    while (staleSettledRoomIds.size > 0) {
-      const staleRoomIds = [...staleSettledRoomIds];
-      staleSettledRoomIds.clear();
-      const desiredSnapshot = desiredRoomJoin;
+export const leaveRoom = (roomId: string) => roomSessionController.leaveRoom(roomId);
 
-      if (!desiredSnapshot) {
-        staleRoomIds.forEach(roomId => socket.emit('leave_room', roomId));
-        continue;
-      }
-
-      if (desiredSnapshot.state === 'pending' && desiredSnapshot.promise) {
-        await desiredSnapshot.promise.catch(() => undefined);
-        if (desiredRoomJoin !== desiredSnapshot) {
-          staleRoomIds.forEach(roomId => staleSettledRoomIds.add(roomId));
-          continue;
-        }
-      }
-
-      if (desiredRoomJoin !== desiredSnapshot) {
-        staleRoomIds.forEach(roomId => staleSettledRoomIds.add(roomId));
-        continue;
-      }
-
-      const desiredState: RoomJoinIntent['state'] = (desiredSnapshot as RoomJoinIntent).state;
-      if (desiredState === 'success') {
-        // A concurrent server can transiently subscribe the socket to more than
-        // one room even when its persisted room list only records the latest.
-        // Remove every known stale room explicitly, then replay the desired join
-        // after all user intents have settled. Do not infer mutation order from
-        // acknowledgement order: the server performs awaited work between its
-        // membership write and ack.
-        staleRoomIds
-          .filter(roomId => roomId !== desiredSnapshot.roomId)
-          .forEach(roomId => socket.emit('leave_room', roomId));
-        let repairError: Error | null = null;
-        for (let attempt = 0; attempt < ROOM_MEMBERSHIP_REPAIR_ATTEMPTS; attempt += 1) {
-          if (desiredRoomJoin !== desiredSnapshot) break;
-          try {
-            // Repair attempts have one bounded budget. A late acknowledgement
-            // from a timed-out repair may have converged server state, but must
-            // not recursively open another repair epoch after the UI was locked.
-            await emitJoinRoomRaw(desiredSnapshot.roomId, desiredSnapshot.password, {
-              reconcileLateResponse: false,
-            });
-            repairError = null;
-            break;
-          } catch (error) {
-            repairError = error instanceof Error ? error : new Error('Failed to reconcile room membership');
-          }
-        }
-        if (desiredRoomJoin !== desiredSnapshot) {
-          staleSettledRoomIds.add(desiredSnapshot.roomId);
-        } else if (repairError) {
-          console.error('Failed to reconcile latest room membership after a stale join acknowledgement:', repairError);
-          roomMembershipRepairFailureCallbacks.forEach(callback => callback(desiredSnapshot.roomId, repairError));
-        }
-        continue;
-      }
-
-      // The latest join failed. Do not silently turn it into a success; only
-      // remove rooms that a superseded request may have joined late.
-      staleRoomIds.forEach(roomId => socket.emit('leave_room', roomId));
-      const failedIntentError = desiredSnapshot.error;
-      if (failedIntentError && !desiredSnapshot.failureNotified) {
-        desiredSnapshot.failureNotified = true;
-        roomMembershipRepairFailureCallbacks.forEach(callback => (
-          callback(desiredSnapshot.roomId, failedIntentError)
-        ));
-      }
-    }
-  }).finally(() => {
-    roomJoinRepairPromise = null;
-    if (staleSettledRoomIds.size > 0) {
-      const [nextRoomId] = staleSettledRoomIds;
-      staleSettledRoomIds.delete(nextRoomId);
-      requestRoomJoinReconciliation(nextRoomId);
-    }
-  });
-};
-
-// Join a chat room. Membership acknowledgements can complete out of order, so
-// the latest user intent is recorded synchronously and stale completions repair
-// (or leave) their server-side membership without taking ownership of the UI.
-export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinResult> => {
-  const intent: RoomJoinIntent = {
-    version: ++roomJoinIntentVersion,
-    roomId,
-    password,
-    state: 'pending',
-  };
-  desiredRoomJoin = intent;
-  activeRoomId = roomId;
-  activeRoomPassword = password || null;
-  logRoomSessionDiagnostic('join-intent-created', {
-    roomId,
-    intentVersion: intent.version,
-    socketId: socket.id ?? null,
-    socketConnected: socket.connected,
-    hasPassword: Boolean(password),
-  });
-
-  const promise = emitJoinRoomRaw(roomId, password).then((result) => {
-    intent.state = 'success';
-    logRoomSessionDiagnostic('join-intent-ready', {
-      roomId,
-      intentVersion: intent.version,
-      isLatestIntent: desiredRoomJoin === intent,
-      socketId: socket.id ?? null,
-      socketConnected: socket.connected,
-    });
-    if (desiredRoomJoin !== intent) {
-      requestRoomJoinReconciliation(roomId);
-    }
-    return result;
-  }).catch((error) => {
-    intent.state = 'failed';
-    const joinError = error instanceof Error ? error : new Error('Failed to join room');
-    intent.error = joinError;
-    const outcomeIsUncertain = isUncertainRoomJoinError(joinError);
-    logRoomSessionDiagnostic('join-intent-failed', {
-      roomId,
-      intentVersion: intent.version,
-      isLatestIntent: desiredRoomJoin === intent,
-      outcomeIsUncertain,
-      socketId: socket.id ?? null,
-      socketConnected: socket.connected,
-      error: joinError.message,
-    });
-    if (desiredRoomJoin !== intent || outcomeIsUncertain) {
-      requestRoomJoinReconciliation(roomId);
-    }
-    throw error;
-  });
-  intent.promise = promise;
-  return promise;
-};
-
-export const ensureRoomJoined = (roomId: string): Promise<RoomJoinResult> => {
-  const password = desiredRoomJoin?.roomId === roomId
-    ? desiredRoomJoin.password
-    : activeRoomId === roomId
-      ? activeRoomPassword || undefined
-      : undefined;
-  return joinRoom(roomId, password);
-};
-
-// Leave a chat room
-export const leaveRoom = (roomId: string) => {
-  if (desiredRoomJoin?.roomId === roomId) {
-    desiredRoomJoin = null;
-    roomJoinIntentVersion += 1;
-  }
-  if (activeRoomId === roomId) {
-    activeRoomId = null; // 清除活动房间ID
-    activeRoomPassword = null;
-  }
-  socket.emit('leave_room', roomId);
-};
-
-export const resetRoomJoinStateForTests = () => {
-  roomJoinIntentVersion += 1;
-  desiredRoomJoin = null;
-  activeRoomId = null;
-  activeRoomPassword = null;
-  staleSettledRoomIds.clear();
-  roomJoinRepairPromise = null;
-  roomMembershipRepairFailureCallbacks.length = 0;
-};
-
-export const onRoomMembershipRepairFailure = (callback: (roomId: string, error: Error) => void) => {
-  roomMembershipRepairFailureCallbacks.push(callback);
-  return () => {
-    const index = roomMembershipRepairFailureCallbacks.indexOf(callback);
-    if (index !== -1) roomMembershipRepairFailureCallbacks.splice(index, 1);
-  };
-};
+export const resetRoomJoinStateForTests = () => roomSessionController.resetForTests();
 
 // Create a new room
 export const createRoom = (
@@ -1315,13 +806,7 @@ const adoptAuthenticatedClient = async (response: ClientAuthResponse) => {
     clearStoredUsername();
   }
   setClientAuthToken(response.clientAuthToken);
-  registeredSocketId = null;
-  pendingRegistration = null;
-  if (socket.connected) {
-    void ensureRegisteredSocket().catch((error) => {
-      console.error('Failed to register socket after switching User ID:', error);
-    });
-  }
+  roomSessionController.refreshRegistration();
 };
 
 export const setClientPassword = async (password: string, currentPassword?: string): Promise<ClientAuthStatus> => {
@@ -2337,24 +1822,76 @@ export const onCodeWorkspaceTerminalEvent = (
   };
 };
 
-export const onSocketConnected = (
-  callback: () => void,
-) => {
-  socket.on('connect', callback);
-  return () => {
-    socket.off('connect', callback);
-  };
-};
-
-// Force reconnect the socket - can be called when app comes to foreground
-export const reconnectSocket = (): void => {
-  if (!socket.connected && !socket.active) {
-    console.log('Manually reconnecting socket...');
-    socket.connect();
-  }
-};
-
-// Export Socket instance and client ID
 export const socket = createSocketConnection();
+
+export const roomSessionController = new RoomSessionController({
+  isConnected: () => socket.connected,
+  isActive: () => socket.active,
+  getSocketId: () => socket.id || null,
+  connect: () => {
+    if (!socket.connected && !socket.active) socket.connect();
+  },
+  onConnect: (callback) => {
+    socket.on('connect', callback);
+    return () => socket.off('connect', callback);
+  },
+  onDisconnect: (callback) => {
+    socket.on('disconnect', callback);
+    return () => socket.off('disconnect', callback);
+  },
+  emitRegister: (callback) => {
+    const registeringClientId = getClientId();
+    const registeringBrowserInstanceId = getBrowserInstanceId();
+    logRoomSessionDiagnostic('registration-emitted', {
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      clientId: registeringClientId,
+      browserInstanceId: registeringBrowserInstanceId,
+    });
+    socket.emit('register', {
+      clientId: registeringClientId,
+      browserInstanceId: registeringBrowserInstanceId,
+      username: currentUsername || undefined,
+      clientAuthToken: getClientAuthToken() || undefined,
+    }, callback);
+  },
+  emitJoin: (roomId, password, callback) => {
+    logRoomSessionDiagnostic('join-emitted', {
+      roomId,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      hasPassword: Boolean(password),
+    });
+    socket.emit('join_room', { roomId, password }, callback);
+  },
+  emitLeave: roomId => socket.emit('leave_room', roomId),
+}, {
+  registrationTimeoutMs: SEND_MESSAGE_ACK_TIMEOUT_MS,
+  joinTimeoutMs: SEND_MESSAGE_ACK_TIMEOUT_MS,
+  connectionTimeoutMs: SOCKET_CONNECT_WAIT_TIMEOUT_MS,
+  onRegistered: (response: RoomSessionRegisterAck) => {
+    const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
+    if (adopted && adopted !== currentUsername) {
+      currentUsername = adopted;
+      saveUsername(adopted);
+      usernameAdoptedCallbacks.forEach(callback => callback(adopted));
+    }
+  },
+  onJoinResult: (roomId, result) => {
+    if (typeof result.memberCount === 'number') {
+      roomMemberCounts.set(roomId, result.memberCount);
+    }
+    logRoomSessionDiagnostic('join-acknowledged', {
+      roomId,
+      socketId: socket.id ?? null,
+      socketConnected: socket.connected,
+      memberCount: result.memberCount ?? null,
+      hasPermissions: Boolean(result.permissions),
+    });
+  },
+  onDiagnostic: (event, details) => logRoomSessionDiagnostic(event, details),
+});
+roomSessionController.start();
+
 export const clientId = getClientId();
 export const browserInstanceId = getBrowserInstanceId();
