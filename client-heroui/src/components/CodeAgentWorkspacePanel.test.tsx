@@ -487,9 +487,14 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     const link = screen.getByText('RoomTalk Demo').closest('a');
     expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/');
+    expect(screen.getByText('V2 · codeAgentArtifactLatest')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('codeAgentArtifactVersions'));
+    expect(screen.getByText(/^V1 · /)).toBeTruthy();
+    expect(screen.getByRole('menu').parentElement?.className).toContain('max-h-80');
+    expect(screen.getByRole('menu').parentElement?.className).toContain('overflow-y-auto');
     fireEvent.click(await screen.findByText('bbbbbbbb'));
     expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/__versions/20260629T120000Z_bbbbbbbb/');
+    expect(screen.getAllByText(/^V1 · /).length).toBeGreaterThan(0);
     fireEvent.click(link!);
     expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
       isOpen: true,

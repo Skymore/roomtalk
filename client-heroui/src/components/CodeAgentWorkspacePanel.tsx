@@ -89,6 +89,17 @@ const formatArtifactVersionDate = (value: string, locale: string) => {
   }).format(date);
 };
 
+const buildArtifactVersionNumbers = (
+  versions: readonly CodeAgentWorkspaceSnapshot['artifacts'][number]['versions'][number][]
+) => new Map(
+  [...versions]
+    .sort((left, right) => (
+      left.publishedAt.localeCompare(right.publishedAt)
+      || left.versionId.localeCompare(right.versionId)
+    ))
+    .map((version, index) => [version.versionId, index + 1])
+);
+
 type ScopedDiffFileSummaries = {
   scopeKey: string;
   summaries: readonly CodeAgentWorkspaceDiffFileSummary[];
@@ -727,10 +738,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     const selectedVersion = artifactVersions.find(version => version.versionId === selectedVersionId)
                       || artifactVersions.find(version => version.isCurrent)
                       || artifactVersions[0];
+                    const versionNumbers = buildArtifactVersionNumbers(artifactVersions);
+                    const selectedVersionNumber = versionNumbers.get(selectedVersion?.versionId || artifact.versionId) || 1;
                     const previewUrl = selectedVersion?.isCurrent ? artifact.url : (selectedVersion?.url || artifact.url);
-                    const versionLabel = selectedVersion?.isCurrent
+                    const versionDetail = selectedVersion?.isCurrent
                       ? t('codeAgentArtifactLatest')
                       : formatArtifactVersionDate(selectedVersion?.publishedAt || artifact.updatedAt, i18n.language);
+                    const versionLabel = `V${selectedVersionNumber} · ${versionDetail}`;
                     return (
                       <div
                         key={artifact.slug}
@@ -755,7 +769,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                           </span>
                           <Icon icon="lucide:external-link" className="h-3.5 w-3.5 flex-shrink-0" />
                         </a>
-                        <Dropdown placement="bottom-end">
+                        <Dropdown
+                          placement="bottom-end"
+                          classNames={{ content: 'max-h-80 overflow-hidden' }}
+                        >
                           <DropdownTrigger>
                             <Button
                               isIconOnly
@@ -770,6 +787,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                           </DropdownTrigger>
                           <DropdownMenu
                             aria-label={t('codeAgentArtifactVersions')}
+                            classNames={{ base: 'max-h-80 overflow-y-auto overscroll-contain' }}
                             selectionMode="single"
                             selectedKeys={new Set([selectedVersion?.versionId || artifact.versionId])}
                             onAction={(key) => setSelectedArtifactVersionIds(current => {
@@ -786,9 +804,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                               <DropdownItem key={version.versionId} textValue={version.versionId}>
                                 <span className="flex min-w-0 items-center justify-between gap-3">
                                   <span className="truncate">
-                                    {version.isCurrent
+                                    {`V${versionNumbers.get(version.versionId) || 1} · ${version.isCurrent
                                       ? t('codeAgentArtifactLatest')
-                                      : formatArtifactVersionDate(version.publishedAt, i18n.language)}
+                                      : formatArtifactVersionDate(version.publishedAt, i18n.language)}`}
                                   </span>
                                   <span className="font-mono text-[10px] text-default-400">{version.versionId.slice(-8)}</span>
                                 </span>
