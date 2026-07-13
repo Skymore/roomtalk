@@ -143,7 +143,7 @@ class SandboxDaemon:
             self._reap_finished_active_locked()
             if self._active is not None:
                 raise RunnerError("Sandbox daemon is busy with an active turn", code="daemon_busy")
-        from .codex_sdk_app_server import parse_app_server_request, run_thread_query_request
+        from .codex_app_server import parse_app_server_request, run_thread_query_request
 
         request = parse_app_server_request(json.dumps(raw, ensure_ascii=False, separators=(",", ":")))
         env = self._run_env(raw)
@@ -296,7 +296,7 @@ def _run_codex_app_server(
     env: dict[str, str],
     control_queue: "queue.Queue[dict[str, Any] | None]",
 ) -> None:
-    from .codex_sdk_app_server import run_request
+    from .codex_app_server import run_request
 
     run_request(request, emitter=emitter, env=env, control_queue=control_queue)
 

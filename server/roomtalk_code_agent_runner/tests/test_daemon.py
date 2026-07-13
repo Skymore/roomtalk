@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any
 
+from roomtalk_code_agent_runner import daemon as daemon_module
 from roomtalk_code_agent_runner.daemon import SandboxDaemon
 from roomtalk_code_agent_runner.runner import EventEmitter, RunnerRequest
 
@@ -248,8 +249,8 @@ def test_daemon_runs_thread_query_with_per_request_env(monkeypatch: Any):
             "backwardsCursor": None,
         })
 
-    from roomtalk_code_agent_runner import codex_sdk_app_server
-    monkeypatch.setattr(codex_sdk_app_server, "run_thread_query_request", fake_run_thread_query_request)
+    from roomtalk_code_agent_runner import codex_app_server
+    monkeypatch.setattr(codex_app_server, "run_thread_query_request", fake_run_thread_query_request)
 
     stdout = io.StringIO()
     daemon = SandboxDaemon(
@@ -273,3 +274,13 @@ def test_daemon_runs_thread_query_with_per_request_env(monkeypatch: Any):
     events = event_lines(stdout)
     assert seen == [("thread_list", "/tmp/auth.json")]
     assert any(event.get("type") == "thread_list_result" and event.get("threads") == [{"id": "thread-1"}] for event in events)
+
+
+def test_default_handlers_keep_coco_cli_and_app_server_routes_separate():
+    handlers = daemon_module._default_handlers()
+
+    assert handlers == {
+        "code-agent": daemon_module._run_code_agent,
+        "codex": daemon_module._run_codex_cli,
+        "codex-app-server": daemon_module._run_codex_app_server,
+    }

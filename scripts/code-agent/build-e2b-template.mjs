@@ -60,7 +60,7 @@ const options = {
     'test -f "$HOME/.oh-my-zsh/oh-my-zsh.sh"',
     'test -f "$HOME/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme"',
     'roomtalk --help >/dev/null',
-    'python -c "import importlib; importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_sdk_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.daemon\\"); importlib.import_module(\\"openai_codex\\")"',
+    'python -c "import importlib; importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.daemon\\"); importlib.import_module(\\"openai_codex\\")"',
   ].join(' && '),
 };
 

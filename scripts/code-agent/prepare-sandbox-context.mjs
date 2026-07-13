@@ -31,7 +31,6 @@ const engineSourceRepo = engineSource.sourceRepo;
 const codeAgentCliBackend = lock.runner?.backends?.code_agent_cli;
 const codexCliBackend = lock.runner?.backends?.codex_cli;
 const codexAppServerBackend = lock.runner?.backends?.codex_app_server;
-const codexSdkAppServerBackend = lock.runner?.backends?.codex_sdk_app_server;
 const daemonBackend = lock.runner?.backends?.daemon;
 const runnerPyprojectPath = resolve(repoRoot, lock.runner?.sourcePath || '', 'pyproject.toml');
 const runnerPyproject = readFileSync(runnerPyprojectPath, 'utf8');
@@ -62,14 +61,8 @@ if (!codexAppServerBackend || codexAppServerBackend.command !== 'python -m roomt
 if (codexAppServerBackend.codexCliVersion !== codexCliBackend.codexCliVersion) {
   throw new Error('Codex app-server backend must pin the same Codex CLI version as codex_cli');
 }
-if (!codexSdkAppServerBackend || codexSdkAppServerBackend.command !== 'python -m roomtalk_code_agent_runner.codex_sdk_app_server') {
-  throw new Error('Code-agent artifact lock must declare runner.backends.codex_sdk_app_server.command');
-}
-if (codexSdkAppServerBackend.codexCliVersion !== codexCliBackend.codexCliVersion) {
-  throw new Error('Codex SDK app-server backend must pin the same Codex CLI version as codex_cli');
-}
-if (codexSdkAppServerBackend.pythonSdkVersion !== '0.1.0b3') {
-  throw new Error(`Codex SDK app-server backend must pin openai-codex 0.1.0b3, got: ${codexSdkAppServerBackend.pythonSdkVersion || ''}`);
+if (codexAppServerBackend.pythonSdkVersion !== '0.1.0b3') {
+  throw new Error(`Codex app-server backend must pin openai-codex 0.1.0b3, got: ${codexAppServerBackend.pythonSdkVersion || ''}`);
 }
 if (!daemonBackend || daemonBackend.command !== 'python -m roomtalk_code_agent_runner.daemon') {
   throw new Error('Code-agent artifact lock must declare runner.backends.daemon.command');

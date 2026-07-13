@@ -361,7 +361,7 @@ export class CodeAgentSessionService {
           input.roomId,
           input.promptMessageId,
           'starting',
-          undefined,
+          turnId,
           this.now().toISOString()
         );
         if (!materialized?.found || !materialized.updatedMessage) {

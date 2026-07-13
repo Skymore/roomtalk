@@ -2,258 +2,226 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import queue
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from roomtalk_code_agent_runner import _codex_app_server_protocol as codex_app_server_protocol
 from roomtalk_code_agent_runner import codex_app_server
 from roomtalk_code_agent_runner.runner import EventEmitter, parse_request
 from test_runner import event_lines, request
 
 
-def fake_jwt(claims: dict[str, Any]) -> str:
-    import base64
+class FakeModel:
+    def __init__(self, data: dict[str, Any]):
+        self.data = data
 
-    def encode(value: dict[str, Any]) -> str:
-        return base64.urlsafe_b64encode(json.dumps(value).encode("utf-8")).decode("ascii").rstrip("=")
-
-    return ".".join([encode({"alg": "none"}), encode(claims), "signature"])
+    def model_dump(self, **_kwargs: Any) -> dict[str, Any]:
+        return self.data
 
 
-class RecordingStdin:
-    def __init__(self):
-        self.lines: list[str] = []
+class FakeNotification:
+    def __init__(self, method: str, params: dict[str, Any]):
+        self.method = method
+        self.payload = FakeModel(params)
+
+
+class FakeSdkClient:
+    def __init__(
+        self,
+        sdk_config: Any,
+        approval_handler: Any,
+        *,
+        notifications: list[Any] | None = None,
+        control_queue: "queue.Queue[dict[str, Any] | None] | None" = None,
+        resume_error: Exception | None = None,
+        thread_list_result: dict[str, Any] | None = None,
+        thread_read_result: dict[str, Any] | None = None,
+    ):
+        self.sdk_config = sdk_config
+        self.approval_handler = approval_handler
+        self.notifications = list(notifications or [])
+        self.control_queue = control_queue
+        self.resume_error = resume_error
+        self.thread_list_result = thread_list_result or {"data": [], "nextCursor": None}
+        self.thread_read_result = thread_read_result or {"thread": {}}
+        self.calls: list[tuple[str, Any]] = []
+        self.started_env: dict[str, str] = {}
         self.closed = False
+        self.approval_results: list[dict[str, Any]] = []
 
-    def write(self, value: str):
-        self.lines.append(value)
-        return len(value)
+    def start(self):
+        self.calls.append(("start", None))
+        self.started_env = dict(os.environ)
+        codex_home = Path(self.started_env["CODEX_HOME"])
+        (codex_home / "auth.json").write_text('{"accessToken":"refreshed"}', encoding="utf-8")
 
-    def flush(self):
-        pass
+    def initialize(self):
+        self.calls.append(("initialize", None))
+        return FakeModel({})
+
+    def thread_resume(self, thread_id: str, params: dict[str, Any]):
+        self.calls.append(("thread_resume", {"thread_id": thread_id, "params": params}))
+        if self.resume_error:
+            raise self.resume_error
+        return FakeModel({"thread": {"id": "thread-sdk-1"}})
+
+    def thread_start(self, params: dict[str, Any]):
+        self.calls.append(("thread_start", params))
+        return FakeModel({"thread": {"id": "thread-sdk-new"}})
+
+    def turn_start(self, thread_id: str, input_items: list[dict[str, Any]], params: dict[str, Any]):
+        self.calls.append(("turn_start", {"thread_id": thread_id, "input": input_items, "params": params}))
+        return FakeModel({"turn": {"id": "turn-sdk-1"}})
+
+    def next_turn_notification(self, turn_id: str):
+        self.calls.append(("next_turn_notification", turn_id))
+        if not self.notifications:
+            raise RuntimeError("no fake notification queued")
+        item = self.notifications.pop(0)
+        if isinstance(item, ApprovalStep):
+            result_holder: list[dict[str, Any]] = []
+
+            def ask_for_approval() -> None:
+                result_holder.append(self.approval_handler(item.method, item.params))
+
+            thread = threading.Thread(target=ask_for_approval)
+            thread.start()
+            time.sleep(0.05)
+            assert self.control_queue is not None
+            self.control_queue.put({
+                "schemaVersion": 1,
+                "type": "approval_response",
+                "turnId": item.roomtalk_turn_id,
+                "approvalId": item.approval_id,
+                "decision": item.decision,
+            })
+            thread.join(timeout=2)
+            assert result_holder
+            self.approval_results.append(result_holder[0])
+            return self.next_turn_notification(turn_id)
+        if isinstance(item, ControlStep):
+            assert self.control_queue is not None
+            self.control_queue.put(item.control)
+            deadline = time.time() + 2
+            while not any(name == item.expected_call for name, _payload in self.calls) and time.time() < deadline:
+                time.sleep(0.01)
+            return self.next_turn_notification(turn_id)
+        return item
+
+    def thread_list(self, params: dict[str, Any]):
+        self.calls.append(("thread_list", params))
+        return FakeModel(self.thread_list_result)
+
+    def thread_read(self, thread_id: str, include_turns: bool = False):
+        self.calls.append(("thread_read", {"thread_id": thread_id, "include_turns": include_turns}))
+        return FakeModel(self.thread_read_result)
+
+    def turn_interrupt(self, thread_id: str, turn_id: str):
+        self.calls.append(("turn_interrupt", {"thread_id": thread_id, "turn_id": turn_id}))
+        return FakeModel({})
+
+    def turn_steer(self, thread_id: str, turn_id: str, input_items: list[dict[str, Any]]):
+        self.calls.append(("turn_steer", {"thread_id": thread_id, "turn_id": turn_id, "input": input_items}))
+        return FakeModel({})
+
+    def request(self, method: str, params: dict[str, Any], *, response_model: Any):
+        self.calls.append((method, params))
+        return response_model.model_validate({"turnId": params["expectedTurnId"]})
 
     def close(self):
         self.closed = True
 
 
-class FakeImageResponse:
-    def __init__(
-        self,
-        body: bytes,
-        *,
-        content_type: str = "image/png",
-        content_length: str | None = None,
-        final_url: str = "https://media.example/final.png",
-    ):
-        self.body = body
-        self.headers = {
-            "Content-Type": content_type,
-            "Content-Length": content_length if content_length is not None else str(len(body)),
+class FakeSdkClientFactory:
+    def __init__(self, **client_kwargs: Any):
+        self.client_kwargs = client_kwargs
+        self.clients: list[FakeSdkClient] = []
+
+    def __call__(self, sdk_config: Any, approval_handler: Any):
+        client = FakeSdkClient(sdk_config, approval_handler, **self.client_kwargs)
+        self.clients.append(client)
+        return client
+
+
+class ApprovalStep:
+    def __init__(self, *, roomtalk_turn_id: str, approval_id: str, decision: str):
+        self.roomtalk_turn_id = roomtalk_turn_id
+        self.approval_id = approval_id
+        self.decision = decision
+        self.method = "item/commandExecution/requestApproval"
+        self.params = {
+            "threadId": "thread-sdk-1",
+            "turnId": "turn-sdk-1",
+            "itemId": approval_id,
+            "command": "npm install",
+            "cwd": "/workspace/project",
+            "startedAtMs": 123,
         }
-        self.final_url = final_url
-        self.read_limits: list[int] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def geturl(self):
-        return self.final_url
-
-    def read(self, limit: int):
-        self.read_limits.append(limit)
-        return self.body[:limit]
 
 
-class FakeAppServerProcess:
-    def __init__(self, stdout: str, stderr: str = "", exit_code: int = 0):
-        self.stdin = RecordingStdin()
-        self.stdout = io.StringIO(stdout)
-        self.stderr = io.StringIO(stderr)
-        self.exit_code = exit_code
-        self.returncode: int | None = None
-        self.killed = False
-        self.terminated = False
-
-    def wait(self, timeout: float | None = None):
-        if self.returncode is None:
-            self.returncode = self.exit_code
-        return self.returncode
-
-    def kill(self):
-        self.killed = True
-        self.returncode = -9
-
-    def terminate(self):
-        self.terminated = True
-        self.returncode = -15
+class ControlStep:
+    def __init__(self, control: dict[str, Any], expected_call: str):
+        self.control = control
+        self.expected_call = expected_call
 
 
-class FakeAppServerPopenFactory:
-    def __init__(self, messages: list[dict[str, Any]], *, stderr: str = "", exit_code: int = 0, auth_json_written: str = '{"accessToken":"refreshed"}'):
-        self.stdout = "".join(json.dumps(message) + "\n" for message in messages)
-        self.stderr = stderr
-        self.exit_code = exit_code
-        self.auth_json_written = auth_json_written
-        self.calls: list[dict[str, Any]] = []
-        self.processes: list[FakeAppServerProcess] = []
-
-    def __call__(self, args, **kwargs):
-        self.calls.append({"args": args, **kwargs})
-        codex_home = Path(kwargs["env"]["CODEX_HOME"])
-        (codex_home / "auth.json").write_text(self.auth_json_written, encoding="utf-8")
-        process = FakeAppServerProcess(self.stdout, stderr=self.stderr, exit_code=self.exit_code)
-        self.processes.append(process)
-        return process
-
-
-def codex_app_request(workspace: Path, **overrides: Any):
+def codex_app_server_request(workspace: Path, **overrides: Any):
     return parse_request(json.dumps(request(
-        turnId="turn-app-server",
+        turnId="turn-sdk",
         sessionId="session-prev",
-        prompt="inspect with app server",
+        prompt="inspect with sdk app server",
         workspace=str(workspace),
         **overrides,
     )))
 
 
-def jsonrpc_lines(process: FakeAppServerProcess) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in process.stdin.lines]
-
-
-def test_codex_user_message_item_confirms_pending_steer_insertion(tmp_path: Path):
-    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
-        turn_id="turn-roomtalk",
-        message_id="ai-1",
-        workspace=tmp_path,
-    )
-
-    assert mapper.map_notification({
-        "method": "item/started",
-        "params": {
-            "item": {
-                "type": "userMessage",
-                "id": "item-1",
-                "clientId": "queued-steer-1",
-                "content": [{"type": "text", "text": "use Bing instead"}],
-            },
-        },
-    }) == [{
-        "schemaVersion": 1,
-        "type": "user_input_inserted",
-        "turnId": "turn-roomtalk",
-        "messageId": "queued-steer-1",
-    }]
-
-
-def test_codex_image_url_is_materialized_in_memory(monkeypatch: pytest.MonkeyPatch):
-    image_url = "https://media.example/signed/input.png?token=secret"
-    response = FakeImageResponse(b"png-bytes", content_type="image/png; charset=binary")
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(request, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
-        return response
-
-    monkeypatch.setattr(codex_app_server.urllib_request, "urlopen", fake_urlopen)
-
-    result = codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
-
-    assert result == "data:image/png;base64,cG5nLWJ5dGVz"
-    assert captured["request"].full_url == image_url
-    assert captured["timeout"] == codex_app_server.CODEX_IMAGE_FETCH_TIMEOUT_SECONDS
-    assert response.read_limits == [codex_app_server.MAX_CODEX_IMAGE_BYTES + 1]
-
-
-def test_codex_image_materialization_enforces_transport_boundaries(monkeypatch: pytest.MonkeyPatch):
-    image_url = "https://media.example/signed/input.png?token=secret"
-
-    monkeypatch.setattr(
-        codex_app_server.urllib_request,
-        "urlopen",
-        lambda *_args, **_kwargs: FakeImageResponse(b"text", content_type="text/plain"),
-    )
-    with pytest.raises(codex_app_server.RunnerError) as invalid_type:
-        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
-    assert invalid_type.value.code == "codex_image_invalid_content_type"
-    assert "token=secret" not in str(invalid_type.value)
-
-    monkeypatch.setattr(
-        codex_app_server.urllib_request,
-        "urlopen",
-        lambda *_args, **_kwargs: FakeImageResponse(
-            b"image",
-            content_length=str(codex_app_server.MAX_CODEX_IMAGE_BYTES + 1),
-        ),
-    )
-    with pytest.raises(codex_app_server.RunnerError) as too_large:
-        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
-    assert too_large.value.code == "codex_image_too_large"
-
-    monkeypatch.setattr(
-        codex_app_server.urllib_request,
-        "urlopen",
-        lambda *_args, **_kwargs: FakeImageResponse(b"image", final_url="http://media.example/input.png"),
-    )
-    with pytest.raises(codex_app_server.RunnerError) as insecure_redirect:
-        codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
-    assert insecure_redirect.value.code == "codex_image_insecure_redirect"
-
-
-def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_codex_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def fail_turn_watchdog(*_args, **_kwargs):
-        raise AssertionError("Codex app-server turns must not create a watchdog timer")
+        raise AssertionError("Codex SDK app-server turns must not create a watchdog timer")
 
     monkeypatch.setattr(codex_app_server.threading, "Timer", fail_turn_watchdog)
-    materialized_urls: list[str] = []
-
-    def fake_materialize(image_url: str, *, turn_id: str):
-        materialized_urls.append(f"{turn_id}:{image_url}")
-        return "data:image/png;base64,cG5n"
-
-    monkeypatch.setattr(codex_app_server, "_materialize_codex_image_url", fake_materialize)
+    monkeypatch.setattr(
+        codex_app_server_protocol,
+        "_materialize_codex_image_url",
+        lambda _url, *, turn_id: f"data:image/png;base64,{turn_id}",
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
     refreshed_auth_json = tmp_path / "refreshed" / "auth.json"
     auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
     stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {"serverInfo": {"name": "codex"}}},
-        {"id": 1, "result": {"thread": {"id": "thread-app-1"}}},
-        {"id": 2, "result": {"turn": {"id": "turn-app-1"}}},
-        {"method": "turn/started", "params": {"threadId": "thread-app-1", "turn": {"id": "turn-app-1"}}},
-        {"method": "item/agentMessage/delta", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "itemId": "msg-1", "delta": f"I read {workspace}/demo.txt"}},
-        {"method": "item/started", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "running", "commandActions": [], "cwd": str(workspace)}}},
-        {"method": "item/commandExecution/outputDelta", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "itemId": "cmd-1", "delta": f"{workspace}/demo.txt\n"}},
-        {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "completed", "exitCode": 0, "aggregatedOutput": "", "commandActions": [], "cwd": str(workspace), "durationMs": 12}}},
-        {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "msg-1", "type": "agentMessage", "text": f"I read {workspace}/demo.txt after the tool"}}},
-        {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "file-1", "type": "fileChange", "status": "completed", "changes": [{"type": "update", "path": f"{workspace}/demo.txt"}]}}},
-        {"method": "thread/tokenUsage/updated", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "tokenUsage": {"last": {"totalTokens": 12, "inputTokens": 8, "cachedInputTokens": 2, "outputTokens": 4, "reasoningOutputTokens": 1}, "total": {"totalTokens": 50, "inputTokens": 40, "cachedInputTokens": 5, "outputTokens": 10, "reasoningOutputTokens": 2}, "modelContextWindow": 200000}}},
-        {"method": "turn/completed", "params": {"threadId": "thread-app-1", "turn": {"id": "turn-app-1", "status": "completed", "items": []}}},
+    factory = FakeSdkClientFactory(notifications=[
+        FakeNotification("turn/started", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1"}}),
+        FakeNotification("item/agentMessage/delta", {"threadId": "thread-sdk-1", "turnId": "turn-sdk-1", "itemId": "msg-1", "delta": f"I read {workspace}/demo.txt"}),
+        FakeNotification("item/started", {"threadId": "thread-sdk-1", "turnId": "turn-sdk-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "running", "cwd": str(workspace)}}),
+        FakeNotification("item/commandExecution/outputDelta", {"threadId": "thread-sdk-1", "turnId": "turn-sdk-1", "itemId": "cmd-1", "delta": f"{workspace}/demo.txt\n"}),
+        FakeNotification("item/completed", {"threadId": "thread-sdk-1", "turnId": "turn-sdk-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "completed", "exitCode": 0, "aggregatedOutput": "", "cwd": str(workspace), "durationMs": 7}}),
+        FakeNotification("thread/tokenUsage/updated", {"threadId": "thread-sdk-1", "turnId": "turn-sdk-1", "tokenUsage": {"last": {"totalTokens": 12, "inputTokens": 8, "cachedInputTokens": 2, "outputTokens": 4, "reasoningOutputTokens": 1}, "total": {"totalTokens": 12, "inputTokens": 8, "cachedInputTokens": 2, "outputTokens": 4, "reasoningOutputTokens": 1}}}),
+        FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
     ])
 
     codex_app_server.run_request(
-        codex_app_request(
+        codex_app_server_request(
             workspace,
-            codexModel="gpt-5.6-sol",
+            codexModel="gpt-5.3-codex-spark",
             codexReasoningEffort="high",
-            codexServiceTier="priority",
-            images=[{
-                "url": "https://media.example/signed/input.png?token=secret",
-            }],
+            images=[{"url": "https://media.example/signed/input.png?token=secret"}],
         ),
         emitter=EventEmitter(stdout),
         config=codex_app_server.CodexCliRunConfig(
+            cli_bin="/usr/local/bin/codex",
             secret_parent=tmp_path / "secrets",
             auth_json_path=auth_json,
             refreshed_auth_json_path=refreshed_auth_json,
         ),
-        popen_factory=popen,
+        client_factory=factory,
         env={
             "PATH": "/usr/bin",
             "HOME": "/home/roomtalk",
@@ -264,6 +232,24 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
         },
     )
 
+    client = factory.clients[0]
+    assert client.sdk_config.codex_bin == "/usr/local/bin/codex"
+    assert client.sdk_config.cwd == str(workspace)
+    assert "OPENAI_API_KEY" not in client.started_env
+    assert client.started_env["PUBLIC_VALUE"] == "visible"
+    assert refreshed_auth_json.read_text(encoding="utf-8") == '{"accessToken":"refreshed"}'
+
+    turn_start = next(call[1] for call in client.calls if call[0] == "turn_start")
+    assert turn_start["thread_id"] == "thread-sdk-1"
+    assert turn_start["params"]["model"] == "gpt-5.3-codex-spark"
+    assert turn_start["params"]["effort"] == "high"
+    assert turn_start["params"]["serviceTier"] == "default"
+    assert turn_start["params"]["sandboxPolicy"]["type"] == "readOnly"
+    assert turn_start["input"][1] == {
+        "type": "image",
+        "url": "data:image/png;base64,turn-sdk",
+    }
+
     events = event_lines(stdout)
     assert [event["type"] for event in events] == [
         "status",
@@ -271,132 +257,50 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
         "text_delta",
         "tool_call",
         "tool_result",
-        "text_delta",
-        "tool_result",
         "usage",
         "status",
         "final",
     ]
     assert events[2]["delta"] == "I read demo.txt"
     assert events[4]["output"] == "demo.txt\n"
-    assert events[5]["delta"] == " after the tool"
-    assert events[-1]["answer"] == "I read demo.txt after the tool"
-    assert events[-1]["sessionId"] == "thread-app-1"
-    assert events[-1]["usage"] == {
-        "promptTokens": 8,
-        "completionTokens": 4,
-        "totalTokens": 12,
-        "source": "reported",
-        "cachedPromptTokens": 2,
-        "cacheHitRate": 0.25,
-        "modelContextWindow": 200000,
-    }
-
-    call = popen.calls[0]
-    assert call["args"] == ["codex", "app-server", "--stdio"]
-    assert call["cwd"] == str(workspace)
-    assert "OPENAI_API_KEY" not in call["env"]
-    assert call["env"]["PUBLIC_VALUE"] == "visible"
-    assert refreshed_auth_json.read_text(encoding="utf-8") == '{"accessToken":"refreshed"}'
-
-    sent = jsonrpc_lines(popen.processes[0])
-    assert sent[0]["method"] == "initialize"
-    assert sent[0]["params"]["capabilities"]["experimentalApi"] is True
-    assert sent[1]["method"] == "initialized"
-    assert sent[2]["method"] == "thread/resume"
-    assert sent[2]["params"]["threadId"] == "session-prev"
-    assert sent[2]["params"]["model"] == "gpt-5.6-sol"
-    assert sent[2]["params"]["serviceTier"] == "priority"
-    assert sent[3]["method"] == "turn/start"
-    assert sent[3]["params"]["threadId"] == "thread-app-1"
-    assert sent[3]["params"]["model"] == "gpt-5.6-sol"
-    assert sent[3]["params"]["effort"] == "high"
-    assert sent[3]["params"]["serviceTier"] == "priority"
-    assert sent[3]["params"]["sandboxPolicy"]["type"] == "readOnly"
-    assert sent[3]["params"]["sandboxPolicy"]["networkAccess"] is False
-    assert "roomtalk publish-static-site" not in sent[3]["params"]["input"][0]["text"]
-    assert sent[3]["params"]["input"][1] == {
-        "type": "image",
-        "url": "data:image/png;base64,cG5n",
-    }
-    assert materialized_urls == [
-        "turn-app-server:https://media.example/signed/input.png?token=secret",
-    ]
-    assert not (Path(call["env"]["CODEX_HOME"]) / "auth.json").exists()
-    assert not (Path(call["env"]["CODEX_HOME"]) / "config.toml").exists()
+    assert events[-1]["answer"] == "I read demo.txt"
+    assert events[-1]["sessionId"] == "thread-sdk-1"
+    assert events[-1]["usage"]["source"] == "reported"
 
 
-def test_codex_app_server_uses_read_only_network_profile_when_room_context_is_available(tmp_path: Path):
+def test_codex_app_server_resolves_relative_codex_bin_from_path(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
     auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex_bin = bin_dir / "codex"
+    codex_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
     stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "result": {"thread": {"id": "thread-room-context"}}},
-        {"id": 2, "result": {"turn": {"id": "turn-room-context"}}},
-        {"method": "turn/completed", "params": {"threadId": "thread-room-context", "turn": {"id": "turn-room-context", "status": "completed", "items": []}}},
+    factory = FakeSdkClientFactory(notifications=[
+        FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
     ])
 
     codex_app_server.run_request(
-        codex_app_request(workspace, mode="plan", codexPermissionMode="plan"),
+        codex_app_server_request(workspace),
         emitter=EventEmitter(stdout),
         config=codex_app_server.CodexCliRunConfig(
+            cli_bin="codex",
             secret_parent=tmp_path / "secrets",
             auth_json_path=auth_json,
         ),
-        popen_factory=popen,
+        client_factory=factory,
         env={
+            "PATH": str(bin_dir),
+            "HOME": "/home/roomtalk",
             "CODE_AGENT_WORKSPACE_ROOT": str(tmp_path),
-            "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
-            "ROOMTALK_ROOM_CONTEXT_TOKEN": "room-context-token",
+            "ROOMTALK_CODEX_AUTH_JSON_PATH": str(auth_json),
         },
     )
 
-    sent = jsonrpc_lines(popen.processes[0])
-    thread_resume = next(message for message in sent if message.get("method") == "thread/resume")
-    turn_start = next(message for message in sent if message.get("method") == "turn/start")
-    assert thread_resume["params"]["permissions"] == "roomtalk-room-context-read"
-    assert "sandbox" not in thread_resume["params"]
-    assert turn_start["params"]["permissions"] == "roomtalk-room-context-read"
-    assert "sandboxPolicy" not in turn_start["params"]
-
-
-@pytest.mark.parametrize(
-    ("permission_mode", "runner_mode", "sandbox", "sandbox_policy", "approval_policy", "approvals_reviewer"),
-    [
-        ("plan", "plan", "read-only", "readOnly", "on-request", "user"),
-        ("edit", "acceptEdits", "workspace-write", "workspaceWrite", "on-request", "user"),
-        ("approveForMe", "acceptEdits", "workspace-write", "workspaceWrite", "on-request", "auto_review"),
-        ("fullAccess", "acceptEdits", "danger-full-access", "dangerFullAccess", "never", "user"),
-    ],
-)
-def test_codex_app_server_matches_codex_cli_permission_presets(
-    tmp_path: Path,
-    permission_mode: str,
-    runner_mode: str,
-    sandbox: str,
-    sandbox_policy: str,
-    approval_policy: str,
-    approvals_reviewer: str,
-):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    run_request = codex_app_request(
-        workspace,
-        mode=runner_mode,
-        codexPermissionMode=permission_mode,
-    )
-    thread_params = codex_app_server._thread_start_params(run_request, {}, workspace)
-    turn_params = codex_app_server._turn_start_params(run_request, {}, workspace, "thread-app-2")
-
-    assert thread_params["sandbox"] == sandbox
-    assert thread_params["approvalPolicy"] == approval_policy
-    assert thread_params["approvalsReviewer"] == approvals_reviewer
-    assert turn_params["sandboxPolicy"]["type"] == sandbox_policy
-    assert turn_params["approvalPolicy"] == approval_policy
-    assert turn_params["approvalsReviewer"] == approvals_reviewer
+    assert factory.clients[0].sdk_config.codex_bin == str(codex_bin)
 
 
 def test_codex_app_server_falls_back_to_new_thread_when_resume_fails(tmp_path: Path):
@@ -405,218 +309,122 @@ def test_codex_app_server_falls_back_to_new_thread_when_resume_fails(tmp_path: P
     auth_json = tmp_path / "auth.json"
     auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
     stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "error": {"code": -32000, "message": "thread not found"}},
-        {"id": 2, "result": {"thread": {"id": "thread-new"}}},
-        {"id": 3, "result": {"turn": {"id": "turn-new"}}},
-        {"method": "turn/completed", "params": {"threadId": "thread-new", "turn": {"id": "turn-new", "status": "completed", "items": []}}},
-    ])
+    factory = FakeSdkClientFactory(
+        resume_error=RuntimeError("thread not found"),
+        notifications=[
+            FakeNotification("turn/completed", {"threadId": "thread-sdk-new", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
+        ],
+    )
 
     codex_app_server.run_request(
-        codex_app_request(workspace),
+        codex_app_server_request(workspace),
         emitter=EventEmitter(stdout),
-        config=codex_app_server.CodexCliRunConfig(
-            secret_parent=tmp_path / "secrets",
-            auth_json_path=auth_json,
-        ),
-        popen_factory=popen,
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
         env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
     )
 
-    sent = jsonrpc_lines(popen.processes[0])
-    assert [message["method"] for message in sent if "method" in message][:5] == [
-        "initialize",
-        "initialized",
-        "thread/resume",
-        "thread/start",
-        "turn/start",
-    ]
-    assert sent[2]["params"]["threadId"] == "session-prev"
-    assert sent[3]["params"]["ephemeral"] is False
-    assert event_lines(stdout)[-1]["sessionId"] == "thread-new"
+    call_names = [name for name, _payload in factory.clients[0].calls]
+    assert "thread_resume" in call_names
+    assert "thread_start" in call_names
+    assert event_lines(stdout)[-1]["sessionId"] == "thread-sdk-new"
 
 
-def test_codex_app_server_responds_to_auth_refresh_from_auth_json(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    auth_json = tmp_path / "auth.json"
-    auth_json.write_text(json.dumps({
-        "tokens": {
-            "access_token": "secret-access-token",
-            "account_id": "acct-token",
-            "id_token": fake_jwt({
-                "https://api.openai.com/auth": {
-                    "chatgpt_account_id": "acct-claim",
-                    "chatgpt_plan_type": "pro",
-                },
-            }),
-        },
-    }), encoding="utf-8")
-    stdout = io.StringIO()
-    refresh_auth_json = json.dumps({
-        "tokens": {
-            "access_token": "secret-access-token",
-            "account_id": "acct-token",
-            "id_token": fake_jwt({
-                "https://api.openai.com/auth": {
-                    "chatgpt_account_id": "acct-claim",
-                    "chatgpt_plan_type": "pro",
-                },
-            }),
-        },
-    })
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "result": {"thread": {"id": "thread-app-3"}}},
-        {
-            "id": 44,
-            "method": "account/chatgptAuthTokens/refresh",
-            "params": {"reason": "expired", "previousAccountId": "acct-token"},
-        },
-        {"id": 2, "result": {"turn": {"id": "turn-app-3"}}},
-        {"method": "turn/completed", "params": {"threadId": "thread-app-3", "turn": {"id": "turn-app-3", "status": "completed", "items": []}}},
-    ], auth_json_written=refresh_auth_json)
-
-    codex_app_server.run_request(
-        codex_app_request(workspace),
-        emitter=EventEmitter(stdout),
-        config=codex_app_server.CodexCliRunConfig(
-            secret_parent=tmp_path / "secrets",
-            auth_json_path=auth_json,
-        ),
-        popen_factory=popen,
-        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
-    )
-
-    response = next(message for message in jsonrpc_lines(popen.processes[0]) if message.get("id") == 44)
-    assert response["result"] == {
-        "accessToken": "secret-access-token",
-        "chatgptAccountId": "acct-token",
-        "chatgptPlanType": "pro",
-    }
-
-
-def test_codex_app_server_delegates_auth_refresh_to_roomtalk(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    auth_json = tmp_path / "auth.json"
-    auth_json.write_text(json.dumps({
-        "tokens": {
-            "access_token": "expired-access-token",
-            "refresh_token": "secret-refresh-token",
-            "account_id": "acct-token",
-        },
-    }), encoding="utf-8")
-    refreshed_auth_path = tmp_path / "refreshed-auth.json"
-    refreshed_auth_json = json.dumps({
-        "tokens": {
-            "access_token": "fresh-access-token",
-            "refresh_token": "rotated-refresh-token",
-            "account_id": "acct-token",
-        },
-    })
-    refresh_requests = []
-
-    def fake_refresh(config, params):
-        refresh_requests.append((config.auth_version, params))
-        return {
-            "authJson": refreshed_auth_json,
-            "authVersion": 8,
-            "accessToken": "fresh-access-token",
-            "chatgptAccountId": "acct-token",
-            "chatgptPlanType": "pro",
-        }
-
-    monkeypatch.setattr(codex_app_server, "_request_roomtalk_auth_refresh", fake_refresh)
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "result": {"thread": {"id": "thread-app-refresh"}}},
-        {
-            "id": 44,
-            "method": "account/chatgptAuthTokens/refresh",
-            "params": {"reason": "unauthorized", "previousAccountId": "acct-token"},
-        },
-        {"id": 2, "result": {"turn": {"id": "turn-app-refresh"}}},
-        {"method": "turn/completed", "params": {"threadId": "thread-app-refresh", "turn": {"id": "turn-app-refresh", "status": "completed", "items": []}}},
-    ])
-    config = codex_app_server.CodexCliRunConfig(
-        secret_parent=tmp_path / "secrets",
-        auth_json_path=auth_json,
-        refreshed_auth_json_path=refreshed_auth_path,
-        auth_refresh_url="https://room.example/api/code-agent/codex-auth/refresh",
-        auth_refresh_token="turn-token",
-        auth_version=7,
-    )
-
-    codex_app_server.run_request(
-        codex_app_request(workspace),
-        emitter=EventEmitter(io.StringIO()),
-        config=config,
-        popen_factory=popen,
-        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
-    )
-
-    response = next(message for message in jsonrpc_lines(popen.processes[0]) if message.get("id") == 44)
-    assert response["result"] == {
-        "accessToken": "fresh-access-token",
-        "chatgptAccountId": "acct-token",
-        "chatgptPlanType": "pro",
-    }
-    assert refresh_requests == [(7, {"reason": "unauthorized", "previousAccountId": "acct-token"})]
-    assert config.auth_version == 8
-    assert json.loads(refreshed_auth_path.read_text(encoding="utf-8"))["tokens"]["access_token"] == "fresh-access-token"
-
-
-def test_codex_app_server_emits_interactive_approval_request_in_edit_mode(tmp_path: Path):
+def test_codex_app_server_routes_interactive_approval_response(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
     auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
     stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {"id": 1, "result": {"thread": {"id": "thread-app-approval"}}},
-        {"id": 2, "result": {"turn": {"id": "turn-app-approval"}}},
-        {
-            "id": 88,
-            "method": "item/commandExecution/requestApproval",
-            "params": {
-                "threadId": "thread-app-approval",
-                "turnId": "turn-app-approval",
-                "itemId": "cmd-approval",
-                "command": "npm install",
-                "cwd": str(workspace),
-                "startedAtMs": 123,
-            },
-        },
-        {"method": "turn/completed", "params": {"threadId": "thread-app-approval", "turn": {"id": "turn-app-approval", "status": "completed", "items": []}}},
-    ])
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    factory = FakeSdkClientFactory(
+        control_queue=controls,
+        notifications=[
+            ApprovalStep(roomtalk_turn_id="turn-sdk", approval_id="cmd-approval", decision="accept"),
+            FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
+        ],
+    )
 
     codex_app_server.run_request(
-        codex_app_request(workspace, mode="edit", codexPermissionMode="edit"),
+        codex_app_server_request(workspace, mode="edit", codexPermissionMode="edit"),
         emitter=EventEmitter(stdout),
-        config=codex_app_server.CodexCliRunConfig(
-            secret_parent=tmp_path / "secrets",
-            auth_json_path=auth_json,
-        ),
-        popen_factory=popen,
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
+        control_queue=controls,
         env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
     )
 
+    client = factory.clients[0]
+    assert client.approval_results == [{"decision": "accept"}]
     events = event_lines(stdout)
     approval = next(event for event in events if event["type"] == "approval_request")
-    assert approval["id"] == "cmd-approval"
     assert approval["approvalType"] == "command"
     assert approval["args"]["approvalId"] == "cmd-approval"
-    assert approval["args"]["command"] == "npm install"
-    assert approval["args"]["cwd"] == str(workspace)
-    assert all(message.get("id") != 88 for message in jsonrpc_lines(popen.processes[0]))
+    approval_result = next(event for event in events if event["type"] == "tool_result" and event["name"] == "approval_request")
+    assert approval_result["success"] is True
+
+
+def test_codex_app_server_acknowledges_steer_controls(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    factory = FakeSdkClientFactory(
+        control_queue=controls,
+        notifications=[
+            ControlStep({
+                "schemaVersion": 1,
+                "type": "steer",
+                "turnId": "turn-sdk",
+                "controlId": "control-steer-1",
+                "messageId": "queued-steer-1",
+                "prompt": "use Bing instead",
+            }, "turn/steer"),
+            FakeNotification("item/started", {
+                "threadId": "thread-sdk-1",
+                "turnId": "turn-sdk-1",
+                "item": {
+                    "id": "user-steer-1",
+                    "type": "userMessage",
+                    "clientId": "queued-steer-1",
+                    "content": [{"type": "text", "text": "use Bing instead", "text_elements": []}],
+                },
+            }),
+            FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
+        ],
+    )
+
+    codex_app_server.run_request(
+        codex_app_server_request(workspace),
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
+        control_queue=controls,
+        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    result = next(event for event in event_lines(stdout) if event.get("controlId") == "control-steer-1")
+    assert result["type"] == "control_result"
+    assert result["accepted"] is True
+    assert ("turn/steer", {
+        "threadId": "thread-sdk-1",
+        "expectedTurnId": "turn-sdk-1",
+        "clientUserMessageId": "queued-steer-1",
+        "input": [{"type": "text", "text": "use Bing instead", "text_elements": []}],
+    }) in factory.clients[0].calls
+    assert any(event == {
+        "schemaVersion": 1,
+        "type": "user_input_inserted",
+        "turnId": "turn-sdk",
+        "messageId": "queued-steer-1",
+    } for event in event_lines(stdout))
 
 
 def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def fail_turn_watchdog(*_args, **_kwargs):
-        raise AssertionError("Codex app-server thread queries must not create a watchdog timer")
+        raise AssertionError("Codex SDK app-server thread queries must not create a watchdog timer")
 
     monkeypatch.setattr(codex_app_server.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
@@ -624,23 +432,11 @@ def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: py
     auth_json = tmp_path / "auth.json"
     auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
     stdout = io.StringIO()
-    popen = FakeAppServerPopenFactory([
-        {"id": 0, "result": {}},
-        {
-            "id": 1,
-            "result": {
-                "data": [
-                    {
-                        "id": "thread-1",
-                        "title": "Inspect project",
-                        "updatedAt": "2026-07-04T10:00:00Z",
-                    },
-                ],
-                "nextCursor": "cursor-next",
-            },
-        },
-    ])
-    request = codex_app_server.parse_app_server_request(json.dumps({
+    factory = FakeSdkClientFactory(thread_list_result={
+        "data": [{"id": "thread-1", "title": "Inspect project", "updatedAt": "2026-07-04T10:00:00Z"}],
+        "nextCursor": "cursor-next",
+    })
+    query = codex_app_server.parse_app_server_request(json.dumps({
         "schemaVersion": 1,
         "type": "thread_list",
         "roomId": "room-threads",
@@ -651,23 +447,15 @@ def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: py
     }))
 
     codex_app_server.run_thread_query_request(
-        request,
+        query,
         emitter=EventEmitter(stdout),
-        config=codex_app_server.CodexCliRunConfig(
-            secret_parent=tmp_path / "secrets",
-            auth_json_path=auth_json,
-        ),
-        popen_factory=popen,
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
         env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
     )
 
-    sent = jsonrpc_lines(popen.processes[0])
-    assert [message["method"] for message in sent if "method" in message] == [
-        "initialize",
-        "initialized",
-        "thread/list",
-    ]
-    assert sent[2]["params"] == {
+    thread_list = next(call[1] for call in factory.clients[0].calls if call[0] == "thread_list")
+    assert thread_list == {
         "limit": 10,
         "sortKey": "updated_at",
         "sortDirection": "desc",
@@ -675,29 +463,11 @@ def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: py
         "archived": False,
         "searchTerm": "inspect",
     }
-    events = event_lines(stdout)
-    assert events == [{
+    assert event_lines(stdout) == [{
         "schemaVersion": 1,
         "type": "thread_list_result",
         "roomId": "room-threads",
-        "threads": [
-            {
-                "id": "thread-1",
-                "title": "Inspect project",
-                "updatedAt": "2026-07-04T10:00:00Z",
-            },
-        ],
+        "threads": [{"id": "thread-1", "title": "Inspect project", "updatedAt": "2026-07-04T10:00:00Z"}],
         "nextCursor": "cursor-next",
         "backwardsCursor": None,
     }]
-
-
-def test_codex_app_server_main_emits_error_events_for_invalid_requests():
-    stdout = io.StringIO()
-
-    exit_code = codex_app_server.main(io.StringIO(""), stdout)
-
-    assert exit_code == 1
-    events = event_lines(stdout)
-    assert events[0]["type"] == "error"
-    assert events[0]["code"] == "missing_request"

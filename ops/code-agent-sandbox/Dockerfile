@@ -14,7 +14,7 @@ ARG POWERLEVEL10K_REF=9253fb1c5034410c43a0c681ff8294181c54016c
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-12-site-version-cli-v1
+ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-13-unified-codex-app-server-v1
 ENV ROOMTALK_CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
 ENV ROOMTALK_PLAYWRIGHT_VERSION=${PLAYWRIGHT_NPM_VERSION}
@@ -158,7 +158,7 @@ RUN apt-get update \
   && roomtalk --help >/dev/null \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-code-agent-requirements.lock \
   && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
-  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_code_agent_runner.runner"); importlib.import_module("roomtalk_code_agent_runner.codex_cli"); importlib.import_module("roomtalk_code_agent_runner.codex_app_server"); importlib.import_module("roomtalk_code_agent_runner.codex_sdk_app_server"); importlib.import_module("openai_codex")' \
+  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_code_agent_runner.runner"); importlib.import_module("roomtalk_code_agent_runner.codex_cli"); importlib.import_module("roomtalk_code_agent_runner.codex_app_server"); importlib.import_module("openai_codex")' \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 

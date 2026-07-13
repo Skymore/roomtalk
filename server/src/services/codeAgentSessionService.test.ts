@@ -2184,7 +2184,7 @@ describe('CodeAgentSessionService', () => {
     }
     const startedPrompt = store.messages.get('room-1')?.find(item => item.id === 'queued-1');
     assert.equal(startedPrompt?.codeAgentQueuedInput, undefined);
-    assert.equal(startedPrompt?.turnId, undefined);
+    assert.equal(startedPrompt?.turnId, 'turn-2');
 
     runner.release(1);
     await runner.waitForCompletions(2);
@@ -2259,7 +2259,7 @@ describe('CodeAgentSessionService', () => {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
     assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.codeAgentQueuedInput, undefined);
-    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.turnId, undefined);
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-race-1')?.turnId, 'turn-1');
 
     runner.release(0);
     await runner.waitForCompletions(1);
