@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
 import { getSenderColorTheme } from '../utils/userProfile';
+import { MediaViewerModal } from './MediaViewerModal';
 import { MessageItem } from './MessageItem';
 
 const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
@@ -123,6 +124,7 @@ describe('MessageItem replies', () => {
     downloadMediaBlobMock.mockReset();
     sendA2UIActionMock.mockReset();
     vi.unstubAllGlobals();
+    document.getElementById('root')?.remove();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {
@@ -1328,6 +1330,73 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
     });
+  });
+
+  it('opens the media viewer from the displayed blob URL while the signed URL is unresolved', async () => {
+    getMediaDownloadUrlMock.mockReturnValue(new Promise(() => {}));
+    const appRoot = document.createElement('div');
+    appRoot.id = 'root';
+    document.body.appendChild(appRoot);
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'cached-image-viewer-message',
+          content: '',
+          messageType: 'media',
+          localMediaPreviewUrl: 'blob:cached-image',
+          mediaAsset: {
+            id: 'cached-image-asset',
+            kind: 'image',
+            mimeType: 'image/webp',
+            byteSize: 123,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText('openMediaViewer'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'mediaViewer' });
+    const activeImage = dialog.querySelector('[data-active-media="true"] img');
+    expect(activeImage?.getAttribute('src')).toBe('blob:cached-image');
+    expect(appRoot.inert).toBe(true);
+    expect(appRoot.getAttribute('aria-hidden')).toBe('true');
+
+    fireEvent.click(within(dialog).getByLabelText('close'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull());
+    expect(appRoot.inert).not.toBe(true);
+    expect(appRoot.getAttribute('aria-hidden')).toBeNull();
+    appRoot.remove();
+  });
+
+  it('does not isolate the application when an open viewer has no renderable media', async () => {
+    const appRoot = document.createElement('div');
+    appRoot.id = 'root';
+    document.body.appendChild(appRoot);
+
+    render(
+      <MediaViewerModal
+        isOpen
+        src={null}
+        kind="image"
+        title="mediaViewer"
+        alt="sharedImage"
+        roomId="room-1"
+        onClose={vi.fn()}
+      />
+    );
+    await act(async () => {});
+
+    expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
+    expect(appRoot.inert).not.toBe(true);
+    expect(appRoot.getAttribute('aria-hidden')).toBeNull();
+    appRoot.remove();
   });
 
   it('closes media access and discards the signed URL when the room session locks', async () => {

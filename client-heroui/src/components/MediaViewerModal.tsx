@@ -1294,6 +1294,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   isHistoryPreviewOpenRef.current = isHistoryPreviewOpen;
   hasViewedHistoryItemRef.current = hasViewedHistoryItem;
   onCloseRef.current = onClose;
+  const isDialogReady = isOpen && Boolean(activeMedia);
 
   const resetImageZoom = React.useCallback(() => {
     setImageZoom(MIN_IMAGE_ZOOM);
@@ -1403,7 +1404,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   }, [activeMedia?.assetId, activeMedia?.src, isOpen]);
 
   React.useEffect(() => {
-    if (!isOpen) return undefined;
+    // Never isolate the application unless the portal can render a dialog.
+    // A caller can transiently request open before its media source resolves;
+    // locking #root in that state leaves the entire app inert with no close UI.
+    if (!isDialogReady) return undefined;
 
     previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -1498,7 +1502,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         if (previousFocus?.isConnected) previousFocus.focus();
       });
     };
-  }, [isOpen]);
+  }, [isDialogReady]);
 
   React.useEffect(() => {
     if (!isHistoryOpen) {
@@ -1728,7 +1732,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     }
   };
 
-  if (!isOpen || !activeMedia || typeof document === "undefined") {
+  if (!isDialogReady || !activeMedia || typeof document === "undefined") {
     return null;
   }
 

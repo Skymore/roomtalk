@@ -1559,7 +1559,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       )}
       <MediaViewerModal
         isOpen={isMediaViewerOpen && canOpenMediaViewer}
-        src={signedMediaUrl}
+        // The message may be rendering an IndexedDB-backed blob URL while the
+        // signed network URL is intentionally absent. The viewer must open the
+        // media the user can actually see, not only the network fallback.
+        src={displayMediaUrl}
         kind={isVideo ? "video" : "image"}
         title={t('mediaViewer')}
         alt={isVideo ? t('videoMessage') : t('sharedImage')}
