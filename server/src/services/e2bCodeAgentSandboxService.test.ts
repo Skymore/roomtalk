@@ -300,6 +300,7 @@ describe('E2BCodeAgentSandboxService', () => {
       env: {
         PYTHONUNBUFFERED: '1',
         ROOMTALK_E2B_PORT_HOST_TEMPLATE: '{port}-e2b-1.sandbox.e2b.dev',
+        __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: '.sandbox.e2b.dev',
       },
       timeoutMs: 300_000,
     }]);
@@ -375,6 +376,28 @@ describe('E2BCodeAgentSandboxService', () => {
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);
+  });
+
+  it('preserves an exact Vite preview host for RoomTalk-started workspace commands', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.startWorkspaceCommand({
+      handle,
+      command: 'npm run dev',
+      env: {
+        __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: '5173-e2b-1.sandbox.e2b.dev',
+      },
+    });
+
+    assert.deepEqual(driver.commandOptions, [{
+      env: {
+        ROOMTALK_E2B_PORT_HOST_TEMPLATE: '{port}-e2b-1.sandbox.e2b.dev',
+        __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: '5173-e2b-1.sandbox.e2b.dev',
+      },
+      timeoutMs: 0,
+    }]);
   });
 
   it('exports and imports workspace archives for sandbox migration', async () => {

@@ -258,10 +258,7 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
       cols: input.cols,
       rows: input.rows,
       cwd: input.handle.workspace || this.options.workspace || '/workspace',
-      env: {
-        ...(input.env || {}),
-        ...portHostTemplateEnv(connected),
-      },
+      env: workspaceProcessEnv(connected, input.env),
       timeoutMs: input.timeoutMs ?? 0,
       onData: input.onData,
     });
@@ -273,10 +270,7 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
       throw new Error('E2B sandbox driver handle does not support command execution');
     }
     const commandResult = await handle.commands.run(input.command, {
-      env: {
-        ...(input.env || {}),
-        ...portHostTemplateEnv(handle),
-      },
+      env: workspaceProcessEnv(handle, input.env),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     });
     return {
@@ -1144,8 +1138,27 @@ const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, str
   if (!host || !host.includes(String(placeholderPort))) {
     return {};
   }
+  const normalizedHost = host.trim().replace(/\.$/, '');
+  const firstDot = normalizedHost.indexOf('.');
   return {
-    ROOMTALK_E2B_PORT_HOST_TEMPLATE: host.replace(String(placeholderPort), '{port}'),
+    ROOMTALK_E2B_PORT_HOST_TEMPLATE: normalizedHost.replace(String(placeholderPort), '{port}'),
+    ...(firstDot > 0 ? {
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: normalizedHost.slice(firstDot),
+    } : {}),
+  };
+};
+
+const workspaceProcessEnv = (
+  handle: E2BSandboxDriverHandle,
+  env: Record<string, string> = {}
+): Record<string, string> => {
+  const hostEnv = portHostTemplateEnv(handle);
+  return {
+    ...env,
+    ...hostEnv,
+    ...('__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS' in env ? {
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS,
+    } : {}),
   };
 };
 
