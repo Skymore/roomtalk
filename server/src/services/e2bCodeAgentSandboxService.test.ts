@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { PassThrough } from 'stream';
+import { PassThrough, Writable } from 'stream';
 import { E2BCodeAgentSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from './e2bCodeAgentSandboxService';
 
 class FakeE2BDriver implements E2BSandboxDriver {
@@ -31,6 +31,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
     { path: '/workspace/output/report.html', type: 'file' },
   ];
   ignoredWorkspacePaths: string[] = [];
+  ignoredWorkspaceStdinError?: Error;
   failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
@@ -72,6 +73,22 @@ class FakeE2BDriver implements E2BSandboxDriver {
           const stdout = new PassThrough();
           const stderr = new PassThrough();
           if (command.includes('git check-ignore')) {
+            if (this.ignoredWorkspaceStdinError) {
+              const writeError = this.ignoredWorkspaceStdinError;
+              stdout.end();
+              stderr.end();
+              return {
+                pid: 42,
+                stdin: new Writable({
+                  write(_chunk, _encoding, callback) {
+                    setImmediate(() => callback(writeError));
+                  },
+                }),
+                stdout,
+                stderr,
+                completed: Promise.reject(new Error('E2B command wait failed')),
+              };
+            }
             const stdin = new PassThrough();
             const chunks: Buffer[] = [];
             stdin.on('data', (chunk: Buffer | string) => {
@@ -536,6 +553,35 @@ describe('E2BCodeAgentSandboxService', () => {
       })).map(entry => entry.path),
       [],
     );
+  });
+
+  it('falls back to unfiltered workspace entries when the ignore process exits before stdin is written', async () => {
+    const driver = new FakeE2BDriver();
+    driver.workspaceEntries = [
+      { path: '/workspace/src/App.tsx', type: 'file' },
+      { path: '/workspace/generated/cache.json', type: 'file' },
+    ];
+    driver.ignoredWorkspaceStdinError = new Error('[not_found] process with pid 42 not found');
+    const warnings: Array<{ error?: Error; sandboxId?: string }> = [];
+    const service = new E2BCodeAgentSandboxService(driver, {
+      templateId: 'roomtalk-code-agent',
+      logger: {
+        warn: (_message, meta) => warnings.push(meta as { error?: Error; sandboxId?: string }),
+      },
+    });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    const entries = await service.listWorkspaceEntries(handle, { maxDepth: 5 });
+
+    assert.deepEqual(entries.map(entry => entry.path), [
+      'generated',
+      'src',
+      'generated/cache.json',
+      'src/App.tsx',
+    ]);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].sandboxId, handle.id);
+    assert.match(warnings[0].error?.message || '', /process with pid 42 not found/);
   });
 
   it('initializes an empty workspace with a baseline commit', async () => {

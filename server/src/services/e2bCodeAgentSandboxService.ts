@@ -936,10 +936,20 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
 
     try {
       const result = await connected.commands.run(command, { timeoutMs: 10_000 });
-      result.stdin?.end(entries.map(entry => entry.path).join('\0') + '\0');
+      const completion = result.completed?.then(
+        exit => ({ ok: true as const, exit }),
+        error => ({ ok: false as const, error })
+      );
+      if (!result.stdin) {
+        throw new Error('E2B git ignore query does not expose stdin');
+      }
+      await endWritableStream(result.stdin, entries.map(entry => entry.path).join('\0') + '\0');
       const stdout = await collectReadableTextWithLimit(result.stdout, 2 * 1024 * 1024);
-      const completed = await result.completed;
-      if (completed && completed.exitCode !== 0) {
+      const commandExit = await completion;
+      if (commandExit && !commandExit.ok) {
+        throw commandExit.error;
+      }
+      if (commandExit && commandExit.exit.exitCode !== 0) {
         return new Set();
       }
       return parseGitIgnoredWorkspacePaths(stdout.text, workspacePrefix);
@@ -1833,6 +1843,35 @@ const parseGitIgnoredWorkspacePaths = (stdout: string, workspacePrefix: string):
   }
   return paths;
 };
+
+const endWritableStream = (stream: Writable, data: string | Uint8Array): Promise<void> => (
+  new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      stream.removeListener('error', onError);
+    };
+    const finish = (error?: Error | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        setImmediate(cleanup);
+        reject(error);
+      } else {
+        cleanup();
+        resolve();
+      }
+    };
+    const onError = (error: Error) => finish(error);
+    stream.once('error', onError);
+    try {
+      stream.end(data, finish);
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
+  })
+);
 
 const normalizeWorkspaceInputPath = (value: string, workspacePrefix: string): string => {
   const normalizedValue = value.trim().replace(/\\/g, '/');
