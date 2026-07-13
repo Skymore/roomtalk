@@ -247,6 +247,14 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 50%');
     expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost:$0.000000');
+    for (const testId of [
+      'code-agent-sandbox-status',
+      'code-agent-agent-status',
+      'code-agent-session-cost',
+      'code-agent-context-usage',
+    ]) {
+      expect(screen.getByTestId(testId).className).toContain('h-7');
+    }
   });
 
   it('keeps network-backed workspace tabs disabled until the room session is verified', async () => {

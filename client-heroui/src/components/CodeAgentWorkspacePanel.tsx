@@ -77,6 +77,7 @@ const EMPTY_CHANGED_FILE_STATS: CodeAgentWorkspaceSnapshot['changes']['changedFi
 const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
 const MOBILE_WORKSPACE_QUERY = '(max-width: 1023px)';
 const SHOW_AGENT_ACTIVITY_AND_THREADS = false;
+const statusPillClassName = 'inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[11px] font-medium leading-none';
 
 const formatArtifactVersionDate = (value: string, locale: string) => {
   const date = new Date(value);
@@ -627,16 +628,25 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getSandboxStatusClassName(room.sandboxStatus)}`}>
+          <span
+            data-testid="code-agent-sandbox-status"
+            className={`${statusPillClassName} max-w-[150px] ${getSandboxStatusClassName(room.sandboxStatus)}`}
+          >
             <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
             <span className="truncate">{t(getSandboxStatusLabelKey(room.sandboxStatus))}</span>
           </span>
-          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getCodeAgentStatusClassName(agentStatus)}`}>
+          <span
+            data-testid="code-agent-agent-status"
+            className={`${statusPillClassName} max-w-[150px] ${getCodeAgentStatusClassName(agentStatus)}`}
+          >
             <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
             <span className="truncate">{t(getCodeAgentStatusLabelKey(agentStatus))}</span>
           </span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
-            <Icon icon="lucide:coins" className="h-3 w-3" />
+          <span
+            data-testid="code-agent-session-cost"
+            className={`${statusPillClassName} border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]`}
+          >
+            <Icon icon="lucide:coins" className="h-3 w-3 flex-shrink-0" />
             {t('sessionCost')}:
             {sessionCostUsd !== null ? formatUsdCost(sessionCostUsd) : isSessionCostUnavailable ? t('costUnavailable') : (
               <>
@@ -649,9 +659,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <span
               data-testid="code-agent-context-usage"
               title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.contextWindow.toLocaleString()}`}
-              className="inline-flex items-center gap-1 rounded-full border border-[#b9c7ba] bg-[#f4f8f3] px-2 py-1 text-[11px] font-medium text-[#31533b] dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa]"
+              className={`${statusPillClassName} border-[#b9c7ba] bg-[#f4f8f3] text-[#31533b] dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa]`}
             >
-              <Icon icon="lucide:gauge" className="h-3 w-3" />
+              <Icon icon="lucide:gauge" className="h-3 w-3 flex-shrink-0" />
               Context: {contextUsage.usedPercent}%
             </span>
           ) : null}
