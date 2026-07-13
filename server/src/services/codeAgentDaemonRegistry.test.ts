@@ -45,7 +45,12 @@ describe('CodeAgentDaemonProcessRegistry', () => {
     const input = {
       handle: sandbox('sandbox-1'),
       command: 'daemon',
-      env: { SHARED: 'yes', ROOMTALK_MODEL_GATEWAY_TOKEN: 'secret' },
+      env: {
+        SHARED: 'yes',
+        ROOMTALK_MODEL_GATEWAY_TOKEN: 'secret',
+        ROOMTALK_STATIC_PUBLISH_REFRESH_URL: 'https://room.example/api/code-agent/publish-static-site/token',
+        ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN: 'refresh-secret',
+      },
       start: async (env: Record<string, string>) => {
         startCalls += 1;
         assert.deepEqual(env, { SHARED: 'yes' });

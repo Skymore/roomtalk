@@ -214,6 +214,8 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
             "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/code-agent/publish-static-site",
             "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL": "https://room.example",
             "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
+            "ROOMTALK_STATIC_PUBLISH_REFRESH_URL": "https://room.example/api/code-agent/publish-static-site/token",
+            "ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN": "refresh-token",
             "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
             "ROOMTALK_ROOM_CONTEXT_TOKEN": "room-context-token",
             "ROOMTALK_E2B_PORT_HOST_TEMPLATE": "{port}.sandbox.e2b.dev",
@@ -241,6 +243,7 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
 
     child_env = call["env"]
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in child_env
+    assert "ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN" not in child_env
     assert "ROOMTALK_ROOM_CONTEXT_TOKEN" not in child_env
     config_toml = (Path(child_env["CODEX_HOME"]) / "config.toml").read_text(encoding="utf-8")
     assert 'default_permissions = "roomtalk-room-context-workspace"' in config_toml
@@ -250,6 +253,8 @@ def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: P
     assert 'ROOMTALK_CODE_AGENT_TURN_ID = "turn-codex"' in config_toml
     assert 'ROOMTALK_CODE_AGENT_CLI_ACCESS = "full"' in config_toml
     assert 'ROOMTALK_STATIC_PUBLISH_TOKEN = "turn-token"' in config_toml
+    assert 'ROOMTALK_STATIC_PUBLISH_REFRESH_URL = "https://room.example/api/code-agent/publish-static-site/token"' in config_toml
+    assert 'ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN = "refresh-token"' in config_toml
     assert 'ROOMTALK_ROOM_CONTEXT_SOCKET = "' in config_toml
     assert 'ROOMTALK_ROOM_CONTEXT_URL = ' not in config_toml
     assert 'ROOMTALK_ROOM_CONTEXT_TOKEN = ' not in config_toml
@@ -272,6 +277,8 @@ def test_codex_plan_shell_env_only_exposes_read_only_roomtalk_capabilities(tmp_p
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH": "true",
         "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/code-agent/publish-static-site",
         "ROOMTALK_STATIC_PUBLISH_TOKEN": "publish-token",
+        "ROOMTALK_STATIC_PUBLISH_REFRESH_URL": "https://room.example/api/code-agent/publish-static-site/token",
+        "ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN": "refresh-token",
         "ROOMTALK_E2B_PORT_HOST_TEMPLATE": "{port}.sandbox.e2b.dev",
     }, tmp_path)
 
@@ -280,6 +287,8 @@ def test_codex_plan_shell_env_only_exposes_read_only_roomtalk_capabilities(tmp_p
     assert "ROOMTALK_ROOM_CONTEXT_TOKEN" not in values
     assert "ROOMTALK_ROOM_CONTEXT_URL" not in values
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in values
+    assert "ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN" not in values
+    assert "ROOMTALK_STATIC_PUBLISH_REFRESH_URL" not in values
     assert "ROOMTALK_STATIC_PUBLISH_URL" not in values
     assert "ROOMTALK_E2B_PORT_HOST_TEMPLATE" not in values
 

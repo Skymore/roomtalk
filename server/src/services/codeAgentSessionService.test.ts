@@ -1865,12 +1865,18 @@ describe('CodeAgentSessionService', () => {
       createId: () => 'static-publish-token-id',
     });
     const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'approveForMe' }), [userMessage()]);
+    const roomContext = new CodeAgentRoomContextService(store as any, {
+      tokenSecret: 'room-context-secret',
+      nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
+      createId: () => 'static-publish-refresh-token-id',
+    });
     const { sandboxService, service } = createService({
       store,
       runner,
       availableModes: ['fullAccess'],
       defaultMode: 'plan',
       staticSitePublisher,
+      roomContext,
     });
 
     await service.startTurn({
@@ -1883,6 +1889,10 @@ describe('CodeAgentSessionService', () => {
     assert.equal(env.ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH, 'true');
     assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.example/api/code-agent/publish-static-site');
     assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'https://room.example');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_REFRESH_URL, 'https://room.example/api/code-agent/publish-static-site/token');
+    const refreshClaims = roomContext.verifyTurnToken(env.ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN);
+    assert.equal(refreshClaims?.turnId, 'turn-1');
+    assert.equal(refreshClaims?.exp, Date.parse('2026-05-03T02:00:00.000Z') / 1000);
     const claims = staticSitePublisher.verifyTurnToken(env.ROOMTALK_STATIC_PUBLISH_TOKEN);
     assert.equal(claims?.roomId, 'room-1');
     assert.equal(claims?.clientId, 'client-1');

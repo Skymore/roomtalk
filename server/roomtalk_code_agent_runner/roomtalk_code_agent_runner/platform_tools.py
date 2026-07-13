@@ -199,10 +199,9 @@ def _get_room_context(url: str, token: str) -> dict[str, Any]:
 
 def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     publish_url = (env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip()
-    publish_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
     room_id = (env.get("ROOMTALK_CODE_AGENT_ROOM_ID") or "").strip()
     turn_id = (env.get("ROOMTALK_CODE_AGENT_TURN_ID") or "").strip()
-    if not publish_url or not publish_token:
+    if not publish_url or not _has_static_publish_credentials(env):
         raise RunnerError("Static site publishing is not available for this turn", code="publish_unavailable")
     if not room_id or not turn_id:
         raise RunnerError("RoomTalk publish metadata is missing for this turn", code="publish_metadata_missing")
@@ -226,6 +225,7 @@ def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[
     if args.title:
         payload["title"] = str(args.title).strip()
 
+    publish_token = _resolve_static_publish_token(env)
     prepare = _post_static_publish_payload(f"{publish_url.rstrip('/')}/prepare", publish_token, payload)
     uploads = prepare.get("files")
     upload_token = prepare.get("uploadToken")
@@ -305,10 +305,10 @@ def _put_static_publish_file(url: str, source_path: Path, mime_type: str, byte_s
 
 def _unpublish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     publish_url = (env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip()
-    publish_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
-    if not publish_url or not publish_token:
+    if not publish_url or not _has_static_publish_credentials(env):
         raise RunnerError("Static site management is not available for this turn", code="unpublish_unavailable")
 
+    publish_token = _resolve_static_publish_token(env)
     response = _delete_static_publish_payload(publish_url, publish_token, {"slug": str(args.slug).strip()})
     slug = response.get("slug")
     url = response.get("url")
@@ -321,6 +321,30 @@ def _unpublish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dic
         "slug": slug,
         "objectCount": response.get("objectCount", 0),
     }
+
+
+def _has_static_publish_credentials(env: dict[str, str]) -> bool:
+    access_token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
+    refresh_url = (env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_URL") or "").strip()
+    refresh_token = (env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN") or "").strip()
+    return bool(access_token or (refresh_url and refresh_token))
+
+
+def _resolve_static_publish_token(env: dict[str, str]) -> str:
+    refresh_url = (env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_URL") or "").strip()
+    refresh_token = (env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN") or "").strip()
+    if refresh_url or refresh_token:
+        if not refresh_url or not refresh_token:
+            raise RunnerError("Static site publish refresh metadata is incomplete", code="publish_refresh_unavailable")
+        response = _post_static_publish_payload(refresh_url, refresh_token, {})
+        token = response.get("token")
+        if not isinstance(token, str) or not token:
+            raise RunnerError("Static site publish token refresh response was incomplete", code="invalid_publish_refresh_response")
+        return token
+    token = (env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip()
+    if not token:
+        raise RunnerError("Static site publishing is not available for this turn", code="publish_unavailable")
+    return token
 
 
 def _delete_static_publish_payload(url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:

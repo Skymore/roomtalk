@@ -376,6 +376,10 @@ export class PublishedStaticSiteService {
     return this.publicBaseUrl ? joinPublicUrl(this.publicBaseUrl, CODE_AGENT_STATIC_PUBLISH_API_PATH) : CODE_AGENT_STATIC_PUBLISH_API_PATH;
   }
 
+  get turnTokenTtlSeconds() {
+    return this.tokenTtlSeconds;
+  }
+
   publishApiUrlForRequest(clientOrigin?: string, serverOrigin?: string) {
     const publicBaseUrl = this.publicBaseUrlForRequest(clientOrigin, serverOrigin);
     return publicBaseUrl ? joinPublicUrl(publicBaseUrl, CODE_AGENT_STATIC_PUBLISH_API_PATH) : CODE_AGENT_STATIC_PUBLISH_API_PATH;

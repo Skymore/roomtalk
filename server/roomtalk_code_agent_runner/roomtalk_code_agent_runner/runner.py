@@ -317,10 +317,15 @@ def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[s
 
 
 def _static_publish_enabled(env: dict[str, str]) -> bool:
+    has_publish_token = bool((env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip())
+    has_refresh = (
+        bool((env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_URL") or "").strip())
+        and bool((env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN") or "").strip())
+    )
     return (
         env.get("ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH") == "true"
         and bool((env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip())
-        and bool((env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip())
+        and (has_publish_token or has_refresh)
     )
 
 

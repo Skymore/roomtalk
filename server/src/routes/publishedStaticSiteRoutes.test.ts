@@ -13,12 +13,14 @@ type TestServer = {
   close: () => Promise<void>;
   service: PublishedStaticSiteService;
   roomIds: Set<string>;
+  activeTurnIds: Set<string>;
   storage: MemoryMediaObjectStorage;
 };
 
 const createTestServer = async (): Promise<TestServer> => {
   const app = express();
   const roomIds = new Set(['room-1']);
+  const activeTurnIds = new Set(['turn-1']);
   const storage = new MemoryMediaObjectStorage();
   const service = new PublishedStaticSiteService({
     mediaObjectStorage: storage,
@@ -31,6 +33,19 @@ const createTestServer = async (): Promise<TestServer> => {
     service,
     logger: new Logger('PublishedStaticSiteRoutesTest'),
     getRoomById: async roomId => roomIds.has(roomId) ? { id: roomId } : null,
+    refreshAuthorization: {
+      verifyTurnToken: token => token === 'refresh-token' ? {
+        v: 1,
+        jti: 'refresh-jti',
+        roomId: 'room-1',
+        clientId: 'client-1',
+        turnId: 'turn-1',
+        mode: 'fullAccess',
+        exp: Number.MAX_SAFE_INTEGER,
+      } : null,
+      assertAccess: async () => undefined,
+    },
+    isTurnActive: async (_roomId, turnId) => activeTurnIds.has(turnId),
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -41,6 +56,7 @@ const createTestServer = async (): Promise<TestServer> => {
     baseUrl: `http://127.0.0.1:${port}`,
     service,
     roomIds,
+    activeTurnIds,
     storage,
     close: () => new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
@@ -130,6 +146,35 @@ describe('published static site routes', () => {
 
     const unpublishedResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(unpublishedResponse.status, 404);
+  });
+
+  it('refreshes a short-lived publish token only while the turn is running', async () => {
+    const refresh = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/token`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer refresh-token' },
+    });
+    assert.equal(refresh.status, 200);
+    const payload = await refresh.json() as { token: string; expiresInSeconds: number };
+    assert.equal(payload.expiresInSeconds, 15 * 60);
+    assert.equal(server.service.verifyTurnToken(payload.token)?.turnId, 'turn-1');
+
+    server.activeTurnIds.delete('turn-1');
+    const afterCompletion = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/token`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer refresh-token' },
+    });
+    assert.equal(afterCompletion.status, 409);
+    assert.equal((await afterCompletion.json() as { code: string }).code, 'turn_not_running');
+
+    const staleAccess = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${payload.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(staleAccess.status, 409);
   });
 
   it('prepares direct uploads and finalizes after object storage receives the files', async () => {

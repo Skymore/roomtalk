@@ -573,6 +573,11 @@ registerPublishedStaticSiteRoutes(app, {
   service: publishedStaticSiteService,
   logger: staticPublishLogger,
   getRoomById: roomId => store.getRoomById(roomId),
+  refreshAuthorization: codeAgentRoomContextService,
+  isTurnActive: async (roomId, turnId) => {
+    const turns = await store.readRoomAgentTurns?.(roomId, [turnId]) || [];
+    return turns[0]?.status === 'running';
+  },
 });
 
 registerCodeAgentRoomContextRoutes(app, {

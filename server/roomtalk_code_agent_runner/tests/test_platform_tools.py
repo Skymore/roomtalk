@@ -58,6 +58,8 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
 
     def fake_post(url: str, token: str, payload: dict[str, Any]):
         posted.append({"url": url, "token": token, "payload": payload})
+        if url.endswith("/token"):
+            return {"token": "fresh-turn-token", "expiresInSeconds": 900}
         if url.endswith("/prepare"):
             return {
                 "uploadToken": "upload-token",
@@ -92,7 +94,8 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_ROOM_ID", "room-1")
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_TURN_ID", "turn-1")
     monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_URL", "https://room.example/api/code-agent/publish-static-site")
-    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_TOKEN", "turn-token")
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_REFRESH_URL", "https://room.example/api/code-agent/publish-static-site/token")
+    monkeypatch.setenv("ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN", "refresh-token")
 
     exit_code = platform_tools.main([
         "publish-static-site",
@@ -109,16 +112,22 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     output = json.loads(capsys.readouterr().out)
     assert output["url"] == "https://room.example/p/codex-demo/"
     assert [call["url"] for call in posted] == [
+        "https://room.example/api/code-agent/publish-static-site/token",
         "https://room.example/api/code-agent/publish-static-site/prepare",
         "https://room.example/api/code-agent/publish-static-site/finalize",
     ]
-    assert all(call["token"] == "turn-token" for call in posted)
-    assert posted[0]["payload"]["roomId"] == "room-1"
-    assert posted[0]["payload"]["turnId"] == "turn-1"
-    assert posted[0]["payload"]["entry"] == "index.html"
-    assert posted[0]["payload"]["title"] == "Codex demo"
-    assert posted[0]["payload"]["files"] == [{"path": "index.html", "byteSize": 29}]
-    assert posted[1]["payload"] == {"uploadToken": "upload-token"}
+    assert posted[0] == {
+        "url": "https://room.example/api/code-agent/publish-static-site/token",
+        "token": "refresh-token",
+        "payload": {},
+    }
+    assert all(call["token"] == "fresh-turn-token" for call in posted[1:])
+    assert posted[1]["payload"]["roomId"] == "room-1"
+    assert posted[1]["payload"]["turnId"] == "turn-1"
+    assert posted[1]["payload"]["entry"] == "index.html"
+    assert posted[1]["payload"]["title"] == "Codex demo"
+    assert posted[1]["payload"]["files"] == [{"path": "index.html", "byteSize": 29}]
+    assert posted[2]["payload"] == {"uploadToken": "upload-token"}
     assert uploaded == [{
         "url": "https://uploads.example/index.html",
         "sourcePath": site / "index.html",

@@ -541,6 +541,8 @@ def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: P
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH",
         "ROOMTALK_STATIC_PUBLISH_URL",
         "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL",
+        "ROOMTALK_STATIC_PUBLISH_REFRESH_URL",
+        "ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN",
         "ROOMTALK_STATIC_PUBLISH_TOKEN",
         "ROOMTALK_E2B_PORT_HOST_TEMPLATE",
         "ROOMTALK_E2B_PORT_URL_TEMPLATE",
@@ -592,10 +594,15 @@ def _prompt_with_roomtalk_tools(request: RunnerRequest, env: dict[str, str]) -> 
 
 
 def _codex_static_publish_enabled(env: dict[str, str]) -> bool:
+    has_publish_token = bool((env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip())
+    has_refresh = (
+        bool((env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_URL") or "").strip())
+        and bool((env.get("ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN") or "").strip())
+    )
     return (
         env.get("ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH") == "true"
         and bool((env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip())
-        and bool((env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip())
+        and (has_publish_token or has_refresh)
     )
 
 

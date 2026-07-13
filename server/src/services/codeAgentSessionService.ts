@@ -192,6 +192,7 @@ export class CodeAgentSessionService {
 
   private static readonly MAX_TURN_IMAGE_BYTES = 5 * 1024 * 1024;
   private static readonly TURN_IMAGE_URL_TTL_SECONDS = 2 * 60 * 60;
+  private static readonly STATIC_PUBLISH_REFRESH_TOKEN_TTL_SECONDS = 2 * 60 * 60;
   private static readonly CODEX_AUTH_REFRESH_TOKEN_TTL_SECONDS = 24 * 60 * 60;
   private static readonly TURN_IMAGE_EXTENSION: Record<string, string> = {
     'image/png': 'png',
@@ -2433,6 +2434,15 @@ export class CodeAgentSessionService {
         turnId: context.turnId,
         mode: normalizedMode,
       });
+      if (this.options.roomContext && staticPublishPublicBaseUrl) {
+        env.ROOMTALK_STATIC_PUBLISH_REFRESH_URL = `${env.ROOMTALK_STATIC_PUBLISH_URL}/token`;
+        env.ROOMTALK_STATIC_PUBLISH_REFRESH_TOKEN = this.options.roomContext.issueTurnToken({
+          roomId: context.roomId,
+          clientId: context.clientId,
+          turnId: context.turnId,
+          mode: normalizedMode,
+        }, { ttlSeconds: CodeAgentSessionService.STATIC_PUBLISH_REFRESH_TOKEN_TTL_SECONDS });
+      }
     }
 
     if (this.options.roomContext) {

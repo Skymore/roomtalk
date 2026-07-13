@@ -1,5 +1,6 @@
 import express, { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
+import { CodeAgentRoomContextService } from '../services/codeAgentRoomContext';
 import {
   CODE_AGENT_STATIC_PUBLISH_API_PATH,
   CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX,
@@ -16,6 +17,8 @@ export interface PublishedStaticSiteRouteOptions {
   service: PublishedStaticSiteService;
   logger: Logger;
   getRoomById?: (roomId: string) => Promise<unknown | null>;
+  refreshAuthorization?: Pick<CodeAgentRoomContextService, 'verifyTurnToken' | 'assertAccess'>;
+  isTurnActive?: (roomId: string, turnId: string) => Promise<boolean>;
   bodyLimit?: string;
 }
 
@@ -53,12 +56,59 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
   const { service, logger } = options;
   const jsonParser = express.json({ limit: options.bodyLimit || process.env.CODE_AGENT_STATIC_PUBLISH_BODY_LIMIT || '7mb' });
 
-  app.post(CODE_AGENT_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
+  const requireActiveTurn = async (roomId: string, turnId: string, res: Response) => {
+    try {
+      if (!options.isTurnActive || await options.isTurnActive(roomId, turnId)) {
+        return true;
+      }
+      res.status(409).json({ error: 'The code-agent turn is no longer running', code: 'turn_not_running' });
+      return false;
+    } catch (error) {
+      logger.error('Unable to verify static publish turn state', { error, roomId, turnId });
+      res.status(503).json({ error: 'Unable to verify the code-agent turn', code: 'turn_state_unavailable' });
+      return false;
+    }
+  };
+
+  const authorizePublish = async (req: Request, res: Response) => {
     const token = readBearerToken(req);
     const claims = token ? service.verifyTurnToken(token) : null;
     if (!claims) {
-      return res.status(401).json({ error: 'Invalid or expired publish token' });
+      res.status(401).json({ error: 'Invalid or expired publish token' });
+      return null;
     }
+    return await requireActiveTurn(claims.roomId, claims.turnId, res) ? claims : null;
+  };
+
+  app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/token`, jsonParser, async (req: Request, res: Response) => {
+    const authorization = options.refreshAuthorization;
+    const refreshToken = readBearerToken(req);
+    const claims = authorization && refreshToken ? authorization.verifyTurnToken(refreshToken) : null;
+    if (!claims) {
+      return res.status(401).json({ error: 'Invalid or expired publish refresh token', code: 'invalid_refresh_token' });
+    }
+    try {
+      await authorization!.assertAccess(claims);
+      if (!await requireActiveTurn(claims.roomId, claims.turnId, res)) {
+        return;
+      }
+      return res.json({
+        token: service.issueTurnToken(claims),
+        expiresInSeconds: service.turnTokenTtlSeconds,
+      });
+    } catch (error) {
+      logger.warn('Static site publish token refresh denied', {
+        error,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
+      return res.status(403).json({ error: 'Static site publishing is not available for this turn', code: 'publish_refresh_denied' });
+    }
+  });
+
+  app.post(CODE_AGENT_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
+    const claims = await authorizePublish(req, res);
+    if (!claims) return;
 
     try {
       const result = await service.publish(req.body as PublishedStaticSitePublishInput, claims, requestBaseUrl(req));
@@ -69,11 +119,8 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
   });
 
   app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/prepare`, jsonParser, async (req: Request, res: Response) => {
-    const token = readBearerToken(req);
-    const claims = token ? service.verifyTurnToken(token) : null;
-    if (!claims) {
-      return res.status(401).json({ error: 'Invalid or expired publish token' });
-    }
+    const claims = await authorizePublish(req, res);
+    if (!claims) return;
     try {
       return res.status(201).json(await service.prepareDirectUpload(req.body as PublishedStaticSitePrepareInput, claims));
     } catch (error) {
@@ -86,11 +133,8 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
   });
 
   app.post(`${CODE_AGENT_STATIC_PUBLISH_API_PATH}/finalize`, jsonParser, async (req: Request, res: Response) => {
-    const token = readBearerToken(req);
-    const claims = token ? service.verifyTurnToken(token) : null;
-    if (!claims) {
-      return res.status(401).json({ error: 'Invalid or expired publish token' });
-    }
+    const claims = await authorizePublish(req, res);
+    if (!claims) return;
     try {
       return res.status(201).json(await service.finalizeDirectUpload(
         req.body as PublishedStaticSiteFinalizeInput,
@@ -107,11 +151,8 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
   });
 
   app.delete(CODE_AGENT_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
-    const token = readBearerToken(req);
-    const claims = token ? service.verifyTurnToken(token) : null;
-    if (!claims) {
-      return res.status(401).json({ error: 'Invalid or expired publish token' });
-    }
+    const claims = await authorizePublish(req, res);
+    if (!claims) return;
 
     try {
       const result = await service.unpublish(req.body as PublishedStaticSiteUnpublishInput, claims, requestBaseUrl(req));
