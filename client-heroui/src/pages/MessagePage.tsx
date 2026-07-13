@@ -19,6 +19,7 @@ import {
   renameRoom,
   saveRoomToServer,
   unsaveRoomFromServer,
+  getRoomsFromServer,
   getSavedRoomsFromServer,
   getRoomPermissions,
   clearRoomMessages as clearRoomMessagesFromServer,
@@ -68,6 +69,14 @@ type InFlightBackgroundRestore = {
   promise: Promise<Room | null>;
 };
 
+type InFlightRoomSessionRequest = {
+  roomId: string;
+  password?: string;
+  source: RoomRestoreSource;
+  generation: number;
+  promise: Promise<Room | null>;
+};
+
 
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
@@ -110,6 +119,7 @@ export const MessagePage: React.FC = () => {
   const reconnectIndicatorTimerRef = useRef<number | null>(null);
   const reconnectIndicatorOwnerRef = useRef<symbol | null>(null);
   const inFlightBackgroundRestoreRef = useRef<InFlightBackgroundRestore | null>(null);
+  const inFlightRoomSessionRequestRef = useRef<InFlightRoomSessionRequest | null>(null);
   const backgroundRestoreSuppressUntilByRoomRef = useRef(new Map<string, number>());
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
@@ -348,7 +358,7 @@ export const MessagePage: React.FC = () => {
     return joinedRoom;
   }, [refreshRoomPermissions]);
 
-  const ensureActiveRoomSession = useCallback(async (options: {
+  const runActiveRoomSession = useCallback(async (options: {
     roomId: string;
     password?: string;
     fallbackRoom?: Room | null;
@@ -406,7 +416,7 @@ export const MessagePage: React.FC = () => {
         return null;
       }
 
-      const message = error instanceof Error ? error.message : t("errorLoading");
+      const message = error instanceof Error ? error.message : translationRef.current("errorLoading");
       const outcomeIsUncertain = /timed out while joining room|socket disconnected/i.test(message);
       const canRollbackToPreviousRoom = Boolean(
         isSwitchingRoom
@@ -437,7 +447,7 @@ export const MessagePage: React.FC = () => {
           setView("rooms");
           saveCurrentRoom(null);
           clearRoomUrlParam();
-          setError(t("errorRoomNoLongerExists"));
+          setError(translationRef.current("errorRoomNoLongerExists"));
         }
       } else if (canRollbackToPreviousRoom && previousRoom && previousSession) {
         currentRoomRef.current = previousRoom;
@@ -453,7 +463,7 @@ export const MessagePage: React.FC = () => {
           setCurrentRoom(fallbackRoom);
           setRoomPermissions(null);
         }
-        setError(source === "storage" ? t("errorRestoringRoom") : message);
+        setError(source === "storage" ? translationRef.current("errorRestoringRoom") : message);
       }
       if (!/room not found/i.test(message) && !canRollbackToPreviousRoom) {
         const latestSession = activeRoomSessionRef.current;
@@ -472,7 +482,46 @@ export const MessagePage: React.FC = () => {
         setIsRestoringRoom(false);
       }
     }
-  }, [applyRoomSessionResult, clearRoomUrlParam, commitActiveRoomSession, t]);
+  }, [applyRoomSessionResult, clearRoomUrlParam, commitActiveRoomSession]);
+
+  const ensureActiveRoomSession = useCallback((options: {
+    roomId: string;
+    password?: string;
+    fallbackRoom?: Room | null;
+    source: RoomRestoreSource;
+  }): Promise<Room | null> => {
+    const existing = inFlightRoomSessionRequestRef.current;
+    const sameRequest = Boolean(
+      existing
+      && existing.roomId === options.roomId
+      && existing.password === options.password
+      && existing.generation === roomSessionGenerationRef.current
+    );
+    const existingIsVisible = existing ? VISIBLE_RESTORE_SOURCES.has(existing.source) : false;
+    const incomingIsBackground = !VISIBLE_RESTORE_SOURCES.has(options.source);
+
+    // Every automatic resume signal and the initial storage restore converge
+    // on one room-session request. A new visible/manual request may supersede a
+    // background request, but background events never duplicate a visible one.
+    if (existing && sameRequest && (existingIsVisible || incomingIsBackground)) {
+      return existing.promise;
+    }
+
+    let promise: Promise<Room | null>;
+    promise = runActiveRoomSession(options).finally(() => {
+      if (inFlightRoomSessionRequestRef.current?.promise === promise) {
+        inFlightRoomSessionRequestRef.current = null;
+      }
+    });
+    inFlightRoomSessionRequestRef.current = {
+      roomId: options.roomId,
+      password: options.password,
+      source: options.source,
+      generation: roomSessionGenerationRef.current,
+      promise,
+    };
+    return promise;
+  }, [runActiveRoomSession]);
 
   const scheduleRoomRestore = useCallback((source: RoomRestoreSource) => {
     const activeRoom = currentRoomRef.current;
@@ -733,7 +782,7 @@ export const MessagePage: React.FC = () => {
       setRoomPermissions(null);
       setIsRestoringRoom(false);
       clearRoomUrlParam();
-      setError(t("roomAccessRemoved"));
+      setError(translationRef.current("roomAccessRemoved"));
       if (removedPendingTarget) {
         leaveRoom(roomId);
       }
@@ -751,7 +800,7 @@ export const MessagePage: React.FC = () => {
           source: "online",
         }).then((restoredRoom) => {
           if (restoredRoom?.id === currentRoomAtRemoval.id && currentRoomRef.current?.id === currentRoomAtRemoval.id) {
-            setError(t("roomAccessRemoved"));
+            setError(translationRef.current("roomAccessRemoved"));
           }
         });
         return;
@@ -766,7 +815,12 @@ export const MessagePage: React.FC = () => {
     };
 
     socket.on("room_list", handleRoomList);
-    socket.emit("get_rooms");
+    getRoomsFromServer()
+      .then(handleRoomList)
+      .catch((error) => {
+        console.error("Failed to load rooms:", error);
+        setIsLoadingRooms(false);
+      });
     socket.on("saved_room_list", handleSavedRoomList);
     getSavedRoomsFromServer()
       .then(handleSavedRoomList)
@@ -802,13 +856,13 @@ export const MessagePage: React.FC = () => {
         setView("rooms");
         saveCurrentRoom(null);
         clearRoomUrlParam();
-        setError(t("errorRoomNoLongerExists"));
+        setError(translationRef.current("errorRoomNoLongerExists"));
         return;
       }
       commitActiveRoomSession({ roomId, status: "unavailable" });
       setRoomPermissions(null);
       setIsRestoringRoom(false);
-      setError(t("errorRestoringRoom"));
+      setError(translationRef.current("errorRestoringRoom"));
     });
 
     // 取消注册回调的清理函数
@@ -831,7 +885,7 @@ export const MessagePage: React.FC = () => {
       unsubscribeRepairFailure();
       unsubscribe();
     };
-  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, commitActiveRoomSession, ensureActiveRoomSession, refreshRoomPermissions, t]);
+  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, commitActiveRoomSession, ensureActiveRoomSession, refreshRoomPermissions]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {

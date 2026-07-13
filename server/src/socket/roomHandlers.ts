@@ -348,14 +348,29 @@ export function registerRoomHandlers({
       socketLogger.info('Client registered', { socketId: socket.id, clientId: userId, browserInstanceId });
 
       socket.join(userId);
-      const myRooms = await store.readRoomsByUser(userId);
-      const savedRooms = await store.readSavedRoomsByUser(userId);
-      socket.emit('room_list', myRooms);
-      socket.emit('saved_room_list', savedRooms);
       const nickname = existingNickname || username || undefined;
       callback?.(nickname
         ? { success: true, clientId: userId, nickname }
         : { success: true, clientId: userId });
+
+      // Registration is complete once the socket identity and private room are
+      // durable. Room-list I/O must not hold the registration acknowledgement
+      // hostage: clients fetch both lists through registration-aware requests
+      // as well, and these events are only an eager initial snapshot.
+      try {
+        const [myRooms, savedRooms] = await Promise.all([
+          store.readRoomsByUser(userId),
+          store.readSavedRoomsByUser(userId),
+        ]);
+        socket.emit('room_list', myRooms);
+        socket.emit('saved_room_list', savedRooms);
+      } catch (listError) {
+        socketLogger.error('Failed to emit initial room lists after registration', {
+          socketId: socket.id,
+          clientId: userId,
+          error: listError,
+        });
+      }
     } catch (error) {
       socketLogger.error('Failed to register client', { socketId: socket.id, clientId: userId, error });
       callback?.({ success: false, error: 'Failed to register client' });
@@ -404,17 +419,25 @@ export function registerRoomHandlers({
     callback?.({ success: true, members });
   });
 
-  socket.on('get_rooms', async () => {
+  socket.on('get_rooms', async (
+    payloadOrCallback?: unknown,
+    maybeCallback?: (result: RoomListAck) => void
+  ) => {
+    const callback = typeof payloadOrCallback === 'function'
+      ? payloadOrCallback as (result: RoomListAck) => void
+      : maybeCallback;
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to get rooms', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
       return;
     }
 
     socketLogger.debug('Client requested room list', { socketId: socket.id, clientId });
     const myRooms = await store.readRoomsByUser(clientId);
     socket.emit('room_list', myRooms);
+    callback?.({ success: true, rooms: myRooms });
   });
 
   socket.on('get_saved_rooms', async (

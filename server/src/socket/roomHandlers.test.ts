@@ -392,6 +392,30 @@ describe('room socket handlers', () => {
     ]);
   });
 
+  it('acknowledges registration before the eager room-list snapshot finishes', async () => {
+    const { socket, store } = createHarness(null);
+    let releaseRoomList: (rooms: Room[]) => void = () => {};
+    store.readRoomsByUser = async () => new Promise<Room[]>((resolve) => {
+      releaseRoomList = resolve;
+    });
+
+    let invocation: Promise<unknown> = Promise.resolve();
+    const acknowledgement = new Promise<unknown>((resolve) => {
+      invocation = socket.invoke('register', 'client-1', resolve);
+    });
+
+    assert.deepEqual(await acknowledgement, { success: true, clientId: 'client-1' });
+    assert.deepEqual(socket.joined, ['client-1']);
+    assert.deepEqual(socket.emitted, []);
+
+    releaseRoomList([room()]);
+    await invocation;
+    assert.deepEqual(socket.emitted, [
+      { event: 'room_list', args: [[room()]] },
+      { event: 'saved_room_list', args: [[]] },
+    ]);
+  });
+
   it('rejects malformed or oversized client identities during registration', async () => {
     const invalid = createHarness(null);
     const responses: unknown[] = [];
@@ -789,11 +813,19 @@ describe('room socket handlers', () => {
 
   it('returns rooms only for registered clients', async () => {
     const unregistered = createHarness(null);
-    await unregistered.socket.invoke('get_rooms');
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('get_rooms', {}, (response: unknown) => {
+      unregisteredResponse = response;
+    });
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'You are not registered' });
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
 
     const registered = createHarness('client-1');
-    await registered.socket.invoke('get_rooms');
+    let registeredResponse: unknown;
+    await registered.socket.invoke('get_rooms', {}, (response: unknown) => {
+      registeredResponse = response;
+    });
+    assert.deepEqual(registeredResponse, { success: true, rooms: [room()] });
     assert.deepEqual(registered.socket.emitted, [{ event: 'room_list', args: [[room()]] }]);
   });
 

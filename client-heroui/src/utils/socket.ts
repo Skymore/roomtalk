@@ -73,9 +73,8 @@ const staleSettledRoomIds = new Set<string>();
 let currentUsername = '';
 let registeredSocketId: string | null = null;
 let pendingRegistration: Promise<void> | null = null;
-let suppressNextConnectAutoRegistration = false;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
-const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
+const SOCKET_CONNECT_WAIT_TIMEOUT_MS = 45000;
 const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 10 * 60 * 1000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
@@ -357,11 +356,6 @@ const createSocketConnection = (): Socket => {
   socket.on('connect', () => {
     console.log('Connected to WebSocket server, socket ID:', socket.id);
     registeredSocketId = null;
-    if (suppressNextConnectAutoRegistration) {
-      suppressNextConnectAutoRegistration = false;
-      return;
-    }
-
     ensureRegisteredSocket()
       .catch((error) => {
         console.error('Failed to register socket session after connection:', error);
@@ -422,11 +416,17 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
   let startRegistration: () => void = () => {};
   const registrationPromise = new Promise<void>((resolve, reject) => {
     let settled = false;
-    let timeoutId: number;
+    let connectTimeoutId: number | undefined;
+    let acknowledgementTimeoutId: number | undefined;
     let registerAttempt = 0;
 
     function cleanup() {
-      window.clearTimeout(timeoutId);
+      if (connectTimeoutId !== undefined) {
+        window.clearTimeout(connectTimeoutId);
+      }
+      if (acknowledgementTimeoutId !== undefined) {
+        window.clearTimeout(acknowledgementTimeoutId);
+      }
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
     }
@@ -438,8 +438,24 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       settled = true;
       cleanup();
       pendingRegistration = null;
-      suppressNextConnectAutoRegistration = false;
       fn();
+    }
+
+    function armConnectionTimeout() {
+      if (connectTimeoutId !== undefined) {
+        window.clearTimeout(connectTimeoutId);
+      }
+      connectTimeoutId = window.setTimeout(() => {
+        settle(() => reject(new Error('Timed out while connecting to server')));
+      }, SOCKET_CONNECT_WAIT_TIMEOUT_MS);
+    }
+
+    function clearAcknowledgementTimeout() {
+      if (acknowledgementTimeoutId === undefined) {
+        return;
+      }
+      window.clearTimeout(acknowledgementTimeoutId);
+      acknowledgementTimeoutId = undefined;
     }
 
     function waitForReconnect() {
@@ -452,18 +468,28 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       }
       socket.off('connect', handleConnect);
       socket.on('connect', handleConnect);
-      suppressNextConnectAutoRegistration = true;
-      socket.connect();
+      armConnectionTimeout();
+      // socket.active means Socket.IO already owns an automatic connection or
+      // reconnection attempt. Calling connect() again while it is active can
+      // create an extra restore edge during mobile resume.
+      if (!socket.active) {
+        socket.connect();
+      }
     }
 
     function handleConnect() {
       socket.off('connect', handleConnect);
+      if (connectTimeoutId !== undefined) {
+        window.clearTimeout(connectTimeoutId);
+        connectTimeoutId = undefined;
+      }
       attemptRegister();
     }
 
     function handleDisconnect() {
       registeredSocketId = null;
       registerAttempt += 1;
+      clearAcknowledgementTimeout();
       socket.off('disconnect', handleDisconnect);
       waitForReconnect();
     }
@@ -487,6 +513,10 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       registerAttempt = attemptId;
       socket.off('disconnect', handleDisconnect);
       socket.on('disconnect', handleDisconnect);
+      clearAcknowledgementTimeout();
+      acknowledgementTimeoutId = window.setTimeout(() => {
+        settle(() => reject(new Error('Timed out while registering client')));
+      }, timeoutMs || SEND_MESSAGE_ACK_TIMEOUT_MS);
       socket.emit('register', {
         clientId: getClientId(),
         browserInstanceId: getBrowserInstanceId(),
@@ -496,6 +526,7 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
         if (settled || attemptId !== registerAttempt) {
           return;
         }
+        clearAcknowledgementTimeout();
         socket.off('disconnect', handleDisconnect);
         if (!socket.connected) {
           handleDisconnect();
@@ -521,10 +552,6 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
     }
 
     startRegistration = () => {
-      timeoutId = window.setTimeout(() => {
-        settle(() => reject(new Error('Timed out while registering client')));
-      }, timeoutMs || SEND_MESSAGE_CONNECT_TIMEOUT_MS);
-
       attemptRegister();
     };
   });
@@ -921,6 +948,15 @@ export const getSavedRoomsFromServer = (): Promise<Room[]> => {
   ).then((response) => response.rooms || []);
 };
 
+export const getRoomsFromServer = (): Promise<Room[]> => {
+  return emitWithAck<RoomListAckResponse>(
+    'get_rooms',
+    {},
+    'Timed out while getting rooms',
+    'Failed to get rooms',
+  ).then((response) => response.rooms || []);
+};
+
 export const getRoomPermissions = (roomId: string): Promise<RoomPermissions> => {
   return emitWithAck<RoomPermissionsAckResponse>(
     'get_room_permissions',
@@ -1148,7 +1184,6 @@ const adoptAuthenticatedClient = async (response: ClientAuthResponse) => {
   setClientAuthToken(response.clientAuthToken);
   registeredSocketId = null;
   pendingRegistration = null;
-  suppressNextConnectAutoRegistration = false;
   if (socket.connected) {
     void ensureRegisteredSocket().catch((error) => {
       console.error('Failed to register socket after switching User ID:', error);
@@ -2180,7 +2215,7 @@ export const onSocketConnected = (
 
 // Force reconnect the socket - can be called when app comes to foreground
 export const reconnectSocket = (): void => {
-  if (!socket.connected) {
+  if (!socket.connected && !socket.active) {
     console.log('Manually reconnecting socket...');
     socket.connect();
   }

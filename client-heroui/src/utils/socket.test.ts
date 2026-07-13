@@ -19,6 +19,7 @@ const socketMock = vi.hoisted(() => {
   const socket = {
     id: 'socket-1',
     connected: true,
+    active: true,
     handlers,
     ackResponses,
     on: vi.fn((event: string, handler: (...args: any[]) => void) => {
@@ -43,6 +44,7 @@ const socketMock = vi.hoisted(() => {
     }),
     emit: vi.fn(defaultEmit),
     connect: vi.fn(() => {
+      socket.active = true;
       socket.connected = true;
       handlers.get('connect')?.forEach(handler => handler());
       return socket;
@@ -53,6 +55,7 @@ const socketMock = vi.hoisted(() => {
       nextSocketId += 1;
       socket.id = `socket-${nextSocketId}`;
       socket.connected = true;
+      socket.active = true;
       socket.emit.mockImplementation(defaultEmit);
     },
   };
@@ -72,6 +75,7 @@ vi.mock('uuid', () => ({
 
 const {
   ensureRoomJoined,
+  ensureRegisteredSocket,
   getAudioTranscription,
   getClientAccountStatus,
   getClientAuthStatus,
@@ -81,6 +85,7 @@ const {
   getRoomMembers,
   getRoomRoleMembers,
   getSavedRoomsFromServer,
+  getRoomsFromServer,
   joinRoom,
   leaveRoom,
   loginWithClientPassword,
@@ -98,6 +103,7 @@ const {
   requestResolveCodeWorkspacePreviewTarget,
   requestCodeWorkspaceRefs,
   resetRoomJoinStateForTests,
+  reconnectSocket,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -247,6 +253,7 @@ describe('socket message acknowledgement helpers', () => {
 
   it('connects before registering when the socket is disconnected', async () => {
     socketMock.connected = false;
+    socketMock.active = false;
     const savedMessage = message({ id: 'after-reconnect' });
     socketMock.ackResponses.set('send_message', {
       success: true,
@@ -263,6 +270,81 @@ describe('socket message acknowledgement helpers', () => {
     ]);
   });
 
+  it('does not spend the registration acknowledgement budget while the transport is still connecting', async () => {
+    vi.useFakeTimers();
+    try {
+      socketMock.connected = false;
+      socketMock.active = true;
+
+      let settled = false;
+      const registration = ensureRegisteredSocket().finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(15001);
+      expect(settled).toBe(false);
+      expect(socketMock.connect).not.toHaveBeenCalled();
+      expect(socketMock.emit).not.toHaveBeenCalledWith('register', expect.anything(), expect.any(Function));
+
+      socketMock.connected = true;
+      socketMock.id = 'socket-after-slow-connect';
+      Array.from(socketMock.handlers.get('connect') || []).forEach(handler => handler());
+
+      await expect(registration).resolves.toBeUndefined();
+      expect(socketMock.emit).toHaveBeenCalledWith(
+        'register',
+        { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
+        expect.any(Function),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds a transport connection wait independently from registration acknowledgement time', async () => {
+    vi.useFakeTimers();
+    try {
+      socketMock.connected = false;
+      socketMock.active = true;
+
+      const registration = ensureRegisteredSocket();
+      const rejection = expect(registration).rejects.toThrow('Timed out while connecting to server');
+      await vi.advanceTimersByTimeAsync(45000);
+      await rejection;
+      expect(socketMock.emit).not.toHaveBeenCalledWith('register', expect.anything(), expect.any(Function));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the registration acknowledgement timeout after a transport is connected', async () => {
+    vi.useFakeTimers();
+    try {
+      socketMock.emit.mockImplementation((event: string) => {
+        expect(event).toBe('register');
+        return socketMock;
+      });
+
+      const registration = ensureRegisteredSocket();
+      const rejection = expect(registration).rejects.toThrow('Timed out while registering client');
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(socketMock.emit).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not start a second connection while Socket.IO is already reconnecting', () => {
+    socketMock.connected = false;
+    socketMock.active = true;
+
+    reconnectSocket();
+
+    expect(socketMock.connect).not.toHaveBeenCalled();
+  });
+
   it('retries registration when the socket disconnects before the register acknowledgement', async () => {
     const savedMessage = message({ id: 'after-register-retry' });
     let registerAttempts = 0;
@@ -272,6 +354,7 @@ describe('socket message acknowledgement helpers', () => {
         expect(event).toBe('register');
         registerAttempts += 1;
         socketMock.connected = false;
+        socketMock.active = false;
         socketMock.id = 'socket-reconnected';
         Array.from(socketMock.handlers.get('disconnect') || []).forEach(handler => handler('transport close'));
         return socketMock;
@@ -304,6 +387,7 @@ describe('socket message acknowledgement helpers', () => {
       .mockImplementationOnce((event: string) => {
         expect(event).toBe('list_code_workspace_entries');
         socketMock.connected = false;
+        socketMock.active = false;
         socketMock.id = 'socket-reconnected';
         Array.from(socketMock.handlers.get('disconnect') || []).forEach(handler => handler('transport close'));
         return socketMock;
@@ -1122,6 +1206,22 @@ describe('socket message acknowledgement helpers', () => {
       'get_saved_rooms',
       {},
       expect.any(Function)
+    );
+  });
+
+  it('loads the owned room list through a registration-aware acknowledgement', async () => {
+    const ownedRooms = [room()];
+    socketMock.ackResponses.set('get_rooms', {
+      success: true,
+      rooms: ownedRooms,
+    });
+
+    await expect(getRoomsFromServer()).resolves.toEqual(ownedRooms);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'get_rooms',
+      {},
+      expect.any(Function),
     );
   });
 

@@ -50,6 +50,7 @@ const socketApiMock = vi.hoisted(() => ({
   renameRoom: vi.fn(),
   saveRoomToServer: vi.fn(),
   unsaveRoomFromServer: vi.fn(),
+  getRoomsFromServer: vi.fn(),
   getSavedRoomsFromServer: vi.fn(),
   getRoomPermissions: vi.fn(),
   clearRoomMessages: vi.fn(),
@@ -341,6 +342,7 @@ describe('MessagePage room session restore', () => {
     socketApiMock.onRoomMemberChange.mockReturnValue(vi.fn());
     socketApiMock.onRoomMembershipRepairFailure.mockReturnValue(vi.fn());
     socketApiMock.onUsernameAdopted.mockReturnValue(vi.fn());
+    socketApiMock.getRoomsFromServer.mockResolvedValue([]);
     socketApiMock.getSavedRoomsFromServer.mockResolvedValue([]);
     socketApiMock.getRoomPermissions.mockResolvedValue(permissions());
   });
@@ -501,6 +503,40 @@ describe('MessagePage room session restore', () => {
     });
     expect(screen.getByTestId('chat-room-view').getAttribute('data-room-id')).toBe('room-2');
     expect(messageCacheMock.invalidateCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+  });
+
+  it('coalesces initial storage restore with pageshow and socket-connect recovery signals', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    let resolveInitialRestore: (value: unknown) => void = () => {};
+    const initialRestore = new Promise((resolve) => {
+      resolveInitialRestore = resolve;
+    });
+    socketApiMock.joinRoom.mockImplementation(() => initialRestore);
+
+    renderPage();
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    act(() => {
+      dispatchPageShow();
+      document.dispatchEvent(new Event('visibilitychange'));
+      socketMock.trigger('connect');
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledTimes(1);
+    expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveInitialRestore({ room: room(), permissions: permissions(), memberCount: 5 });
+      await initialRestore;
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
+    });
   });
 
   it('coalesces mobile restore, BFCache restore, and online events into one background rejoin', async () => {
