@@ -194,6 +194,59 @@ describe('PublishedStaticSiteService', () => {
     assert.match((await service.readFile('legacy-demo', '', first.versionId))!.body.toString('utf8'), /first/);
   });
 
+  it('deduplicates concurrent history rebuilds and trusts an existing version index', async () => {
+    class CountingStorage extends MemoryMediaObjectStorage {
+      headCalls: string[] = [];
+      putCalls: string[] = [];
+
+      override async headObject(input: { objectKey: string }) {
+        this.headCalls.push(input.objectKey);
+        return super.headObject(input);
+      }
+
+      override async putMediaObject(input: { objectKey: string; body: Buffer; mimeType: string; byteSize: number }) {
+        this.putCalls.push(input.objectKey);
+        return super.putMediaObject(input);
+      }
+    }
+
+    const storage = new CountingStorage();
+    const ids = [
+      'token000-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version1-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'version2-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service } = createService({ storage, createId: () => ids.shift() || 'fallback' });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1', mode: 'fullAccess',
+    }))!;
+    await service.publish({
+      roomId: 'room-1', turnId: 'turn-1', slug: 'dedupe-demo', files: [textFile('index.html', 'first')],
+    }, claims);
+    await service.publish({
+      roomId: 'room-1', turnId: 'turn-1', slug: 'dedupe-demo', files: [textFile('index.html', 'second')],
+    }, claims);
+    storage.objects.delete('published-sites/dedupe-demo/versions.json');
+    for (const key of [...storage.objects.keys()]) {
+      if (key.startsWith('published-sites/dedupe-demo/version-manifests/')) storage.objects.delete(key);
+    }
+    storage.headCalls = [];
+    storage.putCalls = [];
+
+    const rebuilt = createService({ storage }).service;
+    const [left, right] = await Promise.all([
+      rebuilt.listSitesForRoom('room-1'),
+      rebuilt.listSitesForRoom('room-1'),
+    ]);
+    assert.equal(left[0].versions.length, 2);
+    assert.equal(right[0].versions.length, 2);
+    assert.equal(storage.putCalls.filter(key => key === 'published-sites/dedupe-demo/versions.json').length, 1);
+
+    storage.headCalls = [];
+    await rebuilt.listSitesForRoom('room-1');
+    assert.deepEqual(storage.headCalls, []);
+  });
+
   it('restores the previous version when the room index commit fails', async () => {
     class FailingRoomIndexStorage extends MemoryMediaObjectStorage {
       failRoomIndex = false;
@@ -509,14 +562,16 @@ describe('PublishedStaticSiteService', () => {
       mode: 'approveForMe',
     }))!;
 
+    let firstVersionId = '';
     for (const version of ['v1', 'v2']) {
-      await service.publish({
+      const published = await service.publish({
         roomId: 'room-1',
         turnId: 'turn-1',
         slug: 'roomtalk-demo',
         entry: 'index.html',
         files: [textFile('index.html', `<!doctype html>${version}`)],
       }, claims);
+      if (!firstVersionId) firstVersionId = published.versionId;
     }
     await service.publish({
       roomId: 'room-1',
@@ -532,6 +587,7 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(result.slug, 'roomtalk-demo');
     assert.equal(result.objectCount, 6);
     assert.equal(await service.readManifest('roomtalk-demo'), null);
+    assert.equal(await service.readFile('roomtalk-demo', '', firstVersionId), null);
     assert.equal([...storage.objects.keys()].some(key => key.startsWith('published-sites/roomtalk-demo/')), false);
     assert.deepEqual((await service.listSitesForRoom('room-1')).map(site => site.slug), ['keep-demo']);
 

@@ -58,7 +58,9 @@ export class MemoryMediaObjectStorage implements MediaObjectStorage {
   async getMediaObject(objectKey: string) {
     const object = this.objects.get(objectKey);
     if (!object) {
-      throw new Error(`missing object ${objectKey}`);
+      const error = new Error(`missing object ${objectKey}`) as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
     }
     return object;
   }

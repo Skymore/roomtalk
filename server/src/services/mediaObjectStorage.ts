@@ -1,5 +1,6 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
@@ -54,11 +55,36 @@ export class MissingMediaObjectStorage implements MediaObjectStorage {
   }
 }
 
-type MediaObjectStorageConfig = {
+export type MediaObjectStorageConfig = {
   bucket: string;
   region: string;
   endpoint?: string;
   forcePathStyle?: boolean;
+  connectionTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  socketTimeoutMs?: number;
+  maxAttempts?: number;
+  slowRequestMs?: number;
+};
+
+const DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS = 3_000;
+const DEFAULT_MEDIA_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_MEDIA_SOCKET_TIMEOUT_MS = 10_000;
+const DEFAULT_MEDIA_MAX_ATTEMPTS = 2;
+const DEFAULT_MEDIA_SLOW_REQUEST_MS = 2_000;
+
+const positiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+export const isMediaObjectNotFoundError = (error: unknown) => {
+  const candidate = error as { $metadata?: { httpStatusCode?: number }; name?: string; Code?: string; code?: string };
+  return candidate?.$metadata?.httpStatusCode === 404 ||
+    candidate?.name === 'NotFound' ||
+    candidate?.name === 'NoSuchKey' ||
+    candidate?.Code === 'NoSuchKey' ||
+    candidate?.code === 'ENOENT';
 };
 
 type LocalMediaMetadata = {
@@ -208,17 +234,50 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
 
 export class S3MediaObjectStorage implements MediaObjectStorage {
   private readonly client: S3Client;
+  private readonly slowRequestMs: number;
 
   constructor(
     private readonly config: MediaObjectStorageConfig,
     private readonly logger: Logger
   ) {
+    const connectionTimeout = config.connectionTimeoutMs ?? DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS;
+    const requestTimeout = config.requestTimeoutMs ?? DEFAULT_MEDIA_REQUEST_TIMEOUT_MS;
+    const socketTimeout = config.socketTimeoutMs ?? DEFAULT_MEDIA_SOCKET_TIMEOUT_MS;
+    this.slowRequestMs = config.slowRequestMs ?? DEFAULT_MEDIA_SLOW_REQUEST_MS;
     this.client = new S3Client({
       region: config.region,
       endpoint: config.endpoint,
       forcePathStyle: config.forcePathStyle,
       requestChecksumCalculation: 'WHEN_REQUIRED',
+      maxAttempts: config.maxAttempts ?? DEFAULT_MEDIA_MAX_ATTEMPTS,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout,
+        requestTimeout,
+        socketTimeout,
+        throwOnRequestTimeout: true,
+      }),
     });
+  }
+
+  private async runOperation<T>(operation: string, objectKey: string, task: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now();
+    let outcome = 'success';
+    try {
+      return await task();
+    } catch (error) {
+      outcome = error instanceof Error ? error.name : 'error';
+      throw error;
+    } finally {
+      const durationMs = Date.now() - startedAt;
+      if (durationMs >= this.slowRequestMs) {
+        this.logger.warn('Slow media object storage operation', {
+          operation,
+          objectKey,
+          durationMs,
+          outcome,
+        });
+      }
+    }
   }
 
   isConfigured() {
@@ -231,14 +290,14 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
     mimeType: string;
     byteSize: number;
   }): Promise<void> {
-    await this.client.send(new PutObjectCommand({
+    await this.runOperation('put', input.objectKey, () => this.client.send(new PutObjectCommand({
       Bucket: this.config.bucket,
       Key: input.objectKey,
       Body: input.body,
       ContentType: input.mimeType,
       ContentLength: input.byteSize,
       CacheControl: 'private, max-age=31536000, immutable',
-    }));
+    })).then(() => undefined));
     this.logger.debug('Uploaded media object', { objectKey: input.objectKey, byteSize: input.byteSize });
   }
 
@@ -293,18 +352,17 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
     objectKey: string;
   }): Promise<{ exists: boolean; mimeType?: string; byteSize?: number }> {
     try {
-      const result = await this.client.send(new HeadObjectCommand({
+      const result = await this.runOperation('head', input.objectKey, () => this.client.send(new HeadObjectCommand({
         Bucket: this.config.bucket,
         Key: input.objectKey,
-      }));
+      })));
       return {
         exists: true,
         mimeType: result.ContentType,
         byteSize: typeof result.ContentLength === 'number' ? result.ContentLength : undefined,
       };
     } catch (error: any) {
-      const statusCode = error?.$metadata?.httpStatusCode;
-      if (statusCode === 404 || error?.name === 'NotFound' || error?.Code === 'NoSuchKey') {
+      if (isMediaObjectNotFoundError(error)) {
         return { exists: false };
       }
       throw error;
@@ -312,23 +370,25 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
   }
 
   async deleteMediaObject(objectKey: string): Promise<void> {
-    await this.client.send(new DeleteObjectCommand({
+    await this.runOperation('delete', objectKey, () => this.client.send(new DeleteObjectCommand({
       Bucket: this.config.bucket,
       Key: objectKey,
-    }));
+    })).then(() => undefined));
   }
 
   async getMediaObject(objectKey: string): Promise<{ body: Buffer; mimeType?: string; byteSize: number }> {
-    const result = await this.client.send(new GetObjectCommand({
-      Bucket: this.config.bucket,
-      Key: objectKey,
-    }));
-    const body = await s3BodyToBuffer(result.Body);
-    return {
-      body,
-      mimeType: result.ContentType,
-      byteSize: typeof result.ContentLength === 'number' ? result.ContentLength : body.length,
-    };
+    return this.runOperation('get', objectKey, async () => {
+      const result = await this.client.send(new GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+      }));
+      const body = await s3BodyToBuffer(result.Body);
+      return {
+        body,
+        mimeType: result.ContentType,
+        byteSize: typeof result.ContentLength === 'number' ? result.ContentLength : body.length,
+      };
+    });
   }
 }
 
@@ -370,6 +430,11 @@ export const resolveMediaObjectStorageConfig = (env: NodeJS.ProcessEnv = process
     region: env.MEDIA_STORAGE_REGION || env.AWS_REGION || env.AWS_DEFAULT_REGION || 'auto',
     endpoint: env.MEDIA_STORAGE_ENDPOINT || env.AWS_ENDPOINT_URL_S3 || env.S3_ENDPOINT,
     forcePathStyle: env.MEDIA_STORAGE_FORCE_PATH_STYLE === 'true' || env.S3_FORCE_PATH_STYLE === 'true',
+    connectionTimeoutMs: positiveInteger(env.MEDIA_STORAGE_CONNECTION_TIMEOUT_MS, DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS),
+    requestTimeoutMs: positiveInteger(env.MEDIA_STORAGE_REQUEST_TIMEOUT_MS, DEFAULT_MEDIA_REQUEST_TIMEOUT_MS),
+    socketTimeoutMs: positiveInteger(env.MEDIA_STORAGE_SOCKET_TIMEOUT_MS, DEFAULT_MEDIA_SOCKET_TIMEOUT_MS),
+    maxAttempts: positiveInteger(env.MEDIA_STORAGE_MAX_ATTEMPTS, DEFAULT_MEDIA_MAX_ATTEMPTS),
+    slowRequestMs: positiveInteger(env.MEDIA_STORAGE_SLOW_REQUEST_MS, DEFAULT_MEDIA_SLOW_REQUEST_MS),
   };
 };
 

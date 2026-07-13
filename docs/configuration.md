@@ -46,6 +46,11 @@ Supported models:
 | `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | Optional path-style addressing. |
+| `MEDIA_STORAGE_CONNECTION_TIMEOUT_MS` | Object-storage connection timeout; defaults to `3000`. |
+| `MEDIA_STORAGE_REQUEST_TIMEOUT_MS` | Per-attempt object-storage request timeout; defaults to `15000`. |
+| `MEDIA_STORAGE_SOCKET_TIMEOUT_MS` | Object-storage socket inactivity timeout; defaults to `10000`. |
+| `MEDIA_STORAGE_MAX_ATTEMPTS` | Maximum object-storage attempts, including the initial request; defaults to `2`. |
+| `MEDIA_STORAGE_SLOW_REQUEST_MS` | Log object-storage operations slower than this threshold; defaults to `2000`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Storage credentials. |
 | `LOCAL_MEDIA_DIR` | Local development media directory. |
 | `DISABLE_LOCAL_MEDIA_STORAGE` | Disables the development fallback. |

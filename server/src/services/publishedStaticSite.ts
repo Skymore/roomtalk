@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import path from 'path';
 import { Logger } from '../logger';
-import { MediaObjectStorage } from './mediaObjectStorage';
+import { isMediaObjectNotFoundError, MediaObjectStorage } from './mediaObjectStorage';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 import { codeAgentModeAllowsStaticPublish, normalizeCodeAgentMode } from './codeAgentModes';
 
@@ -13,6 +13,7 @@ export const DEFAULT_STATIC_PUBLISH_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_STATIC_PUBLISH_MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_STATIC_PUBLISH_TOKEN_TTL_SECONDS = 15 * 60;
 export const DEFAULT_STATIC_PUBLISH_UPLOAD_TTL_SECONDS = 15 * 60;
+const MAX_CACHED_VERSION_MANIFESTS = 256;
 
 export interface PublishedStaticSiteFileInput {
   path: string;
@@ -456,6 +457,8 @@ export class PublishedStaticSiteService {
   private readonly maxFiles: number;
   private readonly maxTotalBytes: number;
   private readonly maxFileBytes: number;
+  private readonly versionHistoryRebuilds = new Map<string, Promise<PublishedStaticSiteVersionIndex | null>>();
+  private readonly versionManifestCache = new Map<string, PublishedStaticSiteManifest>();
 
   constructor(private readonly options: PublishedStaticSiteServiceOptions) {
     this.nowMs = options.nowMs || (() => Date.now());
@@ -682,6 +685,7 @@ export class PublishedStaticSiteService {
       throw error;
     }
 
+    this.cacheVersionManifest(manifest);
     this.options.logger.info('Published code-agent static site', {
       roomId: input.roomId,
       turnId: input.turnId,
@@ -865,6 +869,7 @@ export class PublishedStaticSiteService {
       });
       throw error;
     }
+    this.cacheVersionManifest(manifest);
     return {
       url: this.publicUrlForSlug(upload.slug, requestBaseUrl),
       slug: upload.slug,
@@ -1002,15 +1007,12 @@ export class PublishedStaticSiteService {
       return null;
     }
     try {
-      const head = await this.options.mediaObjectStorage.headObject({ objectKey: manifestObjectKey(slug) });
-      if (!head.exists) {
-        return null;
-      }
       const object = await this.options.mediaObjectStorage.getMediaObject(manifestObjectKey(slug));
       return parseManifest(object.body);
     } catch (error) {
+      if (isMediaObjectNotFoundError(error)) return null;
       this.options.logger.warn('Failed to read published static site manifest', { error, slug });
-      return null;
+      throw error;
     }
   }
 
@@ -1022,25 +1024,40 @@ export class PublishedStaticSiteService {
     if (normalizedSlug !== slug) {
       return null;
     }
+    const cacheKey = `${slug}:${versionId}`;
+    const cached = this.versionManifestCache.get(cacheKey);
+    if (cached) {
+      this.versionManifestCache.delete(cacheKey);
+      this.versionManifestCache.set(cacheKey, cached);
+      return cached;
+    }
+    const objectKey = versionManifestObjectKey(slug, versionId);
     try {
-      const objectKey = versionManifestObjectKey(slug, versionId);
-      const head = await this.options.mediaObjectStorage.headObject({ objectKey });
-      if (head.exists) {
-        const object = await this.options.mediaObjectStorage.getMediaObject(objectKey);
-        const manifest = parseManifest(object.body);
-        return manifest?.slug === slug && manifest.versionId === versionId ? manifest : null;
+      const object = await this.options.mediaObjectStorage.getMediaObject(objectKey);
+      const manifest = parseManifest(object.body);
+      if (!manifest || manifest.slug !== slug || manifest.versionId !== versionId) return null;
+      this.cacheVersionManifest(manifest);
+      return manifest;
+    } catch (error) {
+      if (!isMediaObjectNotFoundError(error)) {
+        this.options.logger.warn('Failed to read published static site version manifest', { error, slug, versionId });
+        throw error;
       }
+    }
+
+    try {
       const current = await this.readManifest(slug);
       if (!current) return null;
       if (current.versionId === versionId) return current;
-      await this.ensureVersionHistory(current);
-      const migratedHead = await this.options.mediaObjectStorage.headObject({ objectKey });
-      if (!migratedHead.exists) return null;
+      await this.ensureVersionHistory(current, versionId);
       const migrated = parseManifest((await this.options.mediaObjectStorage.getMediaObject(objectKey)).body);
-      return migrated?.slug === slug && migrated.versionId === versionId ? migrated : null;
+      if (!migrated || migrated.slug !== slug || migrated.versionId !== versionId) return null;
+      this.cacheVersionManifest(migrated);
+      return migrated;
     } catch (error) {
+      if (isMediaObjectNotFoundError(error)) return null;
       this.options.logger.warn('Failed to read published static site version manifest', { error, slug, versionId });
-      return null;
+      throw error;
     }
   }
 
@@ -1077,6 +1094,7 @@ export class PublishedStaticSiteService {
       ...index.objectKeys,
       roomIndexObjectKey(roomId),
     ]);
+    for (const slug of index.slugs) this.clearVersionManifestCache(slug);
     this.options.logger.info('Deleted published static sites for room', {
       roomId,
       slugCount: index.slugs.length,
@@ -1120,6 +1138,7 @@ export class PublishedStaticSiteService {
       }
     }
 
+    this.clearVersionManifestCache(manifest.slug);
     this.options.logger.info('Deleted published static site by slug', {
       roomId: manifest.roomId,
       slug: manifest.slug,
@@ -1279,12 +1298,33 @@ export class PublishedStaticSiteService {
   }
 
   private async ensureVersionHistory(
-    currentManifest: PublishedStaticSiteManifest
+    currentManifest: PublishedStaticSiteManifest,
+    repairVersionId?: string
   ): Promise<PublishedStaticSiteVersionIndex | null> {
-    const [existingIndex, roomIndex] = await Promise.all([
-      this.readVersionIndex(currentManifest.slug, currentManifest.roomId),
-      this.readRoomIndex(currentManifest.roomId),
-    ]);
+    const existingIndex = await this.readVersionIndex(currentManifest.slug, currentManifest.roomId);
+    if (existingIndex && !repairVersionId) return existingIndex;
+
+    const rebuildKey = `${currentManifest.roomId}:${currentManifest.slug}`;
+    const inFlight = this.versionHistoryRebuilds.get(rebuildKey);
+    if (inFlight) return inFlight;
+
+    const rebuild = this.rebuildVersionHistory(currentManifest, existingIndex, repairVersionId)
+      .finally(() => {
+        if (this.versionHistoryRebuilds.get(rebuildKey) === rebuild) {
+          this.versionHistoryRebuilds.delete(rebuildKey);
+        }
+      });
+    this.versionHistoryRebuilds.set(rebuildKey, rebuild);
+    return rebuild;
+  }
+
+  private async rebuildVersionHistory(
+    currentManifest: PublishedStaticSiteManifest,
+    existingIndex: PublishedStaticSiteVersionIndex | null,
+    repairVersionId?: string
+  ): Promise<PublishedStaticSiteVersionIndex | null> {
+    const roomIndex = await this.readRoomIndex(currentManifest.roomId);
+    if (!roomIndex) return existingIndex;
     const versionsById = new Map<string, PublishedStaticSiteVersionSummary>();
     for (const version of existingIndex?.versions || []) {
       versionsById.set(version.versionId, version);
@@ -1314,11 +1354,14 @@ export class PublishedStaticSiteService {
     let changed = !existingIndex;
     const metadataKeys = new Set<string>();
     for (const [versionId, indexedFiles] of versionFiles) {
+      if (repairVersionId && versionId !== repairVersionId) continue;
       const versionManifestKey = versionManifestObjectKey(currentManifest.slug, versionId);
-      const manifestHead = await this.options.mediaObjectStorage.headObject({ objectKey: versionManifestKey });
-      if (versionsById.has(versionId) && manifestHead.exists) {
-        metadataKeys.add(versionManifestKey);
-        continue;
+      if (!repairVersionId) {
+        const manifestHead = await this.options.mediaObjectStorage.headObject({ objectKey: versionManifestKey });
+        if (versionsById.has(versionId) && manifestHead.exists) {
+          metadataKeys.add(versionManifestKey);
+          continue;
+        }
       }
 
       let manifest: PublishedStaticSiteManifest;
@@ -1360,6 +1403,7 @@ export class PublishedStaticSiteService {
         };
       }
       await this.writeJsonObject(versionManifestKey, manifest);
+      this.cacheVersionManifest(manifest);
       metadataKeys.add(versionManifestKey);
       versionsById.set(versionId, versionSummaryFromManifest(manifest));
       changed = true;
@@ -1372,7 +1416,7 @@ export class PublishedStaticSiteService {
       schemaVersion: 1,
       slug: currentManifest.slug,
       roomId: currentManifest.roomId,
-      currentVersionId: currentManifest.versionId,
+      currentVersionId: existingIndex?.currentVersionId || currentManifest.versionId,
       versions: Array.from(versionsById.values()).sort((left, right) => right.publishedAt.localeCompare(left.publishedAt)),
       updatedAt: new Date(this.nowMs()).toISOString(),
     };
@@ -1396,21 +1440,36 @@ export class PublishedStaticSiteService {
     return versionIndex;
   }
 
+  private cacheVersionManifest(manifest: PublishedStaticSiteManifest) {
+    const cacheKey = `${manifest.slug}:${manifest.versionId}`;
+    this.versionManifestCache.delete(cacheKey);
+    this.versionManifestCache.set(cacheKey, manifest);
+    while (this.versionManifestCache.size > MAX_CACHED_VERSION_MANIFESTS) {
+      const oldest = this.versionManifestCache.keys().next().value;
+      if (typeof oldest !== 'string') break;
+      this.versionManifestCache.delete(oldest);
+    }
+  }
+
+  private clearVersionManifestCache(slug: string) {
+    const prefix = `${slug}:`;
+    for (const cacheKey of this.versionManifestCache.keys()) {
+      if (cacheKey.startsWith(prefix)) this.versionManifestCache.delete(cacheKey);
+    }
+  }
+
   private async readVersionIndex(slug: string, roomId: string): Promise<PublishedStaticSiteVersionIndex | null> {
     if (!this.options.mediaObjectStorage.getMediaObject) {
       return null;
     }
     try {
       const objectKey = versionIndexObjectKey(slug);
-      const head = await this.options.mediaObjectStorage.headObject({ objectKey });
-      if (!head.exists) {
-        return null;
-      }
       const object = await this.options.mediaObjectStorage.getMediaObject(objectKey);
       return parseVersionIndex(object.body, slug, roomId);
     } catch (error) {
+      if (isMediaObjectNotFoundError(error)) return null;
       this.options.logger.warn('Failed to read published static site version index', { error, slug, roomId });
-      return null;
+      throw error;
     }
   }
 
@@ -1439,15 +1498,12 @@ export class PublishedStaticSiteService {
 
     try {
       const objectKey = roomIndexObjectKey(roomId);
-      const head = await this.options.mediaObjectStorage.headObject({ objectKey });
-      if (!head.exists) {
-        return null;
-      }
       const object = await this.options.mediaObjectStorage.getMediaObject(objectKey);
       return parseRoomIndex(object.body, roomId);
     } catch (error) {
+      if (isMediaObjectNotFoundError(error)) return null;
       this.options.logger.warn('Failed to read published static site room index', { error, roomId });
-      return null;
+      throw error;
     }
   }
 

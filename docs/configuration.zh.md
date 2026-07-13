@@ -46,6 +46,11 @@
 | `MEDIA_STORAGE_REGION` | 存储 region；Tigris 通常为 `auto`。 |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint。 |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | 可选 path-style addressing。 |
+| `MEDIA_STORAGE_CONNECTION_TIMEOUT_MS` | 对象存储连接超时，默认 `3000`。 |
+| `MEDIA_STORAGE_REQUEST_TIMEOUT_MS` | 对象存储单次请求超时，默认 `15000`。 |
+| `MEDIA_STORAGE_SOCKET_TIMEOUT_MS` | 对象存储 socket 空闲超时，默认 `10000`。 |
+| `MEDIA_STORAGE_MAX_ATTEMPTS` | 对象存储最大尝试次数（包含首次请求），默认 `2`。 |
+| `MEDIA_STORAGE_SLOW_REQUEST_MS` | 超过该耗时的对象存储操作会记录慢请求日志，默认 `2000`。 |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | 存储凭据。 |
 | `LOCAL_MEDIA_DIR` | 本地开发媒体目录。 |
 | `DISABLE_LOCAL_MEDIA_STORAGE` | 禁用开发环境 fallback。 |

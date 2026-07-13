@@ -1,10 +1,12 @@
 import assert from 'assert/strict';
 import { mkdtemp, rm } from 'fs/promises';
+import { createServer } from 'http';
+import { AddressInfo } from 'net';
 import { describe, it } from 'node:test';
 import os from 'os';
 import path from 'path';
 import { Logger } from '../logger';
-import { createMediaObjectStorageFromEnv, LocalMediaObjectStorage, MissingMediaObjectStorage, S3MediaObjectStorage } from './mediaObjectStorage';
+import { createMediaObjectStorageFromEnv, LocalMediaObjectStorage, MissingMediaObjectStorage, resolveMediaObjectStorageConfig, S3MediaObjectStorage } from './mediaObjectStorage';
 
 const withTestAwsCredentials = async (callback: () => Promise<void>) => {
   const previousAccessKey = process.env.AWS_ACCESS_KEY_ID;
@@ -72,6 +74,36 @@ describe('S3MediaObjectStorage', () => {
       assert.equal(params.get('response-content-disposition'), "attachment; filename*=UTF-8''notes.md");
     });
   });
+
+  it('bounds stalled object-storage requests instead of waiting indefinitely', async () => {
+    await withTestAwsCredentials(async () => {
+      const server = createServer(() => undefined);
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+      const storage = new S3MediaObjectStorage({
+        bucket: 'media-bucket',
+        region: 'auto',
+        endpoint: `http://127.0.0.1:${port}`,
+        forcePathStyle: true,
+        connectionTimeoutMs: 100,
+        requestTimeoutMs: 100,
+        socketTimeoutMs: 100,
+        maxAttempts: 1,
+        slowRequestMs: 5_000,
+      }, new Logger('S3MediaObjectStorageTest'));
+
+      const startedAt = Date.now();
+      try {
+        await assert.rejects(
+          () => storage.getMediaObject('rooms/room-1/media/image/stalled'),
+          error => error instanceof Error && error.name === 'TimeoutError'
+        );
+        assert.ok(Date.now() - startedAt < 2_000);
+      } finally {
+        await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      }
+    });
+  });
 });
 
 describe('LocalMediaObjectStorage', () => {
@@ -126,5 +158,22 @@ describe('createMediaObjectStorageFromEnv', () => {
     } as NodeJS.ProcessEnv);
 
     assert.ok(storage instanceof MissingMediaObjectStorage);
+  });
+
+  it('loads bounded S3 transport settings from the environment', () => {
+    const config = resolveMediaObjectStorageConfig({
+      MEDIA_BUCKET_NAME: 'media-bucket',
+      MEDIA_STORAGE_CONNECTION_TIMEOUT_MS: '4000',
+      MEDIA_STORAGE_REQUEST_TIMEOUT_MS: '20000',
+      MEDIA_STORAGE_SOCKET_TIMEOUT_MS: '12000',
+      MEDIA_STORAGE_MAX_ATTEMPTS: '3',
+      MEDIA_STORAGE_SLOW_REQUEST_MS: '2500',
+    } as NodeJS.ProcessEnv);
+
+    assert.equal(config?.connectionTimeoutMs, 4000);
+    assert.equal(config?.requestTimeoutMs, 20000);
+    assert.equal(config?.socketTimeoutMs, 12000);
+    assert.equal(config?.maxAttempts, 3);
+    assert.equal(config?.slowRequestMs, 2500);
   });
 });
