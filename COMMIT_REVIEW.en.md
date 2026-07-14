@@ -63,7 +63,7 @@ The durable store must determine history order; Redis cache and Socket.IO only a
 
 The final reviewed batch tightened owner/admin/member behavior, deletion/transfer flows, restore logic, stale updates, and multi-client consistency. Security improved as sensitive identity values disappeared from normal UI and privileged actions moved behind server authorization.
 
-Reliability fixes showed that startup hydration, socket updates, and local persistence cannot independently own room order. The eventual strategy was explicit source precedence and monotonic reconciliation, documented in `docs/room-reliability/`.
+Reliability fixes showed that startup hydration, socket updates, and local persistence cannot independently own room order. The current end-to-end contract is documented in [`docs/room-reliability-architecture.md`](docs/room-reliability-architecture.md); the detailed plans created inside the reviewed range now remain in Git history only.
 
 ## Cross-Cutting Findings
 

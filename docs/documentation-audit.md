@@ -10,7 +10,7 @@ This audit classifies repository documentation and records quality controls. It 
 ## Documentation Contract
 
 - Current documents carry an `Updated` or `Verified` date and identify their source of truth.
-- Historical plans and retrospectives preserve their original context, concrete evidence, and decision path; they point to the current reference rather than being rewritten as present tense.
+- Historical plans and retrospectives preserve unique context and evidence when they remain useful. Obsolete current-looking design series may be removed after their valid contract is consolidated into a current reference; Git history remains the archive.
 - Human-facing documents have English and Chinese editions with language links. The bilingual interview HTML remains one file.
 - `CLAUDE.md`/`AGENTS.md` remain one machine-instruction source; human contribution rules live in bilingual `CONTRIBUTING` files.
 - The top-level README presents important technical design directly and links only to deeper evidence or procedures.
@@ -21,7 +21,7 @@ This audit classifies repository documentation and records quality controls. It 
 | --- | --- |
 | `README.md` / `README.zh.md` | Product, technical highlights, architecture, local development, persistence, release model, selected retrospectives, and concise navigation. |
 | `docs/README.md` / `docs/README.zh.md` | Complete categorized bilingual documentation index. |
-| `docs/room-session-controller-design*.md` | Current client room-session ownership, state machine, epoch/resync, message/media continuity, diagnostics, and backend ordering contract. |
+| `docs/room-reliability-architecture*.md` | Current room-session ownership, message/media continuity, room-version convergence, acknowledgement, posting-boundary, diagnostics, and backend ordering contract. |
 | `docs/code-agent-runtime-architecture*.md` | Current code-agent control/execution plane, lifecycle, security, workspace, recovery, persistence, and release boundaries. |
 | `DeploymentGuide.md` / `部署指南.md` | Current GitHub Actions/Fly production runbook. |
 | `docs/configuration*.md` | Operator-facing configuration groups and source-of-truth boundaries. |
@@ -47,7 +47,6 @@ These remain discoverable through the docs index and contextual README/architect
 The following are important evidence, not disposable stale docs:
 
 - PostgreSQL production migration;
-- room reliability/restoration series;
 - code-agent text/tool ordering;
 - A2UI streaming;
 - mobile viewport and keyboard behavior;
@@ -70,7 +69,7 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 - Kept key retrospectives visible from the README.
 - Added bilingual configuration, contribution, security, architecture, runbook, subsystem, retrospective, plan, and report editions.
 - Retained the historical `sandbox-daemon-plan.md` filename for link stability while labeling it as current runtime documentation.
-- Promoted the implemented Room Session Controller to a bilingual current-architecture entry point and marked the earlier suppression/in-flight restore scheduler documents as historical.
+- Consolidated the Room Session Controller and the still-valid room consistency rules into one bilingual Room Reliability Architecture, then removed the obsolete restore/review series from the current tree.
 
 ## Known Product/Protocol Follow-Ups
 

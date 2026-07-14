@@ -205,13 +205,12 @@ npm run test:e2e:postgres
 
 生产使用 Fly.io 承载 Node control plane、Supabase PostgreSQL、Upstash Redis、Tigris 对象存储，以及 E2B 的每房间 execution sandbox。
 
-## 精选工程复盘
+## 精选工程参考
 
-历史记录是工程证据的一部分，不是“已过期的产品文档”：
+当前架构与历史记录都是工程证据的一部分：
 
 - [Redis 到 PostgreSQL 生产迁移](docs/postgres-migration-development-summary.zh.md)：写入冻结切换、provider 响应限制、幂等、回滚边界，以及真正零停机所需的设计。
-- [Room Session Controller 架构](docs/room-session-controller-design.zh.md)：当前 connect/register/join/retry ownership、epoch/resync 规则、内容连续性与生产诊断日志。
-- [房间可靠性系列](docs/room-reliability/README.zh.md)：历史移动端恢复推理，以及仍然有效的房间整体替换、版本顺序、read-your-write ack 和多客户端一致性。
+- [房间可靠性架构](docs/room-reliability-architecture.zh.md)：当前 session recovery、消息/媒体连续性、room-version 收敛、read-your-write ack、posting boundary 与生产诊断的完整合约。
 - [Code Agent 工具顺序](docs/code-agent-tool-ordering-fix-plan.zh.md)：从 engine 源头到持久化和渲染，保留文本/工具/model event 的交错顺序。
 - [A2UI streaming 实现](docs/a2ui-streaming-implementation.zh.md)：结构化 UI streaming、持久化、修复和 provider-independent validation。
 - [CI/CD 构建优化](docs/ci-cd-build-optimization.zh.md)：Docker build 边界、cache 行为、release detection 和生产验证。

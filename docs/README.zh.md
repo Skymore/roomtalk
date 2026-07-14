@@ -28,7 +28,7 @@
 
 | 主题 | English | 中文 |
 | --- | --- | --- |
-| 房间会话恢复 | [Architecture](room-session-controller-design.md) | [架构](room-session-controller-design.zh.md) |
+| 房间可靠性 | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
 | Code Agent runtime | [Architecture](code-agent-runtime-architecture.md) | [架构](code-agent-runtime-architecture.zh.md) |
 | E2B sandbox artifact | [Artifact contract](code-agent-sandbox-artifact.md) | [Artifact 合约](code-agent-sandbox-artifact.zh.md) |
 | Sandbox daemon | [Runtime and protocol](sandbox-daemon-plan.md) | [运行时与协议](sandbox-daemon-plan.zh.md) |
@@ -53,11 +53,6 @@
 | 工程主线 | English | 中文 |
 | --- | --- | --- |
 | PostgreSQL 生产迁移 | [Retrospective](postgres-migration-development-summary.md) | [复盘](postgres-migration-development-summary.zh.md) |
-| 房间恢复与一致性 | [Series index](room-reliability/README.md) | [系列索引](room-reliability/README.zh.md) |
-| 移动端 room restore | [Historical strategy](room-reliability/mobile-room-restore-strategy.md) | [历史策略](room-reliability/mobile-room-restore-strategy.zh.md) |
-| Restore review 与修复 | [Historical review record](room-reliability/room-restore-review-fix-plan.md) | [历史 Review 记录](room-reliability/room-restore-review-fix-plan.zh.md) |
-| Stale room update | [Analysis](room-reliability/room-update-stale-analysis.md) | [分析](room-reliability/room-update-stale-analysis.zh.md) |
-| Room-update follow-up | [Follow-up](room-reliability/room-update-review-followup.md) | [Follow-up](room-reliability/room-update-review-followup.zh.md) |
 | Tool-event ordering | [Ordering record](code-agent-tool-ordering-fix-plan.md) | [顺序记录](code-agent-tool-ordering-fix-plan.zh.md) |
 | A2UI streaming | [Implementation record](a2ui-streaming-implementation.md) | [实现记录](a2ui-streaming-implementation.zh.md) |
 | 移动端 keyboard/viewport | [Fix record](mobile-keyboard-viewport-fix.md) | [修复记录](mobile-keyboard-viewport-fix.zh.md) |

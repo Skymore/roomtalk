@@ -205,13 +205,12 @@ Run focused tests next to changed code and expand to the affected production bui
 
 Production uses Fly.io for the Node control plane, Supabase PostgreSQL, Upstash Redis, Tigris object storage, and E2B for per-room execution sandboxes.
 
-## Selected Engineering Retrospectives
+## Selected Engineering References
 
-The historical records are part of the engineering evidence, not obsolete product documentation:
+Current architecture and historical records are both part of the engineering evidence:
 
 - [Redis-to-PostgreSQL production migration](docs/postgres-migration-development-summary.zh.md): write-freeze cutover, provider response limits, idempotency, rollback boundaries, and what a true zero-downtime design would require.
-- [Room Session Controller architecture](docs/room-session-controller-design.md): current connect/register/join/retry ownership, epoch/resync rules, content continuity, and production diagnostics.
-- [Room reliability series](docs/room-reliability/README.md): historical mobile-restoration reasoning plus current whole-object replacement, version ordering, read-your-write acknowledgements, and multi-client consistency.
+- [Room reliability architecture](docs/room-reliability-architecture.md): the current end-to-end contract for session recovery, message/media continuity, room-version convergence, read-your-write acknowledgements, posting boundaries, and production diagnostics.
 - [Code-agent tool ordering](docs/code-agent-tool-ordering-fix-plan.zh.md): preserving interleaved text/tool/model events from engine source through persistence and rendering.
 - [A2UI streaming implementation](docs/a2ui-streaming-implementation.zh.md): structured UI streaming, persistence, repair, and provider-independent validation.
 - [CI/CD build optimization](docs/ci-cd-build-optimization.zh.md): Docker build boundaries, cache behavior, release detection, and production verification.

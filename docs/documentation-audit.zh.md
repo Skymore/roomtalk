@@ -10,7 +10,7 @@
 ## 文档合约
 
 - 当前文档标注 `Updated` 或 `Verified` 日期并说明事实源。
-- 历史方案和复盘保留原始语境、具体证据和决策路径；它们指向当前参考，不被改写成现在时。
+- 历史方案和复盘在仍有独特价值时保留原始语境和证据。已经被取代、又容易被误读为现行设计的系列，可在有效合约收敛进当前参考后从工作树删除；Git 历史继续作为归档。
 - 人类文档提供英文/中文 edition 和语言切换。双语 interview HTML 保持单文件。
 - `CLAUDE.md`/`AGENTS.md` 保持单一 machine-instruction 事实源；人类贡献规则位于双语 `CONTRIBUTING`。
 - 顶层 README 直接展示重要技术设计，只对更深证据或操作流程做链接。
@@ -21,7 +21,7 @@
 | --- | --- |
 | `README.md` / `README.zh.md` | 产品、技术亮点、架构、本地开发、持久化、发布模型、精选复盘和简洁导航。 |
 | `docs/README.md` / `docs/README.zh.md` | 完整分类双语文档索引。 |
-| `docs/room-session-controller-design*.md` | 当前客户端房间会话 ownership、状态机、epoch/resync、消息/媒体连续性、诊断日志与后端 ordering contract。 |
+| `docs/room-reliability-architecture*.md` | 当前 room-session ownership、消息/媒体连续性、room-version 收敛、ack、posting boundary、诊断日志与后端 ordering contract。 |
 | `docs/code-agent-runtime-architecture*.md` | 当前 Code Agent control/execution plane、lifecycle、security、workspace、recovery、persistence 和 release 边界。 |
 | `DeploymentGuide.md` / `部署指南.md` | 当前 GitHub Actions/Fly 生产 runbook。 |
 | `docs/configuration*.md` | Operator-facing 配置分组与事实源边界。 |
@@ -47,7 +47,6 @@
 以下文档是重要证据，不是可丢弃 stale docs：
 
 - PostgreSQL 生产迁移；
-- room reliability/restore 系列；
 - Code Agent text/tool ordering；
 - A2UI streaming；
 - mobile viewport/keyboard；
@@ -70,7 +69,7 @@
 - 在 README 保留关键复盘可见性。
 - 补齐双语 configuration、contribution、security、architecture、runbook、subsystem、retrospective、plan 和 report。
 - 为链接稳定保留 `sandbox-daemon-plan.md` 历史文件名，但标记为当前 runtime。
-- 将已实现的 Room Session Controller 提升为双语当前架构入口，并把较早的 suppression/in-flight 恢复 scheduler 文档明确标记为历史记录。
+- 将 Room Session Controller 与仍有效的房间一致性规则合并为一份双语 Room Reliability Architecture，并从当前工作树删除已被取代的 restore/review 系列。
 
 ## 已知产品/协议 Follow-up
 
