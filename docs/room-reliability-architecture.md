@@ -21,6 +21,8 @@ Four authorities cooperate during recovery:
 
 Each authority has its own clock. `sessionEpoch`, `resyncRevision`, `roomVersion`, and `historyVersion` solve different ordering problems and must remain independent.
 
+Their numbers are expected to look unrelated. A healthy page might show `sessionEpoch: 2`, `resyncRevision: 7`, `roomVersion: 418`, and `historyVersion: 3462`. The socket may have been replaced twice, the tab may have requested several foreground comparisons, and the room may have accumulated thousands of message mutations. Equality across those values would have no useful meaning.
+
 ## Runtime ownership
 
 The recovery path is intentionally concentrated in a few modules:
@@ -44,36 +46,104 @@ The recovery path is intentionally concentrated in a few modules:
 
 `MessagePage` submits room intent and renders controller state. All join scheduling stays in the controller. Lifecycle handlers call `resume`, socket helpers await controller registration, and message code reacts to `resyncRevision` after the session becomes ready.
 
+Events therefore move through one direction. For example, `visibilitychange` reaches `MessagePage`, which calls `roomSessionController.resume("visibility")`. The controller either returns the active room completion or publishes a new resync revision. React observes the snapshot, and the message hook decides whether a history request is due. The lifecycle handler never emits `register`, `join_room`, or `get_room_messages` itself.
+
 ## Room session lifecycle
 
-`RoomSessionController` owns one desired room for the tab. It connects the transport, registers the current socket ID, joins the desired room, retries transient failures, and publishes an immutable snapshot.
+`RoomSessionController` owns one desired room for the tab. The easiest way to understand its job is to follow one restore from the first React render to the first authoritative history response.
+
+### 1. The page paints a room shell
+
+Suppose the user last viewed room `nZDcDhQEcu`, closes the app, and opens it again later. `MessagePage` reads the saved `Room` and view from localStorage. It can immediately draw the room name, header, and message area. `useRoomMessageEvents` also starts looking for the room's in-memory or IndexedDB message window.
+
+At this point the browser has presentation data, not verified membership on the current socket. The stored room may also be older than the server copy. The page therefore keeps sending, editing, settings, workspace reads, and new media requests locked. Showing the shell early removes a blank loading screen without granting access from stale local state.
+
+### 2. The page records one room intent
+
+The page calls `selectRoom({ roomId, source: "storage" })`. The controller stores that room as the tab's desired room and creates a completion promise for the request. If the desired room changed, it advances `sessionEpoch`. That epoch now identifies every registration and join result that may complete this request.
+
+Lifecycle events can arrive almost immediately after mount. A visible page, a BFCache restore, and an `online` event may all ask for recovery while the first request is still running. They call `resume`, which returns the same completion promise for the same room. The original drive keeps ownership of the request.
+
+### 3. The current socket is registered
+
+If Socket.IO is disconnected, the controller starts the transport and waits for a socket ID. Socket IDs are temporary. A reconnect produces a new one even though the browser still has the same `clientId` and `browserInstanceId`.
+
+Registration binds those persistent browser identities to the current socket. Every operation that requires registration waits on the controller's shared registration promise. The server acknowledges registration before it loads room lists, so a slow list query cannot hold the acknowledgement open and trigger `Timed out while registering client`.
+
+### 4. The server commits the join
+
+After registration, the controller emits `join_room`. The server checks the room, password or durable membership, current role, and rollout restrictions. It adds provisional Socket.IO presence, then checks the durable room and membership again at the commit boundary. Only a successful target commit allows the socket to leave its previous healthy room.
+
+That last ordering matters during a room switch. If the target password is wrong, access was removed, or the room was deleted during the request, the old room remains usable. A provisional target join is cleaned up before the server returns the error.
+
+### 5. The acknowledgement makes the page ready
+
+A successful join acknowledgement contains the canonical `Room`, current `RoomPermissions`, and member count. The controller verifies that the acknowledgement still belongs to the desired room, epoch, and socket. It then publishes `phase: "ready"`, stores the result, and advances `resyncRevision`.
+
+`MessagePage` consumes each result object once. It applies the canonical room through the `roomVersion` guard, installs the returned permissions, updates the member count, and unlocks member operations. The stored room shell has now become a verified room session.
+
+### 6. Message history is reconciled
+
+Readiness does not replace the message window by itself. The message hook waits for cache hydration, reads the current local `historyVersion`, and emits `get_room_messages`. The server returns a versioned page from durable storage. The client accepts it only if no newer live mutation changed the local window while the request was in flight.
+
+This separation is why a join acknowledgement advances `resyncRevision` instead of pretending to be a message version. Membership is ready first. Message history then performs its own comparison.
+
+### 7. A later disconnect repeats only the necessary work
+
+If socket A disconnects, the controller moves to `retrying`. The page locks new member operations but keeps the room shell, messages, scroll position, and loaded media. When socket B connects, the controller advances `sessionEpoch`, registers socket B, rejoins the same desired room, and advances `resyncRevision` after the new join succeeds.
+
+The sequence diagram is a compact index of those two paths. Retry budgets, supersession, and foreground-only resync are covered in the sections that follow.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> idle
-    idle --> connecting: select room while offline
-    idle --> registering: select room while connected
-    idle --> joining: select room on registered socket
-    connecting --> registering: socket connected
-    connecting --> unavailable: connection deadline reached
-    registering --> joining: register acknowledged
-    registering --> retrying: timeout or disconnect
-    registering --> unavailable: definitive rejection
-    joining --> ready: join acknowledged
-    joining --> retrying: timeout or disconnect
-    joining --> unavailable: definitive rejection
-    retrying --> registering: replacement socket connected
-    retrying --> joining: socket already registered
-    retrying --> unavailable: attempt limit reached
-    ready --> ready: foreground resync
-    ready --> retrying: socket disconnected
-    ready --> connecting: select another room while offline
-    ready --> joining: select another room on current socket
-    unavailable --> connecting: retry while offline
-    unavailable --> registering: retry while connected
-    unavailable --> joining: retry on registered socket
-    ready --> idle: leave room
+sequenceDiagram
+    participant Page as MessagePage
+    participant Session as RoomSessionController
+    participant Server as Socket.IO and room server
+    participant Messages as Message sync
+
+    Note over Page,Messages: Cold restore
+    Page->>Page: Render stored room shell and cached messages
+    Page->>Session: selectRoom(roomId, source=storage)
+    Session->>Server: Connect transport
+    Server-->>Session: connected(socket A)
+    Session->>Server: register(clientId, browserInstanceId)
+    Server-->>Session: register acknowledgement
+    Session->>Server: join_room(roomId)
+    Server->>Server: Recheck access and commit membership
+    Server-->>Session: join acknowledgement(Room, permissions, memberCount)
+    Session-->>Page: ready, resyncRevision + 1
+    Page->>Messages: Session is ready
+    Messages->>Server: get_room_messages(baseHistoryVersion)
+    Server-->>Messages: Versioned history payload
+    Messages-->>Page: Reconcile the visible window
+
+    Note over Page,Messages: Later socket replacement
+    Server-->>Session: disconnect(socket A)
+    Session-->>Page: retrying, lock new member operations
+    Note over Page,Messages: Keep the room shell, messages, scroll position, and loaded media
+    Session->>Server: Reconnect transport
+    Server-->>Session: connected(socket B)
+    Note right of Session: sessionEpoch + 1
+    Session->>Server: register(clientId, browserInstanceId)
+    Server-->>Session: register acknowledgement
+    Session->>Server: join_room(roomId)
+    Server->>Server: Recheck access and commit membership
+    Server-->>Session: join acknowledgement
+    Session-->>Page: ready, resyncRevision + 1
+    Page->>Messages: Reconcile history again
 ```
+
+The phase names describe protocol progress, while the page decides how to present each phase:
+
+| Phase | Controller meaning | Page behavior |
+| --- | --- | --- |
+| `idle` | No desired room is being driven | Show a non-room view or wait for room intent |
+| `connecting` | A room is desired and no usable socket ID exists | Keep any room shell visible and lock member operations |
+| `registering` | The transport is connected and identity binding is pending | Keep the shell and cached content visible; wait for register ack |
+| `joining` | The socket is registered and target membership is pending | Keep the target shell locked until the join commits |
+| `ready` | The current socket has verified membership in the desired room | Apply permissions and allow the operations they authorize |
+| `retrying` | A recoverable timeout, disconnect, or transport change interrupted the drive | Preserve rendered content, lock new privileged work, and continue recovery |
+| `unavailable` | A definitive rejection occurred or the retry budget ended | Offer retry or run the room-removal/password handling for that error |
 
 The snapshot contains the current `phase`, desired `roomId`, `socketId`, `sessionEpoch`, `resyncRevision`, last verified result, initiating source, current attempt, and terminal error. The verified result may include the canonical room, current permissions, and member count returned by the join acknowledgement.
 
@@ -102,7 +172,11 @@ The production defaults allow 45 seconds for a connection, 15 seconds for each r
 
 ## Server membership commit
 
+Registration and room membership are separate server decisions. Registration associates a persistent client identity with one temporary socket and joins that socket to its private client channel. It grants no room access. `join_room` performs the room-specific checks and creates live presence.
+
 The server serializes registration, join, leave, re-registration, and disconnect cleanup for each socket. This queue prevents an earlier asynchronous operation from committing after a later one on the same socket. Access-changing membership operations also use a per-room queue so a join cannot commit from a stale room or membership snapshot while another socket removes access or deletes the room.
+
+Without the socket queue, a slow join for room A could finish after a later join for room B and make A the server's final membership by accident. The queue makes the final state follow request order. The room queue handles a different race: an administrator can remove a member while that member is joining on another socket. The join rechecks membership after provisional presence, so removal wins before the acknowledgement is sent.
 
 A join performs the following commit sequence:
 
@@ -123,15 +197,17 @@ The browser creates `clientId` and `browserInstanceId` independently and stores 
 
 The server counts online room members by unique client ID and tracks active browser instances separately. Two sockets that present the same client or browser ID are retained in per-identity socket sets, so closing one socket does not remove the other socket's presence.
 
-## Restore and reconnect
+## What the page preserves during recovery
 
-On a cold restore, `MessagePage` reads the stored room object and saved view from localStorage. It renders that object as a shell, selects the room in the controller with source `storage`, and keeps privileged controls disabled. At the same time, the message layer reads its in-memory window or IndexedDB cache.
+The controller owns the recovery protocol, while `MessagePage` decides what the user can see and do during each phase. A stored room can be rendered as a shell during `connecting`, `registering`, and `joining`. The page derives readiness by checking that the controller is `ready` for the exact room currently on screen.
 
-The controller then connects, registers, and joins. A successful join supplies a canonical room and permissions, moves the session to `ready`, and advances `resyncRevision`. The message layer uses that revision to request an authoritative page from durable history. The stored shell is replaced only by an accepted canonical room object.
+The successful join result replaces the shell with an accepted canonical room and supplies current permissions. If the controller instead reports `unavailable`, the shell remains visible with its operations locked and a retry action. A confirmed missing room or access removal follows the room-removal path and clears the shell.
 
 Transport loss keeps the desired room, current room shell, messages, scroll position, and already loaded media. New privileged work is locked while the controller registers and joins the replacement socket. The reconnect indicator has a 400 ms grace period to avoid flashing during a fast recovery; it only reflects controller state and never starts recovery itself.
 
 `visibilitychange`, BFCache restore, and network recovery all enter through `resume`. A ready session schedules history reconciliation. A session that is still connecting, registering, joining, or retrying shares the active drive. This keeps lifecycle events from duplicating registration or join work.
+
+These two resume cases often look similar in the UI but produce different logs. Returning to a tab with the same ready socket only advances `resyncRevision`. Returning after the mobile OS suspended the socket produces a new socket ID, a new epoch, registration, and join. The 400 ms reconnect indicator appears only when the second path lasts long enough to be visible.
 
 ## Message reconciliation
 
@@ -139,9 +215,15 @@ Message subscriptions are keyed by `roomId` and remain mounted while session rea
 
 The history request is a separate effect. It runs only when the room session is ready and either `resyncRevision` or the reconciliation retry nonce changes. The request sends the local `historyVersion` as `baseHistoryVersion` and asks for the latest 80-message page.
 
+Consider the race that originally made a restored room look healthy while new messages disappeared. The client sends a history request with local version 3462. Before the response returns, `new_message` arrives and advances the visible window. The delayed response still describes the window requested at 3462. Replacing the page with that payload would erase the live message that just appeared.
+
 Live events update the visible window and its local history boundary. When a history response arrives, the client checks the echoed `requestedHistoryVersion` against the current local value and also rejects a server `historyVersion` below the current value. Either condition means the window changed while the request was in flight. The client keeps the displayed data and schedules another comparison, with a limit of three reconciliation retries.
 
+In the example, `[room-messages] history-response` records `requestedHistoryVersion: 3462`, the newer current version, and `decision: "ignored"`. The retry uses the new local version as its base. Once a response describes the same boundary the client is displaying, it can safely replace or confirm the window.
+
 An accepted replacement keeps server position order. If its message IDs, update stamps, and statuses match the displayed window, the client updates cache metadata without replacing the rendered list or forcing another scroll. Older-page responses prepend messages by ID and cannot overwrite a window invalidated by a later mutation.
+
+Cache hydration has a similar ordering guard. A slow IndexedDB read can finish after server history has already loaded. The hook marks that cache result as skipped. When a room is cleared, deleted, or loses access, its cache generation advances or its tombstone is persisted before later callbacks can write. A successful verified rejoin can reactivate the room for new writes, while work started under the old generation remains stale.
 
 ## Media continuity
 
@@ -149,11 +231,19 @@ Media access follows the same readiness boundary as other privileged reads. A me
 
 During temporary recovery, a displayed media URL remains attached to the element. `useCachedMedia` pauses cache and network work while access is unverified and retains its current object URL or signed URL. Media state resets when the asset identity changes or the user retries a failed load. Clicking an image opens the viewer from the URL that is actually rendered, including a cached blob URL.
 
+For example, an image may already be visible from an IndexedDB-backed blob URL when the socket disconnects. The session becomes unready, so the component stops asking for a fresh signed URL. The blob URL stays on the image, and clicking it passes that same URL to the viewer. The user can keep reading the room while membership is repaired.
+
+If the message has no usable local or signed URL yet, it may remain in a loading state until the session is ready. At that point the component asks the server for a new 15-minute read URL. A 403 here means durable room access failed at request time; repeated join attempts in the UI would not make the media endpoint authorize the request.
+
 The viewer marks the application root inert only after the dialog and its source are ready. This keeps an unresolved media source from freezing the whole application before the viewer can render or close.
+
+The inert boundary fixes a specific failure mode. An earlier viewer path could disable the application before it had a renderable source. If source preparation then stalled, no visible dialog existed and the rest of the app was already unclickable. Waiting for `isDialogReady` keeps the close path available.
 
 ## Room object convergence
 
 Server room payloads are complete values. Applying one replaces the previous `Room` instead of merging fields. This matters when the server clears an optional value such as `postingSchedule` or `hasPassword`; absence in the new object must remove the old field.
+
+Take a room with an active posting schedule. The local object contains `postingSchedule`. An owner disables the schedule, and the saved room returned by the server omits that property. `{ ...oldRoom, ...newRoom }` would keep the old property because there is no new key to overwrite it. Whole-object replacement removes it immediately.
 
 For two payloads with the same room ID, [`isNewerRoom`](../client-heroui/src/utils/roomState.ts) uses this rule:
 
@@ -171,13 +261,21 @@ Equal versions represent duplicate delivery of the same canonical write and are 
 
 `MessagePage` advances `currentRoomRef` synchronously before it queues the guarded React state update. An acknowledgement and a broadcast that arrive within the same React commit window therefore see the same latest room. Incremental room updates pass through the same guard for the active room, owned-room list, and saved-room list. Full room-list responses currently replace their corresponding lists as snapshots.
 
+The synchronous ref closes a small but important React timing gap. Suppose `room_updated` with version 52 arrives, followed immediately by an older join acknowledgement with version 51. React may not have committed the first state update yet. `currentRoomRef` already holds version 52, so the second payload is rejected before it can be queued. Reading only React state would let both callbacks compare against version 50.
+
 PostgreSQL increments `roomVersion` at the canonical row mutation boundary. Redis uses Lua scripts that read the stored record and write the next version atomically. Message mutations increment both `messageVersion` and `roomVersion`; room metadata mutations increment `roomVersion`. `updatedAt` remains available for display and migration compatibility.
+
+Message changes also affect room metadata such as `lastActivityAt`, which is why they advance `roomVersion` as well as the message-specific version. The room list can then order activity from a canonical room object while the message layer continues to reconcile its own window with `historyVersion`.
 
 ## Mutation acknowledgements and broadcasts
 
 Room metadata mutations that keep the room active, including rename and settings updates, return the canonical saved room in their acknowledgement. The initiating client applies that room immediately, which provides read-your-write behavior even when it does not receive its own broadcast. Other clients receive `room_updated` where the operation requires fan-out. Both paths use full-object replacement and the same version guard.
 
+For a rename, the initiating client might receive an acknowledgement carrying `roomVersion: 61` and update its header at once. A `room_updated` event with the same version can arrive later through the broadcast path. Accepting an equal version is safe because both payloads describe the same durable write. Another client that still has version 60 accepts the broadcast and reaches the same room object.
+
 The server broadcasts only after persistence succeeds. A failed write cannot publish a room state that durable storage does not contain. Duplicate acknowledgement and broadcast delivery converges because equal `roomVersion` values are idempotent.
+
+The acknowledgement also removes a hidden dependency on Socket.IO fan-out. The initiating socket no longer has to hear its own broadcast before the UI reflects a successful change. If persistence fails, the handler returns an error and has no canonical room to acknowledge or broadcast.
 
 Permission payloads have their own request generation. A newer `room_permissions` event invalidates an older fetch, and permission responses for a room that is no longer active are ignored.
 
@@ -187,15 +285,25 @@ The server evaluates permissions when an operation is attempted. This covers mes
 
 Posting schedules create time-based changes without a socket event. The client computes the next opening or closing boundary in the room timezone and schedules a permission refresh just after that instant. The server evaluates the current clock, and its response supplies the new `canPost` value.
 
+Suppose a room allows posting on Monday from 09:00 through 17:00. At 08:59, the UI may correctly show posting as closed. The client schedules a refresh just after 09:00. It asks the server for permissions again and enables the composer only from that response. At 17:00, the same process closes it. If a sleeping tab runs the timer late, the server still evaluates the actual current time.
+
+There is a second check at the posting boundary itself: `message.post` authorization runs when the message reaches the server. A stale open composer can therefore show an optimistic action briefly, but the server rejects the write after the window closes. Media upload initialization and completion perform the same current access and posting checks.
+
 Client and server tests share the same schedule scenarios: inclusive starts, exclusive ends, overnight windows, room timezones, disabled schedules, empty schedules, and exact boundary instants.
 
 ## Failure handling
 
 Disconnects, transport changes, and acknowledgement timeouts are treated as recoverable until their retry budget is exhausted. The room shell and cached content stay visible while controls remain locked. `unavailable` exposes a retry action without discarding the desired room.
 
+A registration timeout and a join rejection lead to different recovery paths. A timeout may belong to a slow acknowledgement or a socket that changed mid-request, so the controller retries within its budget. A wrong password or confirmed access removal will not improve with another automatic attempt. That request becomes unavailable immediately and the page can ask the user for a password or navigate away.
+
 Access rejection, a missing room, a rejected password, and disabled code-agent access end the current attempt. When a switch to another room fails, `MessagePage` selects the previous verified room again and can reopen password entry for the rejected target. The previous room is not abandoned until the server commits the new join.
 
+Late results are handled by the same ownership rules. If room A is joining and the user selects room B, room A's completion is superseded. A later successful acknowledgement for A cannot change the controller snapshot. The controller sends `leave_room(A)` to clean any presence that the server may have committed, then continues waiting for B.
+
 `room_removed` and confirmed access removal invalidate the persistent room cache, clear the active shell when applicable, remove the URL room parameter, and return the user to the room list. A late acknowledgement for the removed target cannot revive it.
+
+The invalidation happens before navigation completes. This ordering prevents a delayed IndexedDB read, history payload, or join callback from repainting the removed room after the list view is already visible.
 
 Some definitive failures are still recognized by matching server error text. Shared machine-readable room error codes remain useful protocol work because they would remove string classification from recovery decisions.
 
@@ -229,6 +337,10 @@ The following checks narrow common failures quickly:
 | A stale room setting reappears | Compare `roomVersion` on the acknowledgement, broadcast, stored shell, and active room commit |
 
 Within one epoch, the first successful membership commit should produce one `room-ready`. Foreground resync may produce another history request. A different socket ID starts a new epoch and repeats registration and join.
+
+Read the log as one story rather than as independent lines. `room-selected` identifies the desired room and epoch. `transport-connected` supplies the socket ID. `registration-ready` proves that identity is bound to that socket. `room-ready` proves that membership committed. The following `history-response` explains whether durable messages were accepted or rejected because the local window moved.
+
+For example, a normal foreground resume on an already-ready socket changes `resyncRevision` and produces another `history-request`. It should retain the same `sessionEpoch` and socket ID, with no `registration-attempt` or `join-attempt`. A join in that trace means the controller no longer considered the old membership valid, usually because the socket ID changed or the previous session had never reached ready.
 
 ## Change and verification contract
 
