@@ -180,7 +180,7 @@ export class CodeAgentRoomContextService {
       messages,
       hasMore: page.hasMore,
       oldestMessageId: messages[0]?.id,
-      historyVersion: page.historyVersion,
+      messageVersion: page.messageVersion,
     };
   }
 

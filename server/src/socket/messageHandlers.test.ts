@@ -115,14 +115,14 @@ const createHarness = (clientId: string | null = 'client-1') => {
       if (options.beforeMessageId) {
         const targetIndex = roomMessages.findIndex(item => item.id === options.beforeMessageId);
         if (targetIndex === -1) {
-          return { roomId, messages: [], historyVersion: 1, hasMore: false };
+          return { roomId, messages: [], messageVersion: 1, hasMore: false };
         }
         endIndex = targetIndex;
       }
 
       const startIndex = Math.max(0, endIndex - limit);
       const messages = roomMessages.slice(startIndex, endIndex);
-      return { roomId, messages, historyVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+      return { roomId, messages, messageVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
     },
     async readRoomAICost(roomId: string) {
       return roomCost(roomId);
@@ -223,7 +223,7 @@ describe('message socket handlers', () => {
   it('returns message history and AI cost totals for a room', async () => {
     const { socket } = createHarness();
 
-    await socket.invoke('get_room_messages', { roomId: 'room-1', baseHistoryVersion: 7 });
+    await socket.invoke('get_room_messages', { roomId: 'room-1', baseMessageVersion: 7 });
 
     assert.deepEqual(socket.emitted, [
       {
@@ -231,11 +231,11 @@ describe('message socket handlers', () => {
         args: [{
           roomId: 'room-1',
           messages: [message()],
-          historyVersion: 1,
+          messageVersion: 1,
           hasMore: false,
           oldestMessageId: 'message-1',
           mode: 'replace',
-          requestedHistoryVersion: 7,
+          requestedMessageVersion: 7,
         }],
       },
       { event: 'ai_cost_total', args: [roomCost()] },

@@ -202,14 +202,14 @@ const createHarness = (options: {
       if (options.beforeMessageId) {
         const targetIndex = roomMessages.findIndex(item => item.id === options.beforeMessageId);
         if (targetIndex === -1) {
-          return { roomId, messages: [], historyVersion: 1, hasMore: false };
+          return { roomId, messages: [], messageVersion: 1, hasMore: false };
         }
         endIndex = targetIndex;
       }
 
       const startIndex = Math.max(0, endIndex - limit);
       const messages = roomMessages.slice(startIndex, endIndex);
-      return { roomId, messages, historyVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+      return { roomId, messages, messageVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
     },
     async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member', joinedAt = '2026-05-03T00:00:00.000Z') {
       this.members.add(`${roomId}:${memberClientId}`);

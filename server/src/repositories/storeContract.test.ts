@@ -1565,10 +1565,10 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(savedHistoryRoom?.id, initialRoom.id);
       assert.equal(savedHistoryRoom?.lastActivityAt, replacement.timestamp);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [replacement]);
-      const versionBeforeClear = (await store.readMessagePageByRoom(initialRoom.id)).historyVersion;
+      const versionBeforeClear = (await store.readMessagePageByRoom(initialRoom.id)).messageVersion;
       assert.equal(await store.clearRoomMessages(initialRoom.id), 1);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
-      const versionAfterClear = (await store.readMessagePageByRoom(initialRoom.id)).historyVersion;
+      const versionAfterClear = (await store.readMessagePageByRoom(initialRoom.id)).messageVersion;
       assert.equal(versionAfterClear, versionBeforeClear + 1);
     });
 
@@ -1662,7 +1662,7 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(latestPage.messages.map(item => item.id), ['m4', 'm5']);
       assert.equal(latestPage.hasMore, true);
       assert.equal(latestPage.oldestMessageId, 'm4');
-      assert.equal(typeof latestPage.historyVersion, 'number');
+      assert.equal(typeof latestPage.messageVersion, 'number');
 
       const previousPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 2, beforeMessageId: 'm4' });
       assert.deepEqual(previousPage.messages.map(item => item.id), ['m2', 'm3']);

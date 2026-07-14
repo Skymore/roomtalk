@@ -327,7 +327,7 @@ class BlockingContextStore extends MemoryCodeAgentStore {
     return {
       roomId,
       messages: messages.slice(Math.max(0, end - limit), end),
-      historyVersion: messages.length,
+      messageVersion: messages.length,
       hasMore: end > limit,
     };
   }

@@ -27,7 +27,7 @@ describe('code-agent room context routes', () => {
       async readMessagesByRoom() { return messages; },
       async readMessagePageByRoom(roomId: string, input: { limit?: number } = {}) {
         const pageMessages = messages.slice(-(input.limit || messages.length));
-        return { roomId, messages: pageMessages, historyVersion: 2, hasMore: pageMessages.length < messages.length, oldestMessageId: pageMessages[0]?.id };
+        return { roomId, messages: pageMessages, messageVersion: 2, hasMore: pageMessages.length < messages.length, oldestMessageId: pageMessages[0]?.id };
       },
     } as unknown as RoomStore;
     service = new CodeAgentRoomContextService(store, { tokenSecret: 'secret', createId: () => 'token-1' });

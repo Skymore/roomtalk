@@ -228,13 +228,13 @@ export interface RoomMessageHistoryPayload {
   roomId: string;
   messages: Message[];
   turns?: RoomAgentTurn[];
-  historyVersion: number;
+  messageVersion: number;
   hasMore: boolean;
   oldestMessageId?: string;
   mode?: 'replace' | 'prepend';
   // Echoed from the request. It binds a page to the client window that asked
   // for it, so a clear/new mutation cannot be overwritten by a late page.
-  requestedHistoryVersion?: number;
+  requestedMessageVersion?: number;
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

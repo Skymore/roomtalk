@@ -403,7 +403,7 @@ export const MessagePage: React.FC = () => {
           roomId,
           source,
           sessionEpoch: settledSession.sessionEpoch,
-          resyncRevision: settledSession.resyncRevision,
+          messageSyncRequestId: settledSession.messageSyncRequestId,
           memberCount: result.memberCount ?? null,
           socketId: socket.id ?? null,
           socketConnected: socket.connected,
@@ -1224,7 +1224,7 @@ export const MessagePage: React.FC = () => {
               isRestoringRoom={isCurrentRoomSessionRestoring}
               showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
               isRoomSessionReady={isCurrentRoomSessionReady}
-              roomResyncRevision={roomSession.resyncRevision}
+              messageSyncRequestId={roomSession.messageSyncRequestId}
               onRetryRoomSession={handleRetryRoomSession}
               onRoomUpdated={applyServerRoom}
               username={username}
@@ -1254,7 +1254,7 @@ export const MessagePage: React.FC = () => {
             isRestoringRoom={isCurrentRoomSessionRestoring}
             showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
             isRoomSessionReady={isCurrentRoomSessionReady}
-            roomResyncRevision={roomSession.resyncRevision}
+            messageSyncRequestId={roomSession.messageSyncRequestId}
             onRetryRoomSession={handleRetryRoomSession}
             onRoomUpdated={applyServerRoom}
             username={username}

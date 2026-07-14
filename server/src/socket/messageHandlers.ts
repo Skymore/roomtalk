@@ -84,7 +84,12 @@ const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
-  socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number; baseHistoryVersion?: number }) => {
+  socket.on('get_room_messages', async (request: {
+    roomId: string;
+    beforeMessageId?: string;
+    limit?: number;
+    baseMessageVersion?: number;
+  }) => {
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
     const limit = request?.limit;
@@ -105,8 +110,8 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socket.emit('message_history', {
       ...page,
       mode: beforeMessageId ? 'prepend' : 'replace',
-      ...(typeof request.baseHistoryVersion === 'number'
-        ? { requestedHistoryVersion: request.baseHistoryVersion }
+      ...(typeof request.baseMessageVersion === 'number'
+        ? { requestedMessageVersion: request.baseMessageVersion }
         : {}),
     });
     socket.emit('ai_cost_total', await store.readRoomAICost(roomId));

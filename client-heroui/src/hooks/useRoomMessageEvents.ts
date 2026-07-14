@@ -7,13 +7,13 @@ import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCa
 import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
-const ROOM_HISTORY_RESYNC_RETRY_LIMIT = 3;
+const ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT = 3;
 const getEmptyAgentTurns = () => [] as RoomAgentTurn[];
 
 interface UseRoomMessageEventsArgs {
   roomId: string;
   isRoomSessionReady?: boolean;
-  roomResyncRevision?: number;
+  messageSyncRequestId?: number;
   containerRef: RefObject<HTMLDivElement>;
   getCurrentMessages: () => Message[];
   getCurrentAgentTurns?: () => RoomAgentTurn[];
@@ -22,7 +22,7 @@ interface UseRoomMessageEventsArgs {
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsLoadingMore: Dispatch<SetStateAction<boolean>>;
   setHasMoreMessages: Dispatch<SetStateAction<boolean>>;
-  setHistoryVersion: Dispatch<SetStateAction<number>>;
+  setMessageVersion: Dispatch<SetStateAction<number>>;
   setOldestMessageId: Dispatch<SetStateAction<string | undefined>>;
   setSessionCostUsd: Dispatch<SetStateAction<number | null>>;
   setShowScrollButton: Dispatch<SetStateAction<boolean>>;
@@ -38,7 +38,7 @@ interface UseRoomMessageEventsArgs {
 export const useRoomMessageEvents = ({
   roomId,
   isRoomSessionReady = true,
-  roomResyncRevision = 0,
+  messageSyncRequestId = 0,
   containerRef,
   getCurrentMessages,
   getCurrentAgentTurns = getEmptyAgentTurns,
@@ -47,7 +47,7 @@ export const useRoomMessageEvents = ({
   setIsLoading,
   setIsLoadingMore,
   setHasMoreMessages,
-  setHistoryVersion,
+  setMessageVersion,
   setOldestMessageId,
   setSessionCostUsd,
   setShowScrollButton,
@@ -61,11 +61,11 @@ export const useRoomMessageEvents = ({
 }: UseRoomMessageEventsArgs) => {
   const messageToDeleteIdRef = useRef(messageToDeleteId);
   const messageToEditIdRef = useRef(messageToEditId);
-  const historyVersionRef = useRef(0);
+  const messageVersionRef = useRef(0);
   const hasMoreMessagesRef = useRef(false);
   const oldestMessageIdRef = useRef<string | undefined>();
-  const roomResyncRevisionRef = useRef(roomResyncRevision);
-  roomResyncRevisionRef.current = roomResyncRevision;
+  const messageSyncRequestIdRef = useRef(messageSyncRequestId);
+  messageSyncRequestIdRef.current = messageSyncRequestId;
   const cacheHydrationRef = useRef<{ roomId: string; promise: Promise<void> }>({
     roomId,
     promise: Promise.resolve(),
@@ -99,13 +99,13 @@ export const useRoomMessageEvents = ({
     const memoryMessages = memoryWindow ? filterRoomMessages(memoryWindow.messages) : [];
     const memoryTurns = memoryWindow?.turns?.filter(turn => turn.roomId === roomId) || [];
 
-    historyVersionRef.current = memoryWindow?.historyVersion ?? 0;
+    messageVersionRef.current = memoryWindow?.messageVersion ?? 0;
     hasMoreMessagesRef.current = memoryWindow?.hasMore ?? false;
     oldestMessageIdRef.current = memoryWindow?.oldestMessageId;
 
-    const setHistoryVersionState = (historyVersion: number) => {
-      historyVersionRef.current = historyVersion;
-      setHistoryVersion(historyVersion);
+    const setMessageVersionState = (messageVersion: number) => {
+      messageVersionRef.current = messageVersion;
+      setMessageVersion(messageVersion);
     };
 
     const setHasMoreMessagesState = (hasMore: boolean) => {
@@ -118,15 +118,15 @@ export const useRoomMessageEvents = ({
       setOldestMessageId(oldestMessageId);
     };
 
-    const bumpLocalHistoryVersion = () => {
-      const nextHistoryVersion = historyVersionRef.current + 1;
-      setHistoryVersionState(nextHistoryVersion);
-      return nextHistoryVersion;
+    const bumpLocalMessageVersion = () => {
+      const nextMessageVersion = messageVersionRef.current + 1;
+      setMessageVersionState(nextMessageVersion);
+      return nextMessageVersion;
     };
 
     const cacheCurrentWindow = (
       messages: Message[],
-      historyVersion = historyVersionRef.current,
+      messageVersion = messageVersionRef.current,
       hasMore = hasMoreMessagesRef.current,
       oldestMessageId = oldestMessageIdRef.current,
       turns = getCurrentAgentTurns(),
@@ -135,7 +135,7 @@ export const useRoomMessageEvents = ({
         roomId,
         messages: filterRoomMessages(messages),
         turns: turns.filter(turn => turn.roomId === roomId),
-        historyVersion,
+        messageVersion,
         hasMore,
         oldestMessageId,
         cachedAt: Date.now(),
@@ -164,8 +164,8 @@ export const useRoomMessageEvents = ({
     if (memoryWindow) {
       logRoomMessageDiagnostic('memory-cache-hit', {
         roomId,
-        roomResyncRevision: roomResyncRevisionRef.current,
-        historyVersion: memoryWindow.historyVersion,
+        messageSyncRequestId: messageSyncRequestIdRef.current,
+        messageVersion: memoryWindow.messageVersion,
         messageCount: memoryMessages.length,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
@@ -173,7 +173,7 @@ export const useRoomMessageEvents = ({
       // Synchronous in-memory hit: render instantly, no blank/loading flash.
       updateMessages(memoryMessages);
       setAgentTurns(memoryTurns);
-      setHistoryVersionState(memoryWindow.historyVersion);
+      setMessageVersionState(memoryWindow.messageVersion);
       setHasMoreMessagesState(memoryWindow.hasMore);
       setOldestMessageIdState(memoryWindow.oldestMessageId);
       setIsLoading(false);
@@ -181,7 +181,7 @@ export const useRoomMessageEvents = ({
     } else {
       logRoomMessageDiagnostic('persistent-cache-read-start', {
         roomId,
-        roomResyncRevision: roomResyncRevisionRef.current,
+        messageSyncRequestId: messageSyncRequestIdRef.current,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
       });
@@ -193,17 +193,17 @@ export const useRoomMessageEvents = ({
           if (!cachedWindow) {
             logRoomMessageDiagnostic('persistent-cache-miss', {
               roomId,
-              roomResyncRevision: roomResyncRevisionRef.current,
+              messageSyncRequestId: messageSyncRequestIdRef.current,
             });
             return;
           }
           if (cancelled || serverHistoryLoaded) {
             logRoomMessageDiagnostic('persistent-cache-skipped', {
               roomId,
-              roomResyncRevision: roomResyncRevisionRef.current,
+              messageSyncRequestId: messageSyncRequestIdRef.current,
               cancelled,
               serverHistoryLoaded,
-              historyVersion: cachedWindow.historyVersion,
+              messageVersion: cachedWindow.messageVersion,
               messageCount: cachedWindow.messages.length,
             });
             return;
@@ -212,13 +212,13 @@ export const useRoomMessageEvents = ({
           const cachedMessages = filterRoomMessages(cachedWindow.messages);
           logRoomMessageDiagnostic('persistent-cache-hit', {
             roomId,
-            roomResyncRevision: roomResyncRevisionRef.current,
-            historyVersion: cachedWindow.historyVersion,
+            messageSyncRequestId: messageSyncRequestIdRef.current,
+            messageVersion: cachedWindow.messageVersion,
             messageCount: cachedMessages.length,
           });
           updateMessages(cachedMessages);
           setAgentTurns(cachedWindow.turns?.filter(turn => turn.roomId === roomId) || []);
-          setHistoryVersionState(cachedWindow.historyVersion);
+          setMessageVersionState(cachedWindow.messageVersion);
           setHasMoreMessagesState(cachedWindow.hasMore);
           setOldestMessageIdState(cachedWindow.oldestMessageId);
           setIsLoading(false);
@@ -227,7 +227,7 @@ export const useRoomMessageEvents = ({
         .catch(error => {
           logRoomMessageDiagnostic('persistent-cache-read-failed', {
             roomId,
-            roomResyncRevision: roomResyncRevisionRef.current,
+            messageSyncRequestId: messageSyncRequestIdRef.current,
             error: error instanceof Error ? error.message : String(error),
           });
         });
@@ -238,15 +238,17 @@ export const useRoomMessageEvents = ({
       if (historyPayload.roomId !== roomId) return;
 
       serverHistoryLoaded = true;
-      const requestedWindowChanged = typeof historyPayload.requestedHistoryVersion === 'number'
-        && historyPayload.requestedHistoryVersion !== historyVersionRef.current;
-      const serverWindowIsOlder = historyPayload.historyVersion < historyVersionRef.current;
+      const serverMessageVersion = historyPayload.messageVersion;
+      const requestedMessageVersion = historyPayload.requestedMessageVersion;
+      const requestedWindowChanged = typeof requestedMessageVersion === 'number'
+        && requestedMessageVersion !== messageVersionRef.current;
+      const serverWindowIsOlder = serverMessageVersion < messageVersionRef.current;
       logRoomMessageDiagnostic('history-response', {
         roomId,
-        roomResyncRevision: roomResyncRevisionRef.current,
-        requestedHistoryVersion: historyPayload.requestedHistoryVersion ?? null,
-        currentHistoryVersion: historyVersionRef.current,
-        serverHistoryVersion: historyPayload.historyVersion,
+        messageSyncRequestId: messageSyncRequestIdRef.current,
+        requestedMessageVersion: requestedMessageVersion ?? null,
+        currentMessageVersion: messageVersionRef.current,
+        serverMessageVersion,
         messageCount: historyPayload.messages.length,
         mode: historyPayload.mode ?? 'replace',
         decision: requestedWindowChanged || serverWindowIsOlder ? 'ignored' : 'accepted',
@@ -259,15 +261,15 @@ export const useRoomMessageEvents = ({
       if (requestedWindowChanged || serverWindowIsOlder) {
         setIsLoading(false);
         setIsLoadingMore(false);
-        if (!historyRetryScheduledRef.current && historyRetryCountRef.current < ROOM_HISTORY_RESYNC_RETRY_LIMIT) {
+        if (!historyRetryScheduledRef.current && historyRetryCountRef.current < ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT) {
           historyRetryScheduledRef.current = true;
           historyRetryCountRef.current += 1;
-          logRoomMessageDiagnostic('history-resync-scheduled', {
+          logRoomMessageDiagnostic('history-reconciliation-scheduled', {
             roomId,
-            roomResyncRevision: roomResyncRevisionRef.current,
+            messageSyncRequestId: messageSyncRequestIdRef.current,
             retry: historyRetryCountRef.current,
-            retryLimit: ROOM_HISTORY_RESYNC_RETRY_LIMIT,
-            nextBaseHistoryVersion: historyVersionRef.current,
+            retryLimit: ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT,
+            nextBaseMessageVersion: messageVersionRef.current,
           });
           queueMicrotask(() => {
             historyRetryScheduledRef.current = false;
@@ -275,13 +277,13 @@ export const useRoomMessageEvents = ({
               setHistoryRefreshNonce(current => current + 1);
             }
           });
-        } else if (historyRetryCountRef.current >= ROOM_HISTORY_RESYNC_RETRY_LIMIT) {
-          logRoomMessageDiagnostic('history-resync-exhausted', {
+        } else if (historyRetryCountRef.current >= ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT) {
+          logRoomMessageDiagnostic('history-reconciliation-exhausted', {
             roomId,
-            roomResyncRevision: roomResyncRevisionRef.current,
-            retryLimit: ROOM_HISTORY_RESYNC_RETRY_LIMIT,
-            currentHistoryVersion: historyVersionRef.current,
-            serverHistoryVersion: historyPayload.historyVersion,
+            messageSyncRequestId: messageSyncRequestIdRef.current,
+            retryLimit: ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT,
+            currentMessageVersion: messageVersionRef.current,
+            serverMessageVersion,
           });
         }
         return;
@@ -312,7 +314,7 @@ export const useRoomMessageEvents = ({
         }
         cacheCurrentWindow(
           roomMessages,
-          historyPayload.historyVersion,
+          serverMessageVersion,
           historyPayload.hasMore,
           historyPayload.oldestMessageId,
           historyPayload.turns || [],
@@ -320,7 +322,7 @@ export const useRoomMessageEvents = ({
       }
 
       setHasMoreMessagesState(historyPayload.hasMore);
-      setHistoryVersionState(historyPayload.historyVersion);
+      setMessageVersionState(serverMessageVersion);
       setOldestMessageIdState(historyPayload.oldestMessageId);
 
       setIsLoading(false);
@@ -331,19 +333,19 @@ export const useRoomMessageEvents = ({
       if (message.roomId !== roomId) return;
 
       serverHistoryLoaded = true;
-      const nextHistoryVersion = bumpLocalHistoryVersion();
+      const nextMessageVersion = bumpLocalMessageVersion();
       logRoomMessageDiagnostic('new-message', {
         roomId,
-        roomResyncRevision: roomResyncRevisionRef.current,
+        messageSyncRequestId: messageSyncRequestIdRef.current,
         messageId: message.id,
         messageType: message.messageType,
-        nextHistoryVersion,
+        nextMessageVersion,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
       });
       updateMessages(prev => {
         const next = upsertMessage(prev, message);
-        cacheCurrentWindow(next, nextHistoryVersion);
+        cacheCurrentWindow(next, nextMessageVersion);
         return next;
       });
 
@@ -364,7 +366,7 @@ export const useRoomMessageEvents = ({
         const index = previous.findIndex(item => item.id === turn.id);
         const next = index === -1 ? [...previous, turn] : [...previous];
         if (index !== -1) next[index] = turn;
-        cacheCurrentWindow(getCurrentMessages(), historyVersionRef.current, hasMoreMessagesRef.current, oldestMessageIdRef.current, next);
+        cacheCurrentWindow(getCurrentMessages(), messageVersionRef.current, hasMoreMessagesRef.current, oldestMessageIdRef.current, next);
         return next;
       });
     };
@@ -398,7 +400,7 @@ export const useRoomMessageEvents = ({
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
       serverHistoryLoaded = true;
-      const nextHistoryVersion = bumpLocalHistoryVersion();
+      const nextMessageVersion = bumpLocalMessageVersion();
       updateMessages(prev => {
         const next = completeAIMessage(prev, data.messageId, {
           content: data.content,
@@ -407,7 +409,7 @@ export const useRoomMessageEvents = ({
           usage: data.usage,
           cost: data.cost,
         });
-        cacheCurrentWindow(next, nextHistoryVersion);
+        cacheCurrentWindow(next, nextMessageVersion);
         return next;
       });
       if (data.sessionCost) {
@@ -432,14 +434,14 @@ export const useRoomMessageEvents = ({
       if (data.roomId !== roomId) return;
       serverHistoryLoaded = true;
       console.error('AI stream error for message:', data.messageId, data.error);
-      const nextHistoryVersion = bumpLocalHistoryVersion();
+      const nextMessageVersion = bumpLocalMessageVersion();
       updateMessages(prev => {
         const next = prev.map(msg =>
           msg.id === data.messageId
             ? { ...msg, content: (msg.content || '') + `\n\n${warningPrefix}: ` + data.error, status: 'error' as const }
             : msg
         );
-        cacheCurrentWindow(next, nextHistoryVersion);
+        cacheCurrentWindow(next, nextMessageVersion);
         return next;
       });
       onAIStreamSettled?.();
@@ -452,7 +454,7 @@ export const useRoomMessageEvents = ({
         setAgentTurns([]);
         void clearCachedRoomMessageWindow(roomId);
         void clearCachedMediaForRoom(roomId);
-        bumpLocalHistoryVersion();
+        bumpLocalMessageVersion();
         setHasMoreMessagesState(false);
         setOldestMessageIdState(undefined);
         setShowScrollButton(false);
@@ -464,7 +466,7 @@ export const useRoomMessageEvents = ({
     const handleMessageEdited = (updatedMessage: Message) => {
       if (updatedMessage.roomId === roomId) {
         serverHistoryLoaded = true;
-        const nextHistoryVersion = bumpLocalHistoryVersion();
+        const nextMessageVersion = bumpLocalMessageVersion();
         updateMessages(prev => {
           let changed = false;
           const next = prev.map(msg => {
@@ -475,7 +477,7 @@ export const useRoomMessageEvents = ({
             return updatedMessage;
           });
           if (changed) {
-            cacheCurrentWindow(next, nextHistoryVersion);
+            cacheCurrentWindow(next, nextMessageVersion);
           }
           return next;
         });
@@ -488,7 +490,7 @@ export const useRoomMessageEvents = ({
     const handleMessageDeleted = (deletedMessageId: string, deletedRoomId: string) => {
       if (deletedRoomId === roomId) {
         serverHistoryLoaded = true;
-        const nextHistoryVersion = bumpLocalHistoryVersion();
+        const nextMessageVersion = bumpLocalMessageVersion();
         updateMessages(prev => {
           const deletedMessage = prev.find(msg => msg.id === deletedMessageId);
           if (deletedMessage?.mediaAsset?.id) {
@@ -499,7 +501,7 @@ export const useRoomMessageEvents = ({
             if (oldestMessageIdRef.current === deletedMessageId) {
               setOldestMessageIdState(next[0]?.id);
             }
-            cacheCurrentWindow(next, nextHistoryVersion);
+            cacheCurrentWindow(next, nextMessageVersion);
           }
           return next;
         });
@@ -558,7 +560,7 @@ export const useRoomMessageEvents = ({
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,
-    setHistoryVersion,
+    setMessageVersion,
     setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,
@@ -572,7 +574,7 @@ export const useRoomMessageEvents = ({
   useEffect(() => {
     if (!isRoomSessionReady) return;
 
-    const retryContext = `${roomId}:${roomResyncRevision}`;
+    const retryContext = `${roomId}:${messageSyncRequestId}`;
     if (historyRetryContextRef.current !== retryContext) {
       historyRetryContextRef.current = retryContext;
       historyRetryCountRef.current = 0;
@@ -585,13 +587,13 @@ export const useRoomMessageEvents = ({
 
     void hydration.then(() => {
       if (cancelled) return;
-      const baseHistoryVersion = historyVersionRef.current;
+      const baseMessageVersion = messageVersionRef.current;
       logRoomMessageDiagnostic('history-request', {
         roomId,
-        roomResyncRevision,
+        messageSyncRequestId,
         historyRefreshNonce,
-        reason: historyRetryCountRef.current > 0 ? 'version-reconciliation' : 'session-resync',
-        baseHistoryVersion,
+        reason: historyRetryCountRef.current > 0 ? 'version-reconciliation' : 'session-sync',
+        baseMessageVersion,
         limit: ROOM_MESSAGE_PAGE_LIMIT,
         socketId: socket.id ?? null,
         socketConnected: socket.connected,
@@ -599,12 +601,12 @@ export const useRoomMessageEvents = ({
       socket.emit('get_room_messages', {
         roomId,
         limit: ROOM_MESSAGE_PAGE_LIMIT,
-        baseHistoryVersion,
+        baseMessageVersion,
       });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [historyRefreshNonce, isRoomSessionReady, roomId, roomResyncRevision]);
+  }, [historyRefreshNonce, isRoomSessionReady, roomId, messageSyncRequestId]);
 };

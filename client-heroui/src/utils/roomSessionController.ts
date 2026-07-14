@@ -32,7 +32,7 @@ export type RoomSessionSnapshot = {
   roomId: string | null;
   socketId: string | null;
   sessionEpoch: number;
-  resyncRevision: number;
+  messageSyncRequestId: number;
   result: RoomSessionResult | null;
   source: RoomSessionSource | null;
   attempt: number;
@@ -75,7 +75,7 @@ type RoomSessionControllerOptions = {
   maxRegistrationAttempts?: number;
   maxJoinAttempts?: number;
   retryDelaysMs?: number[];
-  resyncCoalesceMs?: number;
+  messageSyncCoalesceMs?: number;
   onRegistered?: (response: RoomSessionRegisterAck) => void;
   onJoinResult?: (roomId: string, result: RoomSessionResult) => void;
   onDiagnostic?: (event: string, details: Record<string, unknown>) => void;
@@ -141,7 +141,7 @@ export class RoomSessionController {
     roomId: null,
     socketId: null,
     sessionEpoch: 0,
-    resyncRevision: 0,
+    messageSyncRequestId: 0,
     result: null,
     source: null,
     attempt: 0,
@@ -161,7 +161,7 @@ export class RoomSessionController {
   private driveVersion = 0;
   private stopConnectListener: (() => void) | null = null;
   private stopDisconnectListener: (() => void) | null = null;
-  private resyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private messageSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly registrationTimeoutMs: number;
   private readonly joinTimeoutMs: number;
@@ -169,7 +169,7 @@ export class RoomSessionController {
   private readonly maxRegistrationAttempts: number;
   private readonly maxJoinAttempts: number;
   private readonly retryDelaysMs: number[];
-  private readonly resyncCoalesceMs: number;
+  private readonly messageSyncCoalesceMs: number;
 
   constructor(
     private readonly transport: RoomSessionTransport,
@@ -181,7 +181,7 @@ export class RoomSessionController {
     this.maxRegistrationAttempts = Math.max(1, options.maxRegistrationAttempts ?? 3);
     this.maxJoinAttempts = Math.max(1, options.maxJoinAttempts ?? 3);
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
-    this.resyncCoalesceMs = Math.max(0, options.resyncCoalesceMs ?? 150);
+    this.messageSyncCoalesceMs = Math.max(0, options.messageSyncCoalesceMs ?? 150);
   }
 
   start = () => {
@@ -302,7 +302,7 @@ export class RoomSessionController {
     }
 
     if (this.isReady(this.desiredRoom.roomId)) {
-      this.requestResync(source);
+      this.requestMessageSync(source);
       return Promise.resolve(this.snapshot.result);
     }
     return this.selectRoom({
@@ -312,17 +312,17 @@ export class RoomSessionController {
     });
   };
 
-  requestResync = (source: RoomSessionSource) => {
-    if (!this.desiredRoom || !this.isReady(this.desiredRoom.roomId) || this.resyncTimer) return;
+  requestMessageSync = (source: RoomSessionSource) => {
+    if (!this.desiredRoom || !this.isReady(this.desiredRoom.roomId) || this.messageSyncTimer) return;
     const epoch = this.desiredRoom.epoch;
-    this.resyncTimer = setTimeout(() => {
-      this.resyncTimer = null;
+    this.messageSyncTimer = setTimeout(() => {
+      this.messageSyncTimer = null;
       if (!this.desiredRoom || this.desiredRoom.epoch !== epoch || !this.isReady(this.desiredRoom.roomId)) return;
       this.setSnapshot({
         source,
-        resyncRevision: this.snapshot.resyncRevision + 1,
-      }, 'resync-requested');
-    }, this.resyncCoalesceMs);
+        messageSyncRequestId: this.snapshot.messageSyncRequestId + 1,
+      }, 'message-sync-requested');
+    }, this.messageSyncCoalesceMs);
   };
 
   leaveRoom = (roomId: string) => {
@@ -333,7 +333,7 @@ export class RoomSessionController {
     this.driveVersion += 1;
     this.activeDrive = null;
     this.desiredRoom = null;
-    this.clearResyncTimer();
+    this.clearMessageSyncTimer();
     this.advanceEpoch('room-change', null, 'manual');
     this.setSnapshot({
       phase: 'idle',
@@ -369,7 +369,7 @@ export class RoomSessionController {
     this.stop();
     this.cancelPendingAcks(new RoomSessionTransportChangedError());
     this.rejectConnectionWaiters(new RoomSessionTransportChangedError());
-    this.clearResyncTimer();
+    this.clearMessageSyncTimer();
     this.desiredRoom = null;
     this.completion = null;
     this.registeredSocketId = null;
@@ -383,7 +383,7 @@ export class RoomSessionController {
       roomId: null,
       socketId: this.currentSocketId,
       sessionEpoch: 0,
-      resyncRevision: 0,
+      messageSyncRequestId: 0,
       result: null,
       source: null,
       attempt: 0,
@@ -709,9 +709,9 @@ export class RoomSessionController {
       source: desired.source,
       attempt: 0,
       error: null,
-      resyncRevision: alreadyReady
-        ? this.snapshot.resyncRevision
-        : this.snapshot.resyncRevision + 1,
+      messageSyncRequestId: alreadyReady
+        ? this.snapshot.messageSyncRequestId
+        : this.snapshot.messageSyncRequestId + 1,
     }, 'room-ready');
     if (this.completion?.epoch === desired.epoch) {
       this.completion.resolve(result);
@@ -785,10 +785,10 @@ export class RoomSessionController {
     [...this.pendingAcks].forEach(pending => pending.cancel(error));
   }
 
-  private clearResyncTimer() {
-    if (!this.resyncTimer) return;
-    clearTimeout(this.resyncTimer);
-    this.resyncTimer = null;
+  private clearMessageSyncTimer() {
+    if (!this.messageSyncTimer) return;
+    clearTimeout(this.messageSyncTimer);
+    this.messageSyncTimer = null;
   }
 
   private setSnapshot(
@@ -808,7 +808,7 @@ export class RoomSessionController {
       roomId: next.roomId,
       socketId: next.socketId,
       sessionEpoch: next.sessionEpoch,
-      resyncRevision: next.resyncRevision,
+      messageSyncRequestId: next.messageSyncRequestId,
       attempt: next.attempt,
       source: next.source,
     });

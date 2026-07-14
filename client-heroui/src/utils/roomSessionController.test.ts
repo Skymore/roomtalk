@@ -92,7 +92,7 @@ describe('RoomSessionController', () => {
       registrationTimeoutMs: 1000,
       joinTimeoutMs: 1000,
       retryDelaysMs: [0],
-      resyncCoalesceMs: 10,
+      messageSyncCoalesceMs: 10,
     });
     controller.start();
   });
@@ -108,7 +108,7 @@ describe('RoomSessionController', () => {
       phase: 'connecting',
       roomId: 'room-1',
       sessionEpoch: 1,
-      resyncRevision: 0,
+      messageSyncRequestId: 0,
     });
     expect(transport.connectCalls).toBe(1);
 
@@ -130,7 +130,7 @@ describe('RoomSessionController', () => {
       roomId: 'room-1',
       socketId: 'socket-1',
       sessionEpoch: 1,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 
@@ -166,7 +166,7 @@ describe('RoomSessionController', () => {
       roomId: 'room-1',
       source: 'storage',
       sessionEpoch: 1,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 
@@ -200,7 +200,7 @@ describe('RoomSessionController', () => {
       phase: 'ready',
       socketId: 'socket-2',
       sessionEpoch: 2,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 
@@ -249,7 +249,7 @@ describe('RoomSessionController', () => {
       phase: 'ready',
       roomId: 'room-1',
       sessionEpoch: 1,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 
@@ -272,7 +272,7 @@ describe('RoomSessionController', () => {
       phase: 'ready',
       roomId: 'room-1',
       sessionEpoch: 1,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 
@@ -295,11 +295,11 @@ describe('RoomSessionController', () => {
     expect(controller.getSnapshot()).toMatchObject({
       phase: 'ready',
       sessionEpoch: before.sessionEpoch,
-      resyncRevision: before.resyncRevision,
+      messageSyncRequestId: before.messageSyncRequestId,
     });
   });
 
-  it('coalesces foreground signals into one resync revision without joining again', async () => {
+  it('coalesces foreground signals into one message sync request without joining again', async () => {
     vi.useFakeTimers();
     transport.establish('socket-1');
     const firstJoin = controller.selectRoom({ roomId: 'room-1' });
@@ -309,13 +309,13 @@ describe('RoomSessionController', () => {
     transport.joins[0].callback({ success: true, room: room('room-1') });
     await firstJoin;
 
-    const revision = controller.getSnapshot().resyncRevision;
+    const requestId = controller.getSnapshot().messageSyncRequestId;
     await controller.resume('pageshow');
     await controller.resume('visibility');
     await controller.resume('online');
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(controller.getSnapshot().resyncRevision).toBe(revision + 1);
+    expect(controller.getSnapshot().messageSyncRequestId).toBe(requestId + 1);
     expect(transport.joins).toHaveLength(1);
   });
 
@@ -347,7 +347,7 @@ describe('RoomSessionController', () => {
     });
   });
 
-  it('retries a timed-out join within the same epoch and advances resync only on ready', async () => {
+  it('retries a timed-out join within the same epoch and advances the message sync request only on ready', async () => {
     vi.useFakeTimers();
     transport.establish('socket-1');
     const joining = controller.selectRoom({ roomId: 'room-1' });
@@ -362,7 +362,7 @@ describe('RoomSessionController', () => {
     expect(controller.getSnapshot()).toMatchObject({
       phase: 'retrying',
       sessionEpoch: 1,
-      resyncRevision: 0,
+      messageSyncRequestId: 0,
     });
 
     transport.joins[1].callback({ success: true, room: room('room-1') });
@@ -370,7 +370,7 @@ describe('RoomSessionController', () => {
     expect(controller.getSnapshot()).toMatchObject({
       phase: 'ready',
       sessionEpoch: 1,
-      resyncRevision: 1,
+      messageSyncRequestId: 1,
     });
   });
 

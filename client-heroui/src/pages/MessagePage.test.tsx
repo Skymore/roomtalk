@@ -13,7 +13,7 @@ const roomSessionMock = vi.hoisted(() => {
     roomId: string | null;
     socketId: string | null;
     sessionEpoch: number;
-    resyncRevision: number;
+    messageSyncRequestId: number;
     result: Result | null;
     source: string | null;
     attempt: number;
@@ -24,7 +24,7 @@ const roomSessionMock = vi.hoisted(() => {
     roomId: null,
     socketId: 'socket-1',
     sessionEpoch: 0,
-    resyncRevision: 0,
+    messageSyncRequestId: 0,
     result: null,
     source: null,
     attempt: 0,
@@ -69,7 +69,7 @@ const roomSessionMock = vi.hoisted(() => {
         publish({
           phase: 'ready',
           result,
-          resyncRevision: snapshot.resyncRevision + 1,
+          messageSyncRequestId: snapshot.messageSyncRequestId + 1,
           error: null,
         });
         return result;
@@ -93,7 +93,7 @@ const roomSessionMock = vi.hoisted(() => {
     resume: vi.fn((source: string) => {
       if (!snapshot.roomId) return Promise.resolve(null);
       if (snapshot.phase === 'ready' && snapshot.result) {
-        publish({ source, resyncRevision: snapshot.resyncRevision + 1 });
+        publish({ source, messageSyncRequestId: snapshot.messageSyncRequestId + 1 });
         return Promise.resolve(snapshot.result);
       }
       return selectRoom({ roomId: snapshot.roomId, source });
@@ -362,13 +362,13 @@ vi.mock('../components/WelcomeView', async () => {
 vi.mock('../components/ChatRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, showRoomSessionSpinner, isRoomSessionReady, roomResyncRevision, roomPermissions, handleShareRoom, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
+    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, showRoomSessionSpinner, isRoomSessionReady, messageSyncRequestId, roomPermissions, handleShareRoom, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
       currentRoom: Room;
       memberCount: number | null;
       isRestoringRoom: boolean;
       showRoomSessionSpinner?: boolean;
       isRoomSessionReady: boolean;
-      roomResyncRevision?: number;
+      messageSyncRequestId?: number;
       roomPermissions?: RoomPermissions | null;
       handleShareRoom?: () => void;
       handleDeleteRoom?: (roomId: string) => void;
@@ -384,7 +384,7 @@ vi.mock('../components/ChatRoomView', async () => {
         'data-restoring': String(showRoomSessionSpinner ?? isRestoringRoom),
         'data-session-restoring': String(isRestoringRoom),
         'data-session-ready': String(isRoomSessionReady),
-        'data-resync-revision': String(roomResyncRevision ?? 0),
+        'data-message-sync-request-id': String(messageSyncRequestId ?? 0),
         'data-permission-room-id': roomPermissions?.roomId || 'none',
         'data-can-post': String(Boolean(roomPermissions?.canPost)),
         'data-posting-enabled': String(Boolean(currentRoom.postingSchedule?.enabled)),
@@ -759,12 +759,12 @@ describe('MessagePage room session restore', () => {
     });
   });
 
-  it('advances the independent resync revision after a foreground resume', async () => {
+  it('advances the independent message sync request after a foreground resume', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('chat-room-view').getAttribute('data-resync-revision')).toBe('1');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-message-sync-request-id')).toBe('1');
     });
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
@@ -774,7 +774,7 @@ describe('MessagePage room session restore', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
-      expect(screen.getByTestId('chat-room-view').getAttribute('data-resync-revision')).toBe('2');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-message-sync-request-id')).toBe('2');
     });
   });
 
@@ -784,7 +784,7 @@ describe('MessagePage room session restore', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
-      expect(screen.getByTestId('chat-room-view').getAttribute('data-resync-revision')).toBe('1');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-message-sync-request-id')).toBe('1');
     });
     expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
 
@@ -794,7 +794,7 @@ describe('MessagePage room session restore', () => {
 
     expect(await screen.findByTestId('chat-room-view')).toBeTruthy();
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
-    expect(screen.getByTestId('chat-room-view').getAttribute('data-resync-revision')).toBe('1');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-message-sync-request-id')).toBe('1');
     expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
   });
 
@@ -1244,7 +1244,7 @@ describe('MessagePage room session restore', () => {
     expect(await screen.findByText('shareSuccess')).toBeTruthy();
   });
 
-  it('keeps member count stable and hides the header spinner during a foreground resync', async () => {
+  it('keeps member count stable and hides the header spinner during a foreground message synchronization', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
 

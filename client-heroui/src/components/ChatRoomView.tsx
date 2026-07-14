@@ -17,7 +17,7 @@ interface ChatRoomViewProps {
   isRestoringRoom: boolean;
   showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
-  roomResyncRevision?: number;
+  messageSyncRequestId?: number;
   onRetryRoomSession: () => void;
   username: string;
   clientId: string;
@@ -41,7 +41,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   isRestoringRoom,
   showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
-  roomResyncRevision = 0,
+  messageSyncRequestId = 0,
   onRetryRoomSession,
   username,
   clientId,
@@ -130,7 +130,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onReply={setReplyToMessage}
             roomPermissions={effectiveRoomPermissions}
             isRoomSessionReady={isRoomSessionReady}
-            roomResyncRevision={roomResyncRevision}
+            messageSyncRequestId={messageSyncRequestId}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />

@@ -26,7 +26,7 @@ const createStore = () => ({
     if (input.beforeMessageId) end = messages.findIndex(message => message.id === input.beforeMessageId);
     const limit = input.limit || 20;
     const start = Math.max(0, end - limit);
-    return { roomId, messages: messages.slice(start, end), historyVersion: 5, hasMore: start > 0, oldestMessageId: messages[start]?.id };
+    return { roomId, messages: messages.slice(start, end), messageVersion: 5, hasMore: start > 0, oldestMessageId: messages[start]?.id };
   },
 }) as unknown as RoomStore;
 

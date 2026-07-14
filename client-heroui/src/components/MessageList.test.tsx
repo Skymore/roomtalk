@@ -310,7 +310,7 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     });
 
     const pending = message({
@@ -364,7 +364,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [queuedMessage],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -389,7 +389,7 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-client-message-2',
         content: 'will fail',
@@ -434,7 +434,7 @@ describe('MessageList optimistic messages', () => {
       replyTo: { messageId: 'quoted-1', messageType: 'text', preview: 'quoted' },
     });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(failed);
     });
 
@@ -480,7 +480,7 @@ describe('MessageList optimistic messages', () => {
       />,
     );
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-sticker-1',
         content: 'xiaokumao/001/01',
@@ -521,7 +521,7 @@ describe('MessageList optimistic messages', () => {
       />,
     );
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-locked',
         clientMessageId: 'client-locked',
@@ -547,7 +547,7 @@ describe('MessageList optimistic messages', () => {
     const clientMessageId = 'ask-ai-client-message';
 
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-ask-ai',
         clientMessageId,
@@ -588,7 +588,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'm-workspace-link', content: 'See [App](src/App.tsx#L42)' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -615,7 +615,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: history.slice(5),
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: true,
         oldestMessageId: 'm-6',
         mode: 'replace',
@@ -634,14 +634,14 @@ describe('MessageList optimistic messages', () => {
       roomId: 'room-1',
       beforeMessageId: 'm-6',
       limit: 80,
-      baseHistoryVersion: 1,
+      baseMessageVersion: 1,
     });
 
     act(() => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: history.slice(0, 5),
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         oldestMessageId: 'm-1',
         mode: 'prepend',
@@ -672,7 +672,7 @@ describe('MessageList optimistic messages', () => {
             timestamp: '2026-01-01T00:01:00.000Z',
           }),
         ],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: true,
         oldestMessageId: 'position-oldest',
         mode: 'replace',
@@ -686,7 +686,7 @@ describe('MessageList optimistic messages', () => {
       roomId: 'room-1',
       beforeMessageId: 'position-oldest',
       limit: 80,
-      baseHistoryVersion: 1,
+      baseMessageVersion: 1,
     });
   });
 
@@ -717,7 +717,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'image-message', content: 'image loaded later' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -761,7 +761,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'last-message', content: 'last visible message' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -820,7 +820,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'historical-message', content: 'existing history' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -852,7 +852,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'old-failure', deliveryStatus: 'failed', deliveryError: 'old network error' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -872,7 +872,7 @@ describe('MessageList optimistic messages', () => {
           message({ id: 'pending-message', clientMessageId: 'pending-client', deliveryStatus: 'pending' }),
           message({ id: 'streaming-ai', clientId: 'ai_assistant', messageType: 'ai', status: 'streaming', content: '' }),
         ],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -951,7 +951,7 @@ describe('MessageList optimistic messages', () => {
             updatedAt: '2026-07-10T00:00:00.000Z',
           },
         })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -981,7 +981,11 @@ describe('MessageList optimistic messages', () => {
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
     );
     await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 0 });
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+        roomId: 'room-1',
+        limit: 80,
+        baseMessageVersion: 0,
+      });
     });
   });
 
@@ -993,7 +997,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'cached-oldest' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: true,
         oldestMessageId: 'cached-oldest',
         mode: 'replace',
@@ -1013,7 +1017,7 @@ describe('MessageList optimistic messages', () => {
       roomId: 'room-1',
       beforeMessageId: 'cached-oldest',
       limit: 80,
-      baseHistoryVersion: 1,
+      baseMessageVersion: 1,
     });
   });
 
@@ -1025,7 +1029,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'modal-message', content: 'editable' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -1278,7 +1282,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'ai-1', messageType: 'ai', content: 'old answer' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -1322,7 +1326,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'ai-1', messageType: 'ai', content: 'old answer' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -1357,7 +1361,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'm-edit', content: 'original' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });
@@ -1403,7 +1407,7 @@ describe('MessageList optimistic messages', () => {
       socketMock.trigger('message_history', {
         roomId: 'room-1',
         messages: [message({ id: 'm-edit', content: 'original' })],
-        historyVersion: 1,
+        messageVersion: 1,
         hasMore: false,
         mode: 'replace',
       });

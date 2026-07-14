@@ -134,7 +134,7 @@ interface MessageListProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   isRoomSessionReady?: boolean;
-  roomResyncRevision?: number;
+  messageSyncRequestId?: number;
 }
 
 export interface MessageListHandle {
@@ -166,7 +166,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onAddReviewComment,
   onRemoveReviewComment,
   isRoomSessionReady = true,
-  roomResyncRevision = 0,
+  messageSyncRequestId = 0,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -185,7 +185,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
-  const [historyVersion, setHistoryVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0);
+  const [messageVersion, setMessageVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.messageVersion ?? 0);
   const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
   // Always points at the latest messages so item handlers can stay reference-stable.
   const messagesRef = useRef(messages);
@@ -368,9 +368,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       roomId,
       beforeMessageId: oldestMessageId || messages[0].id,
       limit: LOAD_MORE_MESSAGE_COUNT,
-      baseHistoryVersion: historyVersion,
+      baseMessageVersion: messageVersion,
     });
-  }, [hasMoreMessages, historyVersion, isLoadingMore, messages, oldestMessageId, roomId]);
+  }, [hasMoreMessages, messageVersion, isLoadingMore, messages, oldestMessageId, roomId]);
 
   useEffect(() => {
     if (!isLoadingMore) {
@@ -739,13 +739,16 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       newContent,
       ...getAIRequestSettingsForRoom(),
     }).then(() => {
-      socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
+      socket.emit('get_room_messages', {
+        roomId,
+        baseMessageVersion: messageVersion,
+      });
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
       alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, historyVersion, t]);
+  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, messageVersion, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
   const handleConfirmDelete = useCallback(() => {
@@ -763,12 +766,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (!response.success) {
         console.error('Failed to delete message on server:', response.error);
         // Refetch history on error to ensure consistency
-        socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
+        socket.emit('get_room_messages', {
+          roomId,
+          baseMessageVersion: messageVersion,
+        });
          // Use translation key for alert
         alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
       }
     });
-  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, historyVersion, t]);
+  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, messageVersion, t]);
 
   const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
     if (!roomSessionReadyRef.current) return;
@@ -885,7 +891,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       ...getAIRequestSettingsForRoom(),
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
-      socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
+      socket.emit('get_room_messages', {
+        roomId,
+        baseMessageVersion: messageVersion,
+      });
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
 
@@ -897,12 +906,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom, historyVersion]);
+  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom, messageVersion]);
 
   useRoomMessageEvents({
     roomId,
     isRoomSessionReady,
-    roomResyncRevision,
+    messageSyncRequestId,
     containerRef,
     getCurrentMessages,
     getCurrentAgentTurns,
@@ -911,7 +920,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,
-    setHistoryVersion,
+    setMessageVersion,
     setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,

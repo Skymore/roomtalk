@@ -1673,9 +1673,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
     try {
       const room = await this.getRoomById(roomId);
-      const historyVersion = room?.messageVersion || 0;
+      const messageVersion = room?.messageVersion || 0;
       if (!room) {
-        return { roomId, messages: [], historyVersion, hasMore: false };
+        return { roomId, messages: [], messageVersion, hasMore: false };
       }
 
       const allMessages = await this.readMessagesByRoom(roomId);
@@ -1683,7 +1683,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       if (options.beforeMessageId) {
         const targetIndex = allMessages.findIndex(message => message.id === options.beforeMessageId);
         if (targetIndex === -1) {
-          return { roomId, messages: [], historyVersion, hasMore: false };
+          return { roomId, messages: [], messageVersion, hasMore: false };
         }
         const target = allMessages[targetIndex];
         endIndex = target.turnId
@@ -1726,13 +1726,13 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         roomId,
         messages,
         turns,
-        historyVersion,
+        messageVersion,
         hasMore: startIndex > 0,
         oldestMessageId: messages[0]?.id,
       };
     } catch (error) {
       this.logger.error('Error reading Redis room message page', { error, roomId, options });
-      return { roomId, messages: [], historyVersion: 0, hasMore: false };
+      return { roomId, messages: [], messageVersion: 0, hasMore: false };
     }
   }
 

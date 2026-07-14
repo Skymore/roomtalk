@@ -1566,9 +1566,9 @@ export class PostgresStore implements DurableRoomStore {
         `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1`,
         [roomId]
       );
-      const historyVersion = Number(room.rows[0]?.message_version || 0);
+      const messageVersion = Number(room.rows[0]?.message_version || 0);
       if (room.rows.length === 0) {
-        return { roomId, messages: [], historyVersion, hasMore: false };
+        return { roomId, messages: [], messageVersion, hasMore: false };
       }
 
       let boundaryPosition: number | undefined;
@@ -1578,7 +1578,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId, options.beforeMessageId]
         );
         if (target.rows.length === 0) {
-          return { roomId, messages: [], historyVersion, hasMore: false };
+          return { roomId, messages: [], messageVersion, hasMore: false };
         }
         boundaryPosition = Number(target.rows[0].position);
         if (target.rows[0].turn_id) {
@@ -1646,13 +1646,13 @@ export class PostgresStore implements DurableRoomStore {
         roomId,
         messages,
         turns,
-        historyVersion,
+        messageVersion,
         hasMore,
         oldestMessageId: messages[0]?.id,
       };
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room message page', { error, roomId, options });
-      return { roomId, messages: [], historyVersion: 0, hasMore: false };
+      return { roomId, messages: [], messageVersion: 0, hasMore: false };
     }
   }
 

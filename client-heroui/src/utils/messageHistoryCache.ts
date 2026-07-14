@@ -1,7 +1,8 @@
 import { ensurePersistentBrowserStorage, getBrowserCacheOwnerId, getOwnedBrowserCacheName } from './browserCacheStorage';
 import { Message, RoomAgentTurn } from './types';
 
-const DB_NAME = 'roomtalk-message-cache-v2';
+const DB_NAME = 'roomtalk-message-cache-v3';
+const LEGACY_DB_NAMES = ['roomtalk-message-cache', 'roomtalk-message-cache-v2'];
 const DB_VERSION = 1;
 const STORE_NAME = 'room-message-windows';
 const MAX_CACHED_MESSAGES = 100;
@@ -15,7 +16,7 @@ let legacyMessageCacheCleanup: Promise<void> | null = null;
 
 export interface CachedRoomMessageWindow {
   roomId: string;
-  historyVersion: number;
+  messageVersion: number;
   messages: Message[];
   turns?: RoomAgentTurn[];
   hasMore: boolean;
@@ -153,10 +154,20 @@ const cleanupLegacyMessageCache = () => {
       resolve();
       return;
     }
-    const request = indexedDB.deleteDatabase('roomtalk-message-cache');
-    request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
-    request.onblocked = () => resolve();
+    let remaining = LEGACY_DB_NAMES.length;
+    const settle = () => {
+      remaining -= 1;
+      if (remaining === 0) resolve();
+    };
+    LEGACY_DB_NAMES.forEach(baseName => {
+      const databaseName = baseName === 'roomtalk-message-cache'
+        ? baseName
+        : getOwnedBrowserCacheName(baseName);
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = settle;
+      request.onerror = settle;
+      request.onblocked = settle;
+    });
   });
   return legacyMessageCacheCleanup;
 };

@@ -220,7 +220,7 @@ export interface RoomMessagePage {
   roomId: string;
   messages: Message[];
   turns?: RoomAgentTurn[];
-  historyVersion: number;
+  messageVersion: number;
   hasMore: boolean;
   oldestMessageId?: string;
 }

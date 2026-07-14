@@ -50,7 +50,7 @@ interface CodeAgentRoomViewProps {
   isRestoringRoom: boolean;
   showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
-  roomResyncRevision?: number;
+  messageSyncRequestId?: number;
   onRetryRoomSession: () => void;
   username: string;
   clientId: string;
@@ -115,7 +115,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   isRestoringRoom,
   showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
-  roomResyncRevision = 0,
+  messageSyncRequestId = 0,
   onRetryRoomSession,
   username,
   clientId,
@@ -562,7 +562,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onReply={setReplyToMessage}
               roomPermissions={effectiveRoomPermissions}
               isRoomSessionReady={isRoomSessionReady}
-              roomResyncRevision={roomResyncRevision}
+              messageSyncRequestId={messageSyncRequestId}
               bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
               onScrollButtonVisibilityChange={setShowScrollButton}
             />
