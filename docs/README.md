@@ -3,7 +3,7 @@
 [中文](README.zh.md)
 
 Status: Current index
-Updated: 2026-07-12
+Updated: 2026-07-13
 
 This index separates current sources of truth from runbooks, subsystem references, engineering retrospectives, completed plans, and reports. Historical documents remain first-class engineering evidence; their original dates and decisions are preserved.
 
@@ -28,6 +28,7 @@ Source code and tests are always the final authority. Start with the current arc
 
 | Topic | English | 中文 |
 | --- | --- | --- |
+| Room-session recovery | [Architecture](room-session-controller-design.md) | [架构](room-session-controller-design.zh.md) |
 | Code-agent runtime | [Architecture](code-agent-runtime-architecture.md) | [架构](code-agent-runtime-architecture.zh.md) |
 | E2B sandbox artifact | [Artifact contract](code-agent-sandbox-artifact.md) | [Artifact 合约](code-agent-sandbox-artifact.zh.md) |
 | Sandbox daemon | [Runtime and protocol](sandbox-daemon-plan.md) | [运行时与协议](sandbox-daemon-plan.zh.md) |
@@ -53,8 +54,8 @@ Source code and tests are always the final authority. Start with the current arc
 | --- | --- | --- |
 | PostgreSQL production migration | [Retrospective](postgres-migration-development-summary.md) | [复盘](postgres-migration-development-summary.zh.md) |
 | Room restoration and consistency | [Series index](room-reliability/README.md) | [系列索引](room-reliability/README.zh.md) |
-| Mobile room restore | [Strategy](room-reliability/mobile-room-restore-strategy.md) | [策略](room-reliability/mobile-room-restore-strategy.zh.md) |
-| Restore review and fixes | [Review record](room-reliability/room-restore-review-fix-plan.md) | [Review 记录](room-reliability/room-restore-review-fix-plan.zh.md) |
+| Mobile room restore | [Historical strategy](room-reliability/mobile-room-restore-strategy.md) | [历史策略](room-reliability/mobile-room-restore-strategy.zh.md) |
+| Restore review and fixes | [Historical review record](room-reliability/room-restore-review-fix-plan.md) | [历史 Review 记录](room-reliability/room-restore-review-fix-plan.zh.md) |
 | Stale room updates | [Analysis](room-reliability/room-update-stale-analysis.md) | [分析](room-reliability/room-update-stale-analysis.zh.md) |
 | Room-update follow-up | [Follow-up](room-reliability/room-update-review-followup.md) | [Follow-up](room-reliability/room-update-review-followup.zh.md) |
 | Tool-event ordering | [Ordering record](code-agent-tool-ordering-fix-plan.md) | [顺序记录](code-agent-tool-ordering-fix-plan.zh.md) |

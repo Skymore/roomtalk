@@ -1,15 +1,47 @@
-# Room session controller design
+# Room Session Controller Architecture
 
-## Problem
+[中文](room-session-controller-design.zh.md)
 
-The client currently has two independent room-session state machines:
+Status: Current architecture
+Updated: 2026-07-13
 
-- `utils/socket.ts` owns socket registration, join intents, late acknowledgements, and membership repair.
-- `pages/MessagePage.tsx` owns restore generations, background suppression, reconnect indicators, and a second ready/unavailable state.
+This document is the current client room-session contract. Source code and tests
+remain authoritative; the older mobile-restore strategy and review plan under
+`docs/room-reliability/` are historical records of the implementation that this
+controller replaced.
 
-Message and media components then interpret the page's temporary `ready` flag as both authorization and content visibility. A short transport transition can therefore clear messages and media that were already safely rendered, and every browser lifecycle signal can accidentally create another join generation.
+## Historical problem
 
-The server already serializes `register`, `join_room`, `leave_room`, re-registration, and disconnect membership mutations on one per-socket queue. Socket.IO also preserves packet order on a connection. The client should rely on that protocol invariant instead of maintaining a second acknowledgement-order repair algorithm.
+Before `RoomSessionController`, the client had two independent room-session
+state machines:
+
+- `utils/socket.ts` owned socket registration, join intents, late acknowledgements, and membership repair.
+- `pages/MessagePage.tsx` owned restore generations, background suppression, reconnect indicators, and a second ready/unavailable state.
+
+Message and media components then interpreted the page's temporary `ready` flag
+as both authorization and content visibility. A short transport transition
+could therefore clear messages and media that were already safely rendered,
+and every browser lifecycle signal could accidentally create another join
+generation.
+
+The server already serialized `register`, `join_room`, `leave_room`,
+re-registration, and disconnect membership mutations on one per-socket queue.
+Socket.IO also preserves packet order on a connection. The refactor kept that
+backend contract and removed the client's second acknowledgement-order repair
+algorithm.
+
+## Source-of-truth map
+
+| Boundary | Current owner |
+| --- | --- |
+| Session state machine | `client-heroui/src/utils/roomSessionController.ts` |
+| Socket.IO transport adapter and diagnostics | `client-heroui/src/utils/socket.ts` |
+| React snapshot projection and browser lifecycle events | `client-heroui/src/pages/MessagePage.tsx` and `client-heroui/src/hooks/useRoomSession.ts` |
+| Message listeners, cache hydration, and history reconciliation | `client-heroui/src/hooks/useRoomMessageEvents.ts` and `client-heroui/src/components/MessageList.tsx` |
+| Per-socket membership serialization | `server/src/socket/roomHandlers.ts` |
+
+No other client layer may own a room membership generation or emit `register`
+or `join_room` directly.
 
 ## Ownership
 
@@ -142,20 +174,58 @@ Controller tests use event sequences instead of component timing:
 8. leave while join pending -> late success receives stale-room cleanup;
 9. message/media content remains rendered while readiness is false, while new privileged requests remain blocked.
 
-## Migration
+## Lifecycle event contract
 
-1. Add and test the pure controller.
-2. Make `socket.ts` the transport adapter and route all registration/join/leave APIs through the controller.
-3. Replace `MessagePage`'s session generations and repair callbacks with one controller subscription.
-4. Rename membership-ack revision props to `roomResyncRevision` and decouple cache hydration/listeners from readiness.
-5. Preserve displayed media while pausing new access-controlled media requests.
-6. Remove obsolete repair tests and replace them with controller event-sequence coverage.
+`visibilitychange`, BFCache `pageshow`, and `online` only call the controller's
+`resume` method. They do not maintain timers, generations, or join promises in
+React. When the current room is already ready, the controller coalesces these
+signals into one `resyncRevision`. If the transport is not ready, they reuse the
+same room completion and drive instead of replacing it.
 
-## Implementation outcome
+The page owns presentation only: it delays the reconnect indicator for a brief
+transient recovery, applies each acknowledged result object once, and renders a
+terminal `unavailable` error. That UI timer is not a recovery scheduler.
 
-The migration is complete on the client. The backend membership implementation
-was retained because its per-socket mutation queue already provides the required
-ordering contract; the server contract test for overlapping joins verifies that
-the final acknowledgement reflects the final serialized membership. Rewriting
-that layer would have duplicated an invariant that is already explicit and
-tested.
+## Diagnostics
+
+Production browser logs intentionally expose the state machine without secrets:
+
+- `[room-session]` records transport, registration, join, epoch, phase, retry,
+  readiness, and resync transitions;
+- `[room-messages]` records persistent-cache hydration and versioned history
+  request/response reconciliation.
+
+For an incident, correlate `roomId`, `socketId`, `sessionEpoch`, and
+`resyncRevision`. A join acknowledgement should lead to one `room-ready`
+transition for that epoch. Foreground lifecycle signals on an already-ready
+session may advance `resyncRevision`, but must not emit another join.
+
+## Completed migration
+
+The client migration is complete:
+
+1. the pure controller owns the state machine and retry budgets;
+2. for room-session registration/join/leave, `socket.ts` is the transport adapter;
+3. `MessagePage` subscribes to one controller snapshot instead of maintaining
+   restore generations and repair callbacks;
+4. `roomResyncRevision` is independent from join attempt/ack counting;
+5. rendered messages and media survive transient unready phases while new
+   privileged work remains gated;
+6. controller event-sequence tests replaced the obsolete socket repair model.
+
+The backend membership implementation was intentionally retained because its
+per-socket mutation queue already provides the required ordering contract. The
+server contract tests for overlapping joins and join-then-leave verify that the
+final acknowledgement/membership reflects the final serialized mutation.
+
+## Superseded documents
+
+These files preserve the investigation and intermediate scheduler design; they
+are not current implementation instructions:
+
+- `docs/room-reliability/mobile-room-restore-strategy.md`;
+- `docs/room-reliability/room-restore-review-fix-plan.md`.
+
+The room-object replacement, monotonic `roomVersion`, read-your-write ack, and
+posting-boundary conclusions in the rest of the room-reliability series remain
+current and are independent from this session-controller replacement.

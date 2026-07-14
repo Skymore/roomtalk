@@ -42,7 +42,7 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | Shared untrusted execution | Split the trusted RoomTalk control plane from a per-room E2B execution plane, connected by a versioned JSONL protocol and short-lived scoped capabilities. |
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
 | Multi-client consistency | Combine Socket.IO's Redis adapter with monotonic `roomVersion`, full-object replacement, and acknowledgment-based read-your-write updates. |
-| Mobile reconnect recovery | Treat browser connection state as untrusted: foreground health checks, idempotent room rejoin, in-flight deduplication, and delayed recovery UI keep presence and rooms correct after backgrounding or network changes. |
+| Mobile reconnect recovery | One `RoomSessionController` owns connect/register/join/retry. Epochs change only with room or socket identity; lifecycle signals coalesce into message resync without duplicate joins, and transient recovery preserves rendered messages/media. |
 | Durable-store migration | Run Redis and PostgreSQL behind one store contract and migrate every current durable Redis record with an idempotent dry-run-capable `R` to `R+P` tool; configuration-only rollback is limited to the frozen cutover window. |
 | Cache correctness | Key recent-message cache entries by `messageVersion`, double-check the version before write-back, invalidate only after successful mutations, and degrade to PostgreSQL on cache failure. |
 | Concurrent Redis writes | Use Lua scripts for atomic room versions, message deletion, and multi-socket member reference counting; run the same behavioral contract suite against both Redis and PostgreSQL implementations. |
@@ -210,7 +210,8 @@ Production uses Fly.io for the Node control plane, Supabase PostgreSQL, Upstash 
 The historical records are part of the engineering evidence, not obsolete product documentation:
 
 - [Redis-to-PostgreSQL production migration](docs/postgres-migration-development-summary.zh.md): write-freeze cutover, provider response limits, idempotency, rollback boundaries, and what a true zero-downtime design would require.
-- [Room reliability series](docs/room-reliability/README.zh.md): mobile restoration, whole-object room replacement, version ordering, read-your-write acknowledgements, and multi-client consistency.
+- [Room Session Controller architecture](docs/room-session-controller-design.md): current connect/register/join/retry ownership, epoch/resync rules, content continuity, and production diagnostics.
+- [Room reliability series](docs/room-reliability/README.md): historical mobile-restoration reasoning plus current whole-object replacement, version ordering, read-your-write acknowledgements, and multi-client consistency.
 - [Code-agent tool ordering](docs/code-agent-tool-ordering-fix-plan.zh.md): preserving interleaved text/tool/model events from engine source through persistence and rendering.
 - [A2UI streaming implementation](docs/a2ui-streaming-implementation.zh.md): structured UI streaming, persistence, repair, and provider-independent validation.
 - [CI/CD build optimization](docs/ci-cd-build-optimization.zh.md): Docker build boundaries, cache behavior, release detection, and production verification.

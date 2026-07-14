@@ -3,7 +3,7 @@
 [English](documentation-audit.md)
 
 状态：当前文档 inventory
-审计日期：2026-07-12
+审计日期：2026-07-13
 
 本审计对仓库文档分类并记录质量控制。它不替代 [文档索引](README.zh.md)、当前架构、runbook、源码或测试。
 
@@ -21,6 +21,7 @@
 | --- | --- |
 | `README.md` / `README.zh.md` | 产品、技术亮点、架构、本地开发、持久化、发布模型、精选复盘和简洁导航。 |
 | `docs/README.md` / `docs/README.zh.md` | 完整分类双语文档索引。 |
+| `docs/room-session-controller-design*.md` | 当前客户端房间会话 ownership、状态机、epoch/resync、消息/媒体连续性、诊断日志与后端 ordering contract。 |
 | `docs/code-agent-runtime-architecture*.md` | 当前 Code Agent control/execution plane、lifecycle、security、workspace、recovery、persistence 和 release 边界。 |
 | `DeploymentGuide.md` / `部署指南.md` | 当前 GitHub Actions/Fly 生产 runbook。 |
 | `docs/configuration*.md` | Operator-facing 配置分组与事实源边界。 |
@@ -69,6 +70,7 @@
 - 在 README 保留关键复盘可见性。
 - 补齐双语 configuration、contribution、security、architecture、runbook、subsystem、retrospective、plan 和 report。
 - 为链接稳定保留 `sandbox-daemon-plan.md` 历史文件名，但标记为当前 runtime。
+- 将已实现的 Room Session Controller 提升为双语当前架构入口，并把较早的 suppression/in-flight 恢复 scheduler 文档明确标记为历史记录。
 
 ## 已知产品/协议 Follow-up
 

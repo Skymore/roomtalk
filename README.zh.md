@@ -42,7 +42,7 @@ RoomTalk 不只覆盖功能的 happy path，也系统处理了实时协作与 AI
 | 共享的不可信代码执行 | 将可信的 RoomTalk control plane 与每房间 E2B execution plane 分离，通过版本化 JSONL 协议和短期 scoped capability 连接。 |
 | AI 文本与工具事件顺序 | 在最早知道真实顺序的 engine/runner 层保留文本与工具边界，再持久化服务端单调递增的 `position`；客户端只展示顺序，不用 timestamp 猜测。 |
 | 多客户端一致性 | Socket.IO Redis adapter 配合单调 `roomVersion`、完整对象替换和 ack read-your-write，保证多实例、多客户端看到一致房间状态。 |
-| 移动端断连恢复 | 不信任浏览器连接状态：回到前台时健康检查、幂等 rejoin、in-flight 去重和延迟恢复提示，处理切后台与网络切换后的 presence 和房间恢复。 |
+| 移动端断连恢复 | 由唯一 `RoomSessionController` 管理 connect/register/join/retry；epoch 只随房间或 socket identity 变化，lifecycle signal 合并成消息 resync 而不重复 join，暂态恢复保留已显示的消息和媒体。 |
 | 持久层迁移 | Redis 与 PostgreSQL 实现同一 store contract；幂等、支持 dry-run 的 `R` 到 `R+P` 工具迁移当前全部 Redis 持久记录，纯配置回滚仅限写入冻结的切换窗口。 |
 | 缓存一致性 | 最近消息缓存以 `messageVersion` 分代，写回前再次校验版本，只在 mutation 成功后失效；缓存故障时降级直读 PostgreSQL。 |
 | Redis 并发写 | 用 Lua 原子处理 room version、消息删除和多 socket 成员引用计数；同一套行为 contract suite 同时验证 Redis 与 PostgreSQL。 |
@@ -210,7 +210,8 @@ npm run test:e2e:postgres
 历史记录是工程证据的一部分，不是“已过期的产品文档”：
 
 - [Redis 到 PostgreSQL 生产迁移](docs/postgres-migration-development-summary.zh.md)：写入冻结切换、provider 响应限制、幂等、回滚边界，以及真正零停机所需的设计。
-- [房间可靠性系列](docs/room-reliability/README.zh.md)：移动端恢复、房间整体替换、版本顺序、read-your-write ack 和多客户端一致性。
+- [Room Session Controller 架构](docs/room-session-controller-design.zh.md)：当前 connect/register/join/retry ownership、epoch/resync 规则、内容连续性与生产诊断日志。
+- [房间可靠性系列](docs/room-reliability/README.zh.md)：历史移动端恢复推理，以及仍然有效的房间整体替换、版本顺序、read-your-write ack 和多客户端一致性。
 - [Code Agent 工具顺序](docs/code-agent-tool-ordering-fix-plan.zh.md)：从 engine 源头到持久化和渲染，保留文本/工具/model event 的交错顺序。
 - [A2UI streaming 实现](docs/a2ui-streaming-implementation.zh.md)：结构化 UI streaming、持久化、修复和 provider-independent validation。
 - [CI/CD 构建优化](docs/ci-cd-build-optimization.zh.md)：Docker build 边界、cache 行为、release detection 和生产验证。

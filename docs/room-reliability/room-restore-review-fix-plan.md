@@ -2,8 +2,13 @@
 
 [中文](room-restore-review-fix-plan.zh.md)
 
-Status: Historical fix plan and adversarial review record; the main fixes are implemented
-Reviewed: 2026-07-12
+Status: Historical fix plan and adversarial review record; its scheduler has been superseded
+Reviewed: 2026-07-13
+
+> This file preserves the failures and review reasoning that led to the final
+> architecture. Its per-room suppression and shared in-flight scheduler are not
+> current implementation instructions. Use the [Room Session Controller architecture](../room-session-controller-design.md)
+> for the implemented state machine and source-of-truth boundaries.
 
 ## Purpose
 

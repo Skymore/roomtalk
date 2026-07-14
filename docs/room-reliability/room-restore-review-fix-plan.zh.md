@@ -2,12 +2,14 @@
 
 [English](room-restore-review-fix-plan.md)
 
-Reviewed: 2026-07-12
+Reviewed: 2026-07-13
 
 日期：2026-06-08
 
-> 状态：历史修复计划 + 评审记录。PR1-PR4 的恢复调度、in-flight 复用、
-> active password 复用、错误/恢复状态可见化等主线已落地。仍然有效的
+> 状态：历史修复计划 + 评审记录。本文保留了最终架构之前的失败模式和 review
+> 推理；其中 per-room suppression、in-flight 与 scheduler 不是当前实现说明。
+> 当前状态机和事实源边界见
+> [Room Session Controller 架构](../room-session-controller-design.zh.md)。仍然有效的
 > 未完成项是 Phase 5：服务端返回稳定错误码，客户端移除 `/room not found/i`
 > 字符串匹配。
 

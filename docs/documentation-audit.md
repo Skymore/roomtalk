@@ -3,7 +3,7 @@
 [中文](documentation-audit.zh.md)
 
 Status: Current documentation inventory
-Audit date: 2026-07-12
+Audit date: 2026-07-13
 
 This audit classifies repository documentation and records quality controls. It does not replace the [documentation index](README.md), current architecture, runbooks, source, or tests.
 
@@ -21,6 +21,7 @@ This audit classifies repository documentation and records quality controls. It 
 | --- | --- |
 | `README.md` / `README.zh.md` | Product, technical highlights, architecture, local development, persistence, release model, selected retrospectives, and concise navigation. |
 | `docs/README.md` / `docs/README.zh.md` | Complete categorized bilingual documentation index. |
+| `docs/room-session-controller-design*.md` | Current client room-session ownership, state machine, epoch/resync, message/media continuity, diagnostics, and backend ordering contract. |
 | `docs/code-agent-runtime-architecture*.md` | Current code-agent control/execution plane, lifecycle, security, workspace, recovery, persistence, and release boundaries. |
 | `DeploymentGuide.md` / `部署指南.md` | Current GitHub Actions/Fly production runbook. |
 | `docs/configuration*.md` | Operator-facing configuration groups and source-of-truth boundaries. |
@@ -69,6 +70,7 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 - Kept key retrospectives visible from the README.
 - Added bilingual configuration, contribution, security, architecture, runbook, subsystem, retrospective, plan, and report editions.
 - Retained the historical `sandbox-daemon-plan.md` filename for link stability while labeling it as current runtime documentation.
+- Promoted the implemented Room Session Controller to a bilingual current-architecture entry point and marked the earlier suppression/in-flight restore scheduler documents as historical.
 
 ## Known Product/Protocol Follow-Ups
 

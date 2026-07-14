@@ -2,8 +2,13 @@
 
 [中文](mobile-room-restore-strategy.zh.md)
 
-Status: Historical design record; the implemented invariants are summarized by this directory's index
-Reviewed: 2026-07-12
+Status: Historical design record; its recovery scheduler has been superseded
+Reviewed: 2026-07-13
+
+> The trigger inventory and failure analysis remain useful, but the scheduler,
+> suppression-window, and in-flight model below are not the current
+> implementation. Use the [Room Session Controller architecture](../room-session-controller-design.md)
+> for current ownership, epoch/revision rules, retry behavior, and diagnostics.
 
 ## Problem
 
@@ -44,7 +49,7 @@ Signals do not each own recovery. They enqueue the same operation with a reason 
 
 - Key work by desired room/client rather than raw event.
 - Reuse the current in-flight promise so overlapping triggers observe one result.
-- Apply a short (current invariant: 250 ms) per-room suppression window to collapse bursts after foregrounding.
+- Apply a short (then-current value: 250 ms) per-room suppression window to collapse bursts after foregrounding.
 - Clear suppression immediately on failure or disconnect so a legitimate retry is not blocked.
 - Let explicit user actions supersede stale background intent.
 - Before committing results, verify that the desired room/client has not changed.
@@ -86,7 +91,7 @@ After join, RoomTalk reads authoritative room/message/member state. Server room 
 
 ## Verification
 
-Automated coverage exercises scheduler deduplication, suppression reset, in-flight reuse, desired-room races, password reuse, foreground/background indicators, whole-object application, and socket join/leave serialization. Real-device checks still matter for suspension duration, BFCache, network switching, and browser lifecycle behavior.
+At the time, automated coverage exercised scheduler deduplication, suppression reset, in-flight reuse, desired-room races, password reuse, foreground/background indicators, whole-object application, and socket join/leave serialization. The current controller coverage is listed in the current architecture document. Real-device checks still matter for suspension duration, BFCache, network switching, and browser lifecycle behavior.
 
 ## Future Option
 
