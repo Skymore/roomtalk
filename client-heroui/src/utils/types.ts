@@ -225,6 +225,7 @@ export interface RoomPermissions {
 }
 
 export interface RoomMessageHistoryPayload {
+  requestId: string;
   roomId: string;
   messages: Message[];
   turns?: RoomAgentTurn[];
@@ -234,7 +235,12 @@ export interface RoomMessageHistoryPayload {
   mode?: 'replace' | 'prepend';
   // Echoed from the request. It binds a page to the client window that asked
   // for it, so a clear/new mutation cannot be overwritten by a late page.
-  requestedMessageVersion?: number;
+  requestedMessageVersion: number;
+}
+
+export interface RoomMessageHistoryInvalidatedEvent {
+  roomId: string;
+  reason: string;
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

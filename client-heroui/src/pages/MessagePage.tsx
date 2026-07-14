@@ -22,7 +22,7 @@ import {
   clearRoomMessages as clearRoomMessagesFromServer,
   type RoomJoinResult,
 } from "../utils/socket";
-import { RoomSessionSupersededError, type RoomSessionSource } from "../utils/roomSessionController";
+import { getRoomSessionErrorCode, RoomSessionSupersededError, type RoomSessionSource } from "../utils/roomSessionController";
 import {
   Room, RoomMemberEvent, RoomPermissions,
 } from "../utils/types";
@@ -57,6 +57,61 @@ const VISIBLE_RESTORE_SOURCES = new Set<RoomRestoreSource>(["storage", "manual",
 // 健康连接下的 rejoin 是毫秒级的,立即显示会在每次切前台时闪一下(回归 #6)
 const RECONNECT_INDICATOR_DELAY_MS = 400;
 const ERROR_AUTO_DISMISS_MS = 8000;
+
+const applyOwnedRoomDelta = (rooms: Room[], incomingRoom: Room): Room[] => {
+  if (incomingRoom.creatorId !== clientId) {
+    return rooms.filter(room => room.id !== incomingRoom.id);
+  }
+  const existing = rooms.find(room => room.id === incomingRoom.id);
+  if (existing && !isNewerRoom(incomingRoom, existing)) {
+    return rooms;
+  }
+  return sortRoomsByLastActivityDesc(upsertRoom(rooms, incomingRoom));
+};
+
+const applySavedRoomMetadataDelta = (rooms: Room[], incomingRoom: Room): Room[] => {
+  const existing = rooms.find(room => room.id === incomingRoom.id);
+  if (!existing || !isNewerRoom(incomingRoom, existing)) {
+    return rooms;
+  }
+  return sortRoomsByLastActivityDesc(rooms.map(room => (
+    room.id === incomingRoom.id ? incomingRoom : room
+  )));
+};
+
+const applySavedRoomAddedDelta = (rooms: Room[], incomingRoom: Room): Room[] => {
+  const existing = rooms.find(room => room.id === incomingRoom.id);
+  if (existing && !isNewerRoom(incomingRoom, existing)) {
+    return rooms;
+  }
+  return sortRoomsByLastActivityDesc(upsertRoom(rooms, incomingRoom));
+};
+
+type RoomListDelta =
+  | { sequence: number; kind: 'room-updated'; room: Room }
+  | { sequence: number; kind: 'saved-room-added'; room: Room }
+  | { sequence: number; kind: 'room-removed'; roomId: string }
+  | { sequence: number; kind: 'saved-room-removed'; roomId: string };
+type RoomListDeltaInput =
+  | { kind: 'room-updated'; room: Room }
+  | { kind: 'saved-room-added'; room: Room }
+  | { kind: 'room-removed'; roomId: string }
+  | { kind: 'saved-room-removed'; roomId: string };
+
+const replayOwnedRoomDeltas = (snapshot: Room[], deltas: RoomListDelta[]): Room[] => deltas.reduce((rooms, delta) => {
+  if (delta.kind === 'room-updated') return applyOwnedRoomDelta(rooms, delta.room);
+  if (delta.kind === 'room-removed') return rooms.filter(room => room.id !== delta.roomId);
+  return rooms;
+}, sortRoomsByLastActivityDesc(snapshot));
+
+const replaySavedRoomDeltas = (snapshot: Room[], deltas: RoomListDelta[]): Room[] => deltas.reduce((rooms, delta) => {
+  if (delta.kind === 'room-updated') return applySavedRoomMetadataDelta(rooms, delta.room);
+  if (delta.kind === 'saved-room-added') return applySavedRoomAddedDelta(rooms, delta.room);
+  if (delta.kind === 'room-removed' || delta.kind === 'saved-room-removed') {
+    return rooms.filter(room => room.id !== delta.roomId);
+  }
+  return rooms;
+}, sortRoomsByLastActivityDesc(snapshot));
 
 
 export const MessagePage: React.FC = () => {
@@ -232,17 +287,9 @@ export const MessagePage: React.FC = () => {
   }, []);
 
   const applyServerRoom = useCallback((updatedRoom: Room) => {
-    setRooms((prev) => {
-      const existing = prev.find((room) => room.id === updatedRoom.id);
-      if (existing && !isNewerRoom(updatedRoom, existing)) {
-        return prev;
-      }
-      return sortRoomsByLastActivityDesc(upsertRoom(prev, updatedRoom));
-    });
+    setRooms((prev) => applyOwnedRoomDelta(prev, updatedRoom));
     commitNewerCurrentRoom(updatedRoom);
-    setSavedRooms((prev) => prev.map((savedRoom) => (
-      savedRoom.id === updatedRoom.id && isNewerRoom(updatedRoom, savedRoom) ? updatedRoom : savedRoom
-    )));
+    setSavedRooms((prev) => applySavedRoomMetadataDelta(prev, updatedRoom));
   }, [commitNewerCurrentRoom]);
 
   const refreshRoomPermissions = useCallback((roomId: string) => {
@@ -427,6 +474,7 @@ export const MessagePage: React.FC = () => {
       }
 
       const message = error instanceof Error ? error.message : translationRef.current("errorLoading");
+      const errorCode = getRoomSessionErrorCode(error);
       logRoomSessionDiagnostic("join-failed", {
         roomId,
         source,
@@ -437,7 +485,7 @@ export const MessagePage: React.FC = () => {
       });
       console.error(`Failed to ensure active room session from ${source}:`, error);
 
-      const definitiveRemoval = /room not found|room access was removed/i.test(message);
+      const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
       if (definitiveRemoval) {
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
@@ -454,7 +502,7 @@ export const MessagePage: React.FC = () => {
         } catch (rollbackError) {
           console.error("Failed to restore the previous room after a rejected room switch:", rollbackError);
         }
-        if (/password is required or incorrect/i.test(message) && fallbackRoom) {
+        if (errorCode === "ROOM_PASSWORD_REQUIRED_OR_INCORRECT" && fallbackRoom) {
           setRoomToJoin(fallbackRoom);
         }
         clearRoomUrlParam();
@@ -561,7 +609,8 @@ export const MessagePage: React.FC = () => {
 
     handledUnavailableErrorRef.current = roomSession.error;
     setRoomPermissions(null);
-    const definitiveRemoval = /room not found|room access was removed/i.test(roomSession.error.message);
+    const errorCode = getRoomSessionErrorCode(roomSession.error);
+    const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
     if (!definitiveRemoval) {
       setError(translationRef.current("errorRestoringRoom"));
       return;
@@ -735,17 +784,29 @@ export const MessagePage: React.FC = () => {
     };
   }, [currentRoomId, roomIdFromUrl]);
 
-  // 监听服务器返回的房间列表和新增房间
+  // 列表请求返回初始快照，之后靠增量事件维护。快照在途时仍可能收到
+  // broadcast，所以记录并重放请求开始后的 delta，避免迟到快照覆盖新状态。
   useEffect(() => {
-    const handleRoomList = (roomList: Room[]) => {
-      setRooms(sortRoomsByLastActivityDesc(roomList));
-      setIsLoadingRooms(false);
+    let cancelled = false;
+    let deltaSequence = 0;
+    let deltas: RoomListDelta[] = [];
+    let refreshInFlight: Promise<void> | null = null;
+    const recordDelta = (delta: RoomListDeltaInput) => {
+      deltaSequence += 1;
+      deltas.push({ ...delta, sequence: deltaSequence } as RoomListDelta);
     };
-    const handleSavedRoomList = (roomList: Room[]) => {
-      setSavedRooms(roomList);
+    const handleSavedRoomAdded = (room: Room) => {
+      recordDelta({ kind: 'saved-room-added', room });
+      setSavedRooms((previous) => applySavedRoomAddedDelta(previous, room));
+      setIsLoadingSavedRooms(false);
+    };
+    const handleSavedRoomRemoved = (roomId: string) => {
+      recordDelta({ kind: 'saved-room-removed', roomId });
+      setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
       setIsLoadingSavedRooms(false);
     };
     const handleRoomUpdate = (room: Room) => {
+      recordDelta({ kind: 'room-updated', room });
       applyServerRoom(room);
       setIsLoadingRooms(false);
     };
@@ -761,6 +822,7 @@ export const MessagePage: React.FC = () => {
       }
     };
     const handleRoomRemoved = (roomId: string) => {
+      recordDelta({ kind: 'room-removed', roomId });
       setRooms((previous) => previous.filter(room => room.id !== roomId));
       setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
       void invalidatePersistentRoomCache(roomId);
@@ -797,25 +859,56 @@ export const MessagePage: React.FC = () => {
       saveCurrentRoom(null);
     };
 
-    socket.on("room_list", handleRoomList);
-    getRoomsFromServer()
-      .then(handleRoomList)
-      .catch((error) => {
-        console.error("Failed to load rooms:", error);
-        setIsLoadingRooms(false);
+    const refreshRoomLists = () => {
+      if (refreshInFlight) return refreshInFlight;
+      const requestStartSequence = deltaSequence;
+      const ownedRoomsRequest = getRoomsFromServer()
+        .then(roomList => {
+          if (cancelled) return;
+          const laterDeltas = deltas.filter(delta => delta.sequence > requestStartSequence);
+          setRooms(replayOwnedRoomDeltas(roomList, laterDeltas));
+          setIsLoadingRooms(false);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.error("Failed to load rooms:", error);
+          setIsLoadingRooms(false);
+        });
+      const savedRoomsRequest = getSavedRoomsFromServer()
+        .then(roomList => {
+          if (cancelled) return;
+          const laterDeltas = deltas.filter(delta => delta.sequence > requestStartSequence);
+          setSavedRooms(replaySavedRoomDeltas(roomList, laterDeltas));
+          setIsLoadingSavedRooms(false);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.error("Failed to load saved rooms:", error);
+          setIsLoadingSavedRooms(false);
+        });
+      const request = Promise.all([ownedRoomsRequest, savedRoomsRequest]).then(() => undefined);
+      const trackedRequest = request.finally(() => {
+        if (refreshInFlight === trackedRequest) {
+          refreshInFlight = null;
+          deltas = [];
+        }
       });
-    socket.on("saved_room_list", handleSavedRoomList);
-    getSavedRoomsFromServer()
-      .then(handleSavedRoomList)
-      .catch((error) => {
-        console.error("Failed to load saved rooms:", error);
-        setIsLoadingSavedRooms(false);
-      });
+      refreshInFlight = trackedRequest;
+      return refreshInFlight;
+    };
+    const handleSocketConnect = () => {
+      void refreshRoomLists();
+    };
+
     socket.on("new_room", handleRoomUpdate);
     socket.on("room_updated", handleRoomUpdate);
+    socket.on("saved_room_added", handleSavedRoomAdded);
+    socket.on("saved_room_removed", handleSavedRoomRemoved);
     socket.on("room_permissions", handleRoomPermissions);
     socket.on("room_permissions_invalidated", handleRoomPermissionsInvalidated);
     socket.on("room_removed", handleRoomRemoved);
+    socket.on("connect", handleSocketConnect);
+    void refreshRoomLists();
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
@@ -826,13 +919,15 @@ export const MessagePage: React.FC = () => {
     });
 
     return () => {
-      socket.off("room_list", handleRoomList);
-      socket.off("saved_room_list", handleSavedRoomList);
+      cancelled = true;
       socket.off("new_room", handleRoomUpdate);
       socket.off("room_updated", handleRoomUpdate);
+      socket.off("saved_room_added", handleSavedRoomAdded);
+      socket.off("saved_room_removed", handleSavedRoomRemoved);
       socket.off("room_permissions", handleRoomPermissions);
       socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
       socket.off("room_removed", handleRoomRemoved);
+      socket.off("connect", handleSocketConnect);
       unsubscribe();
     };
   }, [applyServerRoom, clearRoomUrlParam, ensureActiveRoomSession, refreshRoomPermissions]);
@@ -1031,8 +1126,8 @@ export const MessagePage: React.FC = () => {
 
     try {
       if (isRoomSavedById(currentRoom.id)) {
-        const updatedRooms = await unsaveRoomFromServer(currentRoom.id);
-        setSavedRooms(updatedRooms);
+        await unsaveRoomFromServer(currentRoom.id);
+        setSavedRooms((previous) => previous.filter(room => room.id !== currentRoom.id));
       } else {
         const savedRoom = await saveRoomToServer(currentRoom.id);
         setSavedRooms((prev) => [savedRoom, ...prev.filter((room) => room.id !== savedRoom.id)]);
@@ -1045,8 +1140,8 @@ export const MessagePage: React.FC = () => {
 
   const handleUnsaveRoom = useCallback(async (roomId: string) => {
     try {
-      const updatedRooms = await unsaveRoomFromServer(roomId);
-      setSavedRooms(updatedRooms);
+      await unsaveRoomFromServer(roomId);
+      setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to remove saved room";
       setError(message);
@@ -1085,9 +1180,8 @@ export const MessagePage: React.FC = () => {
         // A deleted room's cached shell is invalid regardless of which room is
         // active when the acknowledgement arrives.
         void invalidatePersistentRoomCache(roomId);
-        // No need to update savedRooms here, that's handled by unsave.
-        // The room list (`rooms` state) will be updated automatically
-        // when the server sends the new 'room_list' event.
+        setRooms((previous) => previous.filter(room => room.id !== roomId));
+        setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
 
         // If currently in the deleted room, navigate away
         if (currentRoomRef.current?.id === roomId) {

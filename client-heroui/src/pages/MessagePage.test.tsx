@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { MessagePage } from './MessagePage';
 import { Room, RoomPermissions } from '../utils/types';
+import { RoomSessionProtocolError } from '../utils/roomSessionController';
 
 const roomSessionMock = vi.hoisted(() => {
   type Result = { room?: Room; permissions?: RoomPermissions; memberCount?: number };
@@ -241,13 +242,14 @@ vi.mock('react-i18next', () => ({
 vi.mock('../components/RoomList', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    RoomList: ({ onRoomSelect, onRoomSelectById, onModalTaskStart }: {
+    RoomList: ({ rooms, onRoomSelect, onRoomSelectById, onModalTaskStart }: {
+      rooms: Room[];
       onRoomSelect: (room: Room) => void;
       onRoomSelectById: (roomId: string) => void;
       onModalTaskStart?: () => void;
     }) => React.createElement(
       'div',
-      { 'data-testid': 'room-list' },
+      { 'data-testid': 'room-list', 'data-room-ids': rooms.map(room => room.id).join(',') },
       React.createElement('button', {
         'data-testid': 'select-room-1',
         onClick: () => onRoomSelect({
@@ -290,7 +292,12 @@ vi.mock('../components/RoomList', async () => {
 
 vi.mock('../components/SavedRoomList', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
-  return { SavedRoomList: () => React.createElement('div', { 'data-testid': 'saved-room-list' }) };
+  return {
+    SavedRoomList: ({ rooms }: { rooms: Room[] }) => React.createElement('div', {
+      'data-testid': 'saved-room-list',
+      'data-room-ids': rooms.map(room => room.id).join(','),
+    }),
+  };
 });
 
 vi.mock('../components/SettingsView', async () => {
@@ -327,9 +334,17 @@ vi.mock('../components/BottomNav', async () => {
 vi.mock('../components/DesktopSidebar', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    DesktopSidebar: ({ onRoomSelect }: { onRoomSelect?: (room: Room) => void }) => React.createElement(
+    DesktopSidebar: ({ rooms, savedRooms, onRoomSelect }: {
+      rooms: Room[];
+      savedRooms: Room[];
+      onRoomSelect?: (room: Room) => void;
+    }) => React.createElement(
       'aside',
-      { 'data-testid': 'desktop-sidebar' },
+      {
+        'data-testid': 'desktop-sidebar',
+        'data-room-ids': rooms.map(room => room.id).join(','),
+        'data-saved-room-ids': savedRooms.map(room => room.id).join(','),
+      },
       React.createElement('button', {
         'data-testid': 'sidebar-select-room-1',
         onClick: () => onRoomSelect?.({
@@ -518,6 +533,52 @@ describe('MessagePage room session restore', () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it('replays room deltas that arrive while list snapshots are in flight', async () => {
+    let resolveOwnedRooms: (rooms: Room[]) => void = () => {};
+    let resolveSavedRooms: (rooms: Room[]) => void = () => {};
+    socketApiMock.getRoomsFromServer.mockReturnValue(new Promise<Room[]>(resolve => {
+      resolveOwnedRooms = resolve;
+    }));
+    socketApiMock.getSavedRoomsFromServer.mockReturnValue(new Promise<Room[]>(resolve => {
+      resolveSavedRooms = resolve;
+    }));
+    renderPage();
+
+    await waitFor(() => {
+      expect(socketApiMock.getRoomsFromServer).toHaveBeenCalledTimes(1);
+      expect(socketApiMock.getSavedRoomsFromServer).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      socketMock.trigger('new_room', room({ id: 'room-2', name: 'Room 2' }));
+      socketMock.trigger('room_removed', 'room-1');
+      socketMock.trigger('saved_room_added', room({ id: 'room-2', name: 'Room 2' }));
+      socketMock.trigger('saved_room_removed', 'room-1');
+    });
+    await act(async () => {
+      resolveOwnedRooms([room()]);
+      resolveSavedRooms([room()]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const sidebar = screen.getByTestId('desktop-sidebar');
+      expect(sidebar.getAttribute('data-room-ids')).toBe('room-2');
+      expect(sidebar.getAttribute('data-saved-room-ids')).toBe('room-2');
+    });
+  });
+
+  it('refreshes list snapshots after the socket reconnects', async () => {
+    renderPage();
+    await waitFor(() => expect(socketApiMock.getRoomsFromServer).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('connect'));
+
+    await waitFor(() => {
+      expect(socketApiMock.getRoomsFromServer).toHaveBeenCalledTimes(2);
+      expect(socketApiMock.getSavedRoomsFromServer).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('restores a stored room through the join acknowledgement', async () => {
@@ -879,7 +940,7 @@ describe('MessagePage room session restore', () => {
   it('clears the stored room when restore reports the room no longer exists', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
-    socketApiMock.joinRoom.mockRejectedValue(new Error('Room not found'));
+    socketApiMock.joinRoom.mockRejectedValue(new RoomSessionProtocolError('ROOM_NOT_FOUND', 'Room not found'));
 
     renderPage();
 
@@ -1060,7 +1121,7 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true'));
 
     act(() => {
-      roomSessionMock.fail(new Error('Room not found'));
+      roomSessionMock.fail(new RoomSessionProtocolError('ROOM_NOT_FOUND', 'Room not found'));
     });
 
     await waitFor(() => expect(screen.queryByTestId('chat-room-view')).toBeNull());
@@ -1077,7 +1138,10 @@ describe('MessagePage room session restore', () => {
     fireEvent.click(await screen.findByTestId('select-room-1'));
     await waitFor(() => expect(screen.getByTestId('chat-room-view').getAttribute('data-room-id')).toBe('room-1'));
 
-    socketApiMock.joinRoom.mockRejectedValueOnce(new Error('Room password is required or incorrect'));
+    socketApiMock.joinRoom.mockRejectedValueOnce(new RoomSessionProtocolError(
+      'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+      'Room password is required or incorrect',
+    ));
     fireEvent.click(screen.getByTestId('sidebar-select-room-2'));
 
     await waitFor(() => {

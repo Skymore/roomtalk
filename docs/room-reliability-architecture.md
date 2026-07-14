@@ -19,9 +19,11 @@ Four authorities cooperate during recovery:
 | Message history | Durable message storage, ordered by `messageVersion` |
 | Permission to perform an action | Server authorization at the time of the action |
 
-Four increasing numbers appear in the code. The two data versions are `roomVersion`, which orders room objects, and `messageVersion`, which orders message history. `sessionEpoch` and `messageSyncRequestId` are control tokens local to the current tab. The first rejects asynchronous work from an old socket session. The second wakes the message synchronization effect.
+Four named values cross module boundaries. The two data versions are `roomVersion`, which orders room objects, and `messageVersion`, which orders durable message history. `sessionEpoch` and `messageSyncRequestId` are control tokens local to the current tab. The first rejects asynchronous work from an old socket session. The second wakes the message synchronization effect.
 
-When investigating stale data, compare values with the same name. `roomVersion` is never compared with `messageVersion`, and neither control token is stored with durable data. This framing lets each number answer one concrete question instead of presenting four parallel versions to remember.
+The message hook also keeps a private `mutationRevision`. It is only a counter inside one mounted hook: every live message change advances it so a history response can tell whether the rendered window moved while the request was in flight. It is never sent to the server or persisted, and it does not claim to be a durable version.
+
+When investigating stale data, compare values with the same name. `roomVersion` is never compared with `messageVersion`, and neither control token is stored with durable data. This framing lets each value answer one concrete question instead of presenting several interchangeable versions.
 
 ## Runtime ownership
 
@@ -40,7 +42,7 @@ The recovery path is intentionally concentrated in a few modules:
 | Room ordering | [`roomState.ts`](../client-heroui/src/utils/roomState.ts) |
 | Posting boundary timer | [`postingSchedule.ts`](../client-heroui/src/utils/postingSchedule.ts) |
 | Registration, join, leave, and membership ordering | [`roomHandlers.ts`](../server/src/socket/roomHandlers.ts) |
-| Message authorization and mutation | [`messageHandlers.ts`](../server/src/socket/messageHandlers.ts) and [`roomAuthorization.ts`](../server/src/socket/roomAuthorization.ts) |
+| Message authorization, mutation, and history invalidation | [`messageHandlers.ts`](../server/src/socket/messageHandlers.ts), [`aiHandlers.ts`](../server/src/socket/aiHandlers.ts), and [`roomAuthorization.ts`](../server/src/socket/roomAuthorization.ts) |
 | Media authorization | [`apiRoutes.ts`](../server/src/routes/apiRoutes.ts) |
 | Durable room and message versions | [`postgresStore.ts`](../server/src/repositories/postgresStore.ts) and [`redisStore.ts`](../server/src/repositories/redisStore.ts) |
 
@@ -68,7 +70,7 @@ Lifecycle events can arrive almost immediately after mount. A visible page, a BF
 
 If Socket.IO is disconnected, the controller starts the transport and waits for a socket ID. Socket IDs are temporary. A reconnect produces a new one even though the browser still has the same `clientId` and `browserInstanceId`.
 
-Registration binds those persistent browser identities to the current socket. Every operation that requires registration waits on the controller's shared registration promise. The server acknowledges registration before it loads room lists, so a slow list query cannot hold the acknowledgement open and trigger `Timed out while registering client`.
+Registration binds those persistent browser identities to the current socket. Every operation that requires registration waits on the controller's shared registration promise. Registration does not load room lists. The page requests owned and saved room snapshots separately after registration, so list storage can never hold the registration acknowledgement open and trigger `Timed out while registering client`.
 
 ### 4. The server commits the join
 
@@ -84,7 +86,7 @@ A successful join acknowledgement contains the canonical `Room`, current `RoomPe
 
 ### 6. Message history is reconciled
 
-Readiness does not replace the message window by itself. The message hook waits for cache hydration, reads the current local `messageVersion`, and emits `get_room_messages`. The server returns a versioned page from durable storage. The client accepts it only if no newer live mutation changed the local window while the request was in flight.
+Readiness does not replace the message window by itself. The message hook waits for cache hydration, records the current canonical `messageVersion` and private `mutationRevision`, then sends `get_room_messages` with a unique `requestId`. The server returns that page through the acknowledgement for this request. The client accepts it only if it is still the latest replacement request and neither boundary changed while the request was in flight.
 
 This separation is why a join acknowledgement advances `messageSyncRequestId` instead of pretending to be a message version. Membership is ready first. Message history then performs its own comparison.
 
@@ -113,8 +115,8 @@ sequenceDiagram
     Server-->>Session: join acknowledgement(Room, permissions, memberCount)
     Session-->>Page: ready, messageSyncRequestId + 1
     Page->>Messages: Session is ready
-    Messages->>Server: get_room_messages(baseMessageVersion)
-    Server-->>Messages: Versioned history payload
+    Messages->>Server: get_room_messages(requestId, baseMessageVersion)
+    Server-->>Messages: Ack(requestId, versioned history page)
     Messages-->>Page: Reconcile the visible window
 
     Note over Page,Messages: Later socket replacement
@@ -158,6 +160,8 @@ The snapshot contains the current `phase`, desired `roomId`, `socketId`, `sessio
 
 A registration acknowledgement and a join acknowledgement leave `sessionEpoch` unchanged. Retries also stay in the same epoch. A successful join advances `messageSyncRequestId` once when that epoch first reaches `ready`.
 
+`mutationRevision` is deliberately absent from this table because it is not shared state. It starts at zero when the room message hook mounts and only answers whether a live event changed this particular rendered window during one request.
+
 When the session is already ready, `visibilitychange`, BFCache `pageshow`, and `online` are coalesced for 150 ms into one message synchronization request. The controller keeps the existing membership and sends no new `join_room`. During initial page load, `MessagePage` ignores the ordinary non-BFCache `pageshow` event.
 
 ### Coalescing and supersession
@@ -174,9 +178,9 @@ The production defaults allow 45 seconds for a connection, 15 seconds for each r
 
 Registration and room membership are separate server decisions. Registration associates a persistent client identity with one temporary socket and joins that socket to its private client channel. It grants no room access. `join_room` performs the room-specific checks and creates live presence.
 
-The server serializes registration, join, leave, re-registration, and disconnect cleanup for each socket. This queue prevents an earlier asynchronous operation from committing after a later one on the same socket. Access-changing membership operations also use a per-room queue so a join cannot commit from a stale room or membership snapshot while another socket removes access or deletes the room.
+The server serializes registration, join, leave, re-registration, and disconnect cleanup for each socket. This queue prevents an earlier asynchronous operation from committing after a later one on the same socket. Access-changing membership operations also use a per-room queue and a Redis lease. The local queue orders work inside one process; the Redis lease extends the same critical section across Socket.IO workers. Join, deletion, member removal, administrator changes, and ownership transfer therefore cannot commit from mutually stale room or membership snapshots.
 
-Without the socket queue, a slow join for room A could finish after a later join for room B and make A the server's final membership by accident. The queue makes the final state follow request order. The room queue handles a different race: an administrator can remove a member while that member is joining on another socket. The join rechecks membership after provisional presence, so removal wins before the acknowledgement is sent.
+Without the socket queue, a slow join for room A could finish after a later join for room B and make A the server's final membership by accident. The queue makes the final state follow request order. The room lock handles a different race: an administrator can remove a member on worker A while that member is joining through worker B. The join rechecks membership after provisional presence, so the serialized removal takes effect before a successful acknowledgement can escape. The Redis lock has a short renewable lease and token-checked release, which lets a crashed owner expire without letting an old owner release a newer lock.
 
 A join performs the following commit sequence:
 
@@ -187,7 +191,7 @@ A join performs the following commit sequence:
 5. Re-read the durable room and membership at the commit boundary.
 6. Remove the provisional presence if access disappeared; otherwise leave previous healthy rooms and acknowledge the target room.
 
-The acknowledgement carries the canonical `Room`, current `RoomPermissions`, and member count. Rejoining the same room is idempotent. Registration is acknowledged before eager room-list reads finish, so a slow list query cannot cause a client registration timeout.
+The acknowledgement carries the canonical `Room`, current `RoomPermissions`, and member count. Rejoining the same room is idempotent. Registration has no eager room-list read; owned and saved room snapshots use their own acknowledgement requests.
 
 Durable membership and live presence have separate lifetimes. `leave_room` and disconnect cleanup remove socket presence while preserving the durable room role. Presence uses socket sets under both `clientId` and `browserInstanceId`, which makes multiple tabs or sockets for one identity safe to add and remove independently.
 
@@ -213,15 +217,17 @@ These two resume cases often look similar in the UI but produce different logs. 
 
 Message subscriptions are keyed by `roomId` and remain mounted while session readiness changes. Reopening a room paints the in-memory window synchronously. A cold tab hydrates the latest window from IndexedDB. The cache stores up to 100 recent messages per room. A per-room generation guards clear and replacement races, while a persistent tombstone prevents an inaccessible or deleted room from being revived by a late cache read in this tab or another tab.
 
-The message cache does not own durable data. A cache format change uses a new database name, deletes the old database, and reloads messages from the server. The current window is stored in `roomtalk-message-cache-v3`.
+The message cache does not own durable data. A cache format change uses a new database name, deletes the old database, and reloads messages from the server. The current window is stored in `roomtalk-message-cache-v3`. Same-tick writes for one room are coalesced, so a burst of stream or metadata updates persists only the newest window. Trimming is throttled rather than scanning every write. A queued write is also bound to the client that created it and is discarded if the active client changes before persistence.
 
-The history request is a separate effect. It runs only when the room session is ready and either `messageSyncRequestId` or the reconciliation retry nonce changes. The request sends the local `messageVersion` as `baseMessageVersion` and asks for the latest 80-message page.
+The history request is a separate effect. It runs only when the room session is ready and either `messageSyncRequestId` or the reconciliation retry nonce changes. Each request sends a unique `requestId`, the canonical local `messageVersion` as `baseMessageVersion`, and asks for the latest 80-message page. The response comes through that request's Socket.IO acknowledgement rather than a shared `message_history` event, so two overlapping requests cannot consume each other's payload.
 
-Consider the race that originally made a restored room look healthy while new messages disappeared. The client sends a history request with local version 3462. Before the response returns, `new_message` arrives and advances the visible window. The delayed response still describes the window requested at 3462. Replacing the page with that payload would erase the live message that just appeared.
+Consider the race that originally made a restored room look healthy while new messages disappeared. The client sends a history request with canonical version 3462 and records `mutationRevision: 0`. Before the response returns, `new_message` arrives and changes the visible window, so the private revision becomes 1. The delayed response may still describe a snapshot taken before that message. Replacing the page would erase the live message that just appeared.
 
-Live events update the visible window and its local history boundary. When a history response arrives, the client checks the echoed `requestedMessageVersion` against the current local value and also rejects a server `messageVersion` below the current value. Either condition means the window changed while the request was in flight. The client keeps the displayed data and schedules another comparison, with a limit of three reconciliation retries.
+Live events update the visible window and advance `mutationRevision`; they do not invent a new canonical `messageVersion`. When a history response arrives, the client checks its `requestId`, the echoed `requestedMessageVersion`, the recorded mutation revision, and the server `messageVersion`. A newer replacement request, a changed canonical boundary, a changed local window, or an older server version makes the response stale. The client keeps the displayed data and schedules another comparison, with a limit of three reconciliation retries.
 
-In the example, `[room-messages] history-response` records `requestedMessageVersion: 3462`, the newer current version, and `decision: "ignored"`. The retry uses the new local version as its base. Once a response describes the same boundary the client is displaying, it can safely replace or confirm the window.
+In the example, `[room-messages] history-response` records `requestedMessageVersion: 3462`, `requestedMutationRevision: 0`, `currentMutationRevision: 1`, and `decision: "ignored"`. The retry records the new local revision while keeping 3462 as the last accepted canonical server boundary. Once a response survives both checks, its server `messageVersion` becomes the new canonical boundary.
+
+Some mutations replace or truncate a whole suffix rather than producing one usable message delta. AI retry and edit-and-ask are examples. The server broadcasts `message_history_invalidated` after the durable mutation. Every room client then requests its own canonical page through the acknowledgement protocol. The invalidation event tells peers that reconciliation is needed; it does not carry a competing full history payload.
 
 An accepted replacement keeps server position order. If its message IDs, update stamps, and statuses match the displayed window, the client updates cache metadata without replacing the rendered list or forcing another scroll. Older-page responses prepend messages by ID and cannot overwrite a window invalidated by a later mutation.
 
@@ -261,7 +267,9 @@ either roomVersion is missing:
 
 Equal versions represent duplicate delivery of the same canonical write and are safe to accept. The permissive legacy fallback prevents an old or corrupted localStorage timestamp from permanently blocking good server data. Versions from different room IDs are never compared.
 
-`MessagePage` advances `currentRoomRef` synchronously before it queues the guarded React state update. An acknowledgement and a broadcast that arrive within the same React commit window therefore see the same latest room. Incremental room updates pass through the same guard for the active room, owned-room list, and saved-room list. Full room-list responses currently replace their corresponding lists as snapshots.
+`MessagePage` advances `currentRoomRef` synchronously before it queues the guarded React state update. An acknowledgement and a broadcast that arrive within the same React commit window therefore see the same latest room. Incremental room updates pass through the same guard for the active room, owned-room list, and saved-room list.
+
+Owned and saved room lists use one snapshot followed by deltas. `get_rooms` and `get_saved_rooms` return initial snapshots through acknowledgements. `new_room`, `room_updated`, `room_removed`, `saved_room_added`, and `saved_room_removed` maintain them afterward. If a delta arrives while a snapshot is in flight, the page records it and replays it over the returned snapshot, so a late snapshot cannot resurrect a removed room or lose a new one. A replacement socket triggers fresh snapshots to cover events missed while offline.
 
 The synchronous ref closes a small but important React timing gap. Suppose `room_updated` with version 52 arrives, followed immediately by an older join acknowledgement with version 51. React may not have committed the first state update yet. `currentRoomRef` already holds version 52, so the second payload is rejected before it can be queued. Reading only React state would let both callbacks compare against version 50.
 
@@ -275,7 +283,9 @@ Room metadata mutations that keep the room active, including rename and settings
 
 For a rename, the initiating client might receive an acknowledgement carrying `roomVersion: 61` and update its header at once. A `room_updated` event with the same version can arrive later through the broadcast path. Accepting an equal version is safe because both payloads describe the same durable write. Another client that still has version 60 accepts the broadcast and reaches the same room object.
 
-The server broadcasts only after persistence succeeds. A failed write cannot publish a room state that durable storage does not contain. Duplicate acknowledgement and broadcast delivery converges because equal `roomVersion` values are idempotent.
+The server broadcasts only after persistence succeeds. A failed write cannot publish a room state that durable storage does not contain. Duplicate acknowledgement and broadcast delivery converges because equal `roomVersion` values and repeated removal deltas are idempotent. Save, unsave, and delete acknowledgements also update the initiating page immediately; private-channel deltas converge its other tabs.
+
+Message delivery follows the same division of labor. A send acknowledgement returns the canonical stored message to the sender, while `new_message` broadcasts it to the room, including other participants. History reads are private request/ack exchanges. A mutation that invalidates an entire window broadcasts only `message_history_invalidated`, prompting each participant to fetch a versioned snapshot.
 
 The acknowledgement also removes a hidden dependency on Socket.IO fan-out. The initiating socket no longer has to hear its own broadcast before the UI reflects a successful change. If persistence fails, the handler returns an error and has no canonical room to acknowledge or broadcast.
 
@@ -307,7 +317,7 @@ Late results are handled by the same ownership rules. If room A is joining and t
 
 The invalidation happens before navigation completes. This ordering prevents a delayed IndexedDB read, history payload, or join callback from repainting the removed room after the list view is already visible.
 
-Some definitive failures are still recognized by matching server error text. Shared machine-readable room error codes remain useful protocol work because they would remove string classification from recovery decisions.
+Register and join failures carry stable machine-readable codes such as `CLIENT_LOGIN_REQUIRED`, `ROOM_NOT_FOUND`, `ROOM_ACCESS_REMOVED`, and `ROOM_PASSWORD_REQUIRED_OR_INCORRECT`. The controller uses those codes to decide whether retrying can help, and `MessagePage` uses them for removal and password flows. Human-readable text is only presentation; changing or translating it cannot change recovery behavior.
 
 ## Production diagnostics
 
@@ -316,7 +326,7 @@ Production browser logs keep room recovery observable without recording password
 - `[room-session]` covers transport events, registration, join, phase changes, retries, epochs, readiness, and message synchronization requests.
 - `[room-messages]` covers memory and persistent cache hydration, history requests, history responses, version decisions, reconciliation retries, and live messages.
 
-For one investigation, correlate `roomId`, `socketId`, `sessionEpoch`, `messageSyncRequestId`, `requestedMessageVersion`, and `messageVersion`. A normal stored-room restore usually follows this order:
+For one investigation, correlate `roomId`, `socketId`, `sessionEpoch`, `messageSyncRequestId`, `requestId`, `requestedMessageVersion`, `mutationRevision`, and `messageVersion`. A normal stored-room restore usually follows this order:
 
 ```text
 room-selected
@@ -351,12 +361,12 @@ Recovery changes should be made at the layer that owns the affected state. A new
 The main automated contracts are:
 
 - [`roomSessionController.test.ts`](../client-heroui/src/utils/roomSessionController.test.ts) covers state transitions, same-room coalescing, socket replacement, retries, supersession, message synchronization, and late acknowledgement cleanup.
-- [`MessagePage.test.tsx`](../client-heroui/src/pages/MessagePage.test.tsx) covers restore, URL and manual room races, lifecycle resume, reconnect locking, rollback, whole-object replacement, room versions, acknowledgement convergence, and posting refresh.
-- [`useRoomMessageEvents.test.tsx`](../client-heroui/src/hooks/useRoomMessageEvents.test.tsx) and [`MessageList.test.tsx`](../client-heroui/src/components/MessageList.test.tsx) cover cache hydration, live/history races, pagination, preserved content, and interaction locking.
+- [`MessagePage.test.tsx`](../client-heroui/src/pages/MessagePage.test.tsx) covers restore, URL and manual room races, lifecycle resume, reconnect locking, rollback, whole-object replacement, list snapshot/delta replay, room versions, acknowledgement convergence, and posting refresh.
+- [`useRoomMessageEvents.test.tsx`](../client-heroui/src/hooks/useRoomMessageEvents.test.tsx), [`MessageList.test.tsx`](../client-heroui/src/components/MessageList.test.tsx), and [`messageHistoryCache.test.ts`](../client-heroui/src/utils/messageHistoryCache.test.ts) cover cache hydration, live/history races, invalidation-driven reconciliation, pagination, batched persistence, preserved content, and interaction locking.
 - [`roomState.test.ts`](../client-heroui/src/utils/roomState.test.ts) covers `roomVersion` ordering and legacy timestamp fallback.
 - [`postingSchedule.test.ts`](../client-heroui/src/utils/postingSchedule.test.ts) and [`roomAuthorization.test.ts`](../server/src/socket/roomAuthorization.test.ts) keep client boundary timing aligned with server authorization.
-- [`roomHandlers.test.ts`](../server/src/socket/roomHandlers.test.ts) covers early registration acknowledgement, overlapping membership mutations, idempotent rejoin, access revocation, deletion, and disconnect cleanup.
+- [`roomHandlers.test.ts`](../server/src/socket/roomHandlers.test.ts) covers independent registration and list requests, overlapping membership mutations, idempotent rejoin, access revocation, deletion, delta broadcasts, and disconnect cleanup.
 - [`messageHandlers.test.ts`](../server/src/socket/messageHandlers.test.ts) covers history authorization and message mutation acknowledgement and broadcast behavior.
-- [`storeContract.test.ts`](../server/src/repositories/storeContract.test.ts) and [`redisStore.test.ts`](../server/src/repositories/redisStore.test.ts) cover monotonic room and message versions, membership persistence, presence, cache validity, and media history.
+- [`storeContract.test.ts`](../server/src/repositories/storeContract.test.ts) and [`redisStore.test.ts`](../server/src/repositories/redisStore.test.ts) cover monotonic room and message versions, membership persistence, cross-instance room access locking, presence, cache validity, and media history.
 
 Any fix for a new race should add an event-sequence or convergence test at the owning layer. The test should reproduce the ordering that caused the failure, including late acknowledgements or lifecycle events when they are part of the path.

@@ -5,7 +5,7 @@ import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message, RoomPermissions } from '../utils/types';
 import { buildMessageTimeline, MessageList, MessageListHandle } from './MessageList';
-import { clearCachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import { clearCachedRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
@@ -21,8 +21,21 @@ const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendStickerMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
+  const pendingHistory: Array<{
+    request: Record<string, any>;
+    resolve: (history: Record<string, any>) => void;
+  }> = [];
+  const queuedHistory: Array<Record<string, any>> = [];
 
-  return {
+  const resolveHistory = (pending: typeof pendingHistory[number], history: Record<string, any>) => {
+    pending.resolve({
+      ...history,
+      requestId: history.requestId || pending.request.requestId,
+      requestedMessageVersion: history.requestedMessageVersion ?? pending.request.baseMessageVersion,
+    });
+  };
+
+  const api = {
     id: 'socket-1',
     handlers,
     on: vi.fn((event: string, handler: (...args: any[]) => void) => {
@@ -35,12 +48,34 @@ const socketMock = vi.hoisted(() => {
     }),
     emit: vi.fn(),
     trigger: (event: string, ...args: any[]) => {
+      if (event === 'message_history') {
+        const history = args[0] as Record<string, any>;
+        const pending = pendingHistory.shift();
+        if (pending) resolveHistory(pending, history);
+        else queuedHistory.push(history);
+        return;
+      }
       handlers.get(event)?.forEach(handler => handler(...args));
     },
+    requestHistory: vi.fn((request: Record<string, any>) => {
+      const { requestId: _requestId, ...loggedRequest } = request;
+      api.emit('get_room_messages', Object.fromEntries(
+        Object.entries(loggedRequest).filter(([, value]) => value !== undefined),
+      ));
+      return new Promise<Record<string, any>>(resolve => {
+        const pending = { request, resolve };
+        const queued = queuedHistory.shift();
+        if (queued) resolveHistory(pending, queued);
+        else pendingHistory.push(pending);
+      });
+    }),
     reset: () => {
       handlers.clear();
+      pendingHistory.splice(0);
+      queuedHistory.splice(0);
     },
   };
+  return api;
 });
 
 describe('buildMessageTimeline', () => {
@@ -117,6 +152,7 @@ vi.mock('../utils/socket', () => ({
   getMediaDownloadUrl: getMediaDownloadUrlMock,
   sendMessage: sendMessageMock,
   sendSticker: sendStickerMock,
+  requestRoomMessages: socketMock.requestHistory,
 }));
 
 vi.mock('../utils/chatExport', () => ({
@@ -257,6 +293,13 @@ const createLocalStorageMock = (): Storage => {
   };
 };
 
+const resolveNextHistory = async (history: Record<string, unknown>) => {
+  await act(async () => {
+    socketMock.trigger('message_history', history);
+    await Promise.resolve();
+  });
+};
+
 describe('MessageList optimistic messages', () => {
   beforeEach(async () => {
     cleanup();
@@ -309,9 +352,7 @@ describe('MessageList optimistic messages', () => {
     const ref = createRef<MessageListHandle>();
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
-    act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
-    });
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
 
     const pending = message({
       id: 'temp-client-message-1',
@@ -388,8 +429,8 @@ describe('MessageList optimistic messages', () => {
     const ref = createRef<MessageListHandle>();
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-client-message-2',
         content: 'will fail',
@@ -433,8 +474,8 @@ describe('MessageList optimistic messages', () => {
       avatar: { text: 'A', color: 'primary' },
       replyTo: { messageId: 'quoted-1', messageType: 'text', preview: 'quoted' },
     });
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(failed);
     });
 
@@ -479,8 +520,8 @@ describe('MessageList optimistic messages', () => {
         isRoomSessionReady
       />,
     );
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-sticker-1',
         content: 'xiaokumao/001/01',
@@ -520,8 +561,8 @@ describe('MessageList optimistic messages', () => {
         isRoomSessionReady
       />,
     );
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-locked',
         clientMessageId: 'client-locked',
@@ -546,8 +587,8 @@ describe('MessageList optimistic messages', () => {
     );
     const clientMessageId = 'ask-ai-client-message';
 
+    await resolveNextHistory({ roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
     act(() => {
-      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], messageVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-ask-ai',
         clientMessageId,
@@ -803,7 +844,7 @@ describe('MessageList optimistic messages', () => {
     nativeAlert.mockRestore();
   });
 
-  it('keeps initial history hydration silent, then enables the realtime chat log', () => {
+  it('keeps initial history hydration silent, then enables the realtime chat log', async () => {
     const animationFrames: FrameRequestCallback[] = [];
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       animationFrames.push(callback);
@@ -816,14 +857,12 @@ describe('MessageList optimistic messages', () => {
     expect(log.getAttribute('aria-live')).toBe('off');
     expect(log.getAttribute('aria-relevant')).toBe('additions');
 
-    act(() => {
-      socketMock.trigger('message_history', {
-        roomId: 'room-1',
-        messages: [message({ id: 'historical-message', content: 'existing history' })],
-        messageVersion: 1,
-        hasMore: false,
-        mode: 'replace',
-      });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [message({ id: 'historical-message', content: 'existing history' })],
+      messageVersion: 1,
+      hasMore: false,
+      mode: 'replace',
     });
     expect(log.getAttribute('aria-live')).toBe('off');
 
@@ -865,17 +904,15 @@ describe('MessageList optimistic messages', () => {
   it('announces delivery failures and AI completion transitions', async () => {
     const ref = createRef<MessageListHandle>();
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
-    act(() => {
-      socketMock.trigger('message_history', {
-        roomId: 'room-1',
-        messages: [
-          message({ id: 'pending-message', clientMessageId: 'pending-client', deliveryStatus: 'pending' }),
-          message({ id: 'streaming-ai', clientId: 'ai_assistant', messageType: 'ai', status: 'streaming', content: '' }),
-        ],
-        messageVersion: 1,
-        hasMore: false,
-        mode: 'replace',
-      });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [
+        message({ id: 'pending-message', clientMessageId: 'pending-client', deliveryStatus: 'pending' }),
+        message({ id: 'streaming-ai', clientId: 'ai_assistant', messageType: 'ai', status: 'streaming', content: '' }),
+      ],
+      messageVersion: 1,
+      hasMore: false,
+      mode: 'replace',
     });
 
     act(() => ref.current?.markOptimisticMessageFailed('pending-client', 'network down'));
@@ -925,6 +962,19 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('locks queued message actions while a restored room shell is unverified', async () => {
+    await writeCachedRoomMessageWindow({
+      roomId: 'room-1',
+      messages: [message({
+        codeAgentQueuedInput: {
+          state: 'queued',
+          queuedAt: '2026-07-10T00:00:00.000Z',
+          updatedAt: '2026-07-10T00:00:00.000Z',
+        },
+      })],
+      messageVersion: 1,
+      hasMore: false,
+      cachedAt: Date.now(),
+    });
     render(<MessageList
       roomId="room-1"
       onReply={vi.fn()}
@@ -941,22 +991,6 @@ describe('MessageList optimistic messages', () => {
       }}
       isRoomSessionReady={false}
     />);
-    act(() => {
-      socketMock.trigger('message_history', {
-        roomId: 'room-1',
-        messages: [message({
-          codeAgentQueuedInput: {
-            state: 'queued',
-            queuedAt: '2026-07-10T00:00:00.000Z',
-            updatedAt: '2026-07-10T00:00:00.000Z',
-          },
-        })],
-        messageVersion: 1,
-        hasMore: false,
-        mode: 'replace',
-      });
-    });
-
     const item = await screen.findByTestId('message-item');
     expect(item.getAttribute('data-interaction-disabled')).toBe('true');
     fireEvent.click(screen.getByText('edit-queued-m1'));
@@ -990,19 +1024,17 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('does not auto-load cached history until the restored room session is verified', async () => {
+    await writeCachedRoomMessageWindow({
+      roomId: 'room-1',
+      messages: [message({ id: 'cached-oldest' })],
+      messageVersion: 1,
+      hasMore: true,
+      oldestMessageId: 'cached-oldest',
+      cachedAt: Date.now(),
+    });
     const rendered = render(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
     );
-    act(() => {
-      socketMock.trigger('message_history', {
-        roomId: 'room-1',
-        messages: [message({ id: 'cached-oldest' })],
-        messageVersion: 1,
-        hasMore: true,
-        oldestMessageId: 'cached-oldest',
-        mode: 'replace',
-      });
-    });
     await screen.findByTestId('history-load-sentinel');
     socketMock.emit.mockClear();
     fireEvent.scroll(screen.getByTestId('message-list-scroll'));

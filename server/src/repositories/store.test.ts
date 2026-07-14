@@ -395,6 +395,10 @@ describe('CompositeRoomStore', () => {
       async failInterruptedStreamingMessages(_content: string) { calls.push('durable.failInterruptedStreamingMessages'); return 2; },
     };
     const realtime: RealtimeRoomStore = {
+      async withRoomAccessMutationLock(_roomId, operation) {
+        calls.push('realtime.withRoomAccessMutationLock');
+        return operation();
+      },
       async updateRoomMemberCount(_roomId: string, _clientId: string, _socketId: string, _isJoining: boolean) { calls.push('realtime.updateRoomMemberCount'); return 1; },
       async updateRoomBrowserPresence(_roomId: string, _browserInstanceId: string, _socketId: string, _isJoining: boolean) { calls.push('realtime.updateRoomBrowserPresence'); },
       async getRoomMemberCount(_roomId: string) { calls.push('realtime.getRoomMemberCount'); return 1; },
@@ -516,6 +520,7 @@ describe('CompositeRoomStore', () => {
     }), room({ type: 'codeAgent', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }));
     assert.deepEqual(await store.findInterruptedCodeAgentRooms(), [room({ type: 'codeAgent', sandboxStatus: 'creating' })]);
     assert.deepEqual(await store.findDanglingToolCalls(), [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]);
+    assert.equal(await store.withRoomAccessMutationLock('room-1', async () => 'locked'), 'locked');
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
     await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', true);
     assert.equal(await store.getRoomMemberCount('room-1'), 1);
@@ -601,6 +606,7 @@ describe('CompositeRoomStore', () => {
       'durable.replaceRoomSandbox',
       'durable.findInterruptedCodeAgentRooms',
       'durable.findDanglingToolCalls',
+      'realtime.withRoomAccessMutationLock',
       'realtime.updateRoomMemberCount',
       'realtime.updateRoomBrowserPresence',
       'realtime.getRoomMemberCount',

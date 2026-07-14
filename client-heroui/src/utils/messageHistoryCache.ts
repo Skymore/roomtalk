@@ -10,9 +10,12 @@ const MAX_CACHED_AGENT_TURNS = 50;
 const MAX_CACHED_ROOMS = 40;
 const MESSAGE_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const MESSAGE_CACHE_TOUCH_INTERVAL_MS = 60 * 1000;
+const MESSAGE_CACHE_TRIM_INTERVAL_MS = 60 * 1000;
 const CACHE_GENERATIONS_STORAGE_KEY = 'roomtalk-message-cache-generations';
 const CACHE_INVALIDATION_STORAGE_PREFIX = 'roomtalk-message-cache-invalidated:';
 let legacyMessageCacheCleanup: Promise<void> | null = null;
+let lastMessageCacheTrimAt = 0;
+let messageCacheTrimPromise: Promise<void> | null = null;
 
 export interface CachedRoomMessageWindow {
   roomId: string;
@@ -35,6 +38,14 @@ type StoredRoomMessageWindow = CachedRoomMessageWindow & {
 // backup.
 const memoryCache = new Map<string, StoredRoomMessageWindow>();
 const lastPersistedTouchByRoom = new Map<string, number>();
+type PendingRoomMessageWrite = {
+  ownerId: string;
+  latest: StoredRoomMessageWindow | null;
+  waiters: Array<() => void>;
+  scheduled: boolean;
+  flushing: boolean;
+};
+const pendingRoomMessageWrites = new Map<string, PendingRoomMessageWrite>();
 // A room that is missing or no longer accessible must not be resurrected by an
 // IndexedDB read or a late socket/cache callback. The generation survives a
 // later successful rejoin, so work started before invalidation stays stale even
@@ -268,6 +279,19 @@ const trimStoredRoomWindows = async (): Promise<void> => {
   }
 };
 
+const trimStoredRoomWindowsIfDue = (): Promise<void> => {
+  if (messageCacheTrimPromise) return messageCacheTrimPromise;
+  const now = Date.now();
+  if (now - lastMessageCacheTrimAt < MESSAGE_CACHE_TRIM_INTERVAL_MS) {
+    return Promise.resolve();
+  }
+  lastMessageCacheTrimAt = now;
+  messageCacheTrimPromise = trimStoredRoomWindows().finally(() => {
+    messageCacheTrimPromise = null;
+  });
+  return messageCacheTrimPromise;
+};
+
 const sanitizeCachedMessages = (messages: Message[]) => messages
   .filter(message => !message.id.startsWith('temp-') && message.deliveryStatus !== 'pending')
   .map(message => {
@@ -333,9 +357,54 @@ export const readCachedRoomMessageWindow = async (roomId: string): Promise<Cache
   }
 };
 
-export const writeCachedRoomMessageWindow = async (window: CachedRoomMessageWindow): Promise<void> => {
+const flushPendingRoomMessageWrite = async (key: string, pending: PendingRoomMessageWrite): Promise<void> => {
+  pending.flushing = true;
+  try {
+    while (pending.latest) {
+      const trimmed = pending.latest;
+      const waiters = pending.waiters.splice(0);
+      pending.latest = null;
+      const cacheGeneration = trimmed.cacheGeneration ?? 0;
+      try {
+        if (
+          getBrowserCacheOwnerId() === pending.ownerId
+          && !isRoomInvalidated(trimmed.roomId)
+          && getCacheGeneration(trimmed.roomId) === cacheGeneration
+        ) {
+          await withStore('readwrite', store => store.put(trimmed));
+          // Invalidation may have happened while the IndexedDB transaction was
+          // in flight. Delete once more so completion order cannot revive it.
+          if (isRoomInvalidated(trimmed.roomId) || getCacheGeneration(trimmed.roomId) !== cacheGeneration) {
+            await deleteStoredRoomMessageWindowIf(trimmed.roomId, stored => (
+              (stored.cacheGeneration ?? 0) === cacheGeneration
+            ));
+          } else {
+            await trimStoredRoomWindowsIfDue();
+          }
+        }
+      } catch {
+        // Local cache is best-effort only.
+      } finally {
+        waiters.forEach(resolve => resolve());
+      }
+    }
+  } finally {
+    pending.flushing = false;
+    if (!pending.latest) {
+      pendingRoomMessageWrites.delete(key);
+    } else if (!pending.scheduled) {
+      pending.scheduled = true;
+      queueMicrotask(() => {
+        pending.scheduled = false;
+        void flushPendingRoomMessageWrite(key, pending);
+      });
+    }
+  }
+};
+
+export const writeCachedRoomMessageWindow = (window: CachedRoomMessageWindow): Promise<void> => {
   if (isRoomInvalidated(window.roomId)) {
-    return;
+    return Promise.resolve();
   }
   void ensurePersistentBrowserStorage();
   const cacheGeneration = getCacheGeneration(window.roomId);
@@ -348,22 +417,31 @@ export const writeCachedRoomMessageWindow = async (window: CachedRoomMessageWind
     lastAccessedAt: now,
     cacheGeneration,
   };
-  memoryCache.set(memoryCacheKey(trimmed.roomId), trimmed);
-  lastPersistedTouchByRoom.set(memoryCacheKey(trimmed.roomId), now);
-  try {
-    await withStore('readwrite', store => store.put(trimmed));
-    // Invalidation may have happened while the IndexedDB transaction was in
-    // flight. Delete once more so that completion order cannot revive it.
-    if (isRoomInvalidated(trimmed.roomId) || getCacheGeneration(trimmed.roomId) !== cacheGeneration) {
-      await deleteStoredRoomMessageWindowIf(trimmed.roomId, stored => (
-        (stored.cacheGeneration ?? 0) === cacheGeneration
-      ));
-      return;
-    }
-    await trimStoredRoomWindows();
-  } catch {
-    // Local cache is best-effort only.
+  const ownerId = getBrowserCacheOwnerId();
+  const key = scopedRoomKey(trimmed.roomId, ownerId);
+  memoryCache.set(key, trimmed);
+  lastPersistedTouchByRoom.set(key, now);
+  const pending = pendingRoomMessageWrites.get(key) || {
+    ownerId,
+    latest: null,
+    waiters: [],
+    scheduled: false,
+    flushing: false,
+  };
+  pending.latest = trimmed;
+  pendingRoomMessageWrites.set(key, pending);
+
+  const completion = new Promise<void>(resolve => {
+    pending.waiters.push(resolve);
+  });
+  if (!pending.scheduled && !pending.flushing) {
+    pending.scheduled = true;
+    queueMicrotask(() => {
+      pending.scheduled = false;
+      void flushPendingRoomMessageWrite(key, pending);
+    });
   }
+  return completion;
 };
 
 // Clear history for a room that still exists. Advancing the generation makes

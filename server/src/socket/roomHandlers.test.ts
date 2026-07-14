@@ -141,6 +141,7 @@ const createHarness = (
     savedRooms: [] as Room[],
     userSavedRooms: new Map<string, Set<string>>(),
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
+    accessMutationLocks: [] as string[],
     removedSessions: [] as string[],
     nicknames: new Map<string, string>(),
     nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
@@ -149,6 +150,10 @@ const createHarness = (
     clientPasswords: new Map<string, string>(),
     clientAccounts: new Set<string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
+    async withRoomAccessMutationLock<T>(roomId: string, operation: () => Promise<T>) {
+      this.accessMutationLocks.push(roomId);
+      return operation();
+    },
     async storeClientSession(_socketId: string, userId: string, browserInstanceId?: string) {
       this.clientId = userId;
       this.browserInstanceId = browserInstanceId || null;
@@ -375,7 +380,7 @@ const createHarness = (
 };
 
 describe('room socket handlers', () => {
-  it('registers clients, joins their private socket room, and returns owned rooms', async () => {
+  it('registers clients and joins their private socket room without pushing list snapshots', async () => {
     const { socket, store } = createHarness(null);
     let response: unknown;
 
@@ -386,34 +391,26 @@ describe('room socket handlers', () => {
     assert.equal(store.clientId, 'client-1');
     assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
-    assert.deepEqual(socket.emitted, [
-      { event: 'room_list', args: [[room()]] },
-      { event: 'saved_room_list', args: [[]] },
-    ]);
+    assert.deepEqual(socket.emitted, []);
   });
 
-  it('acknowledges registration before the eager room-list snapshot finishes', async () => {
+  it('does not read room lists during registration', async () => {
     const { socket, store } = createHarness(null);
-    let releaseRoomList: (rooms: Room[]) => void = () => {};
-    store.readRoomsByUser = async () => new Promise<Room[]>((resolve) => {
-      releaseRoomList = resolve;
+    store.readRoomsByUser = async () => {
+      throw new Error('register must not read owned rooms');
+    };
+    store.readSavedRoomsByUser = async () => {
+      throw new Error('register must not read saved rooms');
+    };
+
+    let response: unknown;
+    await socket.invoke('register', 'client-1', (result: unknown) => {
+      response = result;
     });
 
-    let invocation: Promise<unknown> = Promise.resolve();
-    const acknowledgement = new Promise<unknown>((resolve) => {
-      invocation = socket.invoke('register', 'client-1', resolve);
-    });
-
-    assert.deepEqual(await acknowledgement, { success: true, clientId: 'client-1' });
+    assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
     assert.deepEqual(socket.emitted, []);
-
-    releaseRoomList([room()]);
-    await invocation;
-    assert.deepEqual(socket.emitted, [
-      { event: 'room_list', args: [[room()]] },
-      { event: 'saved_room_list', args: [[]] },
-    ]);
   });
 
   it('rejects malformed or oversized client identities during registration', async () => {
@@ -428,9 +425,9 @@ describe('room socket handlers', () => {
     }, (result: unknown) => responses.push(result));
 
     assert.deepEqual(responses, [
-      { success: false, error: 'Invalid user ID' },
-      { success: false, error: 'Invalid user ID' },
-      { success: false, error: 'Invalid client auth token' },
+      { success: false, code: 'INVALID_CLIENT_ID', error: 'Invalid user ID' },
+      { success: false, code: 'INVALID_CLIENT_ID', error: 'Invalid user ID' },
+      { success: false, code: 'INVALID_CLIENT_AUTH_TOKEN', error: 'Invalid client auth token' },
     ]);
     assert.equal(invalid.store.clientId, null);
   });
@@ -513,7 +510,7 @@ describe('room socket handlers', () => {
     });
 
     assert.equal(store.clientId, null);
-    assert.deepEqual(response, { success: false, error: 'User ID password login is required' });
+    assert.deepEqual(response, { success: false, code: 'CLIENT_LOGIN_REQUIRED', error: 'User ID password login is required' });
     assert.deepEqual(socket.joined, []);
     assert.deepEqual(socket.emitted, []);
   });
@@ -547,7 +544,7 @@ describe('room socket handlers', () => {
     });
 
     assert.equal(store.clientId, null);
-    assert.deepEqual(response, { success: false, error: 'User ID password login is required' });
+    assert.deepEqual(response, { success: false, code: 'CLIENT_LOGIN_REQUIRED', error: 'User ID password login is required' });
 
     await store.saveClientAuthToken({
       clientId: 'client-google',
@@ -693,6 +690,7 @@ describe('room socket handlers', () => {
     });
 
     assert.deepEqual(adminResponse, { success: true });
+    assert.deepEqual(admin.store.accessMutationLocks, ['room-1']);
     assert.equal(await admin.store.isRoomMember('room-1', 'client-3'), false);
     assert.deepEqual(admin.io.socketsLeaveCalls, [{ socketId: 'socket-target', roomId: 'room-1' }]);
     assert.deepEqual(admin.io.roomEmits.map(item => item.event), [
@@ -701,7 +699,6 @@ describe('room socket handlers', () => {
       'room_member_change',
       'room_permissions_invalidated',
       'room_role_members_updated',
-      'room_list',
     ]);
 
     const adminCannotRemoveAdmin = createHarness('client-2');
@@ -785,6 +782,7 @@ describe('room socket handlers', () => {
     });
 
     assert.deepEqual(knownResponse, { success: true });
+    assert.deepEqual(known.store.accessMutationLocks, ['room-1']);
     assert.equal((await known.store.getRoomMember('room-1', 'client-2'))?.role, 'admin');
     assert.equal(known.io.roomEmits.at(-1)?.event, 'room_role_members_updated');
   });
@@ -806,6 +804,7 @@ describe('room socket handlers', () => {
     });
 
     assert.equal(knownResponse?.success, true);
+    assert.deepEqual(known.store.accessMutationLocks, ['room-1']);
     assert.equal(knownResponse?.room?.creatorId, 'client-2');
     assert.equal((await known.store.getRoomMember('room-1', 'client-2'))?.role, 'owner');
     assert.equal((await known.store.getRoomMember('room-1', 'client-1'))?.role, 'admin');
@@ -826,7 +825,7 @@ describe('room socket handlers', () => {
       registeredResponse = response;
     });
     assert.deepEqual(registeredResponse, { success: true, rooms: [room()] });
-    assert.deepEqual(registered.socket.emitted, [{ event: 'room_list', args: [[room()]] }]);
+    assert.deepEqual(registered.socket.emitted, []);
   });
 
   it('returns and updates saved rooms only for registered clients', async () => {
@@ -845,7 +844,7 @@ describe('room socket handlers', () => {
     });
     assert.deepEqual(saveResponse, { success: true, room: room() });
     assert.deepEqual(valid.io.roomEmits, [
-      { roomId: 'client-2', event: 'saved_room_list', args: [[room()]] },
+      { roomId: 'client-2', event: 'saved_room_added', args: [room()] },
     ]);
     assert.deepEqual(await valid.store.readRoomsByUser('client-2'), []);
     assert.deepEqual(await valid.store.readSavedRoomsByUser('client-2'), [room()]);
@@ -860,8 +859,13 @@ describe('room socket handlers', () => {
     await valid.socket.invoke('unsave_room', 'room-1', (response: unknown) => {
       unsaveResponse = response;
     });
-    assert.deepEqual(unsaveResponse, { success: true, rooms: [] });
+    assert.deepEqual(unsaveResponse, { success: true });
     assert.deepEqual(await valid.store.readSavedRoomsByUser('client-2'), []);
+    assert.deepEqual(valid.io.roomEmits.at(-1), {
+      roomId: 'client-2',
+      event: 'saved_room_removed',
+      args: ['room-1'],
+    });
   });
 
   it('creates rooms and emits them to the creator room', async () => {
@@ -921,7 +925,7 @@ describe('room socket handlers', () => {
       unregisteredJoinResponse = result;
     });
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
-    assert.deepEqual(unregisteredJoinResponse, { success: false, error: 'You are not registered' });
+    assert.deepEqual(unregisteredJoinResponse, { success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
 
     const missing = createHarness('client-1');
     let missingJoinResponse: unknown;
@@ -929,7 +933,7 @@ describe('room socket handlers', () => {
       missingJoinResponse = result;
     });
     assert.deepEqual(missing.socket.emitted, [{ event: 'error', args: [{ message: 'Room not found' }] }]);
-    assert.deepEqual(missingJoinResponse, { success: false, error: 'Room not found' });
+    assert.deepEqual(missingJoinResponse, { success: false, code: 'ROOM_NOT_FOUND', error: 'Room not found' });
 
     const valid = createHarness('client-1');
     valid.store.socketRooms = ['old-room'];
@@ -943,6 +947,7 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.socket.joined, ['room-1']);
     assert.deepEqual(valid.store.socketRooms, ['room-1']);
     assert.deepEqual(valid.store.addedMembers, []);
+    assert.deepEqual(valid.store.accessMutationLocks, ['room-1']);
     assert.equal(valid.socket.roomEmits[0].roomId, 'old-room');
     assert.equal(valid.socket.roomEmits[0].event, 'room_member_change');
     assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
@@ -1047,7 +1052,11 @@ describe('room socket handlers', () => {
       joinResponse = result;
     });
 
-    assert.deepEqual(joinResponse, { success: false, error: 'Room password is required or incorrect' });
+    assert.deepEqual(joinResponse, {
+      success: false,
+      code: 'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+      error: 'Room password is required or incorrect',
+    });
     assert.deepEqual(valid.store.socketRooms, [currentRoom.id]);
     assert.equal(valid.socket.rooms.has(currentRoom.id), true);
     assert.equal(valid.socket.rooms.has(protectedRoom.id), false);
@@ -1081,7 +1090,11 @@ describe('room socket handlers', () => {
       joinResponse = result;
     });
 
-    assert.deepEqual(joinResponse, { success: false, error: 'Workspace is not enabled for this user' });
+    assert.deepEqual(joinResponse, {
+      success: false,
+      code: 'WORKSPACE_UNAVAILABLE',
+      error: 'Workspace is not enabled for this user',
+    });
     assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Workspace is not enabled for this user' }] }]);
     assert.deepEqual(denied.socket.joined, []);
     assert.deepEqual(denied.socket.left, []);
@@ -1188,13 +1201,12 @@ describe('room socket handlers', () => {
     assert.deepEqual(response, { success: true });
     assert.deepEqual(deletedStaticSiteRooms, ['room-1']);
     assert.deepEqual(valid.store.deletedRooms, [{ roomId: 'room-1', creatorId: 'client-1' }]);
+    assert.deepEqual(valid.store.accessMutationLocks, ['room-1']);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'room-1', event: 'room_removed', args: ['room-1'] },
       { roomId: 'room-1', event: 'room_permissions_invalidated', args: ['room-1'] },
-      { roomId: 'socket-1', event: 'room_list', args: [[]] },
-      { roomId: 'socket-1', event: 'saved_room_list', args: [[]] },
-      { roomId: 'socket-2', event: 'room_list', args: [[]] },
-      { roomId: 'socket-2', event: 'saved_room_list', args: [[]] },
+      { roomId: 'client-1', event: 'room_removed', args: ['room-1'] },
+      { roomId: 'client-1', event: 'saved_room_removed', args: ['room-1'] },
     ]);
     assert.deepEqual(valid.io.socketsLeaveCalls, [{ socketId: 'room-1', roomId: 'room-1' }]);
     assert.deepEqual(valid.store.socketRooms, []);
@@ -1240,7 +1252,7 @@ describe('room socket handlers', () => {
     releaseDelete();
     await Promise.all([deleting, joining]);
 
-    assert.deepEqual(joinResponse, { success: false, error: 'Room not found' });
+    assert.deepEqual(joinResponse, { success: false, code: 'ROOM_NOT_FOUND', error: 'Room not found' });
     assert.equal(joiningSocket.rooms.has('room-1'), false);
     assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), false);
   });

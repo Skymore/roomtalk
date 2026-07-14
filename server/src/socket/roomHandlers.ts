@@ -19,7 +19,7 @@ const CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 // cannot commit from a room/member snapshot that was deleted or revoked while
 // it awaited password/member storage.
 const roomAccessMutationQueues = new Map<string, Promise<void>>();
-const serializeRoomAccessMutation = <T>(roomId: string, operation: () => Promise<T>): Promise<T> => {
+const serializeLocalRoomAccessMutation = <T>(roomId: string, operation: () => Promise<T>): Promise<T> => {
   const previous = roomAccessMutationQueues.get(roomId) ?? Promise.resolve();
   const result = previous.then(operation);
   const tail = result.then(() => undefined, () => undefined);
@@ -71,6 +71,7 @@ type RoomClientLookupAck = {
 type BasicRoomAck = {
   success: boolean;
   room?: Room;
+  code?: string;
   error?: string;
 };
 
@@ -78,6 +79,7 @@ type RegisterAck = {
   success: boolean;
   clientId?: string;
   nickname?: string;
+  code?: string;
   error?: string;
 };
 
@@ -279,6 +281,13 @@ export function registerRoomHandlers({
     roomMembershipMutationQueue = result.then(() => undefined, () => undefined);
     return result;
   };
+  const serializeRoomAccessMutation = <T>(roomId: string, operation: () => Promise<T>): Promise<T> => (
+    serializeLocalRoomAccessMutation(roomId, () => (
+      store.withRoomAccessMutationLock
+        ? store.withRoomAccessMutationLock(roomId, operation)
+        : operation()
+    ))
+  );
 
   const getTrackedChatRoomIds = async (userId: string): Promise<string[]> => {
     const storedRoomIds = await store.getUserRooms(socket.id);
@@ -294,14 +303,18 @@ export function registerRoomHandlers({
   socket.on('register', (payload: unknown, callback?: (result: RegisterAck) => void) => serializeRoomMembershipMutation(async () => {
     const { clientId, username, clientAuthToken, browserInstanceId, error } = parseRegisterPayload(payload);
     if (error) {
-      callback?.({ success: false, error });
+      callback?.({
+        success: false,
+        code: error === 'Invalid client auth token' ? 'INVALID_CLIENT_AUTH_TOKEN' : 'INVALID_CLIENT_ID',
+        error,
+      });
       return;
     }
     const userId = clientId || uuidv4();
     try {
       if (!(await isClientRequestAuthorized(store, userId, clientAuthToken))) {
         socketLogger.warn('Rejected socket registration with invalid client auth token', { socketId: socket.id, clientId: userId });
-        callback?.({ success: false, error: 'User ID password login is required' });
+        callback?.({ success: false, code: 'CLIENT_LOGIN_REQUIRED', error: 'User ID password login is required' });
         return;
       }
 
@@ -353,27 +366,9 @@ export function registerRoomHandlers({
         ? { success: true, clientId: userId, nickname }
         : { success: true, clientId: userId });
 
-      // Registration is complete once the socket identity and private room are
-      // durable. Room-list I/O must not hold the registration acknowledgement
-      // hostage: clients fetch both lists through registration-aware requests
-      // as well, and these events are only an eager initial snapshot.
-      try {
-        const [myRooms, savedRooms] = await Promise.all([
-          store.readRoomsByUser(userId),
-          store.readSavedRoomsByUser(userId),
-        ]);
-        socket.emit('room_list', myRooms);
-        socket.emit('saved_room_list', savedRooms);
-      } catch (listError) {
-        socketLogger.error('Failed to emit initial room lists after registration', {
-          socketId: socket.id,
-          clientId: userId,
-          error: listError,
-        });
-      }
     } catch (error) {
       socketLogger.error('Failed to register client', { socketId: socket.id, clientId: userId, error });
-      callback?.({ success: false, error: 'Failed to register client' });
+      callback?.({ success: false, code: 'REGISTRATION_FAILED', error: 'Failed to register client' });
     }
   }));
 
@@ -436,7 +431,6 @@ export function registerRoomHandlers({
 
     socketLogger.debug('Client requested room list', { socketId: socket.id, clientId });
     const myRooms = await store.readRoomsByUser(clientId);
-    socket.emit('room_list', myRooms);
     callback?.({ success: true, rooms: myRooms });
   });
 
@@ -457,7 +451,6 @@ export function registerRoomHandlers({
 
     socketLogger.debug('Client requested saved room list', { socketId: socket.id, clientId });
     const savedRooms = await store.readSavedRoomsByUser(clientId);
-    socket.emit('saved_room_list', savedRooms);
     callback?.({ success: true, rooms: savedRooms });
   });
 
@@ -555,14 +548,14 @@ export function registerRoomHandlers({
     if (!userId) {
       socketLogger.warn('Unregistered client tried to join room', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
-      callback?.({ success: false, error: 'You are not registered' });
+      callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
       return;
     }
 
     if (!roomId) {
       socketLogger.warn('Client tried to join room without room ID', { socketId: socket.id, userId });
       socket.emit('error', { message: 'Room ID is required' });
-      callback?.({ success: false, error: 'Room ID is required' });
+      callback?.({ success: false, code: 'ROOM_ID_REQUIRED', error: 'Room ID is required' });
       return;
     }
 
@@ -572,7 +565,7 @@ export function registerRoomHandlers({
     if (!room) {
       socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
       socket.emit('error', { message: 'Room not found' });
-      callback?.({ success: false, error: 'Room not found' });
+      callback?.({ success: false, code: 'ROOM_NOT_FOUND', error: 'Room not found' });
       return;
     }
 
@@ -586,7 +579,7 @@ export function registerRoomHandlers({
           reason: access.reason,
         });
         socket.emit('error', { message: access.message || 'Workspace is unavailable' });
-        callback?.({ success: false, error: access.message || 'Workspace is unavailable' });
+        callback?.({ success: false, code: 'WORKSPACE_UNAVAILABLE', error: access.message || 'Workspace is unavailable' });
         return;
       }
     }
@@ -599,7 +592,11 @@ export function registerRoomHandlers({
       if (!passwordOk) {
         socketLogger.warn('Client tried to join password-protected room with invalid password', { socketId: socket.id, userId, roomId });
         socket.emit('error', { message: 'Room password is required or incorrect' });
-        callback?.({ success: false, error: 'Room password is required or incorrect' });
+        callback?.({
+          success: false,
+          code: 'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+          error: 'Room password is required or incorrect',
+        });
         return;
       }
     }
@@ -608,7 +605,7 @@ export function registerRoomHandlers({
     if (!persistentMember) {
       socketLogger.error('Failed to persist room membership while joining room', { socketId: socket.id, userId, roomId });
       socket.emit('error', { message: 'Failed to join room' });
-      callback?.({ success: false, error: 'Failed to join room' });
+      callback?.({ success: false, code: 'JOIN_FAILED', error: 'Failed to join room' });
       return;
     }
 
@@ -636,7 +633,11 @@ export function registerRoomHandlers({
       }
       const error = committedRoom ? 'Room access was removed' : 'Room not found';
       socket.emit('error', { message: error });
-      callback?.({ success: false, error });
+      callback?.({
+        success: false,
+        code: committedRoom ? 'ROOM_ACCESS_REMOVED' : 'ROOM_NOT_FOUND',
+        error,
+      });
       return;
     }
 
@@ -740,12 +741,11 @@ export function registerRoomHandlers({
       return;
     }
 
-    const savedRooms = await store.readSavedRoomsByUser(clientId);
-    io.to(clientId).emit('saved_room_list', savedRooms);
+    io.to(clientId).emit('saved_room_added', savedRoom);
     callback?.({ success: true, room: savedRoom });
   });
 
-  socket.on('unsave_room', async (payload: unknown, callback?: (result: RoomListAck) => void) => {
+  socket.on('unsave_room', async (payload: unknown, callback?: (result: BasicRoomAck) => void) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to unsave room', { socketId: socket.id });
@@ -761,9 +761,8 @@ export function registerRoomHandlers({
     }
 
     await store.removeSavedRoomForUser(roomId, clientId);
-    const savedRooms = await store.readSavedRoomsByUser(clientId);
-    io.to(clientId).emit('saved_room_list', savedRooms);
-    callback?.({ success: true, rooms: savedRooms });
+    io.to(clientId).emit('saved_room_removed', roomId);
+    callback?.({ success: true });
   });
 
   socket.on('delete_room', (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => serializeRoomMembershipMutation(
@@ -810,19 +809,13 @@ export function registerRoomHandlers({
       // client treats this as the authoritative invalidation boundary.
       io.to(roomId).emit('room_removed', roomId);
       io.to(roomId).emit('room_permissions_invalidated', roomId);
+      io.to(clientId).emit('room_removed', roomId);
+      io.to(clientId).emit('saved_room_removed', roomId);
       for (const subscribedSocketId of subscribedSocketIds) {
         const trackedRooms = await store.getUserRooms(subscribedSocketId);
         await store.storeUserRooms(subscribedSocketId, trackedRooms.filter(id => id !== roomId));
       }
       io.in(roomId).socketsLeave(roomId);
-
-      const userSockets = await io.in(clientId).allSockets();
-      const updatedRooms = await store.readRoomsByUser(clientId);
-      const updatedSavedRooms = await store.readSavedRoomsByUser(clientId);
-      userSockets.forEach(sid => {
-        io.to(sid).emit('room_list', updatedRooms);
-        io.to(sid).emit('saved_room_list', updatedSavedRooms);
-      });
 
       const cleanupResults = await Promise.allSettled([
         clearCodeAgentWorkspaceRuntimeState(roomId),
@@ -1060,7 +1053,6 @@ export function registerRoomHandlers({
 
     io.to(roomId).emit('room_permissions_invalidated', roomId);
     io.to(roomId).emit('room_role_members_updated', roomId);
-    io.to(target.clientId).emit('room_list', await store.readRoomsByUser(target.clientId));
     callback?.({ success: true });
   })));
 
@@ -1192,10 +1184,10 @@ export function registerRoomHandlers({
     }
   });
 
-  socket.on('set_room_admin', async (
+  socket.on('set_room_admin', (
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
-  ) => {
+  ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
     const clientId = await store.getClientId(socket.id);
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
@@ -1243,12 +1235,12 @@ export function registerRoomHandlers({
     io.to(roomId).emit('room_permissions_invalidated', roomId);
     io.to(roomId).emit('room_role_members_updated', roomId);
     callback?.({ success: true });
-  });
+  })));
 
-  socket.on('remove_room_admin', async (
+  socket.on('remove_room_admin', (
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
-  ) => {
+  ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
     const clientId = await store.getClientId(socket.id);
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
@@ -1296,12 +1288,12 @@ export function registerRoomHandlers({
     io.to(roomId).emit('room_permissions_invalidated', roomId);
     io.to(roomId).emit('room_role_members_updated', roomId);
     callback?.({ success: true });
-  });
+  })));
 
-  socket.on('transfer_room_ownership', async (
+  socket.on('transfer_room_ownership', (
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: BasicRoomAck) => void,
-  ) => {
+  ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
     const clientId = await store.getClientId(socket.id);
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
@@ -1346,15 +1338,13 @@ export function registerRoomHandlers({
       return;
     }
 
-    const oldOwnerRooms = await store.readRoomsByUser(clientId);
-    const newOwnerRooms = await store.readRoomsByUser(target.clientId);
-    io.to(clientId).emit('room_list', oldOwnerRooms);
-    io.to(target.clientId).emit('room_list', newOwnerRooms);
+    io.to(clientId).emit('room_updated', updatedRoom);
+    io.to(target.clientId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('room_permissions_invalidated', roomId);
     io.to(roomId).emit('room_role_members_updated', roomId);
     callback?.({ success: true, room: updatedRoom });
-  });
+  })));
 
   // Socket.IO has already cleared socket.rooms by the time `disconnect` fires.
   // Snapshot them one event earlier so cleanup can repair presence records that

@@ -14,6 +14,7 @@ import {
   RoomMediaHistoryKindFilter,
   RoomMediaHistoryPage,
   RoomMemberEvent,
+  RoomMessageHistoryPayload,
   RoomOnlineMember,
   RoomPermissions,
   RoomPostingSchedule,
@@ -69,9 +70,20 @@ export type RoomJoinResult = RoomSessionResult;
 
 type SocketAckResponse = {
   success: boolean;
+  code?: string;
   error?: string;
   message?: unknown;
 };
+
+export class SocketRequestError extends Error {
+  constructor(
+    public readonly code: string | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SocketRequestError';
+  }
+}
 
 type CreateRoomAckResponse = SocketAckResponse & {
   roomId?: string;
@@ -85,6 +97,10 @@ export type CreateRoomOptions = {
 
 type SendMessageAckResponse = SocketAckResponse & {
   message?: Message;
+};
+
+type RoomMessageHistoryAckResponse = SocketAckResponse & {
+  history?: RoomMessageHistoryPayload;
 };
 
 type SendMessageAndAskAIAckResponse = SocketAckResponse & {
@@ -465,7 +481,7 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
           return;
         }
         const message = typeof response?.message === 'string' ? response.message : undefined;
-        reject(new Error(response?.error || message || fallbackError));
+        reject(new SocketRequestError(response?.code || null, response?.error || message || fallbackError));
       });
     });
   }));
@@ -567,13 +583,13 @@ export const saveRoomToServer = (roomId: string): Promise<Room> => {
   });
 };
 
-export const unsaveRoomFromServer = (roomId: string): Promise<Room[]> => {
-  return emitWithAck<RoomListAckResponse>(
+export const unsaveRoomFromServer = (roomId: string): Promise<void> => {
+  return emitWithAck<SocketAckResponse>(
     'unsave_room',
     { roomId },
     'Timed out while removing saved room',
     'Failed to remove saved room',
-  ).then((response) => response.rooms || []);
+  ).then(() => undefined);
 };
 
 export const getSavedRoomsFromServer = (): Promise<Room[]> => {
@@ -737,6 +753,31 @@ export const sendSticker = (
     return response.message;
   });
 };
+
+export const requestRoomMessages = (request: {
+  requestId: string;
+  roomId: string;
+  beforeMessageId?: string;
+  limit?: number;
+  baseMessageVersion: number;
+}): Promise<RoomMessageHistoryPayload> => (
+  emitWithAck<RoomMessageHistoryAckResponse>(
+    'get_room_messages',
+    request,
+    'Timed out while loading room messages',
+    'Failed to load room messages',
+  ).then(response => {
+    if (
+      !response.history
+      || response.history.requestId !== request.requestId
+      || response.history.roomId !== request.roomId
+      || response.history.requestedMessageVersion !== request.baseMessageVersion
+    ) {
+      throw new SocketRequestError('INVALID_HISTORY_RESPONSE', 'Server returned an invalid message history response');
+    }
+    return response.history;
+  })
+);
 
 type CreateMediaUploadResponse = {
   assetId: string;

@@ -363,6 +363,7 @@ export interface DurableRoomStore {
 }
 
 export interface RealtimeRoomStore {
+  withRoomAccessMutationLock?<T>(roomId: string, operation: () => Promise<T>): Promise<T>;
   updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean): Promise<number>;
   updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean): Promise<void>;
   getRoomMemberCount(roomId: string): Promise<number>;
@@ -413,6 +414,12 @@ export class CompositeRoomStore implements RoomStore {
     }
 
     await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateRoomMessagesCache(roomId));
+  }
+
+  withRoomAccessMutationLock<T>(roomId: string, operation: () => Promise<T>): Promise<T> {
+    return this.realtimeStore.withRoomAccessMutationLock
+      ? this.realtimeStore.withRoomAccessMutationLock(roomId, operation)
+      : operation();
   }
 
   generateUniqueRoomId() {

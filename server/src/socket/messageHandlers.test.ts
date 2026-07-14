@@ -222,13 +222,20 @@ const createHarness = (clientId: string | null = 'client-1') => {
 describe('message socket handlers', () => {
   it('returns message history and AI cost totals for a room', async () => {
     const { socket } = createHarness();
+    let response: unknown;
 
-    await socket.invoke('get_room_messages', { roomId: 'room-1', baseMessageVersion: 7 });
+    await socket.invoke('get_room_messages', {
+      requestId: 'history-1',
+      roomId: 'room-1',
+      baseMessageVersion: 7,
+    }, (result: unknown) => {
+      response = result;
+    });
 
-    assert.deepEqual(socket.emitted, [
-      {
-        event: 'message_history',
-        args: [{
+    assert.deepEqual(response, {
+      success: true,
+      history: {
+          requestId: 'history-1',
           roomId: 'room-1',
           messages: [message()],
           messageVersion: 1,
@@ -236,10 +243,9 @@ describe('message socket handlers', () => {
           oldestMessageId: 'message-1',
           mode: 'replace',
           requestedMessageVersion: 7,
-        }],
       },
-      { event: 'ai_cost_total', args: [roomCost()] },
-    ]);
+    });
+    assert.deepEqual(socket.emitted, [{ event: 'ai_cost_total', args: [roomCost()] }]);
   });
 
   it('returns slim asset-backed media history without exposing object storage keys', async () => {
@@ -261,10 +267,17 @@ describe('message socket handlers', () => {
       }),
     ];
 
-    await socket.invoke('get_room_messages', { roomId: 'room-1' });
+    let response: { success?: boolean; history?: { messages: Message[] } } | undefined;
+    await socket.invoke('get_room_messages', {
+      requestId: 'history-media',
+      roomId: 'room-1',
+      baseMessageVersion: 0,
+    }, (result: typeof response) => {
+      response = result;
+    });
 
-    const historyPayload = socket.emitted[0].args[0] as { messages: Message[] };
-    const history = historyPayload.messages;
+    assert.equal(response?.success, true);
+    const history = response?.history?.messages || [];
     assert.deepEqual(history, [store.messages[0]]);
     assert.equal(history[0].content, '');
     assert.equal('objectKey' in history[0].mediaAsset!, false);
@@ -274,10 +287,64 @@ describe('message socket handlers', () => {
   it('rejects room history requests from non-members', async () => {
     const { socket, store } = createHarness('client-3');
     store.members.clear();
+    let response: unknown;
 
-    await socket.invoke('get_room_messages', { roomId: 'room-1' });
+    await socket.invoke('get_room_messages', {
+      requestId: 'history-denied',
+      roomId: 'room-1',
+      baseMessageVersion: 0,
+    }, (result: unknown) => {
+      response = result;
+    });
 
     assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'You are not authorized to access this room' }] }]);
+    assert.deepEqual(response, {
+      success: false,
+      code: 'ROOM_ACCESS_DENIED',
+      error: 'You are not authorized to access this room',
+    });
+  });
+
+  it('rejects malformed room history requests before reading room state', async () => {
+    const { socket } = createHarness();
+    let response: unknown;
+
+    await socket.invoke('get_room_messages', {
+      roomId: 'room-1',
+      baseMessageVersion: 0,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'INVALID_HISTORY_REQUEST',
+      error: 'Invalid message history request',
+    });
+    assert.deepEqual(socket.emitted, []);
+  });
+
+  it('returns a coded error when room history persistence fails', async () => {
+    const { socket, store } = createHarness();
+    store.readMessagePageByRoom = async () => {
+      throw new Error('database unavailable');
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_messages', {
+      requestId: 'history-failed',
+      roomId: 'room-1',
+      baseMessageVersion: 0,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'HISTORY_READ_FAILED',
+      error: 'Failed to load room messages',
+    });
+    assert.deepEqual(socket.emitted, []);
   });
 
   it('rejects unregistered or invalid sends and broadcasts valid messages', async () => {

@@ -41,9 +41,37 @@ export type RoomSessionSnapshot = {
 
 type AckResponse = {
   success: boolean;
+  code?: RoomSessionErrorCode;
   error?: string;
   message?: unknown;
 };
+
+export type RoomSessionErrorCode =
+  | 'INVALID_CLIENT_ID'
+  | 'INVALID_CLIENT_AUTH_TOKEN'
+  | 'CLIENT_LOGIN_REQUIRED'
+  | 'REGISTRATION_FAILED'
+  | 'NOT_REGISTERED'
+  | 'ROOM_ID_REQUIRED'
+  | 'ROOM_NOT_FOUND'
+  | 'ROOM_ACCESS_REMOVED'
+  | 'ROOM_PASSWORD_REQUIRED_OR_INCORRECT'
+  | 'WORKSPACE_UNAVAILABLE'
+  | 'JOIN_FAILED';
+
+export class RoomSessionProtocolError extends Error {
+  constructor(
+    public readonly code: RoomSessionErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RoomSessionProtocolError';
+  }
+}
+
+export const getRoomSessionErrorCode = (error: unknown): RoomSessionErrorCode | null => (
+  error instanceof RoomSessionProtocolError ? error.code : null
+);
 
 export type RoomSessionRegisterAck = AckResponse & {
   clientId?: string;
@@ -124,15 +152,27 @@ export class RoomSessionSupersededError extends Error {
 
 const responseError = (response: AckResponse, fallback: string) => {
   const message = typeof response.message === 'string' ? response.message : undefined;
-  return new Error(response.error || message || fallback);
+  const errorMessage = response.error || message || fallback;
+  return response.code
+    ? new RoomSessionProtocolError(response.code, errorMessage)
+    : new Error(errorMessage);
 };
 
 const isRegistrationErrorDefinitive = (error: Error) => (
-  /password login is required|invalid user id|invalid client auth token/i.test(error.message)
+  error instanceof RoomSessionProtocolError
+  && ['INVALID_CLIENT_ID', 'INVALID_CLIENT_AUTH_TOKEN', 'CLIENT_LOGIN_REQUIRED'].includes(error.code)
 );
 
 const isJoinErrorDefinitive = (error: Error) => (
-  /room not found|room access was removed|password is required or incorrect|workspace is (?:unavailable|disabled)|not enabled for this user/i.test(error.message)
+  error instanceof RoomSessionProtocolError
+  && [
+    'NOT_REGISTERED',
+    'ROOM_ID_REQUIRED',
+    'ROOM_NOT_FOUND',
+    'ROOM_ACCESS_REMOVED',
+    'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+    'WORKSPACE_UNAVAILABLE',
+  ].includes(error.code)
 );
 
 export class RoomSessionController {

@@ -23,7 +23,7 @@ class MemoryRedis {
     return this.hashes.get(key)!;
   }
 
-  private set(key: string) {
+  private setMembers(key: string) {
     if (!this.sets.has(key)) this.sets.set(key, new Set());
     return this.sets.get(key)!;
   }
@@ -127,19 +127,19 @@ class MemoryRedis {
   }
 
   async sAdd(key: string, value: string) {
-    this.set(key).add(value);
+    this.setMembers(key).add(value);
   }
 
   async sRem(key: string, value: string) {
-    return this.set(key).delete(value) ? 1 : 0;
+    return this.setMembers(key).delete(value) ? 1 : 0;
   }
 
   async sMembers(key: string) {
-    return Array.from(this.set(key));
+    return Array.from(this.setMembers(key));
   }
 
   async sCard(key: string) {
-    return this.set(key).size;
+    return this.setMembers(key).size;
   }
 
   async zAdd(key: string, memberOrMembers: { score: number; value: string } | Array<{ score: number; value: string }>) {
@@ -188,6 +188,14 @@ class MemoryRedis {
     return this.strings.get(key);
   }
 
+  async set(key: string, value: string, options?: { NX?: true; PX?: number }) {
+    if (options?.NX && this.strings.has(key)) {
+      return null;
+    }
+    this.strings.set(key, value);
+    return 'OK';
+  }
+
   async setEx(key: string, _seconds: number, value: string) {
     this.strings.set(key, value);
   }
@@ -200,6 +208,18 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('RENEW_ROOM_ACCESS_MUTATION_LOCK')) {
+      const [token] = options.arguments;
+      return this.strings.get(options.keys[0]) === token ? 1 : 0;
+    }
+
+    if (script.includes('RELEASE_ROOM_ACCESS_MUTATION_LOCK')) {
+      const [token] = options.arguments;
+      if (this.strings.get(options.keys[0]) !== token) return 0;
+      this.strings.delete(options.keys[0]);
+      return 1;
+    }
+
     if (script.includes('ACQUIRE_CODE_AGENT_ROOM_LEASE')) {
       const [roomId, turnId, ownerId, nowRaw, ttlRaw] = options.arguments;
       const nowMs = Number(nowRaw);
@@ -353,16 +373,16 @@ class MemoryRedis {
       const [roomMembersKey, clientSocketsKey] = options.keys;
       const [clientId, socketId, isJoining] = options.arguments;
       if (isJoining === '1') {
-        this.set(clientSocketsKey).add(socketId);
-        this.set(roomMembersKey).add(clientId);
+        this.setMembers(clientSocketsKey).add(socketId);
+        this.setMembers(roomMembersKey).add(clientId);
       } else {
-        this.set(clientSocketsKey).delete(socketId);
-        if (this.set(clientSocketsKey).size === 0) {
+        this.setMembers(clientSocketsKey).delete(socketId);
+        if (this.setMembers(clientSocketsKey).size === 0) {
           await this.del(clientSocketsKey);
-          this.set(roomMembersKey).delete(clientId);
+          this.setMembers(roomMembersKey).delete(clientId);
         }
       }
-      return this.set(roomMembersKey).size;
+      return this.setMembers(roomMembersKey).size;
     }
 
     if (script.includes('local dedupeField = ARGV[4]')) {
@@ -409,7 +429,7 @@ class MemoryRedis {
       list.push(messagePayload);
       this.lists.set(messageKey, list);
       this.hash(mediaAssetsKey).set(assetId, assetPayload);
-      this.set(roomMediaAssetsKey).add(assetId);
+      this.setMembers(roomMediaAssetsKey).add(assetId);
       this.zset(roomMediaAssetsTimelineKey).set(assetId, Number(assetScore));
       return [1, JSON.stringify(updatedRoom)];
     }
@@ -739,6 +759,41 @@ describe('RedisStore', () => {
     assert.equal(resolveRoomMessagesCacheMaxBytes({}), DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES);
     assert.equal(resolveRoomMessagesCacheMaxBytes({ ROOM_MESSAGES_CACHE_MAX_BYTES: '4096' }), 4096);
     assert.equal(resolveRoomMessagesCacheMaxBytes({ ROOM_MESSAGES_CACHE_MAX_BYTES: 'invalid' }), DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES);
+  });
+
+  it('serializes room access mutations across store instances', async () => {
+    const redis = new MemoryRedis();
+    const firstStore = new RedisStore(redis as any, logger as any);
+    const secondStore = new RedisStore(redis as any, logger as any);
+    const events: string[] = [];
+    let releaseFirst = () => {};
+    let markFirstStarted = () => {};
+    const firstGate = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    const firstStarted = new Promise<void>(resolve => {
+      markFirstStarted = resolve;
+    });
+
+    const first = firstStore.withRoomAccessMutationLock('room-1', async () => {
+      events.push('first-start');
+      markFirstStarted();
+      await firstGate;
+      events.push('first-end');
+    });
+    await firstStarted;
+    const second = secondStore.withRoomAccessMutationLock('room-1', async () => {
+      events.push('second-start');
+      events.push('second-end');
+    });
+
+    await new Promise<void>(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(events, ['first-start']);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    assert.deepEqual(events, ['first-start', 'first-end', 'second-start', 'second-end']);
+    assert.equal(redis.strings.has('room:room-1:access_mutation_lock'), false);
   });
 
   it('checks fallback room IDs for uniqueness after repeated collisions', async () => {

@@ -938,12 +938,8 @@ export function registerAIHandlers({
   aiStreamOwnerId,
   codeAgentSessionService,
 }: SocketConnectionContext) {
-  const emitLatestHistoryPage = async (roomId: string) => {
-    const page = await store.readMessagePageByRoom(roomId);
-    io.to(roomId).emit('message_history', {
-      ...page,
-      mode: 'replace',
-    });
+  const notifyMessageHistoryInvalidated = (roomId: string, reason: string) => {
+    io.to(roomId).emit('message_history_invalidated', { roomId, reason });
   };
 
   const startChatAIResponse = async (
@@ -1124,7 +1120,7 @@ export function registerAIHandlers({
             newCount: historyUsedForContext.length,
           });
           io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
-          await emitLatestHistoryPage(roomId);
+          notifyMessageHistoryInvalidated(roomId, 'ai-retry-truncated');
         } else {
           openaiLogger.warn('Retry message ID not found in history, using full history', { roomId, retryForMessageId });
         }
@@ -1149,7 +1145,7 @@ export function registerAIHandlers({
             newCount: historyUsedForContext.length,
           });
           io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
-          await emitLatestHistoryPage(roomId);
+          notifyMessageHistoryInvalidated(roomId, 'ai-edit-truncated');
         } else {
           openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
         }
@@ -2009,7 +2005,7 @@ export function registerAIHandlers({
         }
         if (truncation.targetFound) {
           io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
-          await emitLatestHistoryPage(data.roomId);
+          notifyMessageHistoryInvalidated(data.roomId, 'code-agent-retry-truncated');
         }
       }
 
@@ -2283,7 +2279,7 @@ export function registerAIHandlers({
 
     io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
     io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
-    await emitLatestHistoryPage(data.roomId);
+    notifyMessageHistoryInvalidated(data.roomId, 'edit-and-ask-truncated');
 
     if (isCodeAgentRoom) {
       await codeAgentSessionService!.startTurn(buildCodeAgentTurnInput({

@@ -22,7 +22,7 @@ import {
   sortMessages,
   truncateBeforeMessage,
 } from '../utils/messageState';
-import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
+import { useRoomMessageEvents, type RoomMessageHistoryRequest } from '../hooks/useRoomMessageEvents';
 import { CodeAgentBackend, CodeAgentMode, getCodeAgentAssistantDisplayName } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
@@ -185,7 +185,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
-  const [messageVersion, setMessageVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.messageVersion ?? 0);
+  const [, setMessageVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.messageVersion ?? 0);
   const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
   // Always points at the latest messages so item handlers can stay reference-stable.
   const messagesRef = useRef(messages);
@@ -198,6 +198,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const historyLoadSentinelRef = useRef<HTMLDivElement>(null);
+  const requestHistoryRef = useRef<RoomMessageHistoryRequest | null>(null);
   const loadMoreInFlightRef = useRef(false);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryingClientMessageIdsRef = useRef(new Set<string>());
@@ -349,7 +350,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }), [scheduleScrollToBottom, scrollToBottom, updateMessages]);
 
   const handleLoadMore = useCallback(() => {
-    if (!roomSessionReadyRef.current || loadMoreInFlightRef.current || isLoadingMore || !hasMoreMessages || messages.length === 0) {
+    const requestHistory = requestHistoryRef.current;
+    if (!requestHistory || !roomSessionReadyRef.current || loadMoreInFlightRef.current || isLoadingMore || !hasMoreMessages || messages.length === 0) {
       return;
     }
 
@@ -364,13 +366,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
 
     setIsLoadingMore(true);
-    socket.emit('get_room_messages', {
-      roomId,
+    void requestHistory({
       beforeMessageId: oldestMessageId || messages[0].id,
       limit: LOAD_MORE_MESSAGE_COUNT,
-      baseMessageVersion: messageVersion,
+      reason: 'pagination',
     });
-  }, [hasMoreMessages, messageVersion, isLoadingMore, messages, oldestMessageId, roomId]);
+  }, [hasMoreMessages, isLoadingMore, messages, oldestMessageId]);
 
   useEffect(() => {
     if (!isLoadingMore) {
@@ -675,7 +676,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       editQueuedCodeAgentInput(roomId, messageId, newContent).catch((error) => {
         console.error('Failed to edit queued agent input:', error);
         updateMessages(originalMessages);
-        socket.emit('get_room_messages', { roomId });
+        void requestHistoryRef.current?.({ reason: 'queued-edit-recovery' });
         alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       });
       return;
@@ -700,7 +701,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       await steerQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {
       console.error('Failed to steer with queued agent input:', error);
-      socket.emit('get_room_messages', { roomId });
+      void requestHistoryRef.current?.({ reason: 'queued-steer-recovery' });
       alert(t('codeAgentQueuedActionFailed'));
     }
   }, [roomId, t]);
@@ -711,7 +712,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       await cancelQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {
       console.error('Failed to cancel queued agent input:', error);
-      socket.emit('get_room_messages', { roomId });
+      void requestHistoryRef.current?.({ reason: 'queued-cancel-recovery' });
       alert(t('codeAgentQueuedActionFailed'));
     }
   }, [roomId, t]);
@@ -738,17 +739,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       messageId,
       newContent,
       ...getAIRequestSettingsForRoom(),
-    }).then(() => {
-      socket.emit('get_room_messages', {
-        roomId,
-        baseMessageVersion: messageVersion,
-      });
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
       alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, messageVersion, t]);
+  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
   const handleConfirmDelete = useCallback(() => {
@@ -766,15 +762,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (!response.success) {
         console.error('Failed to delete message on server:', response.error);
         // Refetch history on error to ensure consistency
-        socket.emit('get_room_messages', {
-          roomId,
-          baseMessageVersion: messageVersion,
-        });
+        void requestHistoryRef.current?.({ reason: 'delete-recovery' });
          // Use translation key for alert
         alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
       }
     });
-  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, messageVersion, t]);
+  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
 
   const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
     if (!roomSessionReadyRef.current) return;
@@ -891,10 +884,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       ...getAIRequestSettingsForRoom(),
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
-      socket.emit('get_room_messages', {
-        roomId,
-        baseMessageVersion: messageVersion,
-      });
+      void requestHistoryRef.current?.({ reason: 'ai-retry-recovery' });
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
 
@@ -906,7 +896,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom, messageVersion]);
+  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom]);
 
   useRoomMessageEvents({
     roomId,
@@ -931,6 +921,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     messageToEditId: messageToEdit?.id,
     onAIStreamSettled: presentation === 'code-agent' ? handleCodeAgentTurnSettled : undefined,
     warningPrefix: t('warningPrefix'),
+    requestHistoryRef,
   });
 
   // ... handleScroll ...

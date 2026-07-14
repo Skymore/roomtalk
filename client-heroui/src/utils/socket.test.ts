@@ -1256,13 +1256,11 @@ describe('socket message acknowledgement helpers', () => {
   });
 
   it('removes saved rooms through unsave_room acknowledgements', async () => {
-    const remainingRooms = [room({ id: 'room-3' })];
     socketMock.ackResponses.set('unsave_room', {
       success: true,
-      rooms: remainingRooms,
     });
 
-    await expect(unsaveRoomFromServer('room-2')).resolves.toEqual(remainingRooms);
+    await expect(unsaveRoomFromServer('room-2')).resolves.toBeUndefined();
 
     expect(socketMock.emit).toHaveBeenCalledWith(
       'unsave_room',

@@ -1175,9 +1175,12 @@ describe('AI socket handlers', () => {
     assert.equal(store.savedHistories.length, 0);
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
-    const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
-    const historyPayload = historyEvent?.args[0] as { messages: Message[] };
-    assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
+    const historyInvalidatedEvent = io.roomEmits.find(event => event.event === 'message_history_invalidated');
+    assert.deepEqual(historyInvalidatedEvent?.args[0], {
+      roomId: 'room-1',
+      reason: 'edit-and-ask-truncated',
+    });
+    assert.deepEqual(store.messages.map(item => item.id), ['message-1', 'message-edited', store.upsertedMessages[0].id]);
     assert.equal(store.messages[2].status, 'complete');
     assert.equal(store.messages[2].content, expectedE2EFakeContent('edited prompt'));
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
@@ -1235,9 +1238,12 @@ describe('AI socket handlers', () => {
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
-    const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
-    const historyPayload = historyEvent?.args[0] as { messages: Message[] };
-    assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
+    const historyInvalidatedEvent = io.roomEmits.find(event => event.event === 'message_history_invalidated');
+    assert.deepEqual(historyInvalidatedEvent?.args[0], {
+      roomId: 'room-1',
+      reason: 'edit-and-ask-truncated',
+    });
+    assert.deepEqual(store.messages.map(item => item.id), ['message-1', 'message-edited']);
     assert.deepEqual(response, { success: true, messageId: 'code-agent-ai-edit-1' });
   });
 

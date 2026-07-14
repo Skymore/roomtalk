@@ -27,6 +27,9 @@ const ROOM_AGENT_TURN_ROOMS_KEY = 'room_agent_turn_rooms';
 const getRoomAgentTurnsKey = (roomId: string) => `room:${roomId}:agent_turns`;
 const getCodeAgentRoomLeaseKey = (roomId: string) => `room:${roomId}:agent_lease`;
 const getCodeAgentRoomLeaseFenceKey = (roomId: string) => `room:${roomId}:agent_lease_fence`;
+const getRoomAccessMutationLockKey = (roomId: string) => `room:${roomId}:access_mutation_lock`;
+const ROOM_ACCESS_MUTATION_LOCK_TTL_MS = 10_000;
+const ROOM_ACCESS_MUTATION_LOCK_RETRY_MS = 50;
 const OUTBOX_EVENTS_KEY = 'outbox_events';
 const OUTBOX_EVENTS_BY_AVAILABLE_KEY = 'outbox_events_by_available';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
@@ -821,6 +824,18 @@ end
 return redis.call('DEL', KEYS[1])
 `;
 
+const RENEW_ROOM_ACCESS_MUTATION_LOCK_SCRIPT = `
+-- RENEW_ROOM_ACCESS_MUTATION_LOCK
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+`;
+
+const RELEASE_ROOM_ACCESS_MUTATION_LOCK_SCRIPT = `
+-- RELEASE_ROOM_ACCESS_MUTATION_LOCK
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('DEL', KEYS[1])
+`;
+
 const DELETE_ROOM_RECORD_SCRIPT = `
 -- DELETE_ROOM_RECORD
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
@@ -1116,6 +1131,43 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   getRoomMessagesCacheKey(roomId: string): string {
     return `${ROOM_MESSAGES_CACHE_KEY_PREFIX}${roomId}${ROOM_MESSAGES_CACHE_KEY_SUFFIX}`;
+  }
+
+  async withRoomAccessMutationLock<T>(roomId: string, operation: () => Promise<T>): Promise<T> {
+    const key = getRoomAccessMutationLockKey(roomId);
+    const token = nanoid();
+    while (true) {
+      const acquired = await this.redisClient.set(key, token, {
+        NX: true,
+        PX: ROOM_ACCESS_MUTATION_LOCK_TTL_MS,
+      });
+      if (acquired === 'OK') break;
+      await new Promise<void>(resolve => setTimeout(resolve, ROOM_ACCESS_MUTATION_LOCK_RETRY_MS));
+    }
+
+    const renewal = setInterval(() => {
+      void (this.redisClient as any).eval(RENEW_ROOM_ACCESS_MUTATION_LOCK_SCRIPT, {
+        keys: [key],
+        arguments: [token, String(ROOM_ACCESS_MUTATION_LOCK_TTL_MS)],
+      }).catch((error: unknown) => {
+        this.logger.error('Error renewing Redis room access mutation lock', { error, roomId });
+      });
+    }, Math.floor(ROOM_ACCESS_MUTATION_LOCK_TTL_MS / 3));
+    renewal.unref?.();
+
+    try {
+      return await operation();
+    } finally {
+      clearInterval(renewal);
+      try {
+        await (this.redisClient as any).eval(RELEASE_ROOM_ACCESS_MUTATION_LOCK_SCRIPT, {
+          keys: [key],
+          arguments: [token],
+        });
+      } catch (error) {
+        this.logger.error('Error releasing Redis room access mutation lock', { error, roomId });
+      }
+    }
   }
 
   async readCachedRoomMessages(roomId: string, messageVersion?: number): Promise<Message[] | null> {

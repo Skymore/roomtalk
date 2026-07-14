@@ -20,6 +20,7 @@ const cachedWindow = (roomId: string, content: string): CachedRoomMessageWindow 
 const installControlledIndexedDb = () => {
   const records = new Map<string, unknown>();
   let openCount = 0;
+  let putCount = 0;
   let releaseFirstOpen = () => {};
 
   const database = {
@@ -54,6 +55,7 @@ const installControlledIndexedDb = () => {
       const store = {
         get: (roomId: string) => request(() => records.get(roomId)),
         put: (value: { roomId: string }) => request(() => {
+          putCount += 1;
           records.set(value.roomId, value);
           return value.roomId;
         }),
@@ -86,6 +88,7 @@ const installControlledIndexedDb = () => {
 
   return {
     records,
+    getPutCount: () => putCount,
     releaseFirstOpen: () => releaseFirstOpen(),
   };
 };
@@ -102,6 +105,36 @@ describe('messageHistoryCache invalidation', () => {
     await writeCachedRoomMessageWindow(cachedWindow(roomId, 'after clear'));
 
     expect(readMemoryRoomMessageWindow(roomId)?.messages[0]?.content).toBe('after clear');
+  });
+
+  it('coalesces same-tick writes and persists only the latest room window', async () => {
+    const roomId = 'batched-room';
+    const controlledDb = installControlledIndexedDb();
+    const writes = [
+      writeCachedRoomMessageWindow(cachedWindow(roomId, 'first')),
+      writeCachedRoomMessageWindow(cachedWindow(roomId, 'second')),
+      writeCachedRoomMessageWindow(cachedWindow(roomId, 'latest')),
+    ];
+
+    await Promise.resolve();
+    controlledDb.releaseFirstOpen();
+    await Promise.all(writes);
+
+    expect(controlledDb.getPutCount()).toBe(1);
+    expect(readMemoryRoomMessageWindow(roomId)?.messages[0]?.content).toBe('latest');
+    expect((controlledDb.records.get(roomId) as CachedRoomMessageWindow).messages[0]?.content).toBe('latest');
+  });
+
+  it('does not persist a queued write into a different client cache', async () => {
+    const controlledDb = installControlledIndexedDb();
+    localStorage.setItem('clientId', 'owner-before-switch');
+    const write = writeCachedRoomMessageWindow(cachedWindow('owner-switch-room', 'private'));
+    localStorage.setItem('clientId', 'owner-after-switch');
+
+    await write;
+
+    expect(controlledDb.getPutCount()).toBe(0);
+    expect(controlledDb.records.size).toBe(0);
   });
 
   it('persists agent turns while dropping temporary messages and blob URLs', async () => {
@@ -152,6 +185,7 @@ describe('messageHistoryCache invalidation', () => {
     const roomId = 'clear-race-room';
     const controlledDb = installControlledIndexedDb();
     const staleWrite = writeCachedRoomMessageWindow(cachedWindow(roomId, 'stale in-flight write'));
+    await Promise.resolve();
 
     await clearCachedRoomMessageWindow(roomId);
     controlledDb.releaseFirstOpen();

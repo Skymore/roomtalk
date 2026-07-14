@@ -85,11 +85,39 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
   socket.on('get_room_messages', async (request: {
+    requestId: string;
     roomId: string;
     beforeMessageId?: string;
     limit?: number;
-    baseMessageVersion?: number;
-  }) => {
+    baseMessageVersion: number;
+  }, callback?: (response: {
+    success: boolean;
+    code?: string;
+    error?: string;
+    history?: {
+      requestId: string;
+      roomId: string;
+      messages: Message[];
+      turns?: unknown[];
+      messageVersion: number;
+      hasMore: boolean;
+      oldestMessageId?: string;
+      mode: 'replace' | 'prepend';
+      requestedMessageVersion: number;
+    };
+  }) => void) => {
+    if (
+      !isRecord(request)
+      || !isBoundedSocketIdentifier(request.requestId)
+      || !isBoundedSocketIdentifier(request.roomId)
+      || (request.beforeMessageId !== undefined && !isBoundedSocketIdentifier(request.beforeMessageId))
+      || (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 200))
+      || !Number.isSafeInteger(request.baseMessageVersion)
+      || request.baseMessageVersion < 0
+    ) {
+      callback?.({ success: false, code: 'INVALID_HISTORY_REQUEST', error: 'Invalid message history request' });
+      return;
+    }
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
     const limit = request?.limit;
@@ -98,23 +126,38 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
     if (!userId) {
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
       return;
     }
 
     if (!roomId || !(await hasRoomAccess(store, roomId, userId))) {
       socket.emit('error', { message: 'You are not authorized to access this room' });
+      callback?.({ success: false, code: 'ROOM_ACCESS_DENIED', error: 'You are not authorized to access this room' });
       return;
     }
 
-    const page = await store.readMessagePageByRoom(roomId, { beforeMessageId, limit });
-    socket.emit('message_history', {
-      ...page,
-      mode: beforeMessageId ? 'prepend' : 'replace',
-      ...(typeof request.baseMessageVersion === 'number'
-        ? { requestedMessageVersion: request.baseMessageVersion }
-        : {}),
-    });
-    socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
+    try {
+      const page = await store.readMessagePageByRoom(roomId, { beforeMessageId, limit });
+      callback?.({
+        success: true,
+        history: {
+          requestId: request.requestId,
+          ...page,
+          mode: beforeMessageId ? 'prepend' : 'replace',
+          requestedMessageVersion: request.baseMessageVersion,
+        },
+      });
+    } catch (error) {
+      socketLogger.error('Failed to load message history', { socketId: socket.id, userId, roomId, error });
+      callback?.({ success: false, code: 'HISTORY_READ_FAILED', error: 'Failed to load room messages' });
+      return;
+    }
+
+    try {
+      socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
+    } catch (error) {
+      socketLogger.error('Failed to load room AI cost after message history', { socketId: socket.id, userId, roomId, error });
+    }
   });
 
   socket.on('send_message', async (
