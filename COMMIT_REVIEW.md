@@ -951,7 +951,7 @@ Reviewed: 2026-07-12
 - 问题：无明显问题
 
 #### `7238ebe` docs: gather the room reliability series under docs/room-reliability with an entry README
-- 改动：把四份房间可靠性文档归拢到 `docs/room-reliability/`（纯 rename），新增 34 行入口 README：症状→根因→修复表、现行不变量清单、文档指路与 commit 线。
+- 改动：把四份房间可靠性文档归拢到当时的独立子目录（纯 rename），新增 34 行入口 README：症状→根因→修复表、现行不变量清单、文档指路与 commit 线。
 - 评审：内容与代码实况核对一致（250ms 抑制窗、400ms 指示器、room_version 语义、密码复用边界），"不变量"小结对后来者很有价值。
 - 问题：[低] commit 线漏列 6d71e0b（e2e 测试）；"面试 30 秒版"一节风格游离于工程文档之外，无伤大雅。
 - 现行说明（2026-07-13）：该 commit 创建的详细 restore/review 文档已由后续统一状态机取代并从当前工作树删除；当前合约见 [`docs/room-reliability-architecture.zh.md`](docs/room-reliability-architecture.zh.md)，旧内容仍可从 Git 历史读取。
