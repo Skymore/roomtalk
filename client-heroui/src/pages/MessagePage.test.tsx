@@ -6,6 +6,7 @@ import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { MessagePage } from './MessagePage';
 import { Room, RoomPermissions } from '../utils/types';
 import { RoomSessionProtocolError } from '../utils/roomSessionController';
+import { saveCurrentRoomPermissions } from '../utils/appPersistence';
 
 const roomSessionMock = vi.hoisted(() => {
   type Result = { room?: Room; permissions?: RoomPermissions; memberCount?: number };
@@ -610,6 +611,7 @@ describe('MessagePage room session restore', () => {
     expect((await screen.findByTestId('chat-room-view')).getAttribute('data-member-count')).toBe('5');
     expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
     expect(messageCacheMock.reactivateCachedRoomMessageWindow).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem('roomtalk_current_room_permissions') || '{}')).toEqual(permissions());
   });
 
   it('prioritizes URL joins over stale stored rooms and passes the confirmed password', async () => {
@@ -1150,6 +1152,7 @@ describe('MessagePage room session restore', () => {
     expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('false');
     expect(screen.getByTestId('chat-room-view').getAttribute('data-permission-room-id')).toBe('none');
     expect((screen.getByTestId('share-room') as HTMLButtonElement).disabled).toBe(true);
+    expect(localStorage.getItem('roomtalk_current_room_permissions')).toBeNull();
   });
 
   it('waits for room recovery before updating the saved-room state', async () => {
@@ -1267,6 +1270,68 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
     });
+  });
+
+  it('restores saved access immediately while a cold-start rejoin is pending', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    saveCurrentRoomPermissions(permissions());
+    let resolveJoin: (value: unknown) => void = () => {};
+    const pendingJoin = new Promise((resolve) => {
+      resolveJoin = resolve;
+    });
+    socketApiMock.joinRoom.mockReturnValue(pendingJoin);
+
+    renderPage();
+
+    const roomView = await screen.findByTestId('chat-room-view');
+    expect(roomView.getAttribute('data-session-ready')).toBe('false');
+    expect(roomView.getAttribute('data-session-restoring')).toBe('true');
+    expect(roomView.getAttribute('data-retained-access')).toBe('true');
+    expect(roomView.getAttribute('data-can-post')).toBe('true');
+    fireEvent.click(screen.getByTestId('share-room'));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+
+    await act(async () => {
+      resolveJoin({ room: room(), permissions: permissions({ canPost: false }), memberCount: 2 });
+      await pendingJoin;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-can-post')).toBe('false');
+    });
+  });
+
+  it('keeps saved access after a transient cold-start restore failure', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    saveCurrentRoomPermissions(permissions());
+    socketApiMock.joinRoom.mockRejectedValue(new Error('Timed out while joining room'));
+
+    renderPage();
+
+    const roomView = await screen.findByTestId('chat-room-view');
+    await waitFor(() => expect(screen.getByText('errorRestoringRoom')).toBeTruthy());
+    expect(roomView.getAttribute('data-session-ready')).toBe('false');
+    expect(roomView.getAttribute('data-retained-access')).toBe('true');
+    expect(roomView.getAttribute('data-can-post')).toBe('true');
+    expect(localStorage.getItem('roomtalk_current_room_permissions')).not.toBeNull();
+  });
+
+  it('does not restore a permission snapshot owned by another client', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    saveCurrentRoomPermissions(permissions({ clientId: 'client-2' }));
+    socketApiMock.joinRoom.mockReturnValue(new Promise(() => {}));
+
+    renderPage();
+
+    const roomView = await screen.findByTestId('chat-room-view');
+    expect(roomView.getAttribute('data-session-ready')).toBe('false');
+    expect(roomView.getAttribute('data-retained-access')).toBe('false');
+    expect(roomView.getAttribute('data-can-post')).toBe('false');
+    expect(localStorage.getItem('roomtalk_current_room_permissions')).toBeNull();
   });
 
   it('renders a stored room immediately but keeps actions locked until rejoin succeeds', async () => {

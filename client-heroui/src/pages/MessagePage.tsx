@@ -27,7 +27,7 @@ import {
   Room, RoomMemberEvent, RoomPermissions,
 } from "../utils/types";
 import { generateRandomName } from "../utils/userProfile";
-import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
+import { getStoredRoom, getStoredRoomPermissions, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentRoomPermissions, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
@@ -136,7 +136,14 @@ export const MessagePage: React.FC = () => {
   // Room metadata lookups are their own intent stream. A late response from an
   // older URL/manual lookup must never reopen its modal or start a stale join.
   const roomLookupGenerationRef = useRef(0);
-  const [roomPermissions, setRoomPermissions] = useState<RoomPermissions | null>(null);
+  const [roomPermissions, setRoomPermissions] = useState<RoomPermissions | null>(() => {
+    const storedRoom = getStoredRoom();
+    return storedRoom ? getStoredRoomPermissions(storedRoom.id, clientId) : null;
+  });
+  const commitRoomPermissions = useCallback((permissions: RoomPermissions | null) => {
+    saveCurrentRoomPermissions(permissions);
+    setRoomPermissions(permissions);
+  }, []);
   const roomPermissionsRequestGenerationRef = useRef(0);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
@@ -302,7 +309,7 @@ export const MessagePage: React.FC = () => {
           && currentRoomRef.current?.id === roomId
           && permissions.roomId === roomId
         ) {
-          setRoomPermissions(permissions);
+          commitRoomPermissions(permissions);
         }
       })
       .catch((error) => {
@@ -311,7 +318,7 @@ export const MessagePage: React.FC = () => {
         // snapshot. Every protected operation is still authorized by the
         // server, and a later invalidation/rejoin can replace this snapshot.
       });
-  }, []);
+  }, [commitRoomPermissions]);
 
   useEffect(() => {
     currentRoomRef.current = currentRoom;
@@ -355,10 +362,10 @@ export const MessagePage: React.FC = () => {
 
     roomPermissionsRequestGenerationRef.current += 1;
     if (result.permissions) {
-      setRoomPermissions(result.permissions);
+      commitRoomPermissions(result.permissions);
     } else {
       if (previousRoomId !== roomId) {
-        setRoomPermissions(null);
+        commitRoomPermissions(null);
       }
       refreshRoomPermissions(roomId);
     }
@@ -372,7 +379,7 @@ export const MessagePage: React.FC = () => {
       setMemberCount(null);
     }
     return joinedRoom;
-  }, [refreshRoomPermissions]);
+  }, [commitRoomPermissions, refreshRoomPermissions]);
 
   // Foreground joins, lifecycle resumes, and socket replacement all converge on
   // the controller snapshot. A result object represents one acknowledged join
@@ -487,7 +494,7 @@ export const MessagePage: React.FC = () => {
 
       const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
       if (!isSwitchingRoom && retainedAccessInvalidated) {
-        setRoomPermissions(null);
+        commitRoomPermissions(null);
       }
       if (definitiveRemoval) {
         setRooms((previous) => previous.filter(room => room.id !== roomId));
@@ -517,7 +524,7 @@ export const MessagePage: React.FC = () => {
         leaveRoom(roomId);
         currentRoomRef.current = null;
         setCurrentRoom(null);
-        setRoomPermissions(null);
+        commitRoomPermissions(null);
         setMemberCount(null);
         setView("rooms");
         saveCurrentRoom(null);
@@ -536,7 +543,7 @@ export const MessagePage: React.FC = () => {
         foregroundCounts.delete(roomId);
       }
     }
-  }, [clearRoomUrlParam, consumeRoomSessionResult]);
+  }, [clearRoomUrlParam, commitRoomPermissions, consumeRoomSessionResult]);
 
   const ensureActiveRoomSession = useCallback((options: {
     roomId: string;
@@ -614,7 +621,7 @@ export const MessagePage: React.FC = () => {
     const errorCode = getRoomSessionErrorCode(roomSession.error);
     const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
     if (doesRoomSessionErrorInvalidateRetainedAccess(roomSession.error)) {
-      setRoomPermissions(null);
+      commitRoomPermissions(null);
     }
     if (!definitiveRemoval) {
       setError(translationRef.current("errorRestoringRoom"));
@@ -623,7 +630,7 @@ export const MessagePage: React.FC = () => {
 
     const removedRoomId = roomSession.roomId;
     leaveRoom(removedRoomId);
-    setRoomPermissions(null);
+    commitRoomPermissions(null);
     setRooms((previous) => previous.filter(room => room.id !== removedRoomId));
     setSavedRooms((previous) => previous.filter(room => room.id !== removedRoomId));
     void invalidatePersistentRoomCache(removedRoomId);
@@ -634,7 +641,7 @@ export const MessagePage: React.FC = () => {
     saveCurrentRoom(null);
     clearRoomUrlParam();
     setError(translationRef.current("errorRoomNoLongerExists"));
-  }, [clearRoomUrlParam, roomSession.error, roomSession.phase, roomSession.roomId]);
+  }, [clearRoomUrlParam, commitRoomPermissions, roomSession.error, roomSession.phase, roomSession.roomId]);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -731,7 +738,17 @@ export const MessagePage: React.FC = () => {
       if (storedRoom) {
         console.log("Found stored room, attempting to restore:", storedRoom.id);
         const savedView = getStoredView();
+        const storedPermissions = getStoredRoomPermissions(storedRoom.id, clientId);
         console.log("Restored stored room shell with saved view:", savedView);
+        if (storedPermissions) {
+          commitRoomPermissions(storedPermissions);
+          logRoomSessionDiagnostic("retained-access-restored", {
+            roomId: storedRoom.id,
+            clientId,
+            role: storedPermissions.role,
+            canPost: storedPermissions.canPost,
+          });
+        }
 
         if (savedView === "chat" && view !== "chat") {
           setView("chat");
@@ -819,7 +836,7 @@ export const MessagePage: React.FC = () => {
     const handleRoomPermissions = (permissions: RoomPermissions) => {
       if (currentRoomRef.current?.id === permissions.roomId) {
         roomPermissionsRequestGenerationRef.current += 1;
-        setRoomPermissions(permissions);
+        commitRoomPermissions(permissions);
       }
     };
     const handleRoomPermissionsInvalidated = (roomId: string) => {
@@ -839,7 +856,7 @@ export const MessagePage: React.FC = () => {
       }
 
       leaveRoom(roomId);
-      setRoomPermissions(null);
+      commitRoomPermissions(null);
       clearRoomUrlParam();
       setError(translationRef.current("roomAccessRemoved"));
 
@@ -936,7 +953,7 @@ export const MessagePage: React.FC = () => {
       socket.off("connect", handleSocketConnect);
       unsubscribe();
     };
-  }, [applyServerRoom, clearRoomUrlParam, ensureActiveRoomSession, refreshRoomPermissions]);
+  }, [applyServerRoom, clearRoomUrlParam, commitRoomPermissions, ensureActiveRoomSession, refreshRoomPermissions]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
@@ -1092,7 +1109,7 @@ export const MessagePage: React.FC = () => {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
       currentRoomRef.current = null;
-      setRoomPermissions(null);
+      commitRoomPermissions(null);
       setMemberCount(null);
       // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
       clearRoomUrlParam();
@@ -1201,7 +1218,7 @@ export const MessagePage: React.FC = () => {
           setCurrentRoom(null);
           currentRoomRef.current = null;
           setView('rooms');
-          setRoomPermissions(null);
+          commitRoomPermissions(null);
           setMemberCount(null);
           saveCurrentRoom(null);
           clearRoomUrlParam();
@@ -1212,7 +1229,7 @@ export const MessagePage: React.FC = () => {
         setError(response.message || t('errorDeletingRoom')); // Use a new key? e.g., errorDeletingRoomPermanently
       }
     });
-  }, [setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
+  }, [setView, clearRoomUrlParam, commitRoomPermissions, showSuccess, t]); // Dependencies
 
   const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
     if (currentRoomRef.current?.id === roomId && !roomSessionController.isReady(roomId)) {
