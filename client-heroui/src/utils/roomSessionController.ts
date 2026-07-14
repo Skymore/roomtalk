@@ -27,6 +27,9 @@ export type RoomSessionResult = {
   memberCount?: number;
 };
 
+export type EnsureRoomSessionReady = (roomId: string) => Promise<void>;
+export type EnsureRoomOperationReady = () => Promise<void>;
+
 export type RoomSessionSnapshot = {
   phase: RoomSessionPhase;
   roomId: string | null;
@@ -72,6 +75,25 @@ export class RoomSessionProtocolError extends Error {
 export const getRoomSessionErrorCode = (error: unknown): RoomSessionErrorCode | null => (
   error instanceof RoomSessionProtocolError ? error.code : null
 );
+
+const RETAINED_ACCESS_INVALIDATING_ERROR_CODES = new Set<RoomSessionErrorCode>([
+  'INVALID_CLIENT_ID',
+  'INVALID_CLIENT_AUTH_TOKEN',
+  'CLIENT_LOGIN_REQUIRED',
+  'ROOM_NOT_FOUND',
+  'ROOM_ACCESS_REMOVED',
+  'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+  'WORKSPACE_UNAVAILABLE',
+]);
+
+// A timeout, transport failure, or exhausted retry loop does not prove that a
+// previously joined client lost access. Keep the last acknowledged permission
+// snapshot in those cases and let the next operation drive recovery. Only an
+// explicit server denial invalidates retained client-side access immediately.
+export const doesRoomSessionErrorInvalidateRetainedAccess = (error: unknown): boolean => {
+  const code = getRoomSessionErrorCode(error);
+  return code !== null && RETAINED_ACCESS_INVALIDATING_ERROR_CODES.has(code);
+};
 
 export type RoomSessionRegisterAck = AckResponse & {
   clientId?: string;

@@ -72,6 +72,7 @@ import {
   prepareMediaUploadBatch,
   registerMediaUploadTask,
 } from '../utils/mediaUploadTasks';
+import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 
 interface MessageInputProps {
   roomId: string;
@@ -86,6 +87,8 @@ interface MessageInputProps {
   onOptimisticMessageFailed?: (clientMessageId: string, error?: string) => void;
   canPost?: boolean;
   isRoomSessionReady?: boolean;
+  canUseRetainedRoomAccess?: boolean;
+  ensureRoomSessionReady?: EnsureRoomSessionReady;
   postingRestrictionReason?: string;
   postingSchedule?: RoomPostingSchedule;
   isRoomAIProcessing?: boolean;
@@ -200,6 +203,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   onOptimisticMessageFailed,
   canPost = true,
   isRoomSessionReady = true,
+  canUseRetainedRoomAccess = isRoomSessionReady,
+  ensureRoomSessionReady,
+  postingRestrictionReason,
   postingSchedule,
   isRoomAIProcessing = false,
   isCodeAgentRoom = false,
@@ -233,14 +239,20 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const componentMountedRef = useRef(true);
   const attachmentRoomIdRef = useRef(roomId);
   const attachmentRoomGenerationRef = useRef(0);
-  const roomSessionSnapshotRef = useRef({ roomId, isReady: isRoomSessionReady });
+  const roomAccessSnapshotRef = useRef({ roomId, isBlocked: !canUseRetainedRoomAccess });
+  const roomSessionRecoveryPromiseRef = useRef<Promise<void> | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
   const [isInterruptingCodeAgent, setIsInterruptingCodeAgent] = useState(false);
+  const [isRecoveringRoomSessionForOperation, setIsRecoveringRoomSessionForOperation] = useState(false);
   const isAgentRunning = isCodeAgentRoom && isRoomAIProcessing;
   const isAIInputLocked = isAiProcessing || isInterruptingCodeAgent || (isRoomAIProcessing && !isCodeAgentRoom);
-  const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost || !isRoomSessionReady;
+  const isNonTextInputDisabled = isSending
+    || isAIInputLocked
+    || isRecoveringRoomSessionForOperation
+    || !canPost
+    || !canUseRetainedRoomAccess;
 
   useEffect(() => {
     if (!isRoomAIProcessing) {
@@ -330,6 +342,56 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     setShouldAnnounceError(options.announce !== false);
   }, []);
 
+  const ensureRoomOperationReady = useCallback(async (): Promise<boolean> => {
+    if (!canUseRetainedRoomAccess) {
+      showPersistentError(t('errorRestoringRoom'));
+      return false;
+    }
+    if (isRoomSessionReady) {
+      return true;
+    }
+    if (!ensureRoomSessionReady) {
+      showPersistentError(t('errorRestoringRoom'));
+      return false;
+    }
+
+    const requestRoomId = roomId;
+    const requestRoomGeneration = attachmentRoomGenerationRef.current;
+    let recovery = roomSessionRecoveryPromiseRef.current;
+    if (!recovery) {
+      setIsRecoveringRoomSessionForOperation(true);
+      recovery = ensureRoomSessionReady(requestRoomId);
+      roomSessionRecoveryPromiseRef.current = recovery;
+    }
+
+    try {
+      await recovery;
+      return componentMountedRef.current
+        && attachmentRoomIdRef.current === requestRoomId
+        && attachmentRoomGenerationRef.current === requestRoomGeneration;
+    } catch (error) {
+      if (
+        componentMountedRef.current
+        && attachmentRoomIdRef.current === requestRoomId
+        && attachmentRoomGenerationRef.current === requestRoomGeneration
+      ) {
+        showPersistentError(getErrorMessage(error, t('errorRestoringRoom')));
+      }
+      return false;
+    } finally {
+      if (roomSessionRecoveryPromiseRef.current === recovery) {
+        roomSessionRecoveryPromiseRef.current = null;
+        if (
+          componentMountedRef.current
+          && attachmentRoomIdRef.current === requestRoomId
+          && attachmentRoomGenerationRef.current === requestRoomGeneration
+        ) {
+          setIsRecoveringRoomSessionForOperation(false);
+        }
+      }
+    }
+  }, [canUseRetainedRoomAccess, ensureRoomSessionReady, isRoomSessionReady, roomId, showPersistentError, t]);
+
   useEffect(() => {
     attachmentDraftsRef.current = attachmentDrafts;
   }, [attachmentDrafts]);
@@ -338,6 +400,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     if (attachmentRoomIdRef.current === roomId) return;
     attachmentRoomGenerationRef.current += 1;
     attachmentRoomIdRef.current = roomId;
+    roomSessionRecoveryPromiseRef.current = null;
+    setIsRecoveringRoomSessionForOperation(false);
     attachmentDraftsRef.current.forEach(draft => {
       if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
     });
@@ -403,15 +467,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     dismissError();
   }, [dismissError, roomId]);
 
-  // A transport loss changes the trust boundary even when the room id stays
-  // the same. Invalidate every in-flight composer callback first, then stop
-  // privacy-sensitive capture and network work as one synchronous transition.
-  // Draft files and a completed voice preview remain available for an explicit
-  // retry after the room session is verified again.
+  // A transient transport loss does not revoke the last acknowledged room
+  // access. Keep drafts, recording, and in-flight HTTP work alive while the
+  // socket rejoins. Explicit access invalidation still stops every sensitive
+  // callback synchronously; a room change is handled by the effect above.
   React.useLayoutEffect(() => {
-    const previous = roomSessionSnapshotRef.current;
-    roomSessionSnapshotRef.current = { roomId, isReady: isRoomSessionReady };
-    if (previous.roomId !== roomId || !previous.isReady || isRoomSessionReady) {
+    const isBlocked = !canUseRetainedRoomAccess;
+    const previous = roomAccessSnapshotRef.current;
+    roomAccessSnapshotRef.current = { roomId, isBlocked };
+    if (previous.roomId !== roomId || previous.isBlocked || !isBlocked) {
       return;
     }
 
@@ -449,6 +513,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     setIsSending(false);
     setIsAiProcessing(false);
     setIsInterruptingCodeAgent(false);
+    roomSessionRecoveryPromiseRef.current = null;
+    setIsRecoveringRoomSessionForOperation(false);
 
     if (focusTimerRef.current) {
       clearTimeout(focusTimerRef.current);
@@ -458,7 +524,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       window.cancelAnimationFrame(editorFocusFrameRef.current);
       editorFocusFrameRef.current = null;
     }
-  }, [isRoomSessionReady, roomId]);
+  }, [canUseRetainedRoomAccess, roomId]);
 
   const removeAttachmentDraft = useCallback((id: string) => {
     setAttachmentDrafts(current => {
@@ -475,11 +541,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
   useEffect(() => {
-    if (!isRoomSessionReady && isAISettingsOpen) {
+    if (!canUseRetainedRoomAccess && isAISettingsOpen) {
       onAISettingsClose();
     }
-  }, [isAISettingsOpen, isRoomSessionReady, onAISettingsClose]);
-  const postingClosedMessage = t('postingClosed');
+  }, [canUseRetainedRoomAccess, isAISettingsOpen, onAISettingsClose]);
+  const postingClosedMessage = postingRestrictionReason || t('postingClosed');
   const normalizedCodeAgentAvailableModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
   const normalizedCodeAgentMode = normalizeCodeAgentMode(codeAgentMode);
   const selectedCodeAgentMode = normalizedCodeAgentAvailableModes.includes(normalizedCodeAgentMode)
@@ -708,11 +774,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       && attachmentRoomIdRef.current === requestRoomId
       && attachmentRoomGenerationRef.current === requestRoomGeneration
     );
-    if (!isRoomSessionReady || !isRequestRoomCurrent() || isSending || isAIInputLocked) return;
+    if (!canUseRetainedRoomAccess || !isRequestRoomCurrent() || isSending || isAIInputLocked) return;
     if (!canPost) {
       showTransientError(postingClosedMessage);
       return;
     }
+    if (!(await ensureRoomOperationReady()) || !isRequestRoomCurrent()) return;
 
     pushRecent(stickerId);
     const avatar = { text: avatarText, color: avatarColor };
@@ -728,7 +795,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       if (!isRequestRoomCurrent()) return;
       onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('failedToSendSticker')));
     }
-  }, [avatarColor, avatarText, buildOptimisticStickerMessage, canPost, isAIInputLocked, isRoomSessionReady, isSending, onCancelReply, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, postingClosedMessage, pushRecent, replyToMessage, roomId, showTransientError, t, username]);
+  }, [avatarColor, avatarText, buildOptimisticStickerMessage, canPost, canUseRetainedRoomAccess, ensureRoomOperationReady, isAIInputLocked, isSending, onCancelReply, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, postingClosedMessage, pushRecent, replyToMessage, roomId, showTransientError, t, username]);
 
   const clearEditorImmediately = useCallback((options: { blur?: boolean } = {}) => {
     if (editorRef.current) {
@@ -828,7 +895,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 发送AI消息的新方法
   const handleAskAI = async (requestedAction?: MessageInputAIAction) => {
-    if (!isRoomSessionReady) return;
+    if (!canUseRetainedRoomAccess) return;
+    if (!(await ensureRoomOperationReady())) return;
     const latestContentItems = parseEditorContent();
     const prompt = buildAIPrompt(latestContentItems);
     const hasInputContent = hasMessageContent(latestContentItems);
@@ -985,7 +1053,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // Handle regular message submission
   const handleSubmit = async () => {
-    if (!isRoomSessionReady) return;
+    if (!canUseRetainedRoomAccess) return;
     if (!componentMountedRef.current) return;
     if (attachmentRoomIdRef.current !== roomId) return;
     if (!canPost) {
@@ -993,11 +1061,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    // Parse latest content (might be redundant if useEffect handles it well)
-    const latestContentItems = parseEditorContent();
-
-    const currentAttachmentDrafts = attachmentDraftsRef.current;
+    let latestContentItems = parseEditorContent();
+    let currentAttachmentDrafts = attachmentDraftsRef.current;
     if ((!hasMessageContent(latestContentItems) && currentAttachmentDrafts.length === 0) || isSending || isAIInputLocked) return;
+    if (!(await ensureRoomOperationReady())) return;
+    if (!componentMountedRef.current || attachmentRoomIdRef.current !== roomId) return;
+
+    // The editor stays usable while a transient reconnect is in progress.
+    // Re-read the draft after recovery so text or attachments added during
+    // that wait are included instead of being cleared without being sent.
+    latestContentItems = parseEditorContent();
+    currentAttachmentDrafts = attachmentDraftsRef.current;
+    if (!hasMessageContent(latestContentItems) && currentAttachmentDrafts.length === 0) return;
 
     const avatar = { text: avatarText, color: avatarColor };
     const submitRoomId = roomId;
@@ -1221,7 +1296,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [insertTranscriptIntoEditor]);
 
   const startVoiceRecording = useCallback(async (intent: VoiceRecordingIntent) => {
-    if (!isRoomSessionReady) return;
+    if (!canUseRetainedRoomAccess) return;
     if (!canPost) {
       showTransientError(postingClosedMessage);
       return;
@@ -1373,7 +1448,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       setVoiceWorkflow('choice');
       showTransientError(t('errorMicPermission'));
     }
-  }, [canPost, dismissError, insertTranscriptIntoEditor, isRecording, isRoomSessionReady, isSending, postingClosedMessage, resetVoiceDraft, showPersistentError, showTransientError, stopVoiceRecording, t]);
+  }, [canPost, canUseRetainedRoomAccess, dismissError, insertTranscriptIntoEditor, isRecording, isSending, postingClosedMessage, resetVoiceDraft, showPersistentError, showTransientError, stopVoiceRecording, t]);
 
   const handleStopVoiceRecording = useCallback(() => {
     stopVoiceRecording(recordingIntentRef.current === 'voice' ? 'preview' : 'insert');
@@ -1391,7 +1466,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [resetVoiceDraft, restoreEditorSnapshot]);
 
   const handleSendVoiceDraft = useCallback(async () => {
-    if (!isRoomSessionReady) return;
+    if (!canUseRetainedRoomAccess) return;
     if (!canPost) {
       showTransientError(postingClosedMessage);
       return;
@@ -1407,6 +1482,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       && attachmentRoomGenerationRef.current === requestRoomGeneration
     );
     if (!isRequestRoomCurrent()) return;
+    if (!(await ensureRoomOperationReady()) || !isRequestRoomCurrent()) return;
 
     const controller = new AbortController();
     voiceUploadAbortControllerRef.current?.abort();
@@ -1442,7 +1518,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         setIsSending(false);
       }
     }
-  }, [avatarColor, avatarText, canPost, isRoomSessionReady, isSending, onCancelReply, postingClosedMessage, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, showPersistentError, showTransientError, t, username]);
+  }, [avatarColor, avatarText, canPost, canUseRetainedRoomAccess, ensureRoomOperationReady, isSending, onCancelReply, postingClosedMessage, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, showPersistentError, showTransientError, t, username]);
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
@@ -1516,7 +1592,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   };
 
   const handleArbitraryFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isRoomSessionReady || !canPost) {
+    if (!canUseRetainedRoomAccess || !canPost) {
       showTransientError(postingClosedMessage);
       if (arbitraryFileInputRef.current) {
         arbitraryFileInputRef.current.value = '';
@@ -1542,7 +1618,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 处理媒体上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isRoomSessionReady || !canPost) {
+    if (!canUseRetainedRoomAccess || !canPost) {
       showTransientError(postingClosedMessage);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -2001,7 +2077,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             <div
               key="text-input"
               className="min-h-7 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-0.5 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
-              contentEditable={isRoomSessionReady && !isSending && !isAIInputLocked && canPost}
+              contentEditable={canUseRetainedRoomAccess && !isSending && !isAIInputLocked && canPost}
               onInput={parseEditorContent}
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
@@ -2086,7 +2162,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 {/* AI设置按钮 */}
                 <MessageInputAISettingsButton
                   onOpen={onAISettingsOpen}
-                  isDisabled={isSending || isAIInputLocked || isAgentRunning || !isRoomSessionReady}
+                  isDisabled={isSending || isAIInputLocked || isAgentRunning || !canUseRetainedRoomAccess}
                 />
               </>
             )}
@@ -2125,7 +2201,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 isSending={isSending}
                 isAiProcessing={isAiProcessing || isInterruptingCodeAgent}
                 isAgentRunning={isCodeAgentRoom && isRoomAIProcessing}
-                isInputLocked={isAIInputLocked || !isRoomSessionReady}
+                isInputLocked={isAIInputLocked || isRecoveringRoomSessionForOperation || !canUseRetainedRoomAccess}
                 canPost={canPost}
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}

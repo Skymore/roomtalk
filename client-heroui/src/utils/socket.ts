@@ -99,6 +99,10 @@ type SendMessageAckResponse = SocketAckResponse & {
   message?: Message;
 };
 
+type EditMessageAckResponse = SocketAckResponse & {
+  updatedMessage?: Message;
+};
+
 type RoomMessageHistoryAckResponse = SocketAckResponse & {
   history?: RoomMessageHistoryPayload;
 };
@@ -753,6 +757,29 @@ export const sendSticker = (
     return response.message;
   });
 };
+
+export const editMessage = (roomId: string, messageId: string, newContent: string): Promise<Message> => (
+  emitWithAck<EditMessageAckResponse>(
+    'edit_message',
+    { roomId, messageId, newContent },
+    'Timed out while editing message',
+    'Failed to edit message',
+  ).then(response => {
+    if (!response.updatedMessage) {
+      throw new SocketRequestError('INVALID_EDIT_RESPONSE', 'Server did not return the edited message');
+    }
+    return response.updatedMessage;
+  })
+);
+
+export const deleteMessage = (roomId: string, messageId: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'delete_message',
+    { roomId, messageId },
+    'Timed out while deleting message',
+    'Failed to delete message',
+  ).then(() => undefined)
+);
 
 export const requestRoomMessages = (request: {
   requestId: string;

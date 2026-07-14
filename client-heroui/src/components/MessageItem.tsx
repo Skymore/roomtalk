@@ -28,6 +28,7 @@ import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComme
 import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
 import { getCodeAgentAssistantDisplayName, getCodeAgentModeLabelKey, normalizeCodeAgentMode } from "../utils/codeAgent";
 import { clearCachedMediaAsset, getCachedMediaObjectUrlFromCache } from "../utils/mediaCache";
+import type { EnsureRoomOperationReady } from '../utils/roomSessionController';
 
 interface MessageItemProps {
   message: Message;
@@ -49,6 +50,7 @@ interface MessageItemProps {
   workspaceRoot?: string | null;
   turnGrouped?: boolean;
   isInteractionDisabled?: boolean;
+  ensureRoomOperationReady?: EnsureRoomOperationReady;
 }
 
 export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
@@ -304,6 +306,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   workspaceRoot,
   turnGrouped = false,
   isInteractionDisabled = false,
+  ensureRoomOperationReady,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
@@ -415,17 +418,21 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const replyReference = message.replyTo ? (
     <ReplyReference replyTo={message.replyTo} roomId={message.roomId} isInteractionDisabled={isInteractionDisabled} />
   ) : null;
-  const handleA2UIAction = React.useCallback((action: A2UIActionEvent) => {
+  const handleA2UIAction = React.useCallback(async (action: A2UIActionEvent) => {
     if (interactionDisabledRef.current) return;
-    sendA2UIAction({
-      roomId: message.roomId,
-      messageId: message.id,
-      action,
-      ...getRoomAIRequestSettingsForKind(message.roomId, aiRequestRoomKind),
-    }).catch((error) => {
+    try {
+      await ensureRoomOperationReady?.();
+      if (!componentMountedRef.current || interactionDisabledRef.current) return;
+      await sendA2UIAction({
+        roomId: message.roomId,
+        messageId: message.id,
+        action,
+        ...getRoomAIRequestSettingsForKind(message.roomId, aiRequestRoomKind),
+      });
+    } catch (error) {
       console.error("Failed to send A2UI action:", error);
-    });
-  }, [aiRequestRoomKind, message.id, message.roomId]);
+    }
+  }, [aiRequestRoomKind, ensureRoomOperationReady, message.id, message.roomId]);
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [liked, setLiked] = useState(false);

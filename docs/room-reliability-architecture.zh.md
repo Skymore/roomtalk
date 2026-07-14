@@ -8,7 +8,7 @@
 
 ## 房间何时可用
 
-当前 Socket.IO 连接完成注册，并且服务端已经确认当前 session epoch 所选择房间的 membership 后，房间才进入 `ready`。在此之前，React 可以先显示本地保存的房间外壳和缓存消息，但发送、编辑、媒体读取等成员操作仍处于锁定状态。
+当前 Socket.IO 连接完成注册，并且服务端已经确认当前 session epoch 所选择房间的 membership 后，房间才进入 `ready`。冷启动恢复时，React 可以提前显示本地保存的房间外壳和缓存消息，但此时没有本标签页确认过的权限快照，成员操作仍然锁住。本标签页成功 join 过一次后，单纯的 transport 中断不会清除这份快照。页面在 controller 恢复期间继续可用，任何依赖 socket 的操作都会先等待当前房间重新 ready，再发送到服务端。
 
 恢复过程由四个事实源共同完成：
 
@@ -37,6 +37,7 @@
 | 订阅 controller snapshot | [`useRoomSession.ts`](../client-heroui/src/hooks/useRoomSession.ts) |
 | 消息监听与 history reconciliation | [`useRoomMessageEvents.ts`](../client-heroui/src/hooks/useRoomMessageEvents.ts) |
 | 消息渲染和成员操作锁定 | [`MessageList.tsx`](../client-heroui/src/components/MessageList.tsx) |
+| 保留权限的页面表现与操作触发恢复 | [`MessagePage.tsx`](../client-heroui/src/pages/MessagePage.tsx)、[`ChatHeader.tsx`](../client-heroui/src/components/ChatHeader.tsx)、[`MessageInput.tsx`](../client-heroui/src/components/MessageInput.tsx) 与 [`MessageList.tsx`](../client-heroui/src/components/MessageList.tsx) |
 | 行内媒体加载与全屏查看器 lifecycle | [`MessageItem.tsx`](../client-heroui/src/components/MessageItem.tsx)、[`useCachedMedia.ts`](../client-heroui/src/hooks/useCachedMedia.ts) 和 [`MediaViewerModal.tsx`](../client-heroui/src/components/MediaViewerModal.tsx) |
 | 消息与媒体缓存 | [`messageHistoryCache.ts`](../client-heroui/src/utils/messageHistoryCache.ts) 和 [`mediaCache.ts`](../client-heroui/src/utils/mediaCache.ts) |
 | 房间对象排序 | [`roomState.ts`](../client-heroui/src/utils/roomState.ts) |
@@ -92,7 +93,7 @@ Session ready 本身不会替换消息窗口。消息 hook 会先等缓存 hydra
 
 ### 7. 后续断线只重做必要步骤
 
-Socket A 断线后，controller 进入 `retrying`。页面会锁住新的成员操作，同时保留房间外壳、消息、滚动位置和已经加载的媒体。Socket B 连接后，controller 推进 `sessionEpoch`，注册 socket B，重新加入相同 desired room，并在新 join 成功后推进 `messageSyncRequestId`。
+Socket A 断线后，controller 进入 `retrying`。页面保留房间外壳、消息、滚动位置、已加载媒体、草稿和最近一次确认的权限快照，本地交互继续可用。如果用户在后台恢复完成前发起依赖 socket 的操作，该操作会等待 `ensureRoom(roomId, "operation")`；只有当前 socket 完成注册和 join 后，请求才会真正发出。Socket B 连接后，controller 推进 `sessionEpoch`，注册 socket B，重新加入相同 desired room，并在新 join 成功后推进 `messageSyncRequestId`。
 
 下面的时序图是这两条链路的索引。重试预算、supersession 和仅发生 history reconciliation 的前台恢复，会在后续章节继续说明。
 
@@ -121,8 +122,8 @@ sequenceDiagram
 
     Note over Page,Messages: 之后发生 socket replacement
     Server-->>Session: disconnect(socket A)
-    Session-->>Page: retrying，锁定新的成员操作
-    Note over Page,Messages: 保留房间外壳、消息、滚动位置和已加载媒体
+    Session-->>Page: retrying，保留已确认的 UI access
+    Note over Page,Messages: 保留房间外壳、消息、草稿、workspace snapshot 与已加载媒体
     Session->>Server: 重新连接
     Server-->>Session: connected(socket B)
     Note right of Session: sessionEpoch + 1
@@ -140,12 +141,12 @@ sequenceDiagram
 | Phase | Controller 中的含义 | 页面行为 |
 | --- | --- | --- |
 | `idle` | 当前没有正在驱动的 desired room | 显示非房间 view，或者等待新的房间意图 |
-| `connecting` | 已经有 desired room，但还没有可用 socket ID | 保留已有 room shell，锁定成员操作 |
-| `registering` | Transport 已连接，当前 socket 的 identity binding 尚未完成 | 保留 shell 和缓存内容，等待 register ack |
-| `joining` | Socket 已注册，目标 membership 尚未提交 | 保持目标房间锁定，直到 join commit |
+| `connecting` | 已经有 desired room，但还没有可用 socket ID | 保留 room shell；只有本标签页已有该房间确认快照时才沿用 retained access |
+| `registering` | Transport 已连接，当前 socket 的 identity binding 尚未完成 | 等待 register ack，同时维持上一行所述的 UI 边界 |
+| `joining` | Socket 已注册，目标 membership 尚未提交 | 冷启动或新选择的目标保持锁定；同房间恢复可保留已经确认的交互 |
 | `ready` | 当前 socket 已验证 desired room 的 membership | 应用权限，并开放权限允许的操作 |
-| `retrying` | 可恢复 timeout、disconnect 或 transport change 中断了 drive | 保留已渲染内容，锁住新的 privileged work，并继续恢复 |
-| `unavailable` | 收到明确拒绝，或者重试预算耗尽 | 提供 retry，或者根据错误进入 room removal 或密码处理 |
+| `retrying` | 可恢复 timeout、disconnect 或 transport change 中断了 drive | 保留渲染内容和已确认的 UI access；依赖 socket 的操作必须先等待恢复 |
+| `unavailable` | 收到明确拒绝，或者重试预算耗尽 | Transport 重试耗尽时保留 access；服务端明确拒绝时使它失效，并提供 retry 或进入 room removal、密码处理 |
 
 Snapshot 包含 `phase`、目标 `roomId`、`socketId`、`sessionEpoch`、`messageSyncRequestId`、最近一次验证成功的结果、触发来源、当前 attempt 和终止错误。Join ack 返回的完整房间、权限与成员数会保存在验证结果中。
 
@@ -205,9 +206,13 @@ Join ack 包含完整 `Room`、当前 `RoomPermissions` 和成员数。重复加
 
 Controller 负责恢复协议，`MessagePage` 决定每个 phase 中用户能看到什么、能做什么。保存的房间在 `connecting`、`registering` 和 `joining` 期间都可以作为 shell 显示。页面判断 readiness 时，会同时检查 controller 是否为 `ready`，以及 snapshot 中的 room ID 是否正是屏幕上的当前房间。
 
-Join 成功后，页面用通过版本检查的 canonical room 替换 shell，并安装当前权限。如果 controller 进入 `unavailable`，shell 仍然显示，操作保持锁定，同时提供 retry。确认房间不存在或 access 已被移除时，则进入 room removal 路径并清除 shell。
+Join 成功后，页面用通过版本检查的 canonical room 替换 shell，并安装当前权限。之后的权限刷新、timeout 或 transport 恢复失败时，`MessagePage` 会为当前房间保留这份快照。服务端明确拒绝 identity 或 room access 时才会清除它，包括 client auth 无效、要求重新登录、房间不存在或 access 被移除、密码无效，以及 code-agent access 不可用。确认房间不存在或 access 已被移除时，还会进入 room removal 路径并清除 shell。
 
-Transport 断线时，目标房间、当前外壳、消息、滚动位置和已经加载的媒体都会保留。Controller 为新 socket 重新注册和 join 期间，新的成员操作会保持锁定。重连提示有 400 ms 的宽限时间，快速恢复时不会闪烁；这个计时器只负责 UI 展示，不参与恢复调度。
+Transport 断线时，目标房间、当前外壳、消息、滚动位置、草稿、正在进行的语音录制、已打开的消息对话框、已加载媒体和缓存 workspace 数据都会保留。Composer 和此前已获授权的消息操作继续显示。发送、编辑、删除、AI retry、保存房间、读取在线成员、导出和 A2UI action 等依赖 room membership 的操作，会先等待 controller 为当前 socket 完成注册与 join，然后再到达服务端当下的授权检查。高风险房间设置、code-agent mode 切换、workspace 写入、history replace 和 workspace refresh 仍然直接受当前 session readiness 限制。
+
+这样分层避免了两种问题。把每次断线都当成权限撤销，会丢掉有用的本地状态，让手机短暂挂起也表现得像失去 access。直接从旧 UI 发请求，又可能命中尚未 join 的 socket。Retained access 只控制页面表现，`ensureRoom` 控制 socket 边界，最终权限仍由服务端决定。
+
+重连提示有 400 ms 的宽限时间，快速恢复时不会闪烁。这个计时器只负责 UI 展示，不参与恢复调度。
 
 页面回到前台、BFCache 恢复和网络恢复都会进入 `resume`。Session 已 ready 时，它们安排一次 history reconciliation。Session 仍处于连接、注册、join 或 retry 时，它们共享正在执行的 drive，因而不会重复创建 register 或 join 请求。
 
@@ -235,13 +240,13 @@ History request 由独立 effect 发出。只有房间 session ready，并且 `m
 
 ## 媒体连续性
 
-媒体读取遵守与其他成员操作相同的 readiness 边界。房间 session 验证成功后，消息才能申请新的签名下载 URL。服务端每次签发都会检查 client auth token、当前持久 room access、room ID 与 asset 归属。
+媒体读取同时遵守 retained-access 展示边界和独立的服务端授权边界。冷启动且尚未验证的 shell 不读取缓存媒体 body，也不申请签名下载 URL。本标签页成功 join 过一次后，短暂 socket 中断期间可以继续读取缓存或申请 signed URL，因为 HTTP endpoint 每次都会检查 client auth token、当前持久 room access、room ID 与 asset 归属，并不会信任客户端保留的权限快照。
 
-短暂恢复期间，页面已经显示的媒体 URL 会继续附着在元素上。`useCachedMedia` 在 access 未验证时暂停缓存和网络操作，同时保留已有 object URL 或 signed URL。只有 asset identity 变化或用户重试失败加载时才会重置媒体状态。点击图片时，查看器直接使用当前实际渲染的 URL，其中也包括缓存得到的 blob URL。
+短暂恢复期间，页面已经显示的媒体 URL 会继续附着在元素上。只有 retained access 不可用时，`useCachedMedia` 才暂停新的缓存和网络操作；单纯的 transport 中断会保留并继续使用 object URL 或 signed URL。只有 asset identity 变化或用户重试失败加载时才会重置媒体状态。点击图片时，查看器直接使用当前实际渲染的 URL，其中也包括缓存得到的 blob URL。
 
-例如，一张图片可能已经通过 IndexedDB 中的 blob URL 显示出来，此时 socket 突然断线。Session 进入 unready 后，组件停止申请新的 signed URL，但图片上的 blob URL 会继续保留。用户点击图片时，viewer 收到的也是这条实际显示中的 URL，因此 membership 修复期间仍然可以阅读已经加载的内容。
+例如，一张图片可能已经通过 IndexedDB 中的 blob URL 显示出来，此时 socket 突然断线。图片上的 blob URL 会继续保留，viewer 收到的也是这条实际显示中的 URL。如果另一项媒体仍需要 URL，它可以独立继续申请，但必须通过服务端的 durable-access 检查。
 
-如果消息还没有任何可用的本地 URL 或 signed URL，它会保持 loading，直到 session 再次 ready。随后组件向服务端申请一条新的 15 分钟 read URL。这里返回 403 表示请求当下的持久 room access 校验失败，页面多发一次 join 也不会让媒体接口绕过授权。
+如果消息还没有任何可用的本地 URL 或 signed URL，冷启动 shell 会等到第一次 join 成功。已经验证过的房间可以在 socket 恢复期间向服务端申请新的 15 分钟 read URL。这里返回 403 表示请求当下的持久 room access 校验失败，客户端会展示失败，而不会把旧 permission snapshot 当成授权。
 
 查看器会等到 dialog 和媒体 source 都准备好以后，才把应用根节点设为 inert。媒体 source 尚未解析时，整个应用仍可操作，不会出现查看器没有显示却无法点击页面的状态。
 
@@ -293,7 +298,7 @@ Ack 还消除了发起客户端对 Socket.IO fan-out 的隐式依赖。当前 so
 
 ## Posting boundary 与操作授权
 
-服务端在操作发生时重新做权限判断，覆盖消息发送、媒体上传初始化与完成、消息编辑和删除、房间管理以及 code-agent access。客户端早先收到的 permission snapshot 只用于展示当前 UI 状态。
+服务端在操作发生时重新做权限判断，覆盖消息发送、媒体上传初始化与完成、消息编辑和删除、房间管理以及 code-agent access。客户端早先收到的 permission snapshot 可以在短暂重连时保持界面稳定，但不能自行授权后续操作。依赖 socket 的操作会先恢复当前 membership，再依赖服务端的即时检查。
 
 Posting schedule 会随着时间变化，而这个变化本身没有 socket event。客户端按照房间 timezone 计算下一次开启或关闭边界，并在边界刚过时请求最新权限。服务端根据当前时钟计算并返回新的 `canPost`。
 
@@ -305,11 +310,11 @@ Posting schedule 会随着时间变化，而这个变化本身没有 socket even
 
 ## 失败处理
 
-断线、transport 变化和 ack 超时会在重试预算内继续恢复。房间外壳与缓存内容保持可见，成员操作维持锁定。预算耗尽后进入 `unavailable`，页面提供显式重试，并保留目标房间。
+断线、transport 变化和 ack 超时会在重试预算内继续恢复。房间外壳与缓存内容保持可见。冷启动 shell 继续锁定；已经确认过的房间保留 UI access，并允许下一次操作触发新的恢复。预算耗尽后进入 `unavailable`，页面提供显式重试，但不会只因为 timeout 就把它当成 access 被撤销。
 
 Registration timeout 和 join rejection 会走不同恢复路径。Timeout 可能来自慢 ack，也可能是请求期间 socket 已经变化，因此 controller 会在预算内重试。密码错误或确认 access 已被移除时，自动重试不会改变结果，这次请求会立即进入 unavailable，页面可以重新询问密码或离开房间。
 
-Access rejection、房间不存在、密码错误和 code-agent access 被关闭会结束当前 attempt。切换新房间失败时，`MessagePage` 会重新选择之前验证成功的房间，并可为目标房间再次打开密码输入。服务端成功提交新 join 之前，旧房间仍是健康回退点。
+Access rejection、房间不存在、密码错误和 code-agent access 被关闭会结束当前 attempt，并使目标房间的 retained access 失效。Client identity 无效或要求重新登录时也一样。切换新房间失败时，`MessagePage` 会重新选择之前验证成功的房间，并可为目标房间再次打开密码输入。服务端成功提交新 join 之前，旧房间仍是健康回退点。
 
 延迟结果也由同一套 ownership rule 处理。房间 A 正在 joining 时，如果用户选择房间 B，A 的 completion 会被 supersede。A 随后才到达的成功 ack 无法修改 controller snapshot。Controller 会发送 `leave_room(A)`，清理服务端可能已经提交的 presence，然后继续等待 B。
 

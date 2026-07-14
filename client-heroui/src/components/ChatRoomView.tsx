@@ -8,6 +8,7 @@ import { MessageList, MessageListHandle } from './MessageList';
 import { AppView } from '../utils/appPersistence';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
+import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 
 const MESSAGE_LIST_BOTTOM_GAP_PX = 12;
 
@@ -17,6 +18,8 @@ interface ChatRoomViewProps {
   isRestoringRoom: boolean;
   showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
+  canUseRetainedRoomAccess: boolean;
+  ensureRoomSessionReady: EnsureRoomSessionReady;
   messageSyncRequestId?: number;
   onRetryRoomSession: () => void;
   username: string;
@@ -41,6 +44,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   isRestoringRoom,
   showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
+  canUseRetainedRoomAccess,
+  ensureRoomSessionReady,
   messageSyncRequestId = 0,
   onRetryRoomSession,
   username,
@@ -64,7 +69,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const messageListRef = React.useRef<MessageListHandle>(null);
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
-  const effectiveRoomPermissions = isRoomSessionReady ? roomPermissions : null;
+  const effectiveRoomPermissions = canUseRetainedRoomAccess ? roomPermissions : null;
 
   React.useEffect(() => {
     setReplyToMessage(null);
@@ -100,6 +105,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         isRestoringRoom={isRestoringRoom}
         showRoomSessionSpinner={showRoomSessionSpinner}
         isRoomSessionReady={isRoomSessionReady}
+        canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+        ensureRoomSessionReady={ensureRoomSessionReady}
         onRetryRoomSession={onRetryRoomSession}
         handleCopyToClipboard={handleCopyToClipboard}
         handleShareRoom={handleShareRoom}
@@ -130,6 +137,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onReply={setReplyToMessage}
             roomPermissions={effectiveRoomPermissions}
             isRoomSessionReady={isRoomSessionReady}
+            canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+            ensureRoomSessionReady={ensureRoomSessionReady}
             messageSyncRequestId={messageSyncRequestId}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
@@ -173,8 +182,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
               messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
             }
             isRoomSessionReady={isRoomSessionReady}
-            canPost={isRoomSessionReady && Boolean(roomPermissions?.canPost)}
-            postingRestrictionReason={isRoomSessionReady
+            canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+            ensureRoomSessionReady={ensureRoomSessionReady}
+            canPost={canUseRetainedRoomAccess && Boolean(roomPermissions?.canPost)}
+            postingRestrictionReason={canUseRetainedRoomAccess
               ? roomPermissions?.postingRestrictionReason
               : t(isRestoringRoom ? 'loading' : 'errorRestoringRoom')}
             postingSchedule={currentRoom.postingSchedule}

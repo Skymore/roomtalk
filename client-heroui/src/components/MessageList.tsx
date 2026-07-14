@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { cancelQueuedCodeAgentInput, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
+import { cancelQueuedCodeAgentInput, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { AgentTurnItem } from './AgentTurnItem';
@@ -27,6 +27,7 @@ import { CodeAgentBackend, CodeAgentMode, getCodeAgentAssistantDisplayName } fro
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { hasRegisteredMediaUpload, retryRegisteredMediaUpload } from '../utils/mediaUploadTasks';
+import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -134,6 +135,8 @@ interface MessageListProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   isRoomSessionReady?: boolean;
+  canUseRetainedRoomAccess?: boolean;
+  ensureRoomSessionReady?: EnsureRoomSessionReady;
   messageSyncRequestId?: number;
 }
 
@@ -166,6 +169,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onAddReviewComment,
   onRemoveReviewComment,
   isRoomSessionReady = true,
+  canUseRetainedRoomAccess = isRoomSessionReady,
+  ensureRoomSessionReady,
   messageSyncRequestId = 0,
 }, ref) => {
   const { t } = useTranslation();
@@ -194,6 +199,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   agentTurnsRef.current = agentTurns;
   const roomSessionReadyRef = useRef(isRoomSessionReady);
   roomSessionReadyRef.current = isRoomSessionReady;
+  const retainedRoomAccessRef = useRef(canUseRetainedRoomAccess);
+  retainedRoomAccessRef.current = canUseRetainedRoomAccess;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -228,6 +235,19 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
+
+  const ensureRoomOperationReady = useCallback(async () => {
+    if (!retainedRoomAccessRef.current) {
+      throw new Error(t('errorRestoringRoom'));
+    }
+    if (roomSessionReadyRef.current) {
+      return;
+    }
+    if (!ensureRoomSessionReady) {
+      throw new Error(t('errorRestoringRoom'));
+    }
+    await ensureRoomSessionReady(roomId);
+  }, [ensureRoomSessionReady, roomId, t]);
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const workspaceRoot = workspaceSnapshot?.workspaceRoot ?? null;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
@@ -530,11 +550,14 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [presentation, refreshWorkspaceSnapshot]);
 
   useEffect(() => {
-    if (!isRoomSessionReady || presentation !== 'code-agent' || !currentRoomId) {
+    if (presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
       setWorkspaceRefreshError(null);
       onWorkspaceRootChange?.(null);
       onWorkspaceChangesChange?.(null);
+      return;
+    }
+    if (!isRoomSessionReady) {
       return;
     }
 
@@ -569,8 +592,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [canManageSenderActions, roomId]);
 
   useEffect(() => {
+    if (!isRoomSessionReady) return;
     void loadRoleMembers();
-  }, [loadRoleMembers]);
+  }, [isRoomSessionReady, loadRoleMembers]);
 
   useEffect(() => {
     if (!canManageSenderActions) {
@@ -633,7 +657,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
   const handleOpenDeleteModal = useCallback((messageId: string) => {
-    if (!roomSessionReadyRef.current) return;
+    if (!retainedRoomAccessRef.current) return;
     const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToDelete(msg);
@@ -645,7 +669,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setMessageToDelete(null);
    }, []);
   const handleOpenEditModal = useCallback((messageId: string) => {
-    if (!roomSessionReadyRef.current) return;
+    if (!retainedRoomAccessRef.current) return;
       const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToEdit(msg);
@@ -658,16 +682,22 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
    }, []);
 
   useEffect(() => {
-    if (isRoomSessionReady) return;
+    if (canUseRetainedRoomAccess) return;
     handleCloseDeleteModal();
     handleCloseEditModal();
-  }, [handleCloseDeleteModal, handleCloseEditModal, isRoomSessionReady]);
+  }, [canUseRetainedRoomAccess, handleCloseDeleteModal, handleCloseEditModal]);
 
   // --- Edit/Delete Logic ---
-  const handleSaveEdit = useCallback((messageId: string, newContent: string) => {
-    if (!roomSessionReadyRef.current) return;
+  const handleSaveEdit = useCallback(async (messageId: string, newContent: string) => {
+    if (!retainedRoomAccessRef.current) return;
+    try {
+      await ensureRoomOperationReady();
+    } catch (error) {
+      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      return;
+    }
     console.log('Saving edit (from modal):', messageId, newContent);
-    const originalMessages = messages;
+    const originalMessages = messagesRef.current;
     updateMessages(prev => editMessageContent(prev, messageId, newContent));
     // No need to close modal here, EditMessageModal handles it
 
@@ -682,46 +712,51 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       return;
     }
 
-    socket.emit('edit_message', { roomId, messageId, newContent }, (response: { success: boolean; updatedMessage?: Message; error?: string }) => {
-      if (response.success && response.updatedMessage) {
+    editMessage(roomId, messageId, newContent).then((updatedMessage) => {
         console.log('Edit successful on server.');
-        updateMessages(prev => replaceMessage(prev, response.updatedMessage!));
-      } else {
-        console.error('Failed to save edit on server:', response.error);
+        updateMessages(prev => replaceMessage(prev, updatedMessage));
+      }).catch((error) => {
+        console.error('Failed to save edit on server:', error);
         updateMessages(originalMessages);
-        // Use translation key for alert
-        alert(t('errorEditingMessage', { error: response.error || t('unknownError') }));
-      }
-    });
-  }, [roomId, messages, updateMessages, t]);
+        alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      });
+  }, [ensureRoomOperationReady, roomId, updateMessages, t]);
 
   const handleSteerQueuedMessage = useCallback(async (messageId: string) => {
-    if (!roomSessionReadyRef.current) return;
+    if (!retainedRoomAccessRef.current) return;
     try {
+      await ensureRoomOperationReady();
       await steerQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {
       console.error('Failed to steer with queued agent input:', error);
       void requestHistoryRef.current?.({ reason: 'queued-steer-recovery' });
       alert(t('codeAgentQueuedActionFailed'));
     }
-  }, [roomId, t]);
+  }, [ensureRoomOperationReady, roomId, t]);
 
   const handleCancelQueuedMessage = useCallback(async (messageId: string) => {
-    if (!roomSessionReadyRef.current) return;
+    if (!retainedRoomAccessRef.current) return;
     try {
+      await ensureRoomOperationReady();
       await cancelQueuedCodeAgentInput(roomId, messageId);
     } catch (error) {
       console.error('Failed to cancel queued agent input:', error);
       void requestHistoryRef.current?.({ reason: 'queued-cancel-recovery' });
       alert(t('codeAgentQueuedActionFailed'));
     }
-  }, [roomId, t]);
+  }, [ensureRoomOperationReady, roomId, t]);
 
-  const handleSaveEditAndAskAI = useCallback((messageId: string, newContent: string) => {
-    if (!roomSessionReadyRef.current) return;
+  const handleSaveEditAndAskAI = useCallback(async (messageId: string, newContent: string) => {
+    if (!retainedRoomAccessRef.current) return;
+    try {
+      await ensureRoomOperationReady();
+    } catch (error) {
+      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      return;
+    }
     console.log('Saving edit and triggering AI (from modal):', messageId, newContent);
-    const originalMessages = messages;
-    const optimisticResult = editMessageAndTruncateAfter(messages, messageId, newContent);
+    const originalMessages = messagesRef.current;
+    const optimisticResult = editMessageAndTruncateAfter(originalMessages, messageId, newContent);
 
     // 1. Optimistic Update & Truncation
     updateMessages(optimisticResult.messages);
@@ -744,34 +779,36 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       updateMessages(originalMessages);
       alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, t]);
+  }, [ensureRoomOperationReady, roomId, updateMessages, getAIRequestSettingsForRoom, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
-  const handleConfirmDelete = useCallback(() => {
-    if (!roomSessionReadyRef.current || !messageToDelete) return;
+  const handleConfirmDelete = useCallback(async () => {
+    if (!retainedRoomAccessRef.current || !messageToDelete) return;
 
     const messageIdToDelete = messageToDelete.id;
     console.log('Confirmed deleting message:', messageIdToDelete);
 
-    // 1. Close modal & Optimistically remove from UI
-    handleCloseDeleteModal(); // Close modal first
+    handleCloseDeleteModal();
+    try {
+      await ensureRoomOperationReady();
+    } catch (error) {
+      alert(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      return;
+    }
+
     updateMessages(prev => deleteMessageById(prev, messageIdToDelete));
 
-    // 2. Emit event to server
-    socket.emit('delete_message', { roomId, messageId: messageIdToDelete }, (response: { success: boolean; error?: string }) => {
-      if (!response.success) {
-        console.error('Failed to delete message on server:', response.error);
-        // Refetch history on error to ensure consistency
+    deleteMessage(roomId, messageIdToDelete).catch((error) => {
+        console.error('Failed to delete message on server:', error);
         void requestHistoryRef.current?.({ reason: 'delete-recovery' });
-         // Use translation key for alert
-        alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
-      }
+        alert(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
+  }, [ensureRoomOperationReady, roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
 
   const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
-    if (!roomSessionReadyRef.current) return;
+    if (!retainedRoomAccessRef.current) return;
     try {
+      await ensureRoomOperationReady();
       if (action === 'setAdmin') {
         await setRoomAdmin(roomId, message.clientId);
       } else if (action === 'removeAdmin') {
@@ -792,12 +829,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       console.error('Failed to perform member action:', error);
       alert(error instanceof Error ? error.message : t('unknownError'));
     }
-  }, [loadRoleMembers, roomId, t]);
+  }, [ensureRoomOperationReady, loadRoleMembers, roomId, t]);
 
   const handleRetryDelivery = useCallback(async (failedMessage: Message) => {
     const clientMessageId = failedMessage.clientMessageId;
     if (
-      !roomSessionReadyRef.current
+      !retainedRoomAccessRef.current
       || roomPermissions?.canPost !== true
       || failedMessage.roomId !== roomId
       || failedMessage.deliveryStatus !== 'failed'
@@ -821,6 +858,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     )));
 
     try {
+      await ensureRoomOperationReady();
       const savedMessage = failedMessage.messageType === 'media'
         ? await retryRegisteredMediaUpload(clientMessageId)
         : failedMessage.messageType === 'sticker'
@@ -856,11 +894,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     } finally {
       retryingClientMessageIdsRef.current.delete(clientMessageId);
     }
-  }, [roomId, roomPermissions?.canPost, t, updateMessages]);
+  }, [ensureRoomOperationReady, roomId, roomPermissions?.canPost, t, updateMessages]);
 
   // 添加刷新AI的处理函数
-  const handleRefreshAI = useCallback((messageId: string) => {
-    if (!roomSessionReadyRef.current) return;
+  const handleRefreshAI = useCallback(async (messageId: string) => {
+    if (!retainedRoomAccessRef.current) return;
+    try {
+      await ensureRoomOperationReady();
+    } catch (error) {
+      console.error('Failed to restore room before retrying AI response:', error);
+      return;
+    }
     console.log('Retrying AI response for message ID:', messageId);
 
     // 找到消息的索引位置
@@ -896,7 +940,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom]);
+  }, [ensureRoomOperationReady, roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom]);
 
   useRoomMessageEvents({
     roomId,
@@ -962,10 +1006,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, []);
 
   const handleExportHtml = useCallback(async () => {
-    if (!roomSessionReadyRef.current || isExporting) return;
+    if (!retainedRoomAccessRef.current || isExporting) return;
     setIsExporting(true);
     setExportNotice(null);
     try {
+      await ensureRoomOperationReady();
       await downloadTranscriptHtml(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
       showExportNotice({ tone: 'success', message: t('exportSucceeded', { format: 'HTML' }) });
     } catch (error) {
@@ -974,13 +1019,14 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     } finally {
       setIsExporting(false);
     }
-  }, [isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
+  }, [ensureRoomOperationReady, isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
 
   const handleExportZip = useCallback(async () => {
-    if (!roomSessionReadyRef.current || isExporting) return;
+    if (!retainedRoomAccessRef.current || isExporting) return;
     setIsExporting(true);
     setExportNotice(null);
     try {
+      await ensureRoomOperationReady();
       await downloadTranscriptZip(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
       showExportNotice({ tone: 'success', message: t('exportSucceeded', { format: 'ZIP' }) });
     } catch (error) {
@@ -989,7 +1035,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     } finally {
       setIsExporting(false);
     }
-  }, [isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
+  }, [ensureRoomOperationReady, isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
 
   // ... loading/empty states ...
   // ... return statement with JSX ...
@@ -1005,7 +1051,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 size="sm"
                 variant="flat"
                 radius="full"
-                isDisabled={isExporting || !isRoomSessionReady}
+                isDisabled={isExporting || !canUseRetainedRoomAccess}
                 aria-busy={isExporting}
                 aria-label={isExporting ? t('exportingChat') : t('exportChat')}
                 className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
@@ -1147,7 +1193,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       onOpenWorkspaceFile={onOpenWorkspaceFile}
                       workspaceRoot={workspaceRoot}
                       turnGrouped={turnGrouped}
-                      isInteractionDisabled={!isRoomSessionReady}
+                      isInteractionDisabled={!canUseRetainedRoomAccess}
+                      ensureRoomOperationReady={ensureRoomOperationReady}
                     />
                   );
                   if (item.kind === 'agent-turn') {
@@ -1200,7 +1247,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 onUserAction={handleUserAction}
                 onOpenWorkspaceFile={onOpenWorkspaceFile}
                 workspaceRoot={workspaceRoot}
-                isInteractionDisabled={!isRoomSessionReady}
+                isInteractionDisabled={!canUseRetainedRoomAccess}
+                ensureRoomOperationReady={ensureRoomOperationReady}
               />
             ))}
           </div>

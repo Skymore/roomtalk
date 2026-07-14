@@ -22,7 +22,7 @@ import {
   clearRoomMessages as clearRoomMessagesFromServer,
   type RoomJoinResult,
 } from "../utils/socket";
-import { getRoomSessionErrorCode, RoomSessionSupersededError, type RoomSessionSource } from "../utils/roomSessionController";
+import { doesRoomSessionErrorInvalidateRetainedAccess, getRoomSessionErrorCode, RoomSessionSupersededError, type RoomSessionSource } from "../utils/roomSessionController";
 import {
   Room, RoomMemberEvent, RoomPermissions,
 } from "../utils/types";
@@ -307,12 +307,9 @@ export const MessagePage: React.FC = () => {
       })
       .catch((error) => {
         console.error("Failed to load room permissions:", error);
-        if (
-          roomPermissionsRequestGenerationRef.current === requestGeneration
-          && currentRoomRef.current?.id === roomId
-        ) {
-          setRoomPermissions(null);
-        }
+        // A failed refresh does not revoke the last acknowledged permission
+        // snapshot. Every protected operation is still authorized by the
+        // server, and a later invalidation/rejoin can replace this snapshot.
       });
   }, []);
 
@@ -360,7 +357,9 @@ export const MessagePage: React.FC = () => {
     if (result.permissions) {
       setRoomPermissions(result.permissions);
     } else {
-      setRoomPermissions(null);
+      if (previousRoomId !== roomId) {
+        setRoomPermissions(null);
+      }
       refreshRoomPermissions(roomId);
     }
 
@@ -475,6 +474,7 @@ export const MessagePage: React.FC = () => {
 
       const message = error instanceof Error ? error.message : translationRef.current("errorLoading");
       const errorCode = getRoomSessionErrorCode(error);
+      const retainedAccessInvalidated = doesRoomSessionErrorInvalidateRetainedAccess(error);
       logRoomSessionDiagnostic("join-failed", {
         roomId,
         source,
@@ -486,6 +486,9 @@ export const MessagePage: React.FC = () => {
       console.error(`Failed to ensure active room session from ${source}:`, error);
 
       const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
+      if (!isSwitchingRoom && retainedAccessInvalidated) {
+        setRoomPermissions(null);
+      }
       if (definitiveRemoval) {
         setRooms((previous) => previous.filter(room => room.id !== roomId));
         setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
@@ -608,9 +611,11 @@ export const MessagePage: React.FC = () => {
     }
 
     handledUnavailableErrorRef.current = roomSession.error;
-    setRoomPermissions(null);
     const errorCode = getRoomSessionErrorCode(roomSession.error);
     const definitiveRemoval = errorCode === "ROOM_NOT_FOUND" || errorCode === "ROOM_ACCESS_REMOVED";
+    if (doesRoomSessionErrorInvalidateRetainedAccess(roomSession.error)) {
+      setRoomPermissions(null);
+    }
     if (!definitiveRemoval) {
       setError(translationRef.current("errorRestoringRoom"));
       return;
@@ -618,6 +623,7 @@ export const MessagePage: React.FC = () => {
 
     const removedRoomId = roomSession.roomId;
     leaveRoom(removedRoomId);
+    setRoomPermissions(null);
     setRooms((previous) => previous.filter(room => room.id !== removedRoomId));
     setSavedRooms((previous) => previous.filter(room => room.id !== removedRoomId));
     void invalidatePersistentRoomCache(removedRoomId);
@@ -1095,13 +1101,21 @@ export const MessagePage: React.FC = () => {
     }
   };
 
+  const ensureRoomSessionReadyForOperation = useCallback(async (roomId: string) => {
+    if (currentRoomRef.current?.id !== roomId) {
+      throw new RoomSessionSupersededError();
+    }
+    if (!roomSessionController.isReady(roomId)) {
+      await roomSessionController.ensureRoom(roomId, "operation");
+    }
+    if (currentRoomRef.current?.id !== roomId || !roomSessionController.isReady(roomId)) {
+      throw new RoomSessionSupersededError();
+    }
+  }, []);
+
   // 分享当前房间链接
   const handleShareRoom = () => {
     if (!currentRoom) return;
-    if (!roomSessionController.isReady(currentRoom.id)) {
-      setError(t("errorRestoringRoom"));
-      return;
-    }
     const url = buildRoomShareUrl(window.location.origin, window.location.pathname, currentRoom.id);
     navigator.clipboard
       .writeText(url)
@@ -1119,17 +1133,15 @@ export const MessagePage: React.FC = () => {
   // 切换保存/取消保存房间
   const handleToggleSave = async () => {
     if (!currentRoom) return;
-    if (!roomSessionController.isReady(currentRoom.id)) {
-      setError(t("errorRestoringRoom"));
-      return;
-    }
+    const roomId = currentRoom.id;
 
     try {
-      if (isRoomSavedById(currentRoom.id)) {
-        await unsaveRoomFromServer(currentRoom.id);
-        setSavedRooms((previous) => previous.filter(room => room.id !== currentRoom.id));
+      await ensureRoomSessionReadyForOperation(roomId);
+      if (isRoomSavedById(roomId)) {
+        await unsaveRoomFromServer(roomId);
+        setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
       } else {
-        const savedRoom = await saveRoomToServer(currentRoom.id);
+        const savedRoom = await saveRoomToServer(roomId);
         setSavedRooms((prev) => [savedRoom, ...prev.filter((room) => room.id !== savedRoom.id)]);
       }
     } catch (error) {
@@ -1222,6 +1234,14 @@ export const MessagePage: React.FC = () => {
   const isCurrentRoomSessionUnavailable = Boolean(
     currentRoom && roomSession.roomId === currentRoom.id && roomSession.phase === "unavailable"
   );
+  const hasCurrentRoomPermissionSnapshot = Boolean(
+    currentRoom && roomPermissions?.roomId === currentRoom.id
+  );
+  const retainedRoomAccessInvalidated = Boolean(
+    isCurrentRoomSessionUnavailable
+    && doesRoomSessionErrorInvalidateRetainedAccess(roomSession.error)
+  );
+  const canUseRetainedRoomAccess = hasCurrentRoomPermissionSnapshot && !retainedRoomAccessInvalidated;
   const isCurrentRoomSessionRestoring = Boolean(
     currentRoom && !isCurrentRoomSessionReady && !isCurrentRoomSessionUnavailable
   );
@@ -1318,6 +1338,8 @@ export const MessagePage: React.FC = () => {
               isRestoringRoom={isCurrentRoomSessionRestoring}
               showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
               isRoomSessionReady={isCurrentRoomSessionReady}
+              canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+              ensureRoomSessionReady={ensureRoomSessionReadyForOperation}
               messageSyncRequestId={roomSession.messageSyncRequestId}
               onRetryRoomSession={handleRetryRoomSession}
               onRoomUpdated={applyServerRoom}
@@ -1348,6 +1370,8 @@ export const MessagePage: React.FC = () => {
             isRestoringRoom={isCurrentRoomSessionRestoring}
             showRoomSessionSpinner={isCurrentRoomSessionRestoring && (!roomSession.result || isReconnecting)}
             isRoomSessionReady={isCurrentRoomSessionReady}
+            canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+            ensureRoomSessionReady={ensureRoomSessionReadyForOperation}
             messageSyncRequestId={roomSession.messageSyncRequestId}
             onRetryRoomSession={handleRetryRoomSession}
             onRoomUpdated={applyServerRoom}

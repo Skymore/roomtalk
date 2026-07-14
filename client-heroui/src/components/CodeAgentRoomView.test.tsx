@@ -99,6 +99,7 @@ vi.mock('./MessageInput', () => ({
     isCodeAgentRoom,
     canPost,
     isRoomSessionReady,
+    canUseRetainedRoomAccess,
     postingRestrictionReason,
     reviewComments = [],
     onRemoveReviewComment,
@@ -110,6 +111,7 @@ vi.mock('./MessageInput', () => ({
     isCodeAgentRoom?: boolean;
     canPost?: boolean;
     isRoomSessionReady?: boolean;
+    canUseRetainedRoomAccess?: boolean;
     postingRestrictionReason?: string;
     reviewComments?: readonly ReviewCommentContext[];
     onRemoveReviewComment?: (commentId: string) => void;
@@ -123,6 +125,7 @@ vi.mock('./MessageInput', () => ({
       data-can-switch-code-agent-mode={String(Boolean(canSwitchCodeAgentMode))}
       data-can-post={String(Boolean(canPost))}
       data-session-ready={String(Boolean(isRoomSessionReady))}
+      data-retained-access={String(Boolean(canUseRetainedRoomAccess))}
       data-posting-restriction-reason={postingRestrictionReason || ''}
       data-review-comments={String(reviewComments.length)}
     >
@@ -280,12 +283,15 @@ const renderCodeAgentRoom = (
   defaultMode: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits' = 'plan',
   roomPermissions: RoomPermissions | null = null,
   isRoomSessionReady = true,
+  canUseRetainedRoomAccess = isRoomSessionReady,
 ) => render(
   <CodeAgentRoomView
     currentRoom={room}
     memberCount={1}
     isRestoringRoom={false}
     isRoomSessionReady={isRoomSessionReady}
+    canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+    ensureRoomSessionReady={vi.fn(async () => {})}
     onRetryRoomSession={vi.fn()}
     username="User"
     clientId="client-1"
@@ -340,6 +346,29 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.postingRestrictionReason).toBe('errorRestoringRoom');
     expect(screen.queryByTestId('file-browser')).toBeNull();
     expect(screen.getByTestId('code-agent-file-browser-session-locked')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('message-list-switch-app'));
+    expect(updateRoomSettings).not.toHaveBeenCalled();
+  });
+
+  it('preserves the cached workspace and composer during a transient reconnect', async () => {
+    const { updateRoomSettings } = await import('../utils/socket');
+    vi.mocked(updateRoomSettings).mockClear();
+    renderCodeAgentRoom(
+      { ...codeAgentRoom, codeAgentMode: 'edit' },
+      ['plan', 'edit'],
+      'edit',
+      permissions(),
+      false,
+      true,
+    );
+
+    expect(screen.getByTestId('message-input').dataset.canPost).toBe('true');
+    expect(screen.getByTestId('message-input').dataset.sessionReady).toBe('false');
+    expect(screen.getByTestId('message-input').dataset.retainedAccess).toBe('true');
+    expect(screen.getByTestId('message-input').dataset.postingRestrictionReason).toBe('');
+    expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('false');
+    expect(screen.queryByTestId('code-agent-file-browser-session-locked')).toBeNull();
+
     fireEvent.click(screen.getByTestId('message-list-switch-app'));
     expect(updateRoomSettings).not.toHaveBeenCalled();
   });

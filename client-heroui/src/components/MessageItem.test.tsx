@@ -955,6 +955,39 @@ describe('MessageItem replies', () => {
     expect(sendA2UIActionMock).not.toHaveBeenCalled();
   });
 
+  it('waits for room recovery before sending a retained A2UI action', async () => {
+    let resolveRecovery!: () => void;
+    const ensureRoomOperationReady = vi.fn(() => new Promise<void>(resolve => {
+      resolveRecovery = resolve;
+    }));
+    sendA2UIActionMock.mockResolvedValue(undefined);
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'retained-a2ui-message',
+          messageType: 'ai',
+          uiPayload: { format: 'a2ui', version: 'v0.9', messages: [] },
+        }}
+        roomPermissions={null}
+        ensureRoomOperationReady={ensureRoomOperationReady}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('a2ui-action'));
+    await waitFor(() => expect(ensureRoomOperationReady).toHaveBeenCalledTimes(1));
+    expect(sendA2UIActionMock).not.toHaveBeenCalled();
+
+    await act(async () => resolveRecovery());
+    await waitFor(() => expect(sendA2UIActionMock).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      messageId: 'retained-a2ui-message',
+    })));
+  });
+
   it('waits for restored room verification before requesting a signed media URL', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/verified.webp' });
     const mediaMessage: Message = {

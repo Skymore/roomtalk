@@ -11,8 +11,15 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('./ChatHeader', () => ({
-  ChatHeader: ({ isRoomSessionReady }: { isRoomSessionReady: boolean }) => (
-    <div data-testid="chat-header" data-session-ready={String(isRoomSessionReady)} />
+  ChatHeader: ({ isRoomSessionReady, canUseRetainedRoomAccess }: {
+    isRoomSessionReady: boolean;
+    canUseRetainedRoomAccess: boolean;
+  }) => (
+    <div
+      data-testid="chat-header"
+      data-session-ready={String(isRoomSessionReady)}
+      data-retained-access={String(canUseRetainedRoomAccess)}
+    />
   ),
 }));
 
@@ -21,25 +28,35 @@ vi.mock('./MessageList', async () => {
   return {
     MessageList: ReactModule.forwardRef(({
       isRoomSessionReady,
+      canUseRetainedRoomAccess,
     }: {
       isRoomSessionReady: boolean;
+      canUseRetainedRoomAccess: boolean;
     }, ref: React.ForwardedRef<unknown>) => {
       ReactModule.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
-      return <div data-testid="message-list" data-session-ready={String(isRoomSessionReady)} />;
+      return (
+        <div
+          data-testid="message-list"
+          data-session-ready={String(isRoomSessionReady)}
+          data-retained-access={String(canUseRetainedRoomAccess)}
+        />
+      );
     }),
   };
 });
 
 vi.mock('./MessageInput', () => ({
-  MessageInput: ({ canPost, isRoomSessionReady, postingRestrictionReason }: {
+  MessageInput: ({ canPost, isRoomSessionReady, canUseRetainedRoomAccess, postingRestrictionReason }: {
     canPost: boolean;
     isRoomSessionReady?: boolean;
+    canUseRetainedRoomAccess?: boolean;
     postingRestrictionReason?: string;
   }) => (
     <div
       data-testid="message-input"
       data-can-post={String(canPost)}
       data-session-ready={String(Boolean(isRoomSessionReady))}
+      data-retained-access={String(Boolean(canUseRetainedRoomAccess))}
       data-restriction={postingRestrictionReason || ''}
     />
   ),
@@ -76,12 +93,17 @@ const roomPermissions: RoomPermissions = {
   canUseCodeAgent: true,
 };
 
-const renderRoom = (isRoomSessionReady: boolean) => render(
+const renderRoom = (
+  isRoomSessionReady: boolean,
+  canUseRetainedRoomAccess = isRoomSessionReady,
+) => render(
   <ChatRoomView
     currentRoom={currentRoom}
     memberCount={1}
     isRestoringRoom={!isRoomSessionReady}
     isRoomSessionReady={isRoomSessionReady}
+    canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+    ensureRoomSessionReady={vi.fn(async () => {})}
     onRetryRoomSession={vi.fn()}
     username="User"
     clientId="client-1"
@@ -111,6 +133,18 @@ describe('ChatRoomView room session guard', () => {
     expect(screen.getByTestId('message-input').dataset.canPost).toBe('false');
     expect(screen.getByTestId('message-input').dataset.sessionReady).toBe('false');
     expect(screen.getByTestId('message-input').dataset.restriction).toBe('loading');
+  });
+
+  it('keeps acknowledged room actions available during a transient reconnect', () => {
+    renderRoom(false, true);
+
+    expect(screen.getByTestId('chat-header').dataset.retainedAccess).toBe('true');
+    expect(screen.getByTestId('message-list').dataset.sessionReady).toBe('false');
+    expect(screen.getByTestId('message-list').dataset.retainedAccess).toBe('true');
+    expect(screen.getByTestId('message-input').dataset.canPost).toBe('true');
+    expect(screen.getByTestId('message-input').dataset.sessionReady).toBe('false');
+    expect(screen.getByTestId('message-input').dataset.retainedAccess).toBe('true');
+    expect(screen.getByTestId('message-input').dataset.restriction).toBe('');
   });
 
   it('re-enables posting after the room session is verified', () => {

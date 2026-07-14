@@ -377,15 +377,18 @@ vi.mock('../components/WelcomeView', async () => {
 vi.mock('../components/ChatRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, showRoomSessionSpinner, isRoomSessionReady, messageSyncRequestId, roomPermissions, handleShareRoom, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
+    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, showRoomSessionSpinner, isRoomSessionReady, canUseRetainedRoomAccess, ensureRoomSessionReady, messageSyncRequestId, roomPermissions, handleShareRoom, handleToggleSave, handleDeleteRoom, onRetryRoomSession, setView, onRoomUpdated }: {
       currentRoom: Room;
       memberCount: number | null;
       isRestoringRoom: boolean;
       showRoomSessionSpinner?: boolean;
       isRoomSessionReady: boolean;
+      canUseRetainedRoomAccess: boolean;
+      ensureRoomSessionReady?: (roomId: string) => Promise<void>;
       messageSyncRequestId?: number;
       roomPermissions?: RoomPermissions | null;
       handleShareRoom?: () => void;
+      handleToggleSave?: () => void;
       handleDeleteRoom?: (roomId: string) => void;
       onRetryRoomSession?: () => void;
       setView?: (view: 'settings') => void;
@@ -399,6 +402,7 @@ vi.mock('../components/ChatRoomView', async () => {
         'data-restoring': String(showRoomSessionSpinner ?? isRestoringRoom),
         'data-session-restoring': String(isRestoringRoom),
         'data-session-ready': String(isRoomSessionReady),
+        'data-retained-access': String(canUseRetainedRoomAccess),
         'data-message-sync-request-id': String(messageSyncRequestId ?? 0),
         'data-permission-room-id': roomPermissions?.roomId || 'none',
         'data-can-post': String(Boolean(roomPermissions?.canPost)),
@@ -407,7 +411,18 @@ vi.mock('../components/ChatRoomView', async () => {
       currentRoom.name,
       React.createElement('button', {
         'data-testid': 'share-room',
+        disabled: !canUseRetainedRoomAccess,
         onClick: handleShareRoom,
+      }),
+      React.createElement('button', {
+        'data-testid': 'ensure-room-operation',
+        disabled: !canUseRetainedRoomAccess,
+        onClick: () => void ensureRoomSessionReady?.(currentRoom.id),
+      }),
+      React.createElement('button', {
+        'data-testid': 'toggle-save-room',
+        disabled: !canUseRetainedRoomAccess,
+        onClick: handleToggleSave,
       }),
       React.createElement('button', {
         'data-testid': 'delete-current-room',
@@ -438,13 +453,15 @@ vi.mock('../components/ChatRoomView', async () => {
 vi.mock('../components/CodeAgentRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    CodeAgentRoomView: ({ currentRoom, isRoomSessionReady }: {
+    CodeAgentRoomView: ({ currentRoom, isRoomSessionReady, canUseRetainedRoomAccess }: {
       currentRoom: Room;
       isRoomSessionReady: boolean;
+      canUseRetainedRoomAccess: boolean;
     }) => React.createElement('div', {
       'data-testid': 'code-agent-room-view',
       'data-room-id': currentRoom.id,
       'data-session-ready': String(isRoomSessionReady),
+      'data-retained-access': String(canUseRetainedRoomAccess),
     }),
   };
 });
@@ -859,7 +876,7 @@ describe('MessagePage room session restore', () => {
     expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
   });
 
-  it('locks the room on disconnect and unlocks only after the new socket rejoins', async () => {
+  it('keeps acknowledged access on disconnect while the new socket rejoins', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
     renderPage();
@@ -876,12 +893,14 @@ describe('MessagePage room session restore', () => {
       socketMock.trigger('disconnect', 'transport close');
     });
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('true');
 
     act(() => {
       socketMock.trigger('connect');
     });
     await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined));
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('true');
 
     await act(async () => {
       resolveReconnect({ room: room(), permissions: permissions(), memberCount: 4 });
@@ -905,6 +924,7 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
       expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('true');
     });
     expect(localStorage.getItem('roomtalk_current_room')).not.toBeNull();
 
@@ -1099,7 +1119,7 @@ describe('MessagePage room session restore', () => {
     expect(screen.getByTestId('chat-room-view').getAttribute('data-permission-room-id')).toBe('none');
   });
 
-  it('locks the room shell when the controller reports an unavailable session', async () => {
+  it('retains acknowledged room access when reconnect retries are exhausted', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
     renderPage();
@@ -1111,7 +1131,49 @@ describe('MessagePage room session restore', () => {
 
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
     expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('true');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-permission-room-id')).toBe('room-1');
     expect(await screen.findByText('errorRestoringRoom')).toBeTruthy();
+  });
+
+  it('invalidates retained access after an explicit server denial', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('true'));
+    act(() => {
+      roomSessionMock.fail(new RoomSessionProtocolError('WORKSPACE_UNAVAILABLE', 'Workspace unavailable'));
+    });
+
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-permission-room-id')).toBe('none');
+    expect((screen.getByTestId('share-room') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('waits for room recovery before updating the saved-room state', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('true'));
+
+    act(() => {
+      roomSessionMock.fail(new Error('reconnect failed'));
+    });
+    let resolveRecovery!: (value: { room: Room; permissions: RoomPermissions; memberCount: number }) => void;
+    socketApiMock.joinRoom.mockImplementationOnce(() => new Promise(resolve => {
+      resolveRecovery = resolve;
+    }));
+    socketApiMock.saveRoomToServer.mockResolvedValueOnce(room());
+    socketApiMock.joinRoom.mockClear();
+
+    fireEvent.click(screen.getByTestId('toggle-save-room'));
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined));
+    expect(socketApiMock.saveRoomToServer).not.toHaveBeenCalled();
+
+    await act(async () => resolveRecovery({ room: room(), permissions: permissions(), memberCount: 1 }));
+    await waitFor(() => expect(socketApiMock.saveRoomToServer).toHaveBeenCalledWith('room-1'));
   });
 
   it('atomically clears the active room when the controller confirms it is missing', async () => {
@@ -1190,6 +1252,7 @@ describe('MessagePage room session restore', () => {
     expect(localStorage.getItem('roomtalk_current_room')).not.toBeNull();
     expect(await screen.findByText('errorRestoringRoom')).toBeTruthy();
     expect(screen.getByTestId('chat-room-view').getAttribute('data-session-ready')).toBe('false');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-retained-access')).toBe('false');
     expect(messageCacheMock.invalidateCachedRoomMessageWindow).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId('share-room'));
@@ -1220,6 +1283,7 @@ describe('MessagePage room session restore', () => {
     const roomView = await screen.findByTestId('chat-room-view');
     expect(roomView.getAttribute('data-session-ready')).toBe('false');
     expect(roomView.getAttribute('data-restoring')).toBe('true');
+    expect(roomView.getAttribute('data-retained-access')).toBe('false');
     fireEvent.click(screen.getByTestId('share-room'));
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
 

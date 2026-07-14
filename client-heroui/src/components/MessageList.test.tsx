@@ -19,6 +19,8 @@ const downloadTranscriptHtmlMock = vi.hoisted(() => vi.fn());
 const downloadTranscriptZipMock = vi.hoisted(() => vi.fn());
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendStickerMock = vi.hoisted(() => vi.fn());
+const editMessageMock = vi.hoisted(() => vi.fn());
+const deleteMessageMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
   const pendingHistory: Array<{
@@ -152,6 +154,8 @@ vi.mock('../utils/socket', () => ({
   getMediaDownloadUrl: getMediaDownloadUrlMock,
   sendMessage: sendMessageMock,
   sendSticker: sendStickerMock,
+  editMessage: editMessageMock,
+  deleteMessage: deleteMessageMock,
   requestRoomMessages: socketMock.requestHistory,
 }));
 
@@ -323,6 +327,8 @@ describe('MessageList optimistic messages', () => {
     downloadTranscriptZipMock.mockResolvedValue(undefined);
     sendMessageMock.mockReset();
     sendStickerMock.mockReset();
+    editMessageMock.mockResolvedValue(message({ content: 'edited content' }));
+    deleteMessageMock.mockResolvedValue(undefined);
     loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'code-agent',
@@ -481,15 +487,17 @@ describe('MessageList optimistic messages', () => {
 
     fireEvent.click(await screen.findByText('retry-delivery-temp-client-message-3'));
 
-    expect(sendMessageMock).toHaveBeenCalledWith(
-      'retry this text',
-      'room-1',
-      'text',
-      'Ada',
-      { text: 'A', color: 'primary' },
-      'quoted-1',
-      'client-message-3',
-    );
+    await waitFor(() => {
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        'retry this text',
+        'room-1',
+        'text',
+        'Ada',
+        { text: 'A', color: 'primary' },
+        'quoted-1',
+        'client-message-3',
+      );
+    });
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('pending');
 
     const saved = message({
@@ -536,14 +544,16 @@ describe('MessageList optimistic messages', () => {
 
     fireEvent.click(await screen.findByText('retry-delivery-temp-sticker-1'));
 
-    expect(sendStickerMock).toHaveBeenCalledWith(
-      'xiaokumao/001/01',
-      'room-1',
-      'Ada',
-      { text: 'A', color: 'primary' },
-      undefined,
-      'client-sticker-1',
-    );
+    await waitFor(() => {
+      expect(sendStickerMock).toHaveBeenCalledWith(
+        'xiaokumao/001/01',
+        'room-1',
+        'Ada',
+        { text: 'A', color: 'primary' },
+        undefined,
+        'client-sticker-1',
+      );
+    });
     await waitFor(() => {
       expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('failed');
       expect(screen.getByTestId('message-item').getAttribute('data-delivery-error')).toBe('still offline');
@@ -1001,6 +1011,45 @@ describe('MessageList optimistic messages', () => {
     expect(cancelQueuedCodeAgentInputMock).not.toHaveBeenCalled();
   });
 
+  it('keeps acknowledged queued actions visible and recovers before mutating', async () => {
+    let resolveRecovery!: () => void;
+    const ensureRoomSessionReady = vi.fn(() => new Promise<void>(resolve => {
+      resolveRecovery = resolve;
+    }));
+    await writeCachedRoomMessageWindow({
+      roomId: 'room-1',
+      messages: [message({
+        codeAgentQueuedInput: {
+          state: 'queued',
+          queuedAt: '2026-07-10T00:00:00.000Z',
+          updatedAt: '2026-07-10T00:00:00.000Z',
+        },
+      })],
+      messageVersion: 1,
+      hasMore: false,
+      cachedAt: Date.now(),
+    });
+    render(<MessageList
+      roomId="room-1"
+      onReply={vi.fn()}
+      roomPermissions={postingPermissions}
+      presentation="code-agent"
+      isRoomSessionReady={false}
+      canUseRetainedRoomAccess
+      ensureRoomSessionReady={ensureRoomSessionReady}
+    />);
+
+    const item = await screen.findByTestId('message-item');
+    expect(item.getAttribute('data-interaction-disabled')).toBe('false');
+    fireEvent.click(screen.getByText('steer-queued-m1'));
+
+    await waitFor(() => expect(ensureRoomSessionReady).toHaveBeenCalledWith('room-1'));
+    expect(steerQueuedCodeAgentInputMock).not.toHaveBeenCalled();
+
+    await act(async () => resolveRecovery());
+    await waitFor(() => expect(steerQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'm1'));
+  });
+
   it('does not request message history until the restored room session is verified', async () => {
     const rendered = render(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
@@ -1096,6 +1145,57 @@ describe('MessageList optimistic messages', () => {
     );
   });
 
+  it('keeps open message actions during a transient reconnect and validates before delete', async () => {
+    let resolveRecovery!: () => void;
+    const ensureRoomSessionReady = vi.fn(() => new Promise<void>(resolve => {
+      resolveRecovery = resolve;
+    }));
+    const rendered = render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        isRoomSessionReady
+        canUseRetainedRoomAccess
+        ensureRoomSessionReady={ensureRoomSessionReady}
+      />
+    );
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'modal-message', content: 'editable' })],
+        messageVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('edit-modal-message'));
+    fireEvent.click(screen.getByText('delete-modal-message'));
+    expect(screen.getByText('edit-and-ask')).toBeTruthy();
+    expect(screen.getByText('confirm-delete')).toBeTruthy();
+
+    rendered.rerender(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        isRoomSessionReady={false}
+        canUseRetainedRoomAccess
+        ensureRoomSessionReady={ensureRoomSessionReady}
+      />
+    );
+    expect(screen.getByText('edit-and-ask')).toBeTruthy();
+    expect(screen.getByText('confirm-delete')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('confirm-delete'));
+    await waitFor(() => expect(ensureRoomSessionReady).toHaveBeenCalledWith('room-1'));
+    expect(deleteMessageMock).not.toHaveBeenCalled();
+
+    await act(async () => resolveRecovery());
+    await waitFor(() => expect(deleteMessageMock).toHaveBeenCalledWith('room-1', 'modal-message'));
+  });
+
   it('keeps the code workspace panel outside the message scroll container', () => {
     render(
       <MessageList
@@ -1158,6 +1258,63 @@ describe('MessageList optimistic messages', () => {
     );
     await waitFor(() => expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId('code-agent-refresh-workspace')).toBeTruthy();
+  });
+
+  it('retains the acknowledged workspace snapshot while the room reconnects', async () => {
+    const onWorkspaceRootChange = vi.fn();
+    loadCodeAgentWorkspaceSnapshotMock.mockResolvedValueOnce({
+      roomId: 'room-1',
+      backend: 'code-agent',
+      source: 'sandbox',
+      generatedAt: '2026-05-29T00:00:00.000Z',
+      workspaceRoot: '/workspace',
+      status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
+      summary: { toolCalls: 0, toolResults: 0, toolErrors: 0, lastToolName: null },
+      artifacts: [],
+      changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
+      commands: [],
+    });
+    const currentRoom = {
+      id: 'room-1',
+      name: 'Code Agent',
+      createdAt: '2026-05-26T00:00:00.000Z',
+      creatorId: 'client-1',
+      type: 'codeAgent' as const,
+      sandboxStatus: 'ready' as const,
+      codeAgentStatus: 'idle' as const,
+    };
+    const rendered = render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        presentation="code-agent"
+        currentRoom={currentRoom}
+        isRoomSessionReady
+        canUseRetainedRoomAccess
+        onWorkspaceRootChange={onWorkspaceRootChange}
+      />
+    );
+    await waitFor(() => expect(onWorkspaceRootChange).toHaveBeenCalledWith('/workspace'));
+    onWorkspaceRootChange.mockClear();
+
+    rendered.rerender(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        presentation="code-agent"
+        currentRoom={currentRoom}
+        isRoomSessionReady={false}
+        canUseRetainedRoomAccess
+        onWorkspaceRootChange={onWorkspaceRootChange}
+      />
+    );
+
+    await act(async () => {});
+    expect(onWorkspaceRootChange).not.toHaveBeenCalledWith(null);
+    expect(screen.getByTestId('code-agent-workspace')).toBeTruthy();
+    expect(screen.queryByTestId('code-agent-refresh-workspace')).toBeNull();
   });
 
   it('does not expose code-agent mode switching to non-managers', () => {

@@ -8,7 +8,7 @@ This document describes the current room recovery and consistency model across t
 
 ## What room readiness means
 
-A room is ready when the current Socket.IO connection has been registered and the server has acknowledged membership in the room selected by the current session epoch. React may show a stored room shell and cached messages before that point, but member-only actions stay locked until the controller reports `ready` for the same room ID.
+A room is ready when the current Socket.IO connection has been registered and the server has acknowledged membership in the room selected by the current session epoch. A cold restore may show a stored room shell and cached messages before that point, but it has no acknowledged permission snapshot and keeps member actions locked. After this tab has joined successfully once, a transport-only interruption does not erase that snapshot. The page remains usable while the controller recovers, and every socket-backed operation waits for the current room to become ready before it is sent.
 
 Four authorities cooperate during recovery:
 
@@ -37,6 +37,7 @@ The recovery path is intentionally concentrated in a few modules:
 | React subscription to controller snapshots | [`useRoomSession.ts`](../client-heroui/src/hooks/useRoomSession.ts) |
 | Message listeners and history reconciliation | [`useRoomMessageEvents.ts`](../client-heroui/src/hooks/useRoomMessageEvents.ts) |
 | Message rendering and privileged interaction boundary | [`MessageList.tsx`](../client-heroui/src/components/MessageList.tsx) |
+| Retained-access presentation and operation-triggered recovery | [`MessagePage.tsx`](../client-heroui/src/pages/MessagePage.tsx), [`ChatHeader.tsx`](../client-heroui/src/components/ChatHeader.tsx), [`MessageInput.tsx`](../client-heroui/src/components/MessageInput.tsx), and [`MessageList.tsx`](../client-heroui/src/components/MessageList.tsx) |
 | Inline media loading and full-screen viewer lifecycle | [`MessageItem.tsx`](../client-heroui/src/components/MessageItem.tsx), [`useCachedMedia.ts`](../client-heroui/src/hooks/useCachedMedia.ts), and [`MediaViewerModal.tsx`](../client-heroui/src/components/MediaViewerModal.tsx) |
 | Message and media caches | [`messageHistoryCache.ts`](../client-heroui/src/utils/messageHistoryCache.ts) and [`mediaCache.ts`](../client-heroui/src/utils/mediaCache.ts) |
 | Room ordering | [`roomState.ts`](../client-heroui/src/utils/roomState.ts) |
@@ -92,7 +93,7 @@ This separation is why a join acknowledgement advances `messageSyncRequestId` in
 
 ### 7. A later disconnect repeats only the necessary work
 
-If socket A disconnects, the controller moves to `retrying`. The page locks new member operations but keeps the room shell, messages, scroll position, and loaded media. When socket B connects, the controller advances `sessionEpoch`, registers socket B, rejoins the same desired room, and advances `messageSyncRequestId` after the new join succeeds.
+If socket A disconnects, the controller moves to `retrying`. The page keeps the room shell, messages, scroll position, loaded media, drafts, and the last acknowledged permission snapshot. Local interactions remain available. If the user starts a socket-backed operation before background recovery finishes, that operation waits on `ensureRoom(roomId, "operation")`; it is sent only after registration and join succeed on the current socket. When socket B connects, the controller advances `sessionEpoch`, registers socket B, rejoins the same desired room, and advances `messageSyncRequestId` after the new join succeeds.
 
 The sequence diagram is a compact index of those two paths. Retry budgets, supersession, and foreground-only message reconciliation are covered in the sections that follow.
 
@@ -121,8 +122,8 @@ sequenceDiagram
 
     Note over Page,Messages: Later socket replacement
     Server-->>Session: disconnect(socket A)
-    Session-->>Page: retrying, lock new member operations
-    Note over Page,Messages: Keep the room shell, messages, scroll position, and loaded media
+    Session-->>Page: retrying, retain acknowledged UI access
+    Note over Page,Messages: Keep the room shell, messages, drafts, workspace snapshot, and loaded media
     Session->>Server: Reconnect transport
     Server-->>Session: connected(socket B)
     Note right of Session: sessionEpoch + 1
@@ -140,12 +141,12 @@ The phase names describe protocol progress, while the page decides how to presen
 | Phase | Controller meaning | Page behavior |
 | --- | --- | --- |
 | `idle` | No desired room is being driven | Show a non-room view or wait for room intent |
-| `connecting` | A room is desired and no usable socket ID exists | Keep any room shell visible and lock member operations |
-| `registering` | The transport is connected and identity binding is pending | Keep the shell and cached content visible; wait for register ack |
-| `joining` | The socket is registered and target membership is pending | Keep the target shell locked until the join commits |
+| `connecting` | A room is desired and no usable socket ID exists | Keep the shell visible; use retained access only if this tab has an acknowledged snapshot for that room |
+| `registering` | The transport is connected and identity binding is pending | Preserve the same UI boundary while waiting for register ack |
+| `joining` | The socket is registered and target membership is pending | Keep a cold or newly selected target locked; preserve acknowledged same-room interactions during recovery |
 | `ready` | The current socket has verified membership in the desired room | Apply permissions and allow the operations they authorize |
-| `retrying` | A recoverable timeout, disconnect, or transport change interrupted the drive | Preserve rendered content, lock new privileged work, and continue recovery |
-| `unavailable` | A definitive rejection occurred or the retry budget ended | Offer retry or run the room-removal/password handling for that error |
+| `retrying` | A recoverable timeout, disconnect, or transport change interrupted the drive | Preserve rendered content and acknowledged UI access; gate each socket-backed operation on recovery |
+| `unavailable` | A definitive rejection occurred or the retry budget ended | Keep retained access after transport exhaustion, but invalidate it after an explicit server denial; offer retry or run the room-removal/password path |
 
 The snapshot contains the current `phase`, desired `roomId`, `socketId`, `sessionEpoch`, `messageSyncRequestId`, last verified result, initiating source, current attempt, and terminal error. The verified result may include the canonical room, current permissions, and member count returned by the join acknowledgement.
 
@@ -205,9 +206,13 @@ The server counts online room members by unique client ID and tracks active brow
 
 The controller owns the recovery protocol, while `MessagePage` decides what the user can see and do during each phase. A stored room can be rendered as a shell during `connecting`, `registering`, and `joining`. The page derives readiness by checking that the controller is `ready` for the exact room currently on screen.
 
-The successful join result replaces the shell with an accepted canonical room and supplies current permissions. If the controller instead reports `unavailable`, the shell remains visible with its operations locked and a retry action. A confirmed missing room or access removal follows the room-removal path and clears the shell.
+The successful join result replaces the shell with an accepted canonical room and supplies current permissions. `MessagePage` keeps that permission snapshot for the active room if a later refresh, timeout, or transport recovery fails. It clears the snapshot when the server explicitly rejects identity or room access, including invalid client authentication, login required, a missing or removed room, an invalid room password, or unavailable code-agent access. A confirmed missing room or access removal also follows the room-removal path and clears the shell.
 
-Transport loss keeps the desired room, current room shell, messages, scroll position, and already loaded media. New privileged work is locked while the controller registers and joins the replacement socket. The reconnect indicator has a 400 ms grace period to avoid flashing during a fast recovery; it only reflects controller state and never starts recovery itself.
+Transport loss keeps the desired room, current shell, messages, scroll position, drafts, an active voice capture, open message dialogs, loaded media, and cached workspace data. The composer and previously authorized message actions remain visible. Operations that need room membership, such as sending, editing, deleting, retrying AI, saving a room, listing online members, exporting, or sending an A2UI action, first wait for the controller to register and join the current socket. The operation then reaches the server's current authorization check. High-risk room settings, code-agent mode changes, workspace edits, history replacement, and workspace refresh remain gated directly on current-session readiness.
+
+This distinction avoids two failure modes. Treating every disconnect as permission revocation destroys useful local state and makes a short mobile suspension feel like access loss. Sending immediately from a stale UI can target an unjoined socket. Retained access controls presentation; `ensureRoom` controls the socket boundary; server authorization remains the final authority.
+
+The reconnect indicator has a 400 ms grace period to avoid flashing during a fast recovery. It only reflects controller state and never starts recovery itself.
 
 `visibilitychange`, BFCache restore, and network recovery all enter through `resume`. A ready session schedules history reconciliation. A session that is still connecting, registering, joining, or retrying shares the active drive. This keeps lifecycle events from duplicating registration or join work.
 
@@ -235,13 +240,13 @@ Cache hydration has a similar ordering guard. A slow IndexedDB read can finish a
 
 ## Media continuity
 
-Media access follows the same readiness boundary as other privileged reads. A message can request a signed download URL only while the room session is verified. The server checks the client auth token, current durable room access, room ID, and the asset's room association each time it issues a URL.
+Media access uses a retained-access presentation boundary and an independent server authorization boundary. A cold, unverified shell does not read cached media bodies or request a signed download URL. After one acknowledged join, a transient socket interruption may continue cache reads and signed-URL requests because the HTTP endpoint checks the client auth token, current durable room access, room ID, and the asset's room association on every request; it does not trust the retained client snapshot.
 
-During temporary recovery, a displayed media URL remains attached to the element. `useCachedMedia` pauses cache and network work while access is unverified and retains its current object URL or signed URL. Media state resets when the asset identity changes or the user retries a failed load. Clicking an image opens the viewer from the URL that is actually rendered, including a cached blob URL.
+During temporary recovery, a displayed media URL remains attached to the element. `useCachedMedia` pauses cache and network work only when retained access is unavailable and keeps its current object URL or signed URL across a transport interruption. Media state resets when the asset identity changes or the user retries a failed load. Clicking an image opens the viewer from the URL that is actually rendered, including a cached blob URL.
 
-For example, an image may already be visible from an IndexedDB-backed blob URL when the socket disconnects. The session becomes unready, so the component stops asking for a fresh signed URL. The blob URL stays on the image, and clicking it passes that same URL to the viewer. The user can keep reading the room while membership is repaired.
+For example, an image may already be visible from an IndexedDB-backed blob URL when the socket disconnects. The blob URL stays on the image, and clicking it passes that same URL to the viewer. If another asset still needs a URL, its signed request can continue independently and must pass the server's durable-access check.
 
-If the message has no usable local or signed URL yet, it may remain in a loading state until the session is ready. At that point the component asks the server for a new 15-minute read URL. A 403 here means durable room access failed at request time; repeated join attempts in the UI would not make the media endpoint authorize the request.
+If the message has no usable local or signed URL yet, a cold shell waits for its first acknowledged join. A previously verified room may ask the server for a new 15-minute read URL during socket recovery. A 403 means durable room access failed at request time; the client surfaces that failure rather than treating its old permission snapshot as authorization.
 
 The viewer marks the application root inert only after the dialog and its source are ready. This keeps an unresolved media source from freezing the whole application before the viewer can render or close.
 
@@ -293,7 +298,7 @@ Permission payloads have their own request generation. A newer `room_permissions
 
 ## Posting boundaries and operation authorization
 
-The server evaluates permissions when an operation is attempted. This covers message posting, media upload initialization and completion, message edits and deletes, room management, and code-agent access. A previously received permission snapshot cannot authorize a later operation by itself.
+The server evaluates permissions when an operation is attempted. This covers message posting, media upload initialization and completion, message edits and deletes, room management, and code-agent access. A previously received permission snapshot keeps the interface stable during a transient reconnect, but it cannot authorize a later operation by itself. Socket-backed operations first recover current membership and then rely on the server's operation-time check.
 
 Posting schedules create time-based changes without a socket event. The client computes the next opening or closing boundary in the room timezone and schedules a permission refresh just after that instant. The server evaluates the current clock, and its response supplies the new `canPost` value.
 
@@ -305,11 +310,11 @@ Client and server tests share the same schedule scenarios: inclusive starts, exc
 
 ## Failure handling
 
-Disconnects, transport changes, and acknowledgement timeouts are treated as recoverable until their retry budget is exhausted. The room shell and cached content stay visible while controls remain locked. `unavailable` exposes a retry action without discarding the desired room.
+Disconnects, transport changes, and acknowledgement timeouts are treated as recoverable until their retry budget is exhausted. The room shell and cached content remain visible. A cold shell stays locked; an already acknowledged room keeps retained UI access and lets the next operation trigger another recovery attempt. `unavailable` exposes a retry action without treating the timeout itself as access revocation.
 
 A registration timeout and a join rejection lead to different recovery paths. A timeout may belong to a slow acknowledgement or a socket that changed mid-request, so the controller retries within its budget. A wrong password or confirmed access removal will not improve with another automatic attempt. That request becomes unavailable immediately and the page can ask the user for a password or navigate away.
 
-Access rejection, a missing room, a rejected password, and disabled code-agent access end the current attempt. When a switch to another room fails, `MessagePage` selects the previous verified room again and can reopen password entry for the rejected target. The previous room is not abandoned until the server commits the new join.
+Access rejection, a missing room, a rejected password, and disabled code-agent access end the current attempt and invalidate retained access for that target. Invalid client identity or login requirements do the same. When a switch to another room fails, `MessagePage` selects the previous verified room again and can reopen password entry for the rejected target. The previous room is not abandoned until the server commits the new join.
 
 Late results are handled by the same ownership rules. If room A is joining and the user selects room B, room A's completion is superseded. A later successful acknowledgement for A cannot change the controller snapshot. The controller sends `leave_room(A)` to clean any presence that the server may have committed, then continues waiting for B.
 

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  doesRoomSessionErrorInvalidateRetainedAccess,
   RoomSessionController,
   RoomSessionJoinAck,
+  RoomSessionProtocolError,
   RoomSessionRegisterAck,
   RoomSessionSupersededError,
   RoomSessionTransport,
@@ -80,6 +82,30 @@ const flushPromises = async () => {
     await Promise.resolve();
   }
 };
+
+describe('retained room access classification', () => {
+  it('keeps acknowledged access for transport failures and timeouts', () => {
+    expect(doesRoomSessionErrorInvalidateRetainedAccess(new Error('transport close'))).toBe(false);
+    expect(doesRoomSessionErrorInvalidateRetainedAccess(new Error('Timed out while joining room'))).toBe(false);
+    expect(doesRoomSessionErrorInvalidateRetainedAccess(
+      new RoomSessionProtocolError('JOIN_FAILED', 'Unable to join room'),
+    )).toBe(false);
+  });
+
+  it.each([
+    'INVALID_CLIENT_ID',
+    'INVALID_CLIENT_AUTH_TOKEN',
+    'CLIENT_LOGIN_REQUIRED',
+    'ROOM_NOT_FOUND',
+    'ROOM_ACCESS_REMOVED',
+    'ROOM_PASSWORD_REQUIRED_OR_INCORRECT',
+    'WORKSPACE_UNAVAILABLE',
+  ] as const)('invalidates acknowledged access for %s', (code) => {
+    expect(doesRoomSessionErrorInvalidateRetainedAccess(
+      new RoomSessionProtocolError(code, code),
+    )).toBe(true);
+  });
+});
 
 describe('RoomSessionController', () => {
   let transport: FakeRoomSessionTransport;

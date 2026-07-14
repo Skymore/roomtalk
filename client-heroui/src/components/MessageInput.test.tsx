@@ -701,6 +701,43 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
   });
 
+  it('keeps the draft editable and waits for recovery before sending with retained access', async () => {
+    let resolveRecovery!: () => void;
+    const ensureRoomSessionReady = vi.fn(() => new Promise<void>(resolve => {
+      resolveRecovery = resolve;
+    }));
+    const { editor, props } = renderMessageInput({
+      isRoomSessionReady: false,
+      canUseRetainedRoomAccess: true,
+      ensureRoomSessionReady,
+    });
+    setEditorText(editor, 'before reconnect');
+
+    expect(editor.getAttribute('contenteditable')).toBe('true');
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(ensureRoomSessionReady).toHaveBeenCalledWith('room-1'));
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    expect(editor.textContent).toBe('before reconnect');
+
+    setEditorText(editor, 'edited while reconnecting');
+    await act(async () => resolveRecovery());
+
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledWith(
+      'edited while reconnecting',
+      'room-1',
+      'text',
+      'Ada',
+      { text: 'A', color: '#123456' },
+      undefined,
+      expect.any(String),
+    ));
+    expect(props.onOptimisticMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'edited while reconnecting',
+    }));
+    expect(editor.textContent).toBe('');
+  });
+
   it('closes AI settings when the room session becomes unverified', () => {
     disclosureMocks.isOpen = true;
     const rendered = renderMessageInput({ isRoomSessionReady: true });
@@ -710,6 +747,25 @@ describe('MessageInput optimistic send flow', () => {
     );
 
     expect(disclosureMocks.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps AI settings open during a transient reconnect with retained access', () => {
+    disclosureMocks.isOpen = true;
+    const rendered = renderMessageInput({
+      isRoomSessionReady: true,
+      canUseRetainedRoomAccess: true,
+    });
+
+    rendered.rerender(
+      <MessageInput
+        {...rendered.props}
+        isRoomSessionReady={false}
+        canUseRetainedRoomAccess={true}
+        ensureRoomSessionReady={vi.fn(async () => {})}
+      />
+    );
+
+    expect(disclosureMocks.onClose).not.toHaveBeenCalled();
   });
 
   it('queues a complete next turn when the agent is running with text', async () => {
@@ -1484,6 +1540,37 @@ describe('MessageInput optimistic send flow', () => {
     await waitFor(() => expect(trackStop).toHaveBeenCalled());
     await waitFor(() => expect(transcriberStop).toHaveBeenCalled());
     expect(screen.queryByText('stopRecording')).toBeNull();
+  });
+
+  it('keeps an active recording alive during a transient reconnect with retained access', async () => {
+    const { trackStop } = installVoiceRecordingMocks();
+    const transcriberStop = vi.fn().mockResolvedValue(undefined);
+    streamingTranscriptionMocks.startStreamingTranscription.mockResolvedValueOnce({
+      stop: transcriberStop,
+      getText: vi.fn(() => 'draft transcript'),
+    });
+    const rendered = renderMessageInput({
+      isRoomSessionReady: true,
+      canUseRetainedRoomAccess: true,
+    });
+
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('voiceToText'));
+    await waitFor(() => expect(streamingTranscriptionMocks.startStreamingTranscription).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); });
+
+    rendered.rerender(
+      <MessageInput
+        {...rendered.props}
+        isRoomSessionReady={false}
+        canUseRetainedRoomAccess={true}
+        ensureRoomSessionReady={vi.fn(async () => {})}
+      />
+    );
+
+    expect(trackStop).not.toHaveBeenCalled();
+    expect(transcriberStop).not.toHaveBeenCalled();
+    expect(screen.getByText('stopRecording')).toBeTruthy();
   });
 
   it('revokes an unsent voice preview instead of carrying it into the next room', async () => {

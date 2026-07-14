@@ -24,6 +24,7 @@ import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
 import { getCodeAgentStatusClassName, getCodeAgentStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/codeAgentRoom';
+import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -31,6 +32,8 @@ interface ChatHeaderProps {
   isRestoringRoom: boolean;
   showRoomSessionSpinner?: boolean;
   isRoomSessionReady: boolean;
+  canUseRetainedRoomAccess: boolean;
+  ensureRoomSessionReady: EnsureRoomSessionReady;
   onRetryRoomSession: () => void;
   handleCopyToClipboard: (text: string) => void;
   handleShareRoom: () => void;
@@ -55,6 +58,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isRestoringRoom,
   showRoomSessionSpinner = isRestoringRoom,
   isRoomSessionReady,
+  canUseRetainedRoomAccess,
+  ensureRoomSessionReady,
   onRetryRoomSession,
   handleCopyToClipboard,
   handleShareRoom,
@@ -81,6 +86,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const membersRequestGenerationRef = useRef(0);
   const canManageRoom = Boolean(roomPermissions?.canManageRoom);
   const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
   const codeAgentBackend = getCodeAgentBackend(currentRoom);
@@ -91,6 +97,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
   }, []);
+
+  useEffect(() => {
+    membersRequestGenerationRef.current += 1;
+    setOnlineMembers([]);
+    setIsLoadingMembers(false);
+  }, [currentRoom.id]);
 
   useEffect(() => {
     if (!isRoomSessionReady || !canManageRoom) {
@@ -105,15 +117,32 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     copyTimeoutRef.current = setTimeout(() => setCopiedRoomId(false), 2000);
   };
 
-  const handleMembersOpenChange = (isOpen: boolean) => {
-    if (!isOpen || !isRoomSessionReady) {
+  const handleMembersOpenChange = async (isOpen: boolean) => {
+    if (!isOpen) {
+      membersRequestGenerationRef.current += 1;
+      setIsLoadingMembers(false);
       return;
     }
+    if (!canUseRetainedRoomAccess) {
+      return;
+    }
+    const requestGeneration = ++membersRequestGenerationRef.current;
     setIsLoadingMembers(true);
-    getRoomMembers(currentRoom.id)
-      .then(setOnlineMembers)
-      .catch(() => setOnlineMembers([]))
-      .finally(() => setIsLoadingMembers(false));
+    try {
+      await ensureRoomSessionReady(currentRoom.id);
+      const members = await getRoomMembers(currentRoom.id);
+      if (membersRequestGenerationRef.current === requestGeneration) {
+        setOnlineMembers(members);
+      }
+    } catch {
+      if (membersRequestGenerationRef.current === requestGeneration) {
+        setOnlineMembers([]);
+      }
+    } finally {
+      if (membersRequestGenerationRef.current === requestGeneration) {
+        setIsLoadingMembers(false);
+      }
+    }
   };
 
   const onConfirmLeave = () => {
@@ -172,7 +201,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <PopoverTrigger>
               <button
                 type="button"
-                disabled={!isRoomSessionReady}
+                disabled={!canUseRetainedRoomAccess}
                 data-testid="room-member-count"
                 aria-label={t('onlineMembers')}
                 className="flex flex-shrink-0 items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] disabled:cursor-not-allowed disabled:opacity-50 dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
@@ -257,7 +286,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <Button
             size="sm"
             variant={isSaved ? 'flat' : 'light'}
-            isDisabled={!isRoomSessionReady}
+            isDisabled={!canUseRetainedRoomAccess}
             onPress={handleToggleSave}
             aria-label={`${isSaved ? t('unsave') : t('saveAction')} ${t('room')}`}
             className={`hidden rounded-lg px-3 md:inline-flex ${
@@ -277,7 +306,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             </Button>
           </DropdownTrigger>
           <DropdownMenu aria-label={t('ariaLabelRoomActions')}>
-            <DropdownItem key="share" isDisabled={!isRoomSessionReady} startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
+            <DropdownItem key="share" isDisabled={!canUseRetainedRoomAccess} startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
               {t('share')}
             </DropdownItem>
             {hasPostingSchedule ? (
@@ -292,7 +321,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             ) : null}
             <DropdownItem
               key="save"
-              isDisabled={!isRoomSessionReady}
+              isDisabled={!canUseRetainedRoomAccess}
               startContent={<Icon icon={isSaved ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} />}
               onPress={handleToggleSave}
               className={isSaved ? "text-warning-600 dark:text-warning-500" : ""}
