@@ -13,7 +13,7 @@ Add Codex app-server as a backend beside the in-house Coco agent and the legacy 
 
 - RoomTalk remains the control plane and E2B remains the execution plane.
 - Backend selection is per room/turn and survives retry/recovery.
-- User Codex subscription auth is encrypted at rest and injected only for that user's run.
+- The room owner's Codex subscription auth is encrypted at rest and injected only for authorized turns in that room; the requesting member remains the room-access and prompt actor.
 - The app-server backend shares ordered text/tool/status/usage event semantics with Coco.
 - Workspace, room context, model gateway, publishing, queue/steer/interrupt, and access control remain backend-independent.
 - No client-wide turn lock or other deprecated CLI-era constraint may be reintroduced.

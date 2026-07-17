@@ -5,7 +5,7 @@ import {
   CodexConnectionError,
   CodexConnectionService,
 } from '../services/codexConnection';
-import { CodeAgentRoomContextService } from '../services/codeAgentRoomContext';
+import { CodeAgentRoomContextError, CodeAgentRoomContextService } from '../services/codeAgentRoomContext';
 
 const bearerToken = (req: Request) => {
   const match = (req.header('authorization') || '').match(/^Bearer\s+(.+)$/i);
@@ -13,7 +13,7 @@ const bearerToken = (req: Request) => {
 };
 
 export function registerCodeAgentCodexAuthRoutes(app: Express, options: {
-  authorizationService: Pick<CodeAgentRoomContextService, 'verifyTurnToken' | 'assertAccess'>;
+  authorizationService: Pick<CodeAgentRoomContextService, 'verifyTurnToken' | 'resolveCodexAuthClientId'>;
   connectionService: Pick<CodexConnectionService, 'refreshChatgptAuth'>;
   logger: Logger;
 }) {
@@ -32,16 +32,23 @@ export function registerCodeAgentCodexAuthRoutes(app: Express, options: {
     }
 
     try {
-      await options.authorizationService.assertAccess(claims);
-      res.json(await options.connectionService.refreshChatgptAuth(claims.clientId, observedAuthVersion));
+      const codexAuthClientId = await options.authorizationService.resolveCodexAuthClientId(claims);
+      res.json(await options.connectionService.refreshChatgptAuth(codexAuthClientId, observedAuthVersion));
     } catch (error) {
+      if (error instanceof CodeAgentRoomContextError) {
+        res.status(error.statusCode).json({ error: error.message, code: error.code });
+        return;
+      }
       if (error instanceof CodexConnectionError) {
         const status = error.code === 'auth_refresh_failed'
           ? 502
           : error.code === 'auth_refresh_timeout'
             ? 503
             : 409;
-        res.status(status).json({ error: error.message, code: error.code });
+        const message = error.code === 'connection_not_found' || error.code === 'connection_not_ready'
+          ? 'The room owner must connect Codex before this workspace can continue'
+          : "The room owner's Codex connection could not be refreshed";
+        res.status(status).json({ error: message, code: error.code });
         return;
       }
       options.logger.error('Code-agent Codex auth refresh failed', {

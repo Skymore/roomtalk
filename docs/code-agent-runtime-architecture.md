@@ -3,7 +3,7 @@
 [中文](code-agent-runtime-architecture.zh.md)
 
 Status: Current
-Verified against `master`: 2026-07-12
+Verified against `master`: 2026-07-16
 
 This document describes the current implementation. Earlier files under `docs/` may describe individual phases, spikes, or migration plans; use this file as the concise architecture entry point and use source/tests as the final authority.
 
@@ -21,8 +21,8 @@ A code-agent room is not a chat prompt wrapped around remote shell commands. It 
 - The room is the shared source of truth for membership, prompts, turns, tool events, permissions, and artifacts.
 - The sandbox is mutable runtime state for files, Git, processes, terminals, and dev servers.
 - Coco is RoomTalk's in-house CLI coding agent and engine; its reasoning/tool loop remains behind the runner contract.
-- Codex is user-owned: a member connects their own Codex subscription through device authorization, and RoomTalk brokers that encrypted connection into E2B only for their Codex runs.
-- GitHub access is also user-owned: an optional encrypted personal access token is materialized as turn-scoped secret files for `gh` and Git, then removed after the run.
+- Codex is room-owner-provided: the room owner connects a Codex subscription through device authorization, and RoomTalk brokers that encrypted connection into E2B for turns started by members who are allowed to use the workspace.
+- GitHub access is also room-owner-provided: the owner's optional encrypted personal access token is materialized as turn-scoped secret files for `gh` and Git, then removed after the run.
 - The browser never receives E2B credentials, provider keys, database credentials, or raw RoomTalk service tokens.
 
 ## High-Level Architecture
@@ -153,16 +153,16 @@ The current default idle TTL is two minutes and the default active TTL is one ho
 RoomTalk starts one `roomtalk_code_agent_runner.daemon` per sandbox and reuses it for sequential turns. The supported product paths are Coco (`code-agent`) and Codex app-server (`codex-app-server`). The daemon still accepts the deprecated `codex` adapter only for migration and compatibility; new behavior must target app-server. The protocol supports:
 
 - `code-agent` (Coco, RoomTalk's self-built CLI agent and engine);
-- `codex-app-server` (Codex app-server thread/session protocol using the same user-owned connection);
+- `codex-app-server` (Codex app-server thread/session protocol using the room owner's connection);
 - legacy `codex` CLI JSON events while compatibility data still requires them;
 - health, run, interrupt, steer, approval, thread list/read, and shutdown requests;
 - `daemon_ready`, structured runner events, `turn_released`, and shutdown events.
 
 The Fly process keeps an in-memory registry of daemon handles, but the daemon itself lives in E2B. Startup serializes daemon creation and removes stale daemon/Codex child processes before launching a replacement. SIGTERM/SIGINT shutdown reclaims all daemons owned by the process. A bounded turn-release wait prevents a lost `turn_released` signal from leaving a room permanently `running`; timed-out thread queries terminate and recycle the daemon instead of leaving its request channel wedged.
 
-Codex connection ownership is per RoomTalk client, not per room. Settings starts OpenAI/Codex device authorization; RoomTalk encrypts the resulting auth material at rest, writes it to the E2B secret directory for a Codex run, and persists refreshed credentials without exposing them to other room members or the browser runtime. This lets collaborators share the room and workspace while each person uses their own Codex subscription.
+Codex and GitHub connection records remain keyed by RoomTalk client, but a code-agent room resolves both through its current `creatorId`. Settings starts OpenAI/Codex device authorization and optional GitHub PAT storage for the owner; RoomTalk encrypts the resulting auth material at rest and writes it to the E2B secret directory only for an authorized room turn. The requesting member remains the actor for prompt ownership, room authorization, observability, and approvals. A signed Codex refresh token binds both the actor and credential owner so an ownership transfer cannot silently switch accounts during a running turn.
 
-The same per-client boundary applies to GitHub connections. RoomTalk validates and encrypts a user-supplied PAT, writes the token plus an isolated Git config into turn-scoped secret files, and lets the sandbox wrappers expose them to `gh` and HTTPS Git without putting the token in the prompt or ordinary environment snapshot.
+For GitHub, RoomTalk resolves the room owner's encrypted PAT, writes the token plus an isolated Git config into turn-scoped secret files, and lets the sandbox wrappers expose them to `gh` and HTTPS Git without putting the token in the prompt or ordinary environment snapshot.
 
 ## Permissions and Scoped Capabilities
 

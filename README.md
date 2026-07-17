@@ -17,7 +17,7 @@ The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plan
 
 ### Sandboxed code-agent rooms
 
-- One shared E2B workspace per code-agent room, supporting Coco (RoomTalk's self-built CLI coding agent) and Codex. Users can connect their own Codex subscription and run it in the shared room through Codex app-server.
+- One shared E2B workspace per code-agent room, supporting Coco (RoomTalk's self-built CLI coding agent) and Codex. The room owner can connect a Codex subscription and share that capability with members allowed to use the workspace.
 - A reusable sandbox-local JSONL daemon that executes sequential turns, streams text/tool/model-step events, accepts interrupt and steer controls, and is reclaimed during sandbox or server shutdown.
 - Four permission presets: Plan, Ask, Auto, and Full. They compose three Codex-aligned sandbox modes (`read-only`, `workspace-write`, and `danger-full-access`) with approval policy and reviewer selection; Auto keeps the workspace sandbox and sends only eligible escalation requests to Coco's native model reviewer.
 - Turn-scoped model-gateway, room-context, and static-publish credentials. Provider keys and RoomTalk service secrets stay outside the browser and agent prompt.
@@ -80,7 +80,7 @@ The ownership boundary is deliberate:
 
 ### How the difficult paths work
 
-- **A code-agent turn** is authorized and persisted before execution, fenced by a durable room lease, then sent to the reusable sandbox daemon with turn-scoped model, context, publish, and user-owned connection capabilities. Text, tool, approval, usage, and lifecycle events return through one ordered protocol and are persisted before broadcast.
+- **A code-agent turn** is authorized and persisted before execution, fenced by a durable room lease, then sent to the reusable sandbox daemon with turn-scoped model, context, publish, and the room owner's Codex and optional GitHub connections. Text, tool, approval, usage, and lifecycle events return through one ordered protocol and are persisted before broadcast.
 - **Ordering is source-owned.** Coco/Codex adapters preserve native text/tool boundaries; RoomTalk assigns monotonic message positions and groups them by durable turn. The browser renders that order and never attempts to reconstruct execution from timestamps.
 - **Recovery crosses process boundaries.** PostgreSQL or Redis holds durable turn/message state, Redis coordinates realtime clients, E2B owns the mutable workspace, and the Node process holds only replaceable live handles. Startup recovery fails interrupted work explicitly, repairs stale sandbox state, and reacquires fenced leases rather than trusting memory.
 - **Published work outlives execution.** Static files are validated in the sandbox, uploaded directly to object storage through presigned URLs, finalized into immutable versions and manifests, and served through RoomTalk after the source sandbox pauses or is replaced.

@@ -17,6 +17,7 @@ import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 import { ObservabilityEventInput } from './observabilityEvents';
 import { CodeAgentRoomContextService } from './codeAgentRoomContext';
+import { CodexConnectionError } from './codexConnection';
 
 type RoomEmit = {
   roomId: string;
@@ -1294,6 +1295,99 @@ describe('CodeAgentSessionService', () => {
       provider: 'openai',
       label: 'GPT-5.5 Extra High',
     });
+  });
+
+  it("uses the room owner's Codex and GitHub connections for an authorized member turn", async () => {
+    const prompt = { ...userMessage('member prompt'), clientId: 'member-1' };
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'codex-app-server',
+      codeAgentAccess: 'member',
+    }), [prompt]);
+    store.addMember('room-1', 'member-1', 'member');
+    const authCalls: Array<{ clientId: string; runId: string }> = [];
+    const githubCalls: string[] = [];
+    const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Shared owner Codex done',
+        sessionId: 'owner-codex-session',
+      },
+    ]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'codex-app-server',
+      runnerCommand: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+      codexBackendEnabled: true,
+      codexConnectionService: {
+        async withCodexAuth(clientId: string, runId: string, work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>) {
+          authCalls.push({ clientId, runId });
+          const workResult = await work('{"tokens":{"access_token":"owner-token"}}', { authVersion: 3 });
+          return workResult.result;
+        },
+      },
+      githubConnectionService: {
+        async getAccessToken(clientId: string) {
+          githubCalls.push(clientId);
+          return null;
+        },
+      },
+      ids: ['ai-1', 'turn-1'],
+    });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'member-1',
+      selectedModel,
+      promptMessageId: prompt.id,
+      promptMessage: prompt,
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
+    assert.deepEqual(githubCalls, ['client-1']);
+    assert.equal(runner.requests[0].clientId, 'member-1');
+    assert.equal(runner.requests[0].prompt, 'member prompt');
+  });
+
+  it('explains when the room owner has not connected Codex without exposing a client id', async () => {
+    const prompt = { ...userMessage('member prompt'), clientId: 'member-1' };
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'codex-app-server',
+      codeAgentAccess: 'member',
+    }), [prompt]);
+    store.addMember('room-1', 'member-1', 'member');
+    const { service, sandboxService } = createService({
+      store,
+      backend: 'codex-app-server',
+      runnerCommand: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+      codexBackendEnabled: true,
+      codexConnectionService: {
+        async withCodexAuth(clientId: string) {
+          throw new CodexConnectionError(`No Codex connection found for client ${clientId}.`, 'connection_not_found');
+        },
+      },
+      ids: ['ai-1', 'turn-1'],
+    });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'member-1',
+      selectedModel,
+      promptMessageId: prompt.id,
+      promptMessage: prompt,
+    });
+
+    assert.deepEqual(result, {
+      success: false,
+      error: 'The room owner must connect Codex before members can use this workspace',
+    });
+    assert.equal(sandboxService.startedRunnerCommands.length, 0);
+    const errorMessage = store.messages.get('room-1')?.at(-1);
+    assert.equal(errorMessage?.content, 'The room owner must connect Codex before members can use this workspace');
+    assert.equal(errorMessage?.content.includes('client-1'), false);
   });
 
   it('fails Codex backend turns without a configured Codex connection service before starting the runner', async () => {

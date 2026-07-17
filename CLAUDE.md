@@ -101,8 +101,8 @@ Code-agent rooms are a separate request path from ordinary chat. RoomTalk is the
 - `codeAgentDaemonRegistry.ts` serializes one reusable JSONL daemon per sandbox and reclaims daemons on shutdown; bounded thread-query/release waits recycle unhealthy daemon handles.
 - `codeAgentRoomContext.ts` + `codeAgentRoomContextRoutes.ts` expose bounded room history/search/message/site reads through a turn-scoped sandbox broker and `roomtalk` CLI.
 - `codeAgentModelGateway.ts` proxies only the selected provider/model with turn-scoped tokens, budgets, and usage accounting; provider keys never reach the browser.
-- `codexConnection.ts` + `codexConnectionRoutes.ts` let each client connect their own Codex subscription through device authorization; RoomTalk encrypts the auth material and injects it as a per-run sandbox secret. Coco remains the in-house CLI coding agent/engine.
-- `githubConnection.ts` + `githubConnectionRoutes.ts` validate and encrypt per-client GitHub PATs, then inject token/Git-config secret files only for that client's agent turn so `gh` and HTTPS Git work without exposing the PAT in prompts.
+- `codexConnection.ts` + `codexConnectionRoutes.ts` let room owners connect a Codex subscription through device authorization; RoomTalk encrypts the auth material and injects the room owner's connection as a per-run sandbox secret for authorized room members. Coco remains the in-house CLI coding agent/engine.
+- `githubConnection.ts` + `githubConnectionRoutes.ts` validate and encrypt GitHub PATs per RoomTalk client; code-agent rooms resolve the current room owner's PAT and inject token/Git-config secret files only for authorized room turns so `gh` and HTTPS Git work without exposing the PAT in prompts.
 - `publishedStaticSite.ts` stores room-owned versioned static artifacts in local/S3-compatible object storage and serves stable `/p/:slug/` URLs.
 - `e2bCodeAgentSandboxService.ts` owns workspace files, Git changes/diffs/refs, PTY sessions, preview targets, archive migration, and sandbox SDK operations.
 

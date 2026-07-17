@@ -17,6 +17,7 @@ export interface CodeAgentRoomContextTokenClaims {
   jti: string;
   roomId: string;
   clientId: string;
+  codexAuthClientId?: string;
   turnId: string;
   mode: CodeAgentRunnerMode;
   exp: number;
@@ -126,7 +127,7 @@ export class CodeAgentRoomContextService {
   }
 
   issueTurnToken(
-    input: { roomId: string; clientId: string; turnId: string; mode: CodeAgentRunnerMode },
+    input: { roomId: string; clientId: string; codexAuthClientId?: string; turnId: string; mode: CodeAgentRunnerMode },
     options: { ttlSeconds?: number } = {}
   ) {
     const requestedTtl = Number(options.ttlSeconds);
@@ -138,6 +139,7 @@ export class CodeAgentRoomContextService {
       jti: this.createId(),
       roomId: input.roomId,
       clientId: input.clientId,
+      ...(input.codexAuthClientId ? { codexAuthClientId: input.codexAuthClientId } : {}),
       turnId: input.turnId,
       mode: input.mode,
       exp: Math.floor(this.nowMs() / 1000) + ttlSeconds,
@@ -157,6 +159,7 @@ export class CodeAgentRoomContextService {
         !claims || typeof claims !== 'object' || claims.v !== 1 ||
         typeof claims.jti !== 'string' || typeof claims.roomId !== 'string' ||
         typeof claims.clientId !== 'string' || typeof claims.turnId !== 'string' ||
+        (claims.codexAuthClientId !== undefined && typeof claims.codexAuthClientId !== 'string') ||
         !normalizeCodeAgentMode(claims.mode) || typeof claims.exp !== 'number' ||
         claims.exp <= Math.floor(this.nowMs() / 1000)
       ) {
@@ -238,6 +241,19 @@ export class CodeAgentRoomContextService {
     await this.assertRoomAccess(claims);
   }
 
+  async resolveCodexAuthClientId(claims: CodeAgentRoomContextTokenClaims) {
+    const room = await this.assertRoomAccess(claims);
+    const codexAuthClientId = claims.codexAuthClientId || claims.clientId;
+    if (room.creatorId !== codexAuthClientId) {
+      throw new CodeAgentRoomContextError(
+        'Room owner Codex access has changed',
+        403,
+        'codex_auth_owner_changed'
+      );
+    }
+    return codexAuthClientId;
+  }
+
   private async assertRoomAccess(claims: CodeAgentRoomContextTokenClaims) {
     const room = await this.store.getRoomById(claims.roomId);
     if (!room) {
@@ -249,6 +265,7 @@ export class CodeAgentRoomContextService {
     if (!canUseCodeAgentRoom(room, claims.clientId, role)) {
       throw new CodeAgentRoomContextError('Room context access has been revoked', 403, 'room_access_revoked');
     }
+    return room;
   }
 }
 

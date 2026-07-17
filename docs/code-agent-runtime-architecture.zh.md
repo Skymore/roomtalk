@@ -3,7 +3,7 @@
 [English](code-agent-runtime-architecture.md)
 
 状态：当前
-已按 `master` 核对：2026-07-12
+已按 `master` 核对：2026-07-16
 
 本文描述当前实现。`docs/` 中的早期 phase、spike 和 migration plan 保留了演进证据；当前简明入口以本文为准，最终事实源仍是源码和测试。
 
@@ -19,7 +19,7 @@ Code Agent room 不是给 remote shell 包一层 chat prompt，而是一个 room
 - Room 是 membership、prompt、turn、tool event、permission 和 artifact 的共享事实源。
 - Sandbox 是 file、Git、process、terminal 和 dev server 的可变 runtime state。
 - Coco 是 RoomTalk 自研 CLI coding agent/engine，其 reasoning/tool loop 位于 runner contract 之后。
-- Codex 属于用户：成员用自己的 Codex subscription 连接，RoomTalk 加密存储并只为该用户的 Codex run 物化。
+- Codex 由房主提供：房主连接自己的 Codex subscription，RoomTalk 加密存储，并为获准使用工作区的成员 turn 物化房主连接。
 - GitHub 也是用户自有 connection：加密 PAT 只以 turn-scoped secret file 形式供 `gh`/Git 使用，轮次后删除。
 - Browser 永远不获得 E2B、provider、database 或 RoomTalk service secret。
 
@@ -58,7 +58,7 @@ flowchart TB
 3. 用户 prompt 先以 durable message 保存，创建 preparing turn 并返回 ack。
 4. Scheduler 获取 durable fenced room lease，将边界上的 queued input 物化为下一个 turn。
 5. Lifecycle service 连接或创建固定 E2B sandbox，验证 artifact/source-ref，必要时迁移 workspace archive。
-6. Session service 发放 turn-scoped model/context/publish/asset credential，并为当前用户注入 Codex/GitHub secret。
+6. Session service 发放 turn-scoped model/context/publish/asset credential，并注入房主的 Codex 与可选 GitHub secret。
 7. 可复用 daemon 串行执行 backend turn，同时接受 steer、interrupt 和 approval response。
 8. Text/tool/status/model-step/final event 被映射为 RoomTalk event，按真实顺序持久化后再广播。
 9. Finalization 关闭 pending tool call，保存 usage/cost/backend session ID，释放 lease，将 sandbox 回到 idle TTL。
@@ -72,6 +72,8 @@ Turn control 不会绕过 durable scheduler：Queue 保存下一个 prompt；Ste
 Daemon 是 sandbox-local JSONL process，不是 RoomTalk 权威状态存储。它复用 backend process/session，串行 turn/control/query，并发出版本化 event。RoomTalk 为 thread query 和 turn release 设置有界等待；丢失 release、query timeout 或 control connection 失败会使 daemon handle 中毒并重建，而不是永久卡住 room。
 
 PTY terminal、browser preview、dev server 和 file API 是独立 sandbox service，不属于 daemon protocol state。
+
+Codex 与 GitHub connection record 仍以 RoomTalk client 为存储键，但 Code Agent room 始终通过当前 `creatorId` 解析两类凭据。发起成员继续作为 prompt ownership、room authorization、observability 和 approval 的主体；房主提供 Codex subscription 与可选 GitHub PAT。签名 Codex refresh token 同时绑定发起成员与凭据房主，房间所有权在 turn 中途变化时不会静默切换账号。
 
 ## 权限与 Scoped Capability
 

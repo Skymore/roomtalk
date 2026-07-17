@@ -19,7 +19,20 @@ describe('code-agent Codex auth routes', () => {
     const store = {
       async getRoomById(roomId: string) {
         return roomId === 'room-1'
-          ? { id: roomId, name: 'Workspace', description: '', createdAt: '', creatorId: 'client-1', type: 'codeAgent' as const }
+          ? {
+              id: roomId,
+              name: 'Workspace',
+              description: '',
+              createdAt: '',
+              creatorId: 'client-1',
+              type: 'codeAgent' as const,
+              codeAgentAccess: 'member' as const,
+            }
+          : null;
+      },
+      async getRoomMember(roomId: string, clientId: string) {
+        return roomId === 'room-1' && clientId === 'client-2'
+          ? { roomId, clientId, role: 'member' as const, joinedAt: '' }
           : null;
       },
     } as unknown as RoomStore;
@@ -77,10 +90,11 @@ describe('code-agent Codex auth routes', () => {
     assert.equal(invalidVersion.status, 400);
   });
 
-  it('refreshes the authenticated clients Codex credentials', async () => {
+  it("refreshes the room owner's Codex credentials for an authorized member turn", async () => {
     const token = authorizationService.issueTurnToken({
       roomId: 'room-1',
-      clientId: 'client-1',
+      clientId: 'client-2',
+      codexAuthClientId: 'client-1',
       turnId: 'turn-1',
       mode: 'approveForMe',
     });
@@ -93,5 +107,27 @@ describe('code-agent Codex auth routes', () => {
     assert.equal(response.status, 200);
     assert.deepEqual(refreshCalls, [{ clientId: 'client-1', authVersion: 4 }]);
     assert.equal(((await response.json()) as { authVersion: number }).authVersion, 5);
+  });
+
+  it('rejects a refresh token whose bound Codex owner no longer owns the room', async () => {
+    const token = authorizationService.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-2',
+      codexAuthClientId: 'former-owner',
+      turnId: 'turn-1',
+      mode: 'approveForMe',
+    });
+    const response = await fetch(`${baseUrl}/api/code-agent/codex-auth/refresh`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ authVersion: 4 }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), {
+      error: 'Room owner Codex access has changed',
+      code: 'codex_auth_owner_changed',
+    });
+    assert.deepEqual(refreshCalls, []);
   });
 });

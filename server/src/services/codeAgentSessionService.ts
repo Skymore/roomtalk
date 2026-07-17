@@ -39,7 +39,7 @@ import { PublishedStaticSiteService } from './publishedStaticSite';
 import { CODE_AGENT_ROOM_CONTEXT_API_PREFIX, CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAgentRoomAccess';
-import { CODE_AGENT_CODEX_AUTH_API_PREFIX, CodexConnectionService } from './codexConnection';
+import { CODE_AGENT_CODEX_AUTH_API_PREFIX, CodexConnectionError, CodexConnectionService } from './codexConnection';
 import { GitHubConnectionService } from './githubConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
@@ -519,6 +519,7 @@ export class CodeAgentSessionService {
         ...this.buildRunnerEnv(input.selectedModel, {
           roomId: input.roomId,
           clientId: input.clientId,
+          codexAuthClientId: room!.creatorId,
           turnId,
           backend: turnBackend,
           mode: turnMode.mode,
@@ -596,7 +597,7 @@ export class CodeAgentSessionService {
       };
       const runResult = await this.runRunnerWithConnections({
         backend: turnBackend,
-        clientId: input.clientId,
+        credentialOwnerClientId: room!.creatorId,
         turnId,
         runnerEnv,
         request: runnerRequest,
@@ -755,24 +756,30 @@ export class CodeAgentSessionService {
       });
       return { success: true, messageId: aiMessageId };
     } catch (error) {
+      const publicCodexError = error instanceof CodexConnectionError
+        ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
+        : undefined;
+      const reportedError = publicCodexError ? new Error(publicCodexError) : error;
+      if (publicCodexError) publicFailureMessage = publicCodexError;
       const errorTargetId = streamState?.activeMessageId || aiMessageId;
       this.logger.error('Code agent turn failed', { error, roomId: input.roomId, messageId: errorTargetId, backend: turnBackend });
       await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode: 'turn_failed',
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: reportedError instanceof Error ? reportedError.message : String(reportedError),
         payload: {
           backend: turnBackend,
           messageId: errorTargetId,
           placeholderAnnounced,
           roomMarkedRunning,
+          ...(error instanceof CodexConnectionError ? { codexConnectionErrorCode: error.code } : {}),
         },
       });
       if (placeholderAnnounced && aiMessage) {
         if (streamState) {
-          await this.flushInterruptedToolCalls(input.roomId, turnId, streamState, error, aiMessage, turnBackend);
+          await this.flushInterruptedToolCalls(input.roomId, turnId, streamState, reportedError, aiMessage, turnBackend);
         }
         const errorTargetMessage = streamState?.completedAIMessageById.get(errorTargetId) || { ...aiMessage, id: errorTargetId };
-        await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
+        await this.saveCodeAgentError(input.roomId, errorTargetMessage, reportedError, turnBackend);
         if (turnRecord) {
           const turnCompletedAt = this.now().toISOString();
           await updateTurn({
@@ -1065,7 +1072,7 @@ export class CodeAgentSessionService {
       searchTerm: input.searchTerm,
     };
     const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadListResultEvent>({
-      clientId: input.clientId,
+      codexClientId: prepared.room.creatorId,
       sandbox: prepared.sandbox,
       request,
       expectedType: 'thread_list_result',
@@ -1094,7 +1101,7 @@ export class CodeAgentSessionService {
       includeTurns: input.includeTurns,
     };
     const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadReadResultEvent>({
-      clientId: input.clientId,
+      codexClientId: prepared.room.creatorId,
       sandbox: prepared.sandbox,
       request,
       expectedType: 'thread_read_result',
@@ -1166,7 +1173,7 @@ export class CodeAgentSessionService {
   }
 
   private async runCodexThreadQuery<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(input: {
-    clientId: string;
+    codexClientId: string;
     sandbox: CodeAgentSandboxHandle;
     request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest;
     expectedType: T['type'];
@@ -1183,53 +1190,63 @@ export class CodeAgentSessionService {
     }
 
     const queryId = this.createId();
-    return connectionService.withCodexAuth(input.clientId, queryId, async (authJson, snapshot) => {
-      const authPath = this.codexSecretFilePath(queryId, 'auth.json');
-      const refreshedAuthPath = this.codexSecretFilePath(queryId, 'refreshed-auth.json');
-      await this.sandboxService.writeSecretFile!(input.sandbox, {
-        path: authPath,
-        content: authJson,
-      });
+    try {
+      return await connectionService.withCodexAuth(input.codexClientId, queryId, async (authJson, snapshot) => {
+        const authPath = this.codexSecretFilePath(queryId, 'auth.json');
+        const refreshedAuthPath = this.codexSecretFilePath(queryId, 'refreshed-auth.json');
+        await this.sandboxService.writeSecretFile!(input.sandbox, {
+          path: authPath,
+          content: authJson,
+        });
 
-      let refreshedAuthJson: string | undefined;
-      try {
-        const runnerEnv = {
-          PYTHONUNBUFFERED: '1',
-          ...(this.options.runnerEnv || {}),
-          ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
-          ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
-          ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
-          ROOMTALK_CODEX_AUTH_VERSION: String(snapshot.authVersion),
-        };
-        const runnerProcess = this.options.runnerClient === 'daemon'
-          ? await this.startDaemonProcess(input.sandbox, runnerEnv)
-          : await this.sandboxService.startRunner({
-              handle: input.sandbox,
-              command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
-              env: runnerEnv,
-              timeoutMs: 0,
-            });
+        let refreshedAuthJson: string | undefined;
         try {
-          const result = this.options.runnerClient === 'daemon'
-            ? await this.collectCodexDaemonThreadQueryResult<T>(runnerProcess, input.request, input.expectedType, runnerEnv)
-            : await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
-          refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
-          return {
-            result,
-            ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
+          const runnerEnv = {
+            PYTHONUNBUFFERED: '1',
+            ...(this.options.runnerEnv || {}),
+            ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
+            ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
+            ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+            ROOMTALK_CODEX_AUTH_VERSION: String(snapshot.authVersion),
           };
-        } finally {
-          if (this.options.runnerClient !== 'daemon') {
-            await this.stopRunnerProcess(runnerProcess, input.request.roomId);
+          const runnerProcess = this.options.runnerClient === 'daemon'
+            ? await this.startDaemonProcess(input.sandbox, runnerEnv)
+            : await this.sandboxService.startRunner({
+                handle: input.sandbox,
+                command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+                env: runnerEnv,
+                timeoutMs: 0,
+              });
+          try {
+            const result = this.options.runnerClient === 'daemon'
+              ? await this.collectCodexDaemonThreadQueryResult<T>(runnerProcess, input.request, input.expectedType, runnerEnv)
+              : await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
+            refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
+            return {
+              result,
+              ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
+            };
+          } finally {
+            if (this.options.runnerClient !== 'daemon') {
+              await this.stopRunnerProcess(runnerProcess, input.request.roomId);
+            }
           }
+        } finally {
+          await Promise.all([
+            this.deleteCodexSecretFile(input.sandbox, authPath),
+            this.deleteCodexSecretFile(input.sandbox, refreshedAuthPath),
+          ]);
         }
-      } finally {
-        await Promise.all([
-          this.deleteCodexSecretFile(input.sandbox, authPath),
-          this.deleteCodexSecretFile(input.sandbox, refreshedAuthPath),
-        ]);
+      });
+    } catch (error) {
+      if (error instanceof CodexConnectionError) {
+        throw new Error(this.describeCodexConnectionError(
+          error,
+          input.request.clientId === input.codexClientId
+        ));
       }
-    });
+      throw error;
+    }
   }
 
   private async startDaemonProcess(
@@ -1305,7 +1322,7 @@ export class CodeAgentSessionService {
 
   private async runRunnerWithBackendAuth(input: {
     backend: CodeAgentBackend;
-    clientId: string;
+    credentialOwnerClientId: string;
     turnId: string;
     runnerEnv: Record<string, string>;
     request: CodeAgentRunnerRunRequest;
@@ -1334,7 +1351,7 @@ export class CodeAgentSessionService {
       throw new Error('Codex backend requires sandbox secret file support');
     }
 
-    return connectionService.withCodexAuth(input.clientId, input.turnId, async (authJson, snapshot) => {
+    return connectionService.withCodexAuth(input.credentialOwnerClientId, input.turnId, async (authJson, snapshot) => {
       const authPath = this.codexSecretFilePath(input.turnId, 'auth.json');
       const refreshedAuthPath = this.codexSecretFilePath(input.turnId, 'refreshed-auth.json');
       await this.sandboxService.writeSecretFile!(input.sandbox, {
@@ -1373,7 +1390,7 @@ export class CodeAgentSessionService {
 
   private async runRunnerWithConnections(input: {
     backend: CodeAgentBackend;
-    clientId: string;
+    credentialOwnerClientId: string;
     turnId: string;
     runnerEnv: Record<string, string>;
     request: CodeAgentRunnerRunRequest;
@@ -1381,7 +1398,7 @@ export class CodeAgentSessionService {
     sandbox: CodeAgentSandboxHandle;
     startRunnerProcess: (env: Record<string, string>) => Promise<CodeAgentRunnerProcess>;
   }): Promise<CodeAgentRunnerRunResult> {
-    const token = await this.options.githubConnectionService?.getAccessToken(input.clientId);
+    const token = await this.options.githubConnectionService?.getAccessToken(input.credentialOwnerClientId);
     if (!token) {
       return this.runRunnerWithBackendAuth(input);
     }
@@ -1518,6 +1535,17 @@ export class CodeAgentSessionService {
 
   private displayBackendName(backend: CodeAgentBackend): string {
     return isCodexBackend(backend) ? 'Codex' : 'Coco';
+  }
+
+  private describeCodexConnectionError(error: CodexConnectionError, requesterIsOwner: boolean): string {
+    if (error.code === 'connection_not_found' || error.code === 'connection_not_ready') {
+      return requesterIsOwner
+        ? 'Connect Codex in Settings before using this workspace'
+        : 'The room owner must connect Codex before members can use this workspace';
+    }
+    return requesterIsOwner
+      ? 'Your Codex connection is unavailable. Reconnect it in Settings and try again'
+      : "The room owner's Codex connection is unavailable. Ask the owner to reconnect it";
   }
 
   private messageAIModelForBackend(
@@ -2391,6 +2419,7 @@ export class CodeAgentSessionService {
   private buildRunnerEnv(selectedModel: AIModelOption, context: {
     roomId: string;
     clientId: string;
+    codexAuthClientId: string;
     turnId: string;
     backend: CodeAgentBackend;
     mode: CodeAgentRunnerMode;
@@ -2465,6 +2494,7 @@ export class CodeAgentSessionService {
         env.ROOMTALK_CODEX_AUTH_REFRESH_TOKEN = this.options.roomContext.issueTurnToken({
           roomId: context.roomId,
           clientId: context.clientId,
+          codexAuthClientId: context.codexAuthClientId,
           turnId: context.turnId,
           mode: normalizedMode,
         }, { ttlSeconds: CodeAgentSessionService.CODEX_AUTH_REFRESH_TOKEN_TTL_SECONDS });

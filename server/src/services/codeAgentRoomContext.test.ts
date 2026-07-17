@@ -84,4 +84,35 @@ describe('CodeAgentRoomContextService', () => {
     }))!;
     await assert.rejects(() => service.history(memberClaims, {}), /access has been revoked/);
   });
+
+  it("binds Codex auth refresh to the room owner while preserving the member's access identity", async () => {
+    const memberStore = {
+      ...createStore(),
+      async getRoomById(roomId: string) {
+        return roomId === room.id ? { ...room, codeAgentAccess: 'member' as const } : null;
+      },
+      async getRoomMember(roomId: string, clientId: string) {
+        return roomId === room.id && clientId === 'client-2'
+          ? { roomId, clientId, role: 'member' as const, joinedAt: room.createdAt }
+          : null;
+      },
+    } as unknown as RoomStore;
+    const service = new CodeAgentRoomContextService(memberStore, {
+      tokenSecret: 'room-context-secret',
+      createId: () => 'token-1',
+    });
+    const memberClaims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: room.id,
+      clientId: 'client-2',
+      codexAuthClientId: 'client-1',
+      turnId: 'turn-2',
+      mode: 'edit',
+    }))!;
+
+    assert.equal(await service.resolveCodexAuthClientId(memberClaims), 'client-1');
+    await assert.rejects(
+      () => service.resolveCodexAuthClientId({ ...memberClaims, codexAuthClientId: 'client-3' }),
+      /owner Codex access has changed/
+    );
+  });
 });
