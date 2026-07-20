@@ -1,0 +1,99 @@
+name: roomtalk
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: roomtalk-local:dev
+    restart: unless-stopped
+    env_file:
+      - .env.compose
+    environment:
+      NODE_ENV: production
+      PORT: "3012"
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:3012}
+      CLIENT_URLS: ${CLIENT_URLS:-http://localhost:3012}
+      PERSISTENCE_STORE: postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:-roomtalk-local-only}@postgres:5432/${POSTGRES_DB:-message_system}
+      POSTGRES_SSL: "false"
+      REDIS_URL: redis://redis:6379
+      CODE_AGENT_ENABLED: ${CODE_AGENT_ENABLED:-false}
+      CODEX_CONNECTIONS_ENABLED: ${CODEX_CONNECTIONS_ENABLED:-false}
+      GITHUB_CONNECTIONS_ENABLED: ${GITHUB_CONNECTIONS_ENABLED:-false}
+    ports:
+      - 127.0.0.1:${ROOMTALK_PORT:-3012}:3012
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3012/api/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - roomtalk
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-message_system}
+      POSTGRES_USER: ${POSTGRES_USER:-roomtalk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-roomtalk} -d ${POSTGRES_DB:-message_system}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - roomtalk
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - roomtalk
+
+  postgres-backup:
+    image: postgres:17-alpine
+    profiles: ["ops"]
+    env_file:
+      - .env.compose
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-message_system}
+      PGUSER: ${POSTGRES_USER:-roomtalk}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
+    volumes:
+      - ./backups:/backups
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        pg_dump --format=custom --file="/backups/roomtalk-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - roomtalk
+
+volumes:
+  postgres_data:
+
+networks:
+  roomtalk:
+    driver: bridge

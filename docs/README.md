@@ -3,7 +3,7 @@
 [中文](README.zh.md)
 
 Status: Current index
-Updated: 2026-07-13
+Updated: 2026-07-20
 
 This index separates current sources of truth from runbooks, subsystem references, engineering retrospectives, completed plans, and reports. Historical documents remain first-class engineering evidence; their original dates and decisions are preserved.
 
@@ -36,6 +36,13 @@ Source code and tests are always the final authority. Start with the current arc
 | Static publishing | [Implementation](code-agent-static-publish-implementation.md) | [实现](code-agent-static-publish-implementation.zh.md) |
 | Model access | [Model access](code-agent-model-access.md) | [Model access](code-agent-model-access.zh.md) |
 | Configuration | [Configuration](configuration.md) | [配置](configuration.zh.md) |
+| Room event sync and portable deployment | [Architecture](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
+
+## Active Implementation Records
+
+| Engineering line | English | 中文 |
+| --- | --- | --- |
+| Room event sync and portable deployment | [Progress](room-event-sync-portable-deployment-progress.md) | [进度](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## Operations and Runbooks
 

@@ -3,7 +3,7 @@
 [English](README.md)
 
 状态：当前索引
-更新：2026-07-13
+更新：2026-07-20
 
 本索引将当前事实源、runbook、子系统参考、工程复盘、已完成方案和报告分开。历史文档仍是一等工程证据；它们的原始日期和决策会被保留。
 
@@ -36,6 +36,13 @@
 | Static publishing | [Implementation](code-agent-static-publish-implementation.md) | [实现](code-agent-static-publish-implementation.zh.md) |
 | Model access | [Model access](code-agent-model-access.md) | [Model access](code-agent-model-access.zh.md) |
 | 配置 | [Configuration](configuration.md) | [配置](configuration.zh.md) |
+| 房间事件同步与可迁移部署 | [架构](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
+
+## 进行中的实施记录
+
+| 工程主线 | English | 中文 |
+| --- | --- | --- |
+| 房间事件同步与可迁移部署 | [进度](room-event-sync-portable-deployment-progress.md) | [进度](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## 操作与 Runbook
 
