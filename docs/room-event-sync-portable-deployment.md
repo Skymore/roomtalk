@@ -2,7 +2,7 @@
 
 [中文](room-event-sync-portable-deployment.zh.md)
 
-Status: production cutover completed at `roomtalk.ruit.me`
+Status: production cutover completed at `room.ruit.me`
 
 Updated: 2026-07-20
 
@@ -126,7 +126,7 @@ A single maintenance-window cutover was completed on 2026-07-20:
 3. disabled the scheduled Fly workflow, archived Fly logs, and scaled Fly writers/workers to zero;
 4. took the final dump, reran the idempotent S3 copy, and restored the local production database;
 5. compared table counts, removed the retired version columns, and initialized 98 event streams;
-6. routed `roomtalk.ruit.me` and `roomtalk-objects.ruit.me` through Cloudflare Tunnel;
+6. routed `room.ruit.me`, compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` through Cloudflare Tunnel;
 7. verified TLS, HTTP, Socket.IO/WebSocket, snapshot/delta events, public presigned PUT/GET, and deletion tombstones.
 
 Fly, Supabase, and Tigris remain intact through the rollback window. After local writes open, DNS-only rollback is unsafe: new local data must first be reconciled back to the cloud target.

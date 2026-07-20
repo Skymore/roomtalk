@@ -2,7 +2,7 @@
 
 [English](room-event-sync-portable-deployment.md)
 
-状态：已完成 `roomtalk.ruit.me` 生产切换
+状态：已完成 `room.ruit.me` 生产切换
 
 更新：2026-07-20
 
@@ -126,7 +126,7 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 3. 禁用定时 Fly workflow、归档 Fly logs、把 Fly writer/worker 缩到零；
 4. 获取最终 dump、重跑幂等 S3 copy、恢复本地生产库；
 5. 核对表 count、删除退役 version columns、初始化 98 个 event streams；
-6. 通过 Cloudflare Tunnel 路由 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me`；
+6. 通过 Cloudflare Tunnel 路由 `room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me`；
 7. 验证 TLS、HTTP、Socket.IO/WebSocket、snapshot/delta event、公开 presigned PUT/GET 与删除 tombstone。
 
 回滚窗口内继续保留 Fly、Supabase 与 Tigris。一旦本地开放写入，只改 DNS 回滚会丢本地新增数据；必须先把增量重新协调到云端目标。

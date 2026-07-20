@@ -2,7 +2,7 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：`roomtalk.ruit.me` 生产自托管切换完成
+状态：`room.ruit.me` 生产自托管切换完成
 
 本地开始/完成：2026-07-20
 
@@ -28,7 +28,7 @@
 | 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | 本次 self-host commit |
 | 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke | 完成 | 本次 cutover commit |
 
-没有 push 任何 commit。定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。
+定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。runtime 同时接受 `ai-chat.wenlin.dev`，该域名可在原有 DNS zone 中单独切换。
 
 ## 已交付架构
 
@@ -112,7 +112,7 @@
 
 Event schema 演练的全新恢复库中有 1 个 room、member、message、stream 和 2 个有序 event（`headSeq=2`）。九个 event trigger 与一个 room 单调时间 trigger 全部存在，退役 version column 数量为 0。后续成对演练把 `backups/roomtalk-20260720T123725Z.dump` 恢复到全新数据库，并把 `backups/roomtalk-media-20260720T123725Z.tar.gz` 恢复到全新 volume；room/media/message 关系一致，媒体对象 SHA-256 与源文件逐字节相同。临时数据库、volume、marker 和隔离 Compose 项目均已删除。
 
-完成性审计还使用自定义 `.env.compose` 密码渲染 Compose，证明 PostgreSQL service password 与 app `DATABASE_URL` 一致。当前 Fly secrets 已导入 macOS Keychain，本地生产配置再改写为 `roomtalk.ruit.me`、Compose PostgreSQL/Redis 与 SeaweedFS；credential 没有写入 tracked file。
+完成性审计还使用自定义 `.env.compose` 密码渲染 Compose，证明 PostgreSQL service password 与 app `DATABASE_URL` 一致。当前 Fly secrets 已导入 macOS Keychain，本地生产配置再改写为 `room.ruit.me`、Compose PostgreSQL/Redis 与 SeaweedFS；credential 没有写入 tracked file。
 
 生产数据演练恢复了 `backups/roomtalk-supabase-public-precutover-20260720T1958Z.dump`；停写后的正式切换恢复了 `backups/roomtalk-supabase-public-final-20260720T2019Z.dump`。两者都与源端一致：98 rooms、7,939 messages、179 members、404 media assets、6,361 observability events、28 outbox events、60 room-agent turns。启动后退役 version columns 已删除、98 个 room streams 已建立、全部 room-event triggers 存在。历史行继续作为 snapshot state，不伪造 event；切换后的新写入才追加 event。
 

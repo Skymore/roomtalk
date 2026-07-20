@@ -2,7 +2,7 @@
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: Production self-host cutover complete at `roomtalk.ruit.me`
+Status: Production self-host cutover complete at `room.ruit.me`
 
 Started/completed locally: 2026-07-20
 
@@ -28,7 +28,7 @@ Work started from clean local `master` at `d94d2cd0`. The old client recovered b
 | 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | This self-host commit |
 | 6 | Final write freeze, log archive, data restore, DNS route, public HTTP/WebSocket/S3 smoke | Complete | This cutover commit |
 
-No commit was pushed. The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supabase and Tigris remain intact as rollback sources. `roomtalk.ruit.me` and `roomtalk-objects.ruit.me` now route to the Mac through a dedicated Cloudflare Tunnel.
+The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supabase and Tigris remain intact as rollback sources. `room.ruit.me`, the compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` now route to the Mac through a dedicated Cloudflare Tunnel. `ai-chat.wenlin.dev` is accepted by the runtime and can be routed separately through its existing DNS zone.
 
 ## Delivered architecture
 
@@ -72,7 +72,7 @@ The event-schema restore contained one room, member, message, stream, and two or
 
 Automation covers a repeatable snapshot boundary, online delivery, offline replay without refresh, duplicate wake-ups/events, sequence gaps, cursor retention expiry, restored-database cursor rollback, concurrent writers, monotonic complete-room metadata, idempotent retries, transaction rollback, edit/delete/clear/truncate flows, AI final/error recovery, media completion, two-client realtime, authorization, and deleted-room tombstone replay. Media coverage now also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
 
-The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `roomtalk.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
+The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `room.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
 
 The production-data rehearsal restored `backups/roomtalk-supabase-public-precutover-20260720T1958Z.dump`; the frozen cutover restored `backups/roomtalk-supabase-public-final-20260720T2019Z.dump`. Both matched 98 rooms, 7,939 messages, 179 members, 404 media assets, 6,361 observability events, 28 outbox events, and 60 room-agent turns. Startup removed the retired version columns, created 98 room streams, and installed all room-event triggers. Historical rows intentionally remain snapshot state; new writes create events after cutover.
 
