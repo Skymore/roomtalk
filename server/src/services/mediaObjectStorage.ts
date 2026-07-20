@@ -60,6 +60,7 @@ export type MediaObjectStorageConfig = {
   bucket: string;
   region: string;
   endpoint?: string;
+  publicEndpoint?: string;
   forcePathStyle?: boolean;
   connectionTimeoutMs?: number;
   requestTimeoutMs?: number;
@@ -285,6 +286,7 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
 
 export class S3MediaObjectStorage implements MediaObjectStorage {
   private readonly client: S3Client;
+  private readonly signingClient: S3Client;
   private readonly slowRequestMs: number;
 
   constructor(
@@ -295,9 +297,9 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
     const requestTimeout = config.requestTimeoutMs ?? DEFAULT_MEDIA_REQUEST_TIMEOUT_MS;
     const socketTimeout = config.socketTimeoutMs ?? DEFAULT_MEDIA_SOCKET_TIMEOUT_MS;
     this.slowRequestMs = config.slowRequestMs ?? DEFAULT_MEDIA_SLOW_REQUEST_MS;
-    this.client = new S3Client({
+    const createClient = (endpoint?: string) => new S3Client({
       region: config.region,
-      endpoint: config.endpoint,
+      endpoint,
       forcePathStyle: config.forcePathStyle,
       requestChecksumCalculation: 'WHEN_REQUIRED',
       maxAttempts: config.maxAttempts ?? DEFAULT_MEDIA_MAX_ATTEMPTS,
@@ -308,6 +310,10 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
         throwOnRequestTimeout: true,
       }),
     });
+    this.client = createClient(config.endpoint);
+    this.signingClient = config.publicEndpoint && config.publicEndpoint !== config.endpoint
+      ? createClient(config.publicEndpoint)
+      : this.client;
   }
 
   private async runOperation<T>(operation: string, objectKey: string, task: () => Promise<T>): Promise<T> {
@@ -360,7 +366,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     const url = await getSignedUrl(
-      this.client,
+      this.signingClient,
       new PutObjectCommand({
         Bucket: this.config.bucket,
         Key: input.objectKey,
@@ -383,7 +389,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     const url = await getSignedUrl(
-      this.client,
+      this.signingClient,
       new GetObjectCommand({
         Bucket: this.config.bucket,
         Key: input.objectKey,
@@ -480,6 +486,7 @@ export const resolveMediaObjectStorageConfig = (env: NodeJS.ProcessEnv = process
     bucket,
     region: env.MEDIA_STORAGE_REGION || env.AWS_REGION || env.AWS_DEFAULT_REGION || 'auto',
     endpoint: env.MEDIA_STORAGE_ENDPOINT || env.AWS_ENDPOINT_URL_S3 || env.S3_ENDPOINT,
+    publicEndpoint: env.MEDIA_STORAGE_PUBLIC_ENDPOINT,
     forcePathStyle: env.MEDIA_STORAGE_FORCE_PATH_STYLE === 'true' || env.S3_FORCE_PATH_STYLE === 'true',
     connectionTimeoutMs: positiveInteger(env.MEDIA_STORAGE_CONNECTION_TIMEOUT_MS, DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS),
     requestTimeoutMs: positiveInteger(env.MEDIA_STORAGE_REQUEST_TIMEOUT_MS, DEFAULT_MEDIA_REQUEST_TIMEOUT_MS),
@@ -531,6 +538,7 @@ export const createMediaObjectStorageFromEnv = (logger: Logger, env: NodeJS.Proc
     bucket: config.bucket,
     region: config.region,
     endpoint: config.endpoint,
+    publicEndpoint: config.publicEndpoint,
     forcePathStyle: config.forcePathStyle,
   });
   return new S3MediaObjectStorage(config, logger);

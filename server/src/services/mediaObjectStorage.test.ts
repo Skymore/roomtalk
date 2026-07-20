@@ -37,7 +37,8 @@ describe('S3MediaObjectStorage', () => {
       const storage = new S3MediaObjectStorage({
         bucket: 'media-bucket',
         region: 'auto',
-        endpoint: 'https://example.invalid',
+        endpoint: 'http://object-storage:8333',
+        publicEndpoint: 'https://objects.example.invalid',
         forcePathStyle: true,
       }, new Logger('S3MediaObjectStorageTest'));
 
@@ -49,6 +50,7 @@ describe('S3MediaObjectStorage', () => {
       });
 
       const params = new URL(url).searchParams;
+      assert.equal(new URL(url).origin, 'https://objects.example.invalid');
       assert.equal(params.get('X-Amz-SignedHeaders'), 'host');
       assert.equal(params.has('x-amz-sdk-checksum-algorithm'), false);
       assert.equal(params.has('x-amz-checksum-crc32'), false);
@@ -241,6 +243,8 @@ describe('createMediaObjectStorageFromEnv', () => {
   it('loads bounded S3 transport settings from the environment', () => {
     const config = resolveMediaObjectStorageConfig({
       MEDIA_BUCKET_NAME: 'media-bucket',
+      MEDIA_STORAGE_ENDPOINT: 'http://object-storage:8333',
+      MEDIA_STORAGE_PUBLIC_ENDPOINT: 'https://objects.roomtalk.example',
       MEDIA_STORAGE_CONNECTION_TIMEOUT_MS: '4000',
       MEDIA_STORAGE_REQUEST_TIMEOUT_MS: '20000',
       MEDIA_STORAGE_SOCKET_TIMEOUT_MS: '12000',
@@ -249,6 +253,8 @@ describe('createMediaObjectStorageFromEnv', () => {
     } as NodeJS.ProcessEnv);
 
     assert.equal(config?.connectionTimeoutMs, 4000);
+    assert.equal(config?.endpoint, 'http://object-storage:8333');
+    assert.equal(config?.publicEndpoint, 'https://objects.roomtalk.example');
     assert.equal(config?.requestTimeoutMs, 20000);
     assert.equal(config?.socketTimeoutMs, 12000);
     assert.equal(config?.maxAttempts, 3);

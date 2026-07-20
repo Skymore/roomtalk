@@ -2,7 +2,7 @@
 
 [English](room-event-sync-portable-deployment.md)
 
-状态：本地实现完成；尚未执行生产数据/DNS 切换
+状态：已完成 `roomtalk.ruit.me` 生产切换
 
 更新：2026-07-20
 
@@ -92,16 +92,16 @@ PostgreSQL `NOTIFY` 和 Socket.IO 只负责唤醒。多个 app 实例经 Redis a
 
 ## 可迁移运行环境
 
-本地、Fly、未来 AWS 使用同一个根 `Dockerfile`，差异只来自环境变量：
+当前 Mac 生产、保留的 Fly 回滚目标与未来 AWS 使用同一个根 `Dockerfile`，差异只来自环境变量：
 
-| 本地 Compose | 当前云端 | AWS 目标 |
+| 当前 Mac 生产 | 保留的云端回滚目标 | AWS 目标 |
 | --- | --- | --- |
 | app container | Fly Machine | ECS Fargate 或 EKS |
 | PostgreSQL 17 volume | Supabase/托管 PostgreSQL | RDS PostgreSQL |
 | Redis 7，可重建 | 托管 Redis | ElastiCache |
 | SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
 
-Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是镜像、PostgreSQL schema/dump/WAL 合约、Redis 可丢弃定位和 S3 边界。本地 Compose 使用 SeaweedFS，Fly 使用 Tigris，AWS 使用 S3，应用 object key 与 API 不变。
+Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是镜像、PostgreSQL schema/dump/WAL 合约、Redis 可丢弃定位和 S3 边界。当前生产使用 SeaweedFS，回滚部署使用 Tigris，未来 AWS 使用 S3，应用 object key 与 API 不变。
 
 本地启动与备份：
 
@@ -111,22 +111,22 @@ docker compose --env-file .env.compose up -d --build
 docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。本地 S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。SeaweedFS 与 S3 端口只对 Compose 私网和 loopback 开放；浏览器上传/下载继续使用 AWS SDK 生成的短期 SigV4 URL。
+必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。本地 S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。SeaweedFS 与 S3 端口只对 Compose 私网和 loopback 开放；`MEDIA_STORAGE_ENDPOINT` 让服务端流量留在 Compose 网络，`MEDIA_STORAGE_PUBLIC_ENDPOINT` 为 edge hostname 生成浏览器上传/下载签名。
 
 运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后恢复服务。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
-## 一次性生产切换边界
+## 已执行的生产切换
 
-可以在一个维护窗口直接切，但“直接”仍必须包含演练：
+2026-07-20 已在一个维护窗口完成直接切换：
 
-1. 把当前生产 dump 恢复到隔离本地库；
-2. 跑 schema migration、真实 PostgreSQL integration 与 Playwright；
-3. 停止云端写入和 worker；
-4. 生成并验证最终 custom-format dump；
-5. 本地恢复、迁移、比较 counts/invariants，并通过临时入口 smoke；
-6. 切 Cloudflare/DNS，再开放写入；
-7. 回滚窗口结束前保留云端库只读。
+1. 把 Supabase `public` dump 恢复到隔离 PostgreSQL 17 并应用当前 migrations；
+2. 把 2,857 个 Tigris objects 全部复制校验到 SeaweedFS，并恢复同时间戳维护备份；
+3. 禁用定时 Fly workflow、归档 Fly logs、把 Fly writer/worker 缩到零；
+4. 获取最终 dump、重跑幂等 S3 copy、恢复本地生产库；
+5. 核对表 count、删除退役 version columns、初始化 98 个 event streams；
+6. 通过 Cloudflare Tunnel 路由 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me`；
+7. 验证 TLS、HTTP、Socket.IO/WebSocket、snapshot/delta event、公开 presigned PUT/GET 与删除 tombstone。
 
-一旦本地开放写入，只改 DNS 回滚会丢本地新增数据；必须先把增量重新协调到云端目标。
+回滚窗口内继续保留 Fly、Supabase 与 Tigris。一旦本地开放写入，只改 DNS 回滚会丢本地新增数据；必须先把增量重新协调到云端目标。
 
 实际实施证据见[进度账本](room-event-sync-portable-deployment-progress.zh.md)，恢复细节见[房间可靠性架构](room-reliability-architecture.zh.md)。

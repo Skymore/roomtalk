@@ -42,6 +42,7 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket. |
 | `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
+| `MEDIA_STORAGE_PUBLIC_ENDPOINT` | Optional browser-facing S3 endpoint used only when generating presigned URLs; server-side object operations continue to use `MEDIA_STORAGE_ENDPOINT`. |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | Optional path-style addressing. |
 | `MEDIA_STORAGE_CONNECTION_TIMEOUT_MS` | Object-storage connection timeout; defaults to `3000`. |
 | `MEDIA_STORAGE_REQUEST_TIMEOUT_MS` | Per-attempt object-storage request timeout; defaults to `15000`. |

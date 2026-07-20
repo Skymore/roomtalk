@@ -203,9 +203,9 @@ npm run test:e2e:postgres
 
 ## 部署
 
-`master` 是 release branch。`.github/workflows/fly-deploy.yml` 按计划运行或手动 dispatch，检查 `master` 是否比最近成功版本有新提交，随后构建两端、校验翻译与 secret，并部署到 Fly.io。不要手动执行 `fly deploy`。
+`master` 仍是 release branch，但 2026-07-20 自托管切换后，定时 Fly workflow 已禁用。切换产生的本地 commit 按约定没有 push。
 
-生产使用 Fly.io 承载 Node control plane、Supabase PostgreSQL、Upstash Redis、Tigris 对象存储，以及 E2B 的每房间 execution sandbox。
+`roomtalk.ruit.me` 生产现在通过 Docker Compose 与 Cloudflare Tunnel 在 MacBook 上运行根镜像，使用 PostgreSQL 17、Redis 7 和 SeaweedFS 4.29 S3-compatible 存储；每房间 execution sandbox 仍由 E2B 提供。旧 Fly/Supabase/Tigris 只保留为回滚源，不再接受写入。
 
 ## 精选工程参考
 
@@ -220,7 +220,8 @@ npm run test:e2e:postgres
 ## 文档
 
 - [文档索引](docs/README.zh.md)：当前架构、runbook、子系统参考、复盘、历史方案、报告和语言版本。
-- [部署指南](部署指南.md)：当前 GitHub Actions 与 Fly.io 生产流程。
+- [可迁移部署与切换记录](docs/room-event-sync-portable-deployment.zh.md)：当前 Mac 生产 runtime、event sync、对象存储 edge、备份与回滚边界。
+- [旧 Fly 部署指南](部署指南.md)：为回滚历史保留的、当前已禁用的 GitHub Actions/Fly.io 流程。
 - [配置参考](docs/configuration.zh.md)：环境变量分组、存储模式、secret 边界和生产/开发差异。
 - [安全](SECURITY.zh.md)：身份、授权、credential 处理、scoped capability、媒体访问和 sandbox trust boundary。
 - [贡献指南](CONTRIBUTING.zh.md)：开发、验证、artifact、commit 和 release 要求。

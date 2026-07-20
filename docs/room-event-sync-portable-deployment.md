@@ -2,7 +2,7 @@
 
 [中文](room-event-sync-portable-deployment.zh.md)
 
-Status: implemented locally; production data/DNS cutover not performed
+Status: production cutover completed at `roomtalk.ruit.me`
 
 Updated: 2026-07-20
 
@@ -92,16 +92,16 @@ For example, a request can commit a user message, its room event, an assistant-r
 
 ## Portable runtime
 
-The same root `Dockerfile` runs locally, on Fly, and later on AWS. Platform differences are environment variables:
+The same root `Dockerfile` runs on the current Mac production host, the retained Fly rollback target, and later on AWS. Platform differences are environment variables:
 
-| Local Compose | Current cloud | AWS target |
+| Current Mac production | Retained rollback cloud | AWS target |
 | --- | --- | --- |
 | app container | Fly Machine | ECS Fargate or EKS |
 | PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
 | Redis 7, rebuildable | managed Redis | ElastiCache |
 | SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
 
-Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the S3 boundary. Compose uses SeaweedFS, Fly uses Tigris, and AWS uses S3 without changing application object keys or APIs.
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the S3 boundary. Current production uses SeaweedFS, the rollback deployment uses Tigris, and AWS will use S3 without changing application object keys or APIs.
 
 Local start and backup:
 
@@ -111,22 +111,22 @@ docker compose --env-file .env.compose up -d --build
 docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. Local S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. SeaweedFS and its S3 port bind only to the private Compose network and loopback. The AWS SDK continues to issue expiring SigV4 URLs for browser uploads/downloads.
+`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. Local S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. SeaweedFS and its S3 port bind only to the private Compose network and loopback. `MEDIA_STORAGE_ENDPOINT` keeps server traffic on the Compose network while `MEDIA_STORAGE_PUBLIC_ENDPOINT` signs browser uploads/downloads for the edge hostname.
 
 Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
-## Direct production cutover boundary
+## Executed production cutover
 
-A one-window cutover is technically possible, but “direct” must still include a rehearsal:
+A single maintenance-window cutover was completed on 2026-07-20:
 
-1. restore a current production dump into an isolated local database;
-2. run schema migration plus full PostgreSQL integration/Playwright tests;
-3. stop cloud writes and workers;
-4. create and verify the final custom-format dump;
-5. restore locally, migrate, compare counts/invariants, and smoke the temporary origin;
-6. switch the Cloudflare/DNS route, then reopen writes;
-7. retain the cloud database read-only until the rollback window closes.
+1. restored a Supabase `public` dump into an isolated PostgreSQL 17 database and applied current migrations;
+2. copied and verified all 2,857 Tigris objects into SeaweedFS, then restored a paired maintenance backup;
+3. disabled the scheduled Fly workflow, archived Fly logs, and scaled Fly writers/workers to zero;
+4. took the final dump, reran the idempotent S3 copy, and restored the local production database;
+5. compared table counts, removed the retired version columns, and initialized 98 event streams;
+6. routed `roomtalk.ruit.me` and `roomtalk-objects.ruit.me` through Cloudflare Tunnel;
+7. verified TLS, HTTP, Socket.IO/WebSocket, snapshot/delta events, public presigned PUT/GET, and deletion tombstones.
 
-After local writes open, DNS-only rollback is unsafe: new local data must first be reconciled back to the cloud target.
+Fly, Supabase, and Tigris remain intact through the rollback window. After local writes open, DNS-only rollback is unsafe: new local data must first be reconciled back to the cloud target.
 
 Implementation evidence is recorded in [the progress ledger](room-event-sync-portable-deployment-progress.md). The detailed runtime recovery model is in [Room Reliability Architecture](room-reliability-architecture.md).

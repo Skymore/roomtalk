@@ -203,9 +203,9 @@ Run focused tests next to changed code and expand to the affected production bui
 
 ## Deployment
 
-`master` is the release branch. `.github/workflows/fly-deploy.yml` runs on a schedule or through manual dispatch, checks whether `master` has changed since the latest successful run, builds both packages, validates translations and secrets, and deploys to Fly.io. Do not run `fly deploy` manually.
+`master` remains the release branch, but the scheduled Fly workflow is disabled after the 2026-07-20 self-host cutover. Local cutover commits are intentionally not pushed.
 
-Production uses Fly.io for the Node control plane, Supabase PostgreSQL, Upstash Redis, Tigris object storage, and E2B for per-room execution sandboxes.
+Production at `roomtalk.ruit.me` runs the root image on a MacBook through Docker Compose and Cloudflare Tunnel, with PostgreSQL 17, Redis 7, and SeaweedFS 4.29 S3-compatible storage. E2B still provides per-room execution sandboxes. The former Fly/Supabase/Tigris deployment is retained as a rollback source, not a live writer.
 
 ## Selected Engineering References
 
@@ -220,7 +220,8 @@ Current architecture and historical records are both part of the engineering evi
 ## Documentation
 
 - [Documentation index](docs/README.md): current architecture, runbooks, subsystem references, retrospectives, historical plans, reports, and language editions.
-- [Deployment guide](DeploymentGuide.md): the current GitHub Actions and Fly.io production workflow.
+- [Portable deployment and cutover record](docs/room-event-sync-portable-deployment.md): the current Mac production runtime, event sync, storage edge, backup, and rollback boundary.
+- [Legacy Fly deployment guide](DeploymentGuide.md): the disabled GitHub Actions/Fly.io workflow retained for rollback history.
 - [Configuration reference](docs/configuration.md): environment groups, storage modes, secret boundaries, and production/development differences.
 - [Security](SECURITY.md): identity, authorization, credential handling, scoped capabilities, media access, and sandbox trust boundaries.
 - [Contributing](CONTRIBUTING.md): development, validation, artifact, commit, and release expectations.

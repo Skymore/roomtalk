@@ -42,6 +42,7 @@
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket。 |
 | `MEDIA_STORAGE_REGION` | 存储 region；Tigris 通常为 `auto`。 |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint。 |
+| `MEDIA_STORAGE_PUBLIC_ENDPOINT` | 可选的浏览器侧 S3 endpoint，只用于生成 presigned URL；服务端对象操作继续使用 `MEDIA_STORAGE_ENDPOINT`。 |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | 可选 path-style addressing。 |
 | `MEDIA_STORAGE_CONNECTION_TIMEOUT_MS` | 对象存储连接超时，默认 `3000`。 |
 | `MEDIA_STORAGE_REQUEST_TIMEOUT_MS` | 对象存储单次请求超时，默认 `15000`。 |
