@@ -38,7 +38,7 @@
 
 | 变量 | 用途 |
 | --- | --- |
-| `MEDIA_STORAGE_MODE` | 可选显式模式：文件系统 volume 使用 `local`，云对象存储使用 `s3`；显式 `s3` 未配置 bucket 时启动失败。 |
+| `MEDIA_STORAGE_MODE` | 显式存储模式。生产 Compose、Fly 与 AWS 都使用 `s3`；`local` 只作为文件系统开发/恢复 fallback。显式 `s3` 未配置 bucket 时启动失败。 |
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket。 |
 | `MEDIA_STORAGE_REGION` | 存储 region；Tigris 通常为 `auto`。 |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint。 |
@@ -56,7 +56,7 @@
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | 签名 room/client/turn/mode-scoped publish token。 |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish token 生命期。 |
 
-私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。本地 Compose 显式使用 `local`；Fly/AWS 使用 `s3` 或已有的 bucket 自动推断。
+私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。本地生产 Compose 把 `s3` 指向 bundled SeaweedFS 并启用 path-style addressing；Fly 指向 Tigris，AWS 指向 S3。
 
 ## Chat AI 与可选服务
 

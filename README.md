@@ -60,7 +60,7 @@ flowchart LR
   Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
 
   Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
-  Control --> Media["Local volume or S3/Tigris\nprivate media + published artifacts"]
+  Control --> Media["S3-compatible storage\nSeaweedFS, Tigris, or AWS S3"]
 
   Control --> Lifecycle["Sandbox lifecycle + access control"]
   Lifecycle --> E2B["Per-room E2B sandbox"]
@@ -167,7 +167,7 @@ Use `server/.env.example` as the general backend starting point. Important group
 | HTTP and origins | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
 | Durable/realtime stores | `PERSISTENCE_STORE`, `DATABASE_URL`, `REDIS_URL`, PostgreSQL TLS, message-cache TTL |
 | Chat AI | provider API keys, default model, OpenRouter routing metadata |
-| Media and artifacts | `MEDIA_STORAGE_MODE`; local directory/signing key or S3 bucket, endpoint, region, and credentials |
+| Media and artifacts | `MEDIA_STORAGE_MODE`; S3-compatible bucket, endpoint, region, and credentials; filesystem mode remains a development fallback |
 | Optional services | Google OAuth, AssemblyAI, Web Push VAPID |
 | Code-agent control plane | backend allowlists, E2B template/artifact pins, TTL/limits, model-gateway and publish token secrets |
 
@@ -182,7 +182,7 @@ Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Doc
 - Runtime startup requires `PERSISTENCE_STORE=postgres` and `DATABASE_URL`. PostgreSQL stores canonical records and the bounded room-event replay log.
 - Redis owns rebuildable presence, socket sessions, pub/sub, counters, and the short-TTL message cache; Redis is still required, but is never the durable authority.
 - `migrate:redis-to-postgres` remains an idempotent, dry-run-capable importer for legacy Redis durable snapshots, not a supported serving mode or rollback target.
-- Local Compose persists private media and versioned static-site artifacts in a signed-URL filesystem volume; Fly/AWS use the same abstraction with S3/Tigris-compatible storage.
+- Local Compose runs SeaweedFS 4.29 as a private S3-compatible service; Fly uses Tigris and AWS uses S3 through the same SDK/configuration boundary. The filesystem adapter remains available only as a development or recovery fallback.
 
 Migration and rollout references:
 

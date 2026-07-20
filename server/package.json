@@ -11,6 +11,7 @@
     "start:e2e": "ts-node src/server.ts",
     "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
     "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
+    "migrate:s3-to-s3": "ts-node src/scripts/migrateS3Objects.ts",
     "migrate:code-agent-naming": "ts-node src/scripts/migrateCodeAgentNaming.ts",
     "backfill:misrouted-coco-costs": "ts-node src/scripts/backfillMisroutedCocoCosts.ts",
     "backfill:misrouted-coco-model-steps": "ts-node src/scripts/backfillMisroutedCocoModelSteps.ts",

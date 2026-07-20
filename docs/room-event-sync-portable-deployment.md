@@ -99,9 +99,9 @@ The same root `Dockerfile` runs locally, on Fly, and later on AWS. Platform diff
 | app container | Fly Machine | ECS Fargate or EKS |
 | PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
 | Redis 7, rebuildable | managed Redis | ElastiCache |
-| persistent local media volume | Tigris/S3-compatible | S3 |
+| SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
 
-Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the media-storage boundary. Compose selects the persistent filesystem implementation explicitly; Fly/AWS select S3-compatible storage with environment variables.
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the S3 boundary. Compose uses SeaweedFS, Fly uses Tigris, and AWS uses S3 without changing application object keys or APIs.
 
 Local start and backup:
 
@@ -111,9 +111,9 @@ docker compose --env-file .env.compose up -d --build
 docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. The backup job writes a PostgreSQL custom archive and a matching local-media tarball. PostgreSQL and Redis maintenance ports bind to loopback only. Named volumes and the local `backups/` directory are not off-host backups; production needs encrypted external copies and restore drills.
+`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. Local S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. SeaweedFS and its S3 port bind only to the private Compose network and loopback. The AWS SDK continues to issue expiring SigV4 URLs for browser uploads/downloads.
 
-Production-style local media URLs are HMAC-signed over method, object key, and expiry. Unsigned, expired, cross-method, or tampered URLs are rejected. `LOCAL_MEDIA_SIGNING_SECRET` is preferred; Compose can derive a separate signing key from a sufficiently long local PostgreSQL password when it is omitted.
+Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
 ## Direct production cutover boundary
 

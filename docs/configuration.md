@@ -38,7 +38,7 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 
 | Variable | Purpose |
 | --- | --- |
-| `MEDIA_STORAGE_MODE` | Optional explicit mode: `local` for a filesystem volume or `s3` for cloud object storage. Explicit `s3` fails startup without a bucket. |
+| `MEDIA_STORAGE_MODE` | Explicit storage mode. Production Compose, Fly, and AWS use `s3`; `local` is a filesystem development/recovery fallback. Explicit `s3` fails startup without a bucket. |
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket. |
 | `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
@@ -56,7 +56,7 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | Signs room/client/turn/mode-scoped publish tokens. |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish-token lifetime. |
 
-Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts. Local Compose explicitly uses `local`; Fly/AWS use `s3` or the existing bucket-based inference.
+Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts. Local production Compose points `s3` at the bundled SeaweedFS service with path-style addressing; Fly points it at Tigris and AWS at S3.
 
 ## Chat AI and Optional Services
 

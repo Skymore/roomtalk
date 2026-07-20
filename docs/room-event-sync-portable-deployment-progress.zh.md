@@ -2,7 +2,7 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：本地实现与验证完成；未执行生产数据/DNS 切换
+状态：自托管 runtime 与生产数据演练完成；尚未执行最终停写/DNS 切换
 
 本地开始/完成：2026-07-20
 
@@ -25,8 +25,9 @@
 | 2 | PostgreSQL event stream、Socket/client 直接切换、version 退役、integration/E2E | 完成 | `d2c051ab` |
 | 3 | 运维演练、当前文档清理、最终证据 | 完成 | 本文档 commit |
 | 4 | 完成性审计：本地持久媒体、签名 URL、env interpolation、成对恢复 | 完成 | 本次收尾 commit |
+| 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | 本次 self-host commit |
 
-没有 push 任何 commit，也没有修改 Fly 服务、Supabase 数据库、生产 DNS 或生产数据。
+没有 push 任何 commit。Fly/Supabase serving state 和生产 DNS 均未改变；已创建专用 Cloudflare Tunnel，但还没有启用对应 DNS route。
 
 ## 已交付架构
 
@@ -38,7 +39,7 @@
 - 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
 - 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
 - AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
-- 本地 Compose 显式使用持久媒体 volume 与带过期时间的 HMAC URL；云端选择 S3 实现，`/api/status` 会报告媒体是否就绪。
+- 本地生产 Compose 在现有 S3 adapter 后运行 SeaweedFS 4.29，并继续使用带过期时间的 SigV4 URL；Tigris 与未来 AWS S3 共用相同 object key 和 SDK 边界，`/api/status` 会报告媒体是否就绪。
 - Compose 命令强制带 `--env-file .env.compose`，确保 app 与 PostgreSQL 使用同一份配置凭据，而不是各自落到无关默认值。
 
 ## 服务端交付清单
@@ -102,22 +103,22 @@
 | PostgreSQL restart persistence | marker 与 event head 保留 |
 | Listener/pool restart recovery | pool 处理断连，LISTEN 1 秒内恢复，无 uncaught exception |
 | Backup -> fresh restore | 同时间戳 PostgreSQL 17 custom archive（170 TOC）与 media tarball 均恢复到全新目标 |
+| 生产 PostgreSQL 演练 | Supabase `public` dump 恢复到隔离 PostgreSQL 17；当前 migrations 和 event schema 均成功启动 |
+| 生产 S3 演练 | 2,857 个 Tigris objects / 1,302,853,579 bytes 已复制并在 SeaweedFS 校验 |
+| SeaweedFS 维护恢复 | 同时间戳数据库 dump 可恢复；原始对象快照启动成隔离 S3 后完整读取全部对象和字节 |
 
 Event schema 演练的全新恢复库中有 1 个 room、member、message、stream 和 2 个有序 event（`headSeq=2`）。九个 event trigger 与一个 room 单调时间 trigger 全部存在，退役 version column 数量为 0。后续成对演练把 `backups/roomtalk-20260720T123725Z.dump` 恢复到全新数据库，并把 `backups/roomtalk-media-20260720T123725Z.tar.gz` 恢复到全新 volume；room/media/message 关系一致，媒体对象 SHA-256 与源文件逐字节相同。临时数据库、volume、marker 和隔离 Compose 项目均已删除。
 
-完成性审计还使用自定义 `.env.compose` 密码渲染 Compose，证明 PostgreSQL service password 与 app `DATABASE_URL` 一致。只读检查确认当前 Fly 环境具备同一根镜像需要的 PostgreSQL、Redis、bucket、endpoint 与 S3 credential；没有修改任何云端状态。
+完成性审计还使用自定义 `.env.compose` 密码渲染 Compose，证明 PostgreSQL service password 与 app `DATABASE_URL` 一致。当前 Fly secrets 已导入 macOS Keychain，本地生产配置再改写为 `roomtalk.ruit.me`、Compose PostgreSQL/Redis 与 SeaweedFS；credential 没有写入 tracked file。
+
+生产数据演练恢复了 `backups/roomtalk-supabase-public-precutover-20260720T1958Z.dump`。应用 migration 前与源端一致：98 rooms、7,939 messages、179 members、404 media assets、6,361 observability events、28 outbox events、60 room-agent turns。启动后退役 version columns 已删除、98 个 room streams 已建立、全部 room-event triggers 存在。历史行继续作为 snapshot state，不伪造 event；切换后的新写入才追加 event。
+
+Tigris 全量预复制覆盖 private room media、published sites 和 stickers，共 2,857 objects、1,302,853,579 bytes。`node scripts/backup-local-production.mjs` 随后停止 edge/app/object storage，生成同一时间戳的 PostgreSQL archive 与 SeaweedFS snapshot，再自动恢复健康栈。两份 artifact 都恢复到隔离目标；S3 inventory 完全一致，临时目标已经删除。
 
 重启演练第一次发现 node-postgres idle client 断连会冒泡到全局 `uncaughtException`。已增加 pool-level error handler 和单测；第二次真实 PostgreSQL restart 只记录预期 handled warning，API 继续健康且 `LISTEN room_event_committed` 自动恢复。
 
 ## 尚未执行的生产操作
 
-代码已具备维护窗口直接切换条件，但本次没有擅自切生产。真正迁移前仍需：
-
-1. 获取当前 Supabase custom dump，并在隔离库实际 restore；
-2. 单独复制/校验对象存储；
-3. 冻结 Fly writer 与 worker；
-4. 恢复最终 dump，执行 schema、count/invariant、integration、Playwright；
-5. 通过临时 origin smoke 后再切 ingress/DNS；
-6. 回滚窗口结束前保持旧 PostgreSQL 只读。
+剩余维护窗口已经缩短为：冻结 Fly writer/worker，归档运行日志，获取最终 Supabase `public` dump，重跑幂等 S3 copy，用最终数据替换本地演练数据，核对 invariant，最后才把 `roomtalk.ruit.me` route 到现有 tunnel。回滚窗口结束前保留 Fly、Supabase 与 Tigris，不删除旧源。
 
 新本地目标一旦开放写入，只改 DNS 回滚会丢新增数据，必须先协调这些写入。

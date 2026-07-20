@@ -2,7 +2,7 @@
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: Local implementation and verification complete; production data/DNS cutover not executed
+Status: Self-host runtime and production-data rehearsal complete; final write freeze/DNS cutover not executed
 
 Started/completed locally: 2026-07-20
 
@@ -25,8 +25,9 @@ Work started from clean local `master` at `d94d2cd0`. The old client recovered b
 | 2 | PostgreSQL event stream, direct socket/client cutover, version retirement, integration/E2E coverage | Complete | `d2c051ab` |
 | 3 | Operational rehearsal, current-doc cleanup, final evidence | Complete | This documentation commit |
 | 4 | Completion audit: persistent local media, signed URLs, env interpolation, paired restore | Complete | This completion commit |
+| 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | This self-host commit |
 
-No commit was pushed. No Fly service, Supabase database, production DNS, or production data was changed.
+No commit was pushed. Fly and Supabase serving state and production DNS remain unchanged. A dedicated Cloudflare Tunnel was created but its DNS route has not been enabled.
 
 ## Delivered architecture
 
@@ -39,7 +40,7 @@ No commit was pushed. No Fly service, Supabase database, production DNS, or prod
 - Complete-room ack/broadcast ordering uses a database-stamped, strictly monotonic `updatedAt`; it is a last-write guard, not another synchronization version.
 - Hourly retention removes old contiguous prefixes. There is no periodic event-to-message merge because canonical state is already updated in the original transaction.
 - AI execution continues to use a separate claim/retry outbox; room replay events are not worker jobs.
-- Local Compose explicitly uses a persistent media volume and expiring HMAC-signed URLs; cloud runtimes select the S3 implementation. `/api/status` reports media readiness.
+- Local production Compose runs SeaweedFS 4.29 behind the existing S3 adapter and expiring SigV4 URLs. Tigris and future AWS S3 use the same object keys and SDK boundary. `/api/status` reports media readiness.
 - Compose commands require `--env-file .env.compose`, so the app and PostgreSQL receive the same configured credentials instead of unrelated defaults.
 
 ## Verification evidence
@@ -58,6 +59,9 @@ No commit was pushed. No Fly service, Supabase database, production DNS, or prod
 | Compose | Fresh and standard stacks healthy; `/api/status` reported PostgreSQL, Redis, and configured media |
 | PostgreSQL restart | Marker and event head survived; pool and LISTEN reconnected without an uncaught exception |
 | Backup/restore | Matching PostgreSQL 17 custom archive (170 TOC entries) and media tarball both restored fresh |
+| Production PostgreSQL rehearsal | Supabase `public` dump restored into an isolated PostgreSQL 17 database; current migrations and event schema started successfully |
+| Production S3 rehearsal | 2,857 Tigris objects / 1,302,853,579 bytes copied and verified in SeaweedFS |
+| SeaweedFS maintenance restore | Matching database dump restored fresh; raw object snapshot started as an isolated S3 service with all 2,857 objects and bytes readable |
 
 The event-schema restore contained one room, member, message, stream, and two ordered events (`headSeq=2`). All nine event triggers plus the monotonic room timestamp trigger were present, and retired version-column count was zero. A later paired rehearsal restored `backups/roomtalk-20260720T123725Z.dump` into a fresh database and `backups/roomtalk-media-20260720T123725Z.tar.gz` into a fresh volume. The restored room/media/message relationship matched, and the restored object SHA-256 was byte-identical. Temporary databases, volumes, markers, and the isolated Compose project were removed.
 
@@ -65,10 +69,14 @@ The event-schema restore contained one room, member, message, stream, and two or
 
 Automation covers a repeatable snapshot boundary, online delivery, offline replay without refresh, duplicate wake-ups/events, sequence gaps, cursor retention expiry, restored-database cursor rollback, concurrent writers, monotonic complete-room metadata, idempotent retries, transaction rollback, edit/delete/clear/truncate flows, AI final/error recovery, media completion, two-client realtime, authorization, and deleted-room tombstone replay. Media coverage now also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
 
-The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Read-only Fly inspection confirmed that the current cloud environment has the PostgreSQL, Redis, bucket, endpoint, and S3 credential prerequisites used by the unchanged root image; no cloud state was modified.
+The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `roomtalk.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
+
+The production-data rehearsal restored `backups/roomtalk-supabase-public-precutover-20260720T1958Z.dump`. Before application migrations it matched 98 rooms, 7,939 messages, 179 members, 404 media assets, 6,361 observability events, 28 outbox events, and 60 room-agent turns. Startup removed the retired version columns, created 98 room streams, and installed all room-event triggers. Historical rows intentionally remain snapshot state; new writes create events after cutover.
+
+The full Tigris pre-copy matched 2,857 objects and 1,302,853,579 bytes across private room media, published sites, and stickers. `node scripts/backup-local-production.mjs` then stopped edge/app/object storage, produced one timestamp-paired PostgreSQL archive and SeaweedFS snapshot, and restarted the healthy stack. Both artifacts were restored into isolated targets; the restored S3 inventory matched exactly and the temporary targets were removed.
 
 During the restart rehearsal, node-postgres initially surfaced an idle-client disconnect through the global `uncaughtException` handler. A pool-level error handler was added and tested; a second real PostgreSQL restart produced only the expected handled warning and re-established `LISTEN room_event_committed` within one second.
 
 ## Remaining production operation
 
-This repository is ready for a rehearsed maintenance-window cutover, not an unattended production switch. Before moving production, take and restore a current Supabase dump, copy/verify object storage separately, freeze Fly writers/workers, compare invariants on the local target, smoke through a temporary origin, then change ingress/DNS. Keep the old PostgreSQL source read-only until the rollback window closes.
+The remaining maintenance-window operation is deliberately short: freeze Fly writers/workers, archive operational logs, take the final Supabase `public` dump, rerun the idempotent S3 copy, replace the local rehearsal data, compare invariants, and only then route `roomtalk.ruit.me` through the existing tunnel. Keep Fly, Supabase, and Tigris intact through the rollback window.

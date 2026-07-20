@@ -23,6 +23,7 @@ server/build/
 # Local artifacts (DB dumps, scratch output, comparison screenshots)
 backups/
 tmp/
+runtime/
 
 # Python caches (code-agent runner)
 __pycache__/
