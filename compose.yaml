@@ -22,7 +22,7 @@ services:
       CLIENT_URL: ${CLIENT_URL:-http://localhost:3012}
       CLIENT_URLS: ${CLIENT_URLS:-http://localhost:3012}
       PERSISTENCE_STORE: postgres
-      DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:-roomtalk-local-only}@postgres:5432/${POSTGRES_DB:-message_system}
+      DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}@postgres:5432/${POSTGRES_DB:-message_system}
       POSTGRES_SSL: "false"
       REDIS_URL: redis://redis:6379
       MEDIA_STORAGE_MODE: s3
@@ -31,8 +31,8 @@ services:
       MEDIA_STORAGE_ENDPOINT: http://object-storage:8333
       MEDIA_STORAGE_PUBLIC_ENDPOINT: ${MEDIA_STORAGE_PUBLIC_ENDPOINT:-}
       MEDIA_STORAGE_FORCE_PATH_STYLE: "true"
-      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:-roomtalk-local-access-key}
-      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_ACCESS_KEY:-roomtalk-local-secret-key}
+      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:?Set LOCAL_S3_ACCESS_KEY_ID in .env.compose}
+      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_ACCESS_KEY:?Set LOCAL_S3_SECRET_ACCESS_KEY in .env.compose}
       CODE_AGENT_ENABLED: ${CODE_AGENT_ENABLED:-false}
       CODEX_CONNECTIONS_ENABLED: ${CODEX_CONNECTIONS_ENABLED:-false}
       GITHUB_CONNECTIONS_ENABLED: ${GITHUB_CONNECTIONS_ENABLED:-false}
@@ -61,7 +61,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-message_system}
       POSTGRES_USER: ${POSTGRES_USER:-roomtalk}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -95,8 +95,8 @@ services:
     logging: *default-logging
     command: ["mini", "-dir=/data", "-s3.allowedOrigins=${CLIENT_URLS:-http://localhost:3012}"]
     environment:
-      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:-roomtalk-local-access-key}
-      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_ACCESS_KEY:-roomtalk-local-secret-key}
+      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:?Set LOCAL_S3_ACCESS_KEY_ID in .env.compose}
+      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_ACCESS_KEY:?Set LOCAL_S3_SECRET_ACCESS_KEY in .env.compose}
       S3_BUCKET: ${MEDIA_BUCKET_NAME:-roomtalk-media}
     volumes:
       - ${ROOMTALK_OBJECT_STORAGE_HOST_PATH:-./runtime/object-storage}:/data
@@ -136,7 +136,7 @@ services:
       PGPORT: "5432"
       PGDATABASE: ${POSTGRES_DB:-message_system}
       PGUSER: ${POSTGRES_USER:-roomtalk}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}
     volumes:
       - ./backups:/backups
       - ${ROOMTALK_OBJECT_STORAGE_HOST_PATH:-./runtime/object-storage}:/object-storage:ro
