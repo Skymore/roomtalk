@@ -1,5 +1,11 @@
 name: roomtalk
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   app:
     build:
@@ -7,6 +13,7 @@ services:
       dockerfile: Dockerfile
     image: roomtalk-local:dev
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ${ROOMTALK_APP_ENV_FILE:-.env.compose}
     environment:
@@ -50,6 +57,7 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-message_system}
       POSTGRES_USER: ${POSTGRES_USER:-roomtalk}
@@ -69,6 +77,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - 127.0.0.1:${REDIS_HOST_PORT:-63799}:6379
@@ -83,6 +92,7 @@ services:
   object-storage:
     image: chrislusf/seaweedfs:4.29@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
     restart: unless-stopped
+    logging: *default-logging
     command: ["mini", "-dir=/data", "-s3.allowedOrigins=${CLIENT_URL:-http://localhost:3012}"]
     environment:
       AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:-roomtalk-local-access-key}
@@ -105,6 +115,7 @@ services:
     image: cloudflare/cloudflared:2026.7.2
     profiles: ["edge"]
     restart: unless-stopped
+    logging: *default-logging
     command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
     volumes:
       - ${CLOUDFLARE_TUNNEL_CONFIG_FILE:-./runtime/cloudflared/config.yml}:/etc/cloudflared/config.yml:ro

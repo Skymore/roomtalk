@@ -115,6 +115,8 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后恢复服务。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
+长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、outbox 与 turn 记录仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。
+
 ## 已执行的生产切换
 
 2026-07-20 已在一个维护窗口完成直接切换：

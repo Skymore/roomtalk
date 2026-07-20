@@ -115,6 +115,8 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
+Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
+
 ## Executed production cutover
 
 A single maintenance-window cutover was completed on 2026-07-20:
