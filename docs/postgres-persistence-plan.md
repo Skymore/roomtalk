@@ -9,6 +9,10 @@ Reviewed: 2026-07-12
 > 和 `server/src/repositories/postgresSchema.ts` 为准。当前 PostgreSQL schema
 > 已扩展到 room members/saves、auth/account、push subscriptions、`media_assets`、
 > `pending_media_uploads` 和 audio transcriptions 等表。
+>
+> 2026-07-20 补充：本文中的 Redis durable fallback 和消息版本缓存属于历史迁移阶段，
+> 已被[房间事件同步方案](./room-event-sync-portable-deployment.zh.md)取代。当前运行时强制
+> PostgreSQL，并以 `snapshotSeq/afterSeq` 和 room-event head 作为同步/缓存边界。
 
 ## 目标
 

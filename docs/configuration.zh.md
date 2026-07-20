@@ -3,7 +3,7 @@
 [English](configuration.md)
 
 状态：当前
-更新：2026-07-12
+更新：2026-07-20
 事实源：`server/.env.example`、runtime config loader、`fly.toml` 和 `.github/workflows/fly-deploy.yml`
 
 本文只整理 operator-facing 配置。Test-only 变量和每轮注入 sandbox 的 `ROOMTALK_*` 变量刻意不列入。
@@ -23,20 +23,16 @@
 
 | 变量 | 用途 |
 | --- | --- |
-| `REDIS_URL` | 实时状态必需 Redis；Redis 模式下也是 durable store。 |
-| `PERSISTENCE_STORE` | `redis`（`R`）或 `postgres`（`R+P`）。 |
-| `DATABASE_URL` | `PERSISTENCE_STORE=postgres` 时必需。 |
+| `REDIS_URL` | 可重建实时与 cache 状态所需的 Redis。 |
+| `PERSISTENCE_STORE` | 必须为 `postgres`；其他值会启动失败。 |
+| `DATABASE_URL` | 必需的 PostgreSQL durable-store URL。 |
 | `POSTGRES_SSL` | 启用 PostgreSQL TLS。 |
 | `POSTGRES_SSL_REJECT_UNAUTHORIZED` | 默认保持证书校验。 |
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | 可选托管服务 CA；secret manager 中优先 base64。 |
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | PostgreSQL 模式下 Redis 最近消息 cache TTL；`0` 禁用写入。 |
 | `ROOM_MESSAGES_CACHE_MAX_BYTES` | 序列化 cache payload 上限。 |
 
-支持的模型：
-
-- `PERSISTENCE_STORE=redis`：Redis 拥有 durable 和 realtime state（`R`）。
-- `PERSISTENCE_STORE=postgres`：PostgreSQL 拥有 durable fact，Redis 拥有 realtime coordination 和有界 cache state（`R+P`）。
-- 不支持纯 PostgreSQL。
+唯一受支持的 serving model 是 PostgreSQL durable state + Redis realtime/cache state。Redis 运行时仍必需，但允许清空并重建，不能作为 durable fallback。旧 Redis store 只保留给 import 与 contract coverage。
 
 ## 媒体与 Artifact
 

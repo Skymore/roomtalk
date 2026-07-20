@@ -6,6 +6,8 @@ Status: Completed historical plan
 Reviewed: 2026-07-12
 
 > This document preserves migration reasoning and phase acceptance. For current operations use the [PostgreSQL rollout runbook](postgres-rollout-runbook.md), `server/.env.example`, and `server/src/repositories/postgresSchema.ts`. The current schema also covers room members/saves, accounts/auth, push subscriptions, media assets, pending uploads, and audio transcription state.
+>
+> 2026-07-20 update: the Redis durable fallback and message-version cache described below belong to the historical migration phase. The [room-event sync design](room-event-sync-portable-deployment.md) supersedes them; runtime now requires PostgreSQL and uses `snapshotSeq/afterSeq` plus the room-event head as sync/cache boundaries.
 
 ## Goal
 

@@ -3,7 +3,7 @@
 [中文](configuration.zh.md)
 
 Status: Current
-Updated: 2026-07-12
+Updated: 2026-07-20
 Source of truth: `server/.env.example`, runtime config loaders, `fly.toml`, and `.github/workflows/fly-deploy.yml`
 
 This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
@@ -23,20 +23,16 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 
 | Variable | Purpose |
 | --- | --- |
-| `REDIS_URL` | Required Redis connection for realtime state; also the durable store in Redis mode. |
-| `PERSISTENCE_STORE` | `redis` (`R`) or `postgres` (`R+P`). |
-| `DATABASE_URL` | Required when `PERSISTENCE_STORE=postgres`. |
+| `REDIS_URL` | Required Redis connection for rebuildable realtime and cache state. |
+| `PERSISTENCE_STORE` | Must be `postgres`; other values fail startup. |
+| `DATABASE_URL` | Required PostgreSQL durable-store URL. |
 | `POSTGRES_SSL` | Enables PostgreSQL TLS. |
 | `POSTGRES_SSL_REJECT_UNAUTHORIZED` | Keeps certificate validation enabled by default. |
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | Optional managed-provider CA. Prefer base64 in secret managers. |
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | Redis recent-message cache TTL in PostgreSQL mode; `0` disables writes. |
 | `ROOM_MESSAGES_CACHE_MAX_BYTES` | Maximum serialized cache payload. |
 
-Supported models:
-
-- `PERSISTENCE_STORE=redis`: Redis owns durable and realtime state (`R`).
-- `PERSISTENCE_STORE=postgres`: PostgreSQL owns durable facts; Redis owns realtime coordination and bounded cache state (`R+P`).
-- PostgreSQL-only operation is not supported.
+The only supported serving model is PostgreSQL durable state plus Redis realtime/cache state. Redis remains operationally required but may be flushed and rebuilt; it is not a durable fallback. The legacy Redis store exists only for import and contract coverage.
 
 ## Media and Artifacts
 

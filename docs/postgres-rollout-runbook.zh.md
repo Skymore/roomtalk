@@ -2,23 +2,22 @@
 
 [English](postgres-rollout-runbook.md)
 
-状态：当前 runbook
-已按 `master` 和 `https://room.ruit.me/api/status` 核对：2026-07-12
+状态：旧 Redis 到 PostgreSQL 导入 runbook
+Runtime 合约更新：2026-07-20
 
-当前生产状态是 `PERSISTENCE_STORE=postgres`。Redis 仍连接 Socket.IO、实时 membership/session、pub/sub、model-gateway counter 和有界最近消息 cache。
+当前服务端只接受 `PERSISTENCE_STORE=postgres`。Redis 仍连接 Socket.IO、实时 membership/session、pub/sub、model-gateway counter 和有界最近消息 cache，但不再是 durable serving authority。当前本地/AWS 部署与 PostgreSQL 到 PostgreSQL 切换以[可迁移部署设计](room-event-sync-portable-deployment.zh.md)为准。
 
 ## 支持的存储模型
 
 | `PERSISTENCE_STORE` | Durable 事实源 | Realtime coordination/cache | 简写 |
 | --- | --- | --- | --- |
-| `redis` | Redis | Redis | `R` |
 | `postgres` | PostgreSQL | Redis | `R+P` |
 
-不支持纯 PostgreSQL（`P`）：Socket.IO scaling、presence、socket session、pub/sub、counter 和有界最近消息 cache 仍需要 Redis。
+Redis 仍用于 Socket.IO scaling、presence、socket session、pub/sub、counter 和有界最近消息 cache。旧 Redis durable 实现只保留给该 importer 读取遗留数据，以及 contract test 验证迁移语义。
 
 ## 目标
 
-`migrate:redis-to-postgres` 执行从 `R` 到 `R+P` 的单向 durable-data bootstrap，迁移当前 Redis durable model：
+`migrate:redis-to-postgres` 把旧 Redis durable snapshot 导入强制 PostgreSQL 模型，迁移：
 
 - room、完整 message history、member、save、password hash、AI cost total；
 - Code Agent turn 和 media metadata；
@@ -96,7 +95,7 @@ Invalid JSON 或 room save 缺失 `savedAt` counterpart 会 fail closed，不伪
    REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
    ```
 
-4. 设置 `PERSISTENCE_STORE=postgres` 和相关 secret。
+4. 部署 PostgreSQL-only durable runtime 与相关 secret。
 5. Restart/uncordon machine 并验证。
 
 迁移是幂等的：
@@ -140,20 +139,10 @@ fly secrets set ROOM_MESSAGES_CACHE_TTL_SECONDS="30"
 
 ## 回滚
 
-纯配置回滚只在 frozen cutover window 中安全：PostgreSQL 还没有接收 Redis 未获得的写入。应用切换后不会 dual-write 全部 durable data。一旦恢复流量，切回 Redis 可能丢失所有 PostgreSQL-only durable record。
-
-仅在写入仍冻结的立即 cutover failure 中：
-
-```bash
-fly secrets set PERSISTENCE_STORE="redis"
-```
-
-然后确认 status 为 Redis、room/message 正常。保留 PostgreSQL 数据用于分析，不在 incident 中 truncate。
-
-后续 incident 应优先恢复 PostgreSQL，或设计独立 reverse/full migration；在测量并明确接受 divergence 前不切回 Redis。
+Redis 不再是受支持 runtime 回滚目标。回滚窗口内保留切换前 PostgreSQL 数据库或已验证 dump 为只读。恢复写入前若验证失败，restore/failover 到该 PostgreSQL 点并部署上一版兼容应用镜像。一旦新目标接受了写入，任何数据库级回滚前都必须先协调这些新增写入；只改 DNS 会丢数据。
 
 ## 清理窗口
 
 只有在 PostgreSQL 经历正常生产流量窗口、migration/status count 已对账、configuration rollback window 已明确关闭，且 PostgreSQL backup/restore 成为 durable recovery path 后，才能考虑清理遗留 Redis durable data。
 
-即使清理 durable data，Redis 仍是 Socket.IO adapter 和 realtime room membership 的必需组件。
+即使清理旧 durable key，Redis 仍是 Socket.IO adapter 和 realtime room membership 的必需组件。

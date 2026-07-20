@@ -33,22 +33,21 @@ cd client-heroui && npm run check:i18n          # verify all keys present
 cd client-heroui && npm run translate:i18n:dry   # preview auto-translations
 cd client-heroui && npm run translate:i18n       # apply auto-translations
 
-# Persistence smoke test (uses local Redis DB 15, never prod)
-cd server && npm run smoke:persistence
+# Persistence smoke test (uses disposable PostgreSQL plus local Redis DB 15, never prod)
 cd server && TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
 ```
 
 ## Architecture
 
-### Persistence: Dual-Store Pattern
+### Persistence: PostgreSQL Durable + Redis Realtime
 
 The server uses a `CompositeRoomStore` (`server/src/repositories/store.ts`) that combines:
 
-- **DurableRoomStore** — either `RedisStore` or `PostgresStore`, selected by `PERSISTENCE_STORE` env var (`redis` default, or `postgres`). Owns rooms, messages, members, media assets, auth, push subscriptions.
+- **DurableRoomStore** — `PostgresStore`. Runtime startup requires `PERSISTENCE_STORE=postgres`; it owns rooms, messages, room events, members, media metadata, auth, and push subscriptions. `RedisStore` remains only for legacy migration/contract coverage, not as a serving-mode authority.
 - **RealtimeRoomStore** — always Redis. Manages online presence, socket sessions, ephemeral member counts.
 - **RoomMessageCacheStore** (optional) — Redis TTL cache in front of PostgreSQL reads, invalidated on writes.
 
-The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding new store operations, add the method to the `DurableRoomStore` interface, implement in both `RedisStore` and `PostgresStore`, then proxy through `CompositeRoomStore`.
+The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding runtime durable operations, implement PostgreSQL first and proxy through `CompositeRoomStore`; keep the legacy Redis contract aligned only when the migration/import path still needs that operation.
 
 ### Socket Event Handlers
 

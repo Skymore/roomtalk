@@ -13,7 +13,7 @@ The monorepo contains a React/Vite client, a Node/Express/Socket.IO control plan
 - Realtime rooms with invitations, passwords, member roles, admin controls, ownership transfer, posting schedules, saved rooms, and multi-client presence.
 - Provider-neutral AI streaming across Anthropic, OpenAI, DeepSeek, and OpenRouter-compatible models, with role/context controls, usage and cost accounting, recovery of interrupted streams, and A2UI surfaces.
 - Text, private media, stickers, replies, edits, reactions, transcription, web push, Google sign-in, and English/Chinese/Hindi/Japanese/Korean UI.
-- Mobile recovery for reconnects, BFCache restores, keyboard viewport changes, room-version ordering, and read-your-write room updates.
+- Mobile recovery for reconnects, BFCache restores, keyboard viewport changes, cursor-based room-event replay, and read-your-write room updates.
 
 ### Sandboxed code-agent rooms
 
@@ -41,11 +41,11 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | --- | --- |
 | Shared untrusted execution | Split the trusted RoomTalk control plane from a per-room E2B execution plane, connected by a versioned JSONL protocol and short-lived scoped capabilities. |
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
-| Multi-client consistency | Combine Socket.IO's Redis adapter with monotonic `roomVersion`, full-object replacement, and acknowledgment-based read-your-write updates. |
+| Multi-client consistency | Treat Socket.IO as a wake-up path and replay a PostgreSQL-owned per-room event sequence; snapshots and IndexedDB cursors repair missed delivery. |
 | Mobile reconnect recovery | One `RoomSessionController` owns connect/register/join/retry. Epochs change only with room or socket identity; lifecycle signals coalesce into message resync without duplicate joins, and transient recovery preserves rendered messages/media. |
-| Durable-store migration | Run Redis and PostgreSQL behind one store contract and migrate every current durable Redis record with an idempotent dry-run-capable `R` to `R+P` tool; configuration-only rollback is limited to the frozen cutover window. |
-| Cache correctness | Key recent-message cache entries by `messageVersion`, double-check the version before write-back, invalidate only after successful mutations, and degrade to PostgreSQL on cache failure. |
-| Concurrent Redis writes | Use Lua scripts for atomic room versions, message deletion, and multi-socket member reference counting; run the same behavioral contract suite against both Redis and PostgreSQL implementations. |
+| Durable-store boundary | Require PostgreSQL for business state and event replay; keep Redis rebuildable for presence, the Socket.IO adapter, locks, and short-lived cache. |
+| Cache correctness | Guard recent-message cache entries with the durable room-event head, double-check before write-back, invalidate after successful mutations, and degrade to PostgreSQL on cache failure. |
+| Concurrent room writes | Serialize canonical writes in PostgreSQL and allocate contiguous room-event sequences in the same transaction; use Redis Lua only for ephemeral multi-socket presence coordination. |
 | Product-grade mobile UI | Resolve overlapping media gestures with a locked gesture-state machine, batch transforms through `requestAnimationFrame`, layer Object URL/Cache API/network media caching, and guard IME composition and visual viewport changes. |
 | Model portability and context limits | Normalize providers through a model registry and client factory, then select history with semantic truncation, message caps, and a conservative CJK-aware token budget. |
 
@@ -56,7 +56,7 @@ flowchart LR
   Browser["React client"] <-->|"Socket.IO + HTTP"| Control["RoomTalk control plane\nNode 24 + Express"]
 
   Control --> Store["CompositeRoomStore"]
-  Store --> Durable["PostgreSQL or Redis\ndurable state"]
+  Store --> Durable["PostgreSQL\ndurable state + room event log"]
   Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
 
   Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
@@ -82,10 +82,10 @@ The ownership boundary is deliberate:
 
 - **A code-agent turn** is authorized and persisted before execution, fenced by a durable room lease, then sent to the reusable sandbox daemon with turn-scoped model, context, publish, and the room owner's Codex and optional GitHub connections. Text, tool, approval, usage, and lifecycle events return through one ordered protocol and are persisted before broadcast.
 - **Ordering is source-owned.** Coco/Codex adapters preserve native text/tool boundaries; RoomTalk assigns monotonic message positions and groups them by durable turn. The browser renders that order and never attempts to reconstruct execution from timestamps.
-- **Recovery crosses process boundaries.** PostgreSQL or Redis holds durable turn/message state, Redis coordinates realtime clients, E2B owns the mutable workspace, and the Node process holds only replaceable live handles. Startup recovery fails interrupted work explicitly, repairs stale sandbox state, and reacquires fenced leases rather than trusting memory.
+- **Recovery crosses process boundaries.** PostgreSQL holds durable turn/message state and the replay cursor, Redis coordinates realtime clients, E2B owns the mutable workspace, and the Node process holds only replaceable live handles. Startup recovery fails interrupted work explicitly, repairs stale sandbox state, and reacquires fenced leases rather than trusting memory.
 - **Published work outlives execution.** Static files are validated in the sandbox, uploaded directly to object storage through presigned URLs, finalized into immutable versions and manifests, and served through RoomTalk after the source sandbox pauses or is replaced.
 
-See [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md) for the full lifecycle and evidence.
+See [Room event sync and portable deployment](docs/room-event-sync-portable-deployment.md) and [Code-agent runtime architecture](docs/code-agent-runtime-architecture.md) for the full lifecycle and evidence.
 
 ## Repository Layout
 
@@ -103,9 +103,10 @@ docs/                             architecture, runbooks, plans, and postmortems
 Requirements:
 
 - Node.js 24.18.0 or newer.
-- Redis at `localhost:6379`.
-- Optional PostgreSQL test database for PostgreSQL-mode smoke/E2E.
+- PostgreSQL and Redis. PostgreSQL is the mandatory durable store; Redis is rebuildable realtime/cache state.
 - Optional E2B credentials and pinned template settings for real code-agent rooms.
+
+The quickest full local runtime is `cp .env.compose.example .env.compose && docker compose up -d --build`. For manual development, point `DATABASE_URL` and `REDIS_URL` in `server/.env` at local services.
 
 Install dependencies and create local configuration:
 
@@ -178,14 +179,15 @@ Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Doc
 
 `CompositeRoomStore` separates durable and realtime concerns:
 
-- `PERSISTENCE_STORE=redis` is the `R` model: Redis stores both durable and realtime state.
-- `PERSISTENCE_STORE=postgres` is the `R+P` model: PostgreSQL stores durable records while Redis owns presence, socket sessions, pub/sub, counters, and the short-TTL message cache.
-- PostgreSQL-only (`P`) is not supported. `migrate:redis-to-postgres` is the idempotent, dry-run-capable `R` to `R+P` durable-data cutover tool.
+- Runtime startup requires `PERSISTENCE_STORE=postgres` and `DATABASE_URL`. PostgreSQL stores canonical records and the bounded room-event replay log.
+- Redis owns rebuildable presence, socket sessions, pub/sub, counters, and the short-TTL message cache; Redis is still required, but is never the durable authority.
+- `migrate:redis-to-postgres` remains an idempotent, dry-run-capable importer for legacy Redis durable snapshots, not a supported serving mode or rollback target.
 - S3/Tigris-compatible storage holds private media and versioned static-site artifacts; development can use the local object-storage implementation.
 
 Migration and rollout references:
 
-- [PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md)
+- [Portable deployment and direct-cutover design](docs/room-event-sync-portable-deployment.md)
+- [Legacy Redis-to-PostgreSQL import runbook](docs/postgres-rollout-runbook.md)
 - [Media object-storage migration](docs/image-object-storage-migration-runbook.md)
 
 ## Testing

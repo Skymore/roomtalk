@@ -42,7 +42,7 @@ The first scope added rooms, messages, AI status, and exact cost totals with ide
 
 ### Read cache
 
-Recent message cache entries are guarded by `messageVersion`. On a miss, RoomTalk reads PostgreSQL and only writes the cache if the version is still unchanged. Mutations invalidate after durable success. TTL limits stale-cache duration but is not the consistency mechanism.
+The original generation counter has since been retired. Recent-message cache entries are now guarded by the PostgreSQL room-event head. On a miss, RoomTalk reads PostgreSQL and only writes the cache if the head is still unchanged. Mutations invalidate after durable success. TTL limits stale-cache duration but is not the consistency mechanism.
 
 ### Migration script
 

@@ -128,7 +128,7 @@ Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、Nod
 | Tigris/S3-compatible storage | 私有媒体 body、versioned static file/manifest |
 | E2B | 可变 workspace 和进程，不是 durable application database |
 
-PostgreSQL 模式仍需 Redis，所以支持的形态是 `R` 和 `R+P`，不是纯 `P`。
+Runtime 强制使用 PostgreSQL 保存 durable state，同时仍需 Redis 协调 realtime state；Redis 不再是可选 durable authority。
 
 ## 验证与发布
 

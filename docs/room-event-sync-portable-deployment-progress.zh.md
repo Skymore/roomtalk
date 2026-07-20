@@ -2,136 +2,116 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：进行中
+状态：本地实现与验证完成；未执行生产数据/DNS 切换
 
-开始：2026-07-20
+本地开始/完成：2026-07-20
 
 事实源设计：[目标架构](room-event-sync-portable-deployment.zh.md)
 
 ## 实施原则
 
-- 所有代码只保留在本地仓库，不 push。
-- 不提供旧 `messageVersion` 同步协议兼容层。
-- 本地 Compose 和 Fly 必须运行同一应用代码；差异仅来自环境配置。
-- 控制为三个左右阶段性 commit，不为每个小文件单独提交。
-- 每项完成必须记录测试、build、Compose 或运行行为证据。
+- 所有改动只保留在本地仓库，不 push。
+- 直接替换旧协议，不增加 `messageVersion` 兼容层。
+- 本地 Compose、Fly 与未来 AWS 使用同一个应用镜像，只通过环境配置区分。
+- 完成标准必须包含真实 PostgreSQL、浏览器、容器、重启与恢复证据。
 
-## 基线证据
+## 基线与本地 commit
 
-开始时的本地 `master`：`d94d2cd0`。
+实施从干净的本地 `master` `d94d2cd0` 开始。旧客户端通过 `baseMessageVersion` 比较恢复；写入同时推进 `message_version` / `room_version`；Redis cache generation 使用 `messageVersion`；仓库当时没有 Compose runtime。
 
-- 根目录有生产 Dockerfile 和 Fly 配置，没有 Compose 配置；
-- 云端 `PERSISTENCE_STORE=postgres`，Redis 用于实时状态和缓存；
-- 客户端恢复仍发送 `baseMessageVersion`，服务端回传 `messageVersion`；
-- 消息写入同时递增 `message_version` 和 `room_version`；
-- Redis 消息 cache 使用 `messageVersion` generation；
-- 当前工作树在实施前干净。
+| 阶段 | 范围 | 状态 | 本地 commit |
+| --- | --- | --- | --- |
+| 1 | 架构决策、进度账本、初版 Compose runtime | 完成 | `ec0ac9af` |
+| 2 | PostgreSQL event stream、Socket/client 直接切换、version 退役、integration/E2E | 完成 | `d2c051ab` |
+| 3 | 运维演练、当前文档清理、最终证据 | 完成 | 本文档 commit |
 
-## 阶段状态
+没有 push 任何 commit，也没有修改 Fly 服务、Supabase 数据库、生产 DNS 或生产数据。
 
-| 阶段 | 范围 | 状态 | 本地 commit | 验证证据 |
-| --- | --- | --- | --- | --- |
-| 1 | 最终设计、进度账本、Compose 本地运行骨架 | 已验证，待 commit | 待创建 | Compose 2.23 config/build、PostgreSQL health、restart persistence、custom dump |
-| 2 | 服务端 stream/event schema、事务写入、snapshot/delta API、retention | 未开始 | 待创建 | store contract、PostgreSQL/Redis、socket tests |
-| 3 | 客户端事件 reducer/cursor/cache、删除旧 version 路径、端到端验证 | 未开始 | 待创建 | hook tests、client/server build、Compose smoke |
+## 已交付架构
 
-## 阶段 1 清单
+- PostgreSQL 是唯一 durable serving authority；Redis 只保存可重建的 realtime/cache state。
+- Canonical 表仍是事实源；`room_events` 是有界状态传输 changelog，不是完整 Event Sourcing。
+- PostgreSQL trigger 在 room/message/agent-turn 原事务内原子追加 room event。
+- 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`；Socket.IO/`NOTIFY` 只做唤醒 hint。
+- `CURSOR_EXPIRED`、序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。
+- 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
+- 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
+- AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
 
-- [x] 目标架构文档落盘。
-- [x] 进度文档落盘。
-- [x] 增加 `compose.yaml`。
-- [x] 增加无密钥 `.env.compose.example`，忽略真实 `.env.compose`。
-- [x] 验证 Compose 配置解析。
-- [x] 构建镜像并启动 PostgreSQL、Redis、RoomTalk。
-- [x] 验证 `/api/status` 为 PostgreSQL persistence。
-- [x] 执行按需 dump 并用 `pg_restore --list` 验证 archive。
-- [x] 重启 PostgreSQL 后验证 marker room 仍存在，再清理 marker。
-- [ ] 创建阶段 1 本地 commit；不 push。
+## 服务端交付清单
 
-## 阶段 2 变更清单
+- [x] `room_event_streams` / `room_events` schema、函数、trigger 与 migration。
+- [x] `RoomEvent`、snapshot、delta store contract。
+- [x] 同房间原子单调 sequence，事务 rollback 时 event 同步 rollback。
+- [x] `get_room_snapshot` / `get_room_events` 与旧协议 upgrade fence。
+- [x] `CURSOR_EXPIRED`、`CURSOR_AHEAD`、条数/字节分页限制。
+- [x] PostgreSQL `LISTEN/NOTIFY` 跨 app instance 唤醒。
+- [x] 删除服务端运行协议与 cache 对 message/room version 的依赖。
+- [x] Redis recent-message cache 改用 durable event head 守卫。
+- [x] 默认 7 天、每房间 10,000 events 的 retention；删除房间 tombstone 过期后清理 stream。
+- [x] Runtime 拒绝 Redis durable 模式；PostgreSQL 不可用时启动 fail closed。
 
-必须覆盖所有消息可见写路径：
+## 客户端交付清单
 
-- append / idempotent append / atomic-position append；
-- media completion 与 media replacement；
-- upsert、AI final/error、stream recovery；
-- edit、delete、clear；
-- truncate before/after、edit-and-ask、retry；
-- Code Agent queue materialize/claim/delete；
-- history replacement；
-- room metadata update/delete；
-- 失败事务、重复请求和批量写入。
+- [x] IndexedDB v4 保存 recent window 与 `lastAppliedSeq`。
+- [x] snapshot/live race 收敛，重复 event/wake-up 幂等。
+- [x] 只应用连续序列；gap、expired、ahead 统一 snapshot fallback。
+- [x] `beforeMessageId` 只 prepend 旧历史，不移动实时 cursor。
+- [x] message/agent-turn upsert/delete 与 room update/delete reducer。
+- [x] 删除 `messageVersionRef`、`mutationRevision` 与 version reconciliation retry。
+- [x] 完整 room ack/broadcast 以 canonical `updatedAt` 防止旧对象回踩。
+- [x] `updatedAt` 由数据库 trigger 严格单调盖章，只是完整对象的 last-write guard，不是第二套同步 version。
+- [x] 旧 IndexedDB cache 通过数据库名升级不再读取。
 
-服务端交付：
+## 常见用例自动化矩阵
 
-- [ ] `room_event_streams` / `room_events` schema 与迁移。
-- [ ] `RoomEvent`、snapshot、delta store contract。
-- [ ] PostgreSQL 原子 sequence/event 写入。
-- [ ] Redis 等价原子行为。
-- [ ] `get_room_snapshot` / `get_room_events`。
-- [ ] live room event 带 canonical `seq`。
-- [ ] cursor expiry 和 retention 前缀清理。
-- [ ] 删除服务端 `baseMessageVersion` / `messageVersion` 运行时协议。
-- [ ] 删除 cache 对 `messageVersion` 的依赖。
+- [x] 首次进入房间得到 repeatable-read snapshot 与一致 `snapshotSeq`。
+- [x] 在线连续发送、刷新和第二客户端无需刷新实时收敛。
+- [x] 浏览器离线期间产生三条消息，恢复后只补缺失 events，无需 reload。
+- [x] 重复唤醒/事件不重复 UI；乱序或 gap 不应用半页并重新 snapshot。
+- [x] retention 后旧 cursor 返回 `CURSOR_EXPIRED`；恢复较旧数据库返回 `CURSOR_AHEAD`。
+- [x] 八个 PostgreSQL concurrent writer 得到无缺口 room sequence。
+- [x] 更早开启但更晚写入的事务仍得到更大的 room `updatedAt`，不会旧对象回踩。
+- [x] client-message 幂等重试不产生重复 canonical message/event。
+- [x] 写入失败与事务 rollback 不留下 event，也不广播 ghost state。
+- [x] edit、单条 delete、clear、truncate before/after、retry、edit-and-ask 收敛。
+- [x] AI streaming 临时 chunk 不入日志；final/error 与 agent turn 可恢复。
+- [x] media completion、图片刷新、Code Agent tool/final 路径使用有界 canonical event。
+- [x] 无权限用户不能读 snapshot/delta；删除前有权限用户可重放 `room.deleted` tombstone。
+- [x] 房间删除 cascade 后 tombstone 仍可读，retention 后连同授权 stream 清理。
 
-## 阶段 3 变更清单
+## 最终验证证据
 
-- [ ] IndexedDB window 存储 `snapshotSeq/lastAppliedSeq`。
-- [ ] snapshot/live race buffer。
-- [ ] 重复、连续、缺口、expired cursor reducer。
-- [ ] 旧历史分页继续使用 `oldestMessageId`。
-- [ ] 删除 `messageVersionRef`、`mutationRevision` 和 version reconciliation retries。
-- [ ] 更新房间对象排序为统一 `roomSeq`。
-- [ ] 升级 message cache database name，旧 cache 不再读取。
-- [ ] stale bundle 协议错误触发刷新。
-- [ ] 更新 room reliability 文档为新事实源。
+| 验证 | 结果 |
+| --- | --- |
+| Server full suite | 740/740 |
+| Client full suite | 985/985 |
+| Event hook focused | 15/15 |
+| Message socket focused | 29/29 |
+| 真实 PostgreSQL event integration | 6/6 |
+| PostgreSQL Playwright | 4/4 |
+| Server/client production build | 通过 |
+| 根 Dockerfile 独立构建 | 通过，不依赖 Compose build 输入 |
+| Client ESLint / i18n | 通过 |
+| PostgreSQL persistence smoke | 正向 API 通过；不可用数据库在 listen 前非零退出 |
+| Compose config/build/health | 通过；status 为 PostgreSQL，app/PostgreSQL/Redis healthy |
+| PostgreSQL restart persistence | marker 与 event head 保留 |
+| Listener/pool restart recovery | pool 处理断连，LISTEN 1 秒内恢复，无 uncaught exception |
+| Backup -> fresh restore | PostgreSQL 17 custom archive，170 TOC entries，恢复成功 |
 
-## 常见用例自动化测试矩阵
+全新恢复库中有 1 个 room、member、message、stream 和 2 个有序 event（`headSeq=2`）。九个 event trigger 与一个 room 单调时间 trigger 全部存在，退役 version column 数量为 0。验证后已删除源库 marker 和临时 restore database；最终 dump 为 ignored `backups/roomtalk-20260720T122146Z.dump`。
 
-完成标准优先使用真实 PostgreSQL 集成测试和 Playwright E2E，不以 mock-only unit tests 代替跨层证据：
+重启演练第一次发现 node-postgres idle client 断连会冒泡到全局 `uncaughtException`。已增加 pool-level error handler 和单测；第二次真实 PostgreSQL restart 只记录预期 handled warning，API 继续健康且 `LISTEN room_event_committed` 自动恢复。
 
-- [ ] 首次进入房间得到一致 snapshot 和 `snapshotSeq`。
-- [ ] 在线连续消息按 seq 到达且刷新后保持一致。
-- [ ] Socket 漏一条事件后通过 `afterSeq` 补齐。
-- [ ] 重复事件、乱序事件不会重复或回退 UI。
-- [ ] 网络断开/恢复、前后台切换、BFCache 和冷启动收敛。
-- [ ] 事件 retention 后旧 cursor 返回 expired 并只重置一次。
-- [ ] 两个客户端同时发送时得到无冲突的房间序列。
-- [ ] 发送幂等重试不生成重复消息或重复事件。
-- [ ] 编辑、单条删除、clear、truncate before/after 正确收敛。
-- [ ] edit-and-ask / AI retry 的 suffix replacement 正确收敛。
-- [ ] AI streaming 临时 chunk 不入日志，final/error 可在重连后恢复。
-- [ ] media completion 和 Code Agent tool/final message 事件有界且可恢复。
-- [ ] 服务端在状态写入与事件写入之间失败时整体回滚且不广播。
-- [ ] 服务重启后事件 cursor、消息状态和客户端恢复保持一致。
-- [ ] 过期/无权限客户端不能读取 snapshot 或 event delta。
+## 尚未执行的生产操作
 
-## 最终验证矩阵
+代码已具备维护窗口直接切换条件，但本次没有擅自切生产。真正迁移前仍需：
 
-- [ ] server focused persistence/socket tests。
-- [ ] server full test suite。
-- [ ] client focused hook/state tests。
-- [ ] client full test suite。
-- [ ] server production build。
-- [ ] client production build。
-- [ ] PostgreSQL E2E。
-- [ ] Compose clean-volume startup。
-- [ ] Compose restart 后数据仍存在。
-- [ ] backup -> fresh database restore。
-- [ ] Fly Dockerfile build 不依赖 Compose。
-- [ ] `git status` 只含本任务文件。
-- [ ] 本地 commit 数量符合阶段规划。
-- [ ] 确认没有 push。
+1. 获取当前 Supabase custom dump，并在隔离库实际 restore；
+2. 单独复制/校验对象存储；
+3. 冻结 Fly writer 与 worker；
+4. 恢复最终 dump，执行 schema、count/invariant、integration、Playwright；
+5. 通过临时 origin smoke 后再切 ingress/DNS；
+6. 回滚窗口结束前保持旧 PostgreSQL 只读。
 
-## 进展日志
-
-### 2026-07-20
-
-- 确认选择“物化状态 + 事务事件日志 + snapshot fallback + retention”，不做完整 Event Sourcing。
-- 确认本地使用 Compose 而非单机 Kubernetes；未来 AWS 默认映射 ECS/RDS/ElastiCache/S3。
-- 用户明确要求直接替换同步协议，不实现兼容层。
-- 开始阶段 1，加入设计、进度账本与 Compose 骨架。
-- 当前 Docker Compose 2.23.3 成功解析配置；修正了不受该版本支持的 `env_file.required` 新语法。
-- 根 Dockerfile 成功构建 `roomtalk-local:dev`；PostgreSQL、Redis 和 app health checks 通过。
-- `/api/status` 返回 `persistenceStore=postgres`；PostgreSQL 重启后 marker room 保留。
-- `postgres-backup` 生成 PostgreSQL 17 custom archive，`pg_restore --list` 成功读取 131 个 TOC entries。
+新本地目标一旦开放写入，只改 DNS 回滚会丢新增数据，必须先协调这些写入。

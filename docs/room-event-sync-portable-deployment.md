@@ -1,76 +1,130 @@
-# RoomTalk Room Event Sync and Portable Deployment
+# Room Event Sync and Portable Deployment
 
 [中文](room-event-sync-portable-deployment.zh.md)
 
-Status: Target architecture under implementation
+Status: implemented locally; production data/DNS cutover not performed
 
 Updated: 2026-07-20
 
-## Decision
+## Final decision
 
-RoomTalk will directly replace message-version snapshot reconciliation with a durable per-room event stream. There is no compatibility layer for the old `baseMessageVersion` protocol.
+RoomTalk uses materialized PostgreSQL state plus a bounded per-room change log:
 
 ```text
-rooms / room_messages     materialized current state and history source
-room_event_streams        per-room headSeq and minAvailableSeq
-room_events               replayable application change log
-outbox_events             claim/retry queue for one-time background work
+rooms / room_messages / room_agent_turns  canonical current state
+room_event_streams                       headSeq, retention floor, delete readers
+room_events                              bounded replay log
+outbox_events                            one-worker claim/retry jobs
+Redis                                    presence, Socket.IO adapter, short cache only
+object storage                           media and off-host backups
 ```
 
-The same application image must run in both environments:
+This is similar to consuming a MySQL binlog in that clients advance a monotonic cursor, but it is deliberately an application protocol rather than a database replication log. Browsers receive stable room/message semantics and never depend on WAL/binlog formats.
 
-- local: Docker Compose with RoomTalk, PostgreSQL 17, and Redis 7;
-- cloud: the existing root `Dockerfile` and `fly.toml`, with managed PostgreSQL and Redis URLs;
-- later AWS: the image on ECS/EKS, PostgreSQL on RDS, Redis on ElastiCache, and objects on S3.
+It is not full event sourcing. Normalized tables remain the source of truth, and the change log may be pruned.
 
-Kubernetes is not required on the single Mac. Data portability comes from PostgreSQL backup/WAL contracts, not from copying a local container volume.
+## Why this replaces version comparison
 
-## Core invariants
+The former design could tell a client that its message window was stale, but the repair was another snapshot comparison. The event stream says exactly which committed range is missing and lets the client read only that range.
 
-Every user-visible durable room mutation must atomically:
+The runtime protocol now has one durable ordering boundary:
 
-1. lock and advance the room stream head;
-2. update normalized `rooms` / `room_messages` state;
-3. insert one semantic event at the allocated sequence;
-4. insert an outbox task in the same transaction when background work is required;
-5. broadcast only after commit.
+- snapshot: `snapshotSeq`;
+- delta request: `afterSeq`;
+- client state: `lastAppliedSeq`;
+- server range: `minAvailableSeq..headSeq`.
 
-The first protocol events are `messages.upserted`, `messages.deleted`, `history.truncated`, `history.cleared`, `room.updated`, and `room.deleted`. AI token chunks remain transient; the persisted final/error message is replayable.
+The retired room/message counters are dropped from PostgreSQL and removed from TypeScript/runtime payloads. Room metadata still carries `updatedAt` only for the existing complete-object ack/broadcast guard; it is not a second sync cursor. PostgreSQL stamps it with a row trigger using `clock_timestamp()` and at least one microsecond beyond the previous value, so serialized writes remain strictly monotonic even when an older transaction writes last. `room.updated` also travels through the durable cursor and repairs missed broadcasts.
 
-Event payloads are bounded. Large tool output is referenced or fetched through the canonical entity path instead of copied into every event.
+The old history socket is rejected with `UPGRADE_REQUIRED`; it is not served by a dual-read compatibility layer.
 
-## Snapshot and delta protocol
+## Database mechanics
 
-`get_room_snapshot` returns a consistent bounded room/message snapshot with `snapshotSeq`. Older history continues to use `beforeMessageId` pagination.
+PostgreSQL statement transition-table triggers capture message and agent-turn inserts, updates, and deletes. Room inserts/updates are captured as room events; a row-level before-delete trigger records authorized readers and writes the deletion tombstone before cascades.
 
-`get_room_events` accepts `afterSeq`, an event limit, and a byte limit. It returns ordered events, `headSeq`, `minAvailableSeq`, and `hasMore`. A cursor below the retained prefix receives `CURSOR_EXPIRED` and must reset through a new snapshot.
+`append_room_event` locks one stream row by updating it, allocates the next sequence, inserts the event, and calls `pg_notify`. Because triggers execute inside the domain transaction:
 
-The client persists `lastAppliedSeq`. Duplicate events are ignored, contiguous events are reduced, gaps pause live application and trigger a delta read, and events received during a snapshot are buffered and replayed only when their sequence exceeds `snapshotSeq`.
+- rollback removes both state and event;
+- concurrent writers to one room serialize at the stream/room boundary;
+- an idempotent request that performs no second write performs no second event;
+- clear/truncate/edit-and-ask may produce multiple ordered batched events, which is expected.
 
-Socket.IO is a low-latency wake-up path; the durable event table is the recovery authority.
+Stored event payloads contain bounded IDs. The delta read hydrates upserts from current canonical rows, so this is a state-transfer changelog rather than a historical audit trail.
 
-## Retention, not event sourcing
+Implemented event types are:
 
-The event log is not the sole source of truth, so events are never periodically merged into messages. A maintenance job only removes a contiguous old prefix, advances `minAvailableSeq`, and lets expired clients reset from materialized state. Events are never renumbered or removed from the middle.
+- `messages.upserted`, `messages.deleted`;
+- `agent_turns.upserted`, `agent_turns.deleted`;
+- `room.updated`, `room.deleted`.
 
-The initial retention target is seven days or 10,000 events per room, with the older prefix pruned when either configured bound is exceeded. Production metrics will tune the limits.
+## Snapshot and replay
 
-## Direct replacement
+`get_room_snapshot` uses a repeatable-read transaction and returns a complete room, a bounded recent message/turn window, pagination metadata, and `snapshotSeq`.
 
-The server and client switch together to `snapshotSeq/afterSeq`; the browser message-cache database name changes; stale bundles receive `UPGRADE_REQUIRED`; runtime reads and writes of `messageVersion` and ordering use of `roomVersion` are removed; the obsolete database columns are dropped by the final migration rather than dual-written.
+`get_room_events` accepts `afterSeq`, count limit, and byte limit. It returns ordered events, `headSeq`, `minAvailableSeq`, and `hasMore`.
 
-Local Compose and Fly must run the same protocol revision. A production cutover may be a single maintenance-window switch, but it must first be rehearsed against a restored production copy.
+- A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
+- A browser cursor ahead of a restored database receives `CURSOR_AHEAD` and resnapshots.
+- A non-contiguous page is never partially applied.
+- IndexedDB v4 stores the message window and `lastAppliedSeq`.
+- `beforeMessageId` pagination prepends old history without moving the live cursor.
+
+PostgreSQL `NOTIFY` and Socket.IO only wake readers. Every app instance may emit duplicate wake-ups through the Redis adapter; clients treat them as idempotent hints and read durable events.
+
+## Retention, not periodic merge
+
+There is no merge/compaction back into messages: the normalized state was already changed in the original transaction. The hourly job removes only an old contiguous event prefix and advances `minAvailableSeq`.
+
+Defaults are seven days and at most 10,000 events per room. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
+
+## Event log versus AI outbox
+
+These tables have different consumers and must remain separate:
+
+| | `room_events` | `outbox_events` |
+| --- | --- | --- |
+| Consumer | Every authorized client | One claiming worker |
+| Delivery | Repeatable cursor read | Claim, lease, retry |
+| Purpose | Reconstruct visible state | Reliably execute a side effect |
+| Cleanup | Retained prefix | Processed/failed policy |
+
+For example, a request can commit a user message, its room event, an assistant-run record, and an AI job outbox row together. The worker later commits the final AI message, which creates another room event.
 
 ## Portable runtime
 
-The root `compose.yaml` is the local runtime source. PostgreSQL uses a named volume; Redis is rebuildable realtime/cache state when `PERSISTENCE_STORE=postgres`; `.env.compose` is local-only. The root Dockerfile remains the cloud build source and does not depend on Compose.
+The same root `Dockerfile` runs locally, on Fly, and later on AWS. Platform differences are environment variables:
 
-An on-demand custom-format backup is available with:
+| Local Compose | Current cloud | AWS target |
+| --- | --- | --- |
+| app container | Fly Machine | ECS Fargate or EKS |
+| PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
+| Redis 7, rebuildable | managed Redis | ElastiCache |
+| local/S3-compatible media | Tigris/S3-compatible | S3 |
+
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and S3-compatible objects.
+
+Local start and backup:
 
 ```bash
+cp .env.compose.example .env.compose
+docker compose up -d --build
 docker compose --profile ops run --rm postgres-backup
 ```
 
-A local volume is not a backup. Production requires an off-host copy and a tested restore procedure.
+PostgreSQL and Redis maintenance ports bind to loopback only. A named volume is not a backup; production needs encrypted off-host copies and restore drills.
 
-See the [Chinese design](room-event-sync-portable-deployment.zh.md) for the complete event matrix, cutover boundary, and acceptance checklist. Actual implementation evidence is tracked in the [progress record](room-event-sync-portable-deployment-progress.md).
+## Direct production cutover boundary
+
+A one-window cutover is technically possible, but “direct” must still include a rehearsal:
+
+1. restore a current production dump into an isolated local database;
+2. run schema migration plus full PostgreSQL integration/Playwright tests;
+3. stop cloud writes and workers;
+4. create and verify the final custom-format dump;
+5. restore locally, migrate, compare counts/invariants, and smoke the temporary origin;
+6. switch the Cloudflare/DNS route, then reopen writes;
+7. retain the cloud database read-only until the rollback window closes.
+
+After local writes open, DNS-only rollback is unsafe: new local data must first be reconciled back to the cloud target.
+
+Implementation evidence is recorded in [the progress ledger](room-event-sync-portable-deployment-progress.md). The detailed runtime recovery model is in [Room Reliability Architecture](room-reliability-architecture.md).

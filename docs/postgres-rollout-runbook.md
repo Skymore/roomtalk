@@ -2,25 +2,24 @@
 
 [中文](postgres-rollout-runbook.zh.md)
 
-Status: Current runbook
-Verified against `master` and `https://room.ruit.me/api/status`: 2026-07-12
+Status: Legacy Redis-to-PostgreSQL import runbook
+Runtime contract updated: 2026-07-20
 
-Current production status: `PERSISTENCE_STORE=postgres`; Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, model-gateway counters, and the bounded recent-message cache.
+The current server accepts only `PERSISTENCE_STORE=postgres`. Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, model-gateway counters, and the bounded recent-message cache, but is not a durable serving authority. For current local/AWS deployment and PostgreSQL-to-PostgreSQL cutover, use the [portable deployment design](room-event-sync-portable-deployment.md).
 
 ## Supported Storage Models
 
-RoomTalk supports two deployment models, not three:
+RoomTalk now supports one serving model:
 
 | `PERSISTENCE_STORE` | Durable source of truth | Realtime coordination/cache | Shorthand |
 | --- | --- | --- | --- |
-| `redis` | Redis | Redis | `R` |
 | `postgres` | PostgreSQL | Redis | `R+P` |
 
-There is no supported PostgreSQL-only (`P`) model: Socket.IO scaling, presence, socket sessions, pub/sub, counters, and the bounded recent-message cache still require Redis.
+Redis is still required for Socket.IO scaling, presence, socket sessions, pub/sub, counters, and the bounded recent-message cache. The old Redis durable implementation remains only so this importer can read legacy data and contract tests can verify migration semantics.
 
 ## Goal
 
-`migrate:redis-to-postgres` performs the one-way durable-data bootstrap from `R` to `R+P`. It migrates the current Redis durable model:
+`migrate:redis-to-postgres` imports a legacy Redis durable snapshot into the mandatory PostgreSQL model. It migrates:
 
 - rooms, full message histories, members, saves, password hashes, AI-cost totals;
 - Code Agent turns and media metadata;
@@ -88,7 +87,7 @@ Recommended final-sync sequence for Fly:
 1. Announce a maintenance window.
 2. Cordon or stop serving machines so users cannot create new Redis writes.
 3. Run the migration command below from a trusted migration host.
-4. Set `PERSISTENCE_STORE=postgres` and related secrets.
+4. Deploy the PostgreSQL-only runtime with its related secrets.
 5. Restart/uncordon serving machines and verify.
 
 The migration is idempotent:
@@ -145,23 +144,7 @@ The app initializes additive PostgreSQL schema on startup, but production creden
 
 ## Rollback
 
-Configuration-only rollback is safe only inside the frozen cutover window, before PostgreSQL has accepted writes that Redis did not receive. The application does not dual-write durable data after cutover. Once production traffic resumes, switching back to Redis can discard every PostgreSQL-only durable record.
-
-For an immediate cutover failure while writes are still frozen:
-
-```bash
-fly secrets set PERSISTENCE_STORE="redis"
-```
-
-Then restart/redeploy if the platform does not restart automatically.
-
-After rollback:
-
-- Confirm `/api/status` reports `persistenceStore: "redis"`.
-- Confirm existing rooms and messages load from Redis.
-- Keep PostgreSQL data for analysis; do not truncate it during incident response.
-
-For a later incident, prefer restoring PostgreSQL or running a separately designed reverse/full migration. Do not flip `PERSISTENCE_STORE=redis` until data divergence has been measured and explicitly accepted.
+Redis is no longer a supported runtime rollback target. Keep the pre-cutover PostgreSQL database or verified dump read-only during the rollback window. If validation fails before writes resume, restore/fail over to that PostgreSQL point and redeploy the previous compatible application image. Once the new target accepts writes, reconcile those writes before any database-level rollback; changing DNS alone can lose them.
 
 ## Cleanup Window
 
@@ -171,4 +154,4 @@ Only consider legacy Redis durable-data cleanup after:
 - Migration statistics and `/api/status` room counts have been reconciled.
 - The configuration-only rollback window has been explicitly closed and PostgreSQL backup/restore has become the durable recovery path.
 
-Even after cleanup, Redis is still required for Socket.IO adapter state and realtime room membership.
+Even after legacy durable-key cleanup, Redis is still required for Socket.IO adapter state and realtime room membership.

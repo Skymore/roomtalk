@@ -87,16 +87,11 @@ Use `CLIENT_URL` for the canonical RoomTalk browser address. `CLIENT_URLS` is a 
 
 Changing a Fly secret rolls or restarts machines. Verify health after every change.
 
-## Storage Models and PostgreSQL Cutover
+## Storage Model and PostgreSQL Cutover
 
-RoomTalk supports:
+RoomTalk has one serving model: `PERSISTENCE_STORE=postgres`. PostgreSQL owns durable canonical state and room-event replay; Redis remains required only for rebuildable realtime coordination and bounded caches. Runtime startup rejects Redis as a durable authority.
 
-- `PERSISTENCE_STORE=redis`: Redis durable + realtime (`R`);
-- `PERSISTENCE_STORE=postgres`: PostgreSQL durable + Redis realtime/cache (`R+P`).
-
-PostgreSQL-only operation is unsupported. A future `R` to `R+P` cutover must follow [the PostgreSQL rollout runbook](docs/postgres-rollout-runbook.md), including dry-run inventory, a write freeze, the idempotent migration, verification, and the limited rollback window.
-
-Do not treat switching `PERSISTENCE_STORE` back to Redis as a safe rollback after PostgreSQL has accepted unique writes.
+Use the [portable deployment and direct-cutover design](docs/room-event-sync-portable-deployment.md) for PostgreSQL dump/restore, validation, traffic freeze, and rollback boundaries. The [legacy import runbook](docs/postgres-rollout-runbook.md) applies only when importing an old Redis durable snapshot into PostgreSQL. Rollback means restoring or failing over PostgreSQL, not switching durable authority to Redis.
 
 ## Code-Agent / E2B Release Contract
 
