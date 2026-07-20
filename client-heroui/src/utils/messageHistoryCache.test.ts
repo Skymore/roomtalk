@@ -11,7 +11,7 @@ import type { CachedRoomMessageWindow } from './messageHistoryCache';
 
 const cachedWindow = (roomId: string, content: string): CachedRoomMessageWindow => ({
   roomId,
-  messageVersion: 1,
+  lastAppliedSeq: 1,
   messages: [{ id: `${roomId}-message`, roomId, content } as CachedRoomMessageWindow['messages'][number]],
   hasMore: false,
   cachedAt: Date.now(),

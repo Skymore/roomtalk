@@ -20,7 +20,8 @@
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
     "smoke:code-agent:e2b": "ts-node src/scripts/codeAgentE2BSmoke.ts",
     "build": "tsc",
-    "test": "node -r ts-node/register --test \"src/**/*.test.ts\""
+    "test": "node -r ts-node/register --test \"src/**/*.test.ts\"",
+    "test:postgres-events": "node -r ts-node/register --test src/repositories/roomEventPostgres.integration.test.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,164 +1,179 @@
-// @vitest-environment jsdom
-
-import { Dispatch, SetStateAction, useCallback, useRef, useState } from 'react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { Message, RoomAgentTurn } from '../utils/types';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { useCallback, useRef, useState } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import type { Message, Room, RoomAgentTurn, RoomEvent, RoomEventPagePayload, RoomSnapshotPayload } from '../utils/types';
 import { useRoomMessageEvents, type RoomMessageHistoryRequest } from './useRoomMessageEvents';
 
 const socketMock = vi.hoisted(() => {
-  const handlers = new Map<string, Set<(...args: any[]) => void>>();
-  const pendingHistory: Array<{
-    request: Record<string, any>;
-    resolve: (history: Record<string, any>) => void;
-  }> = [];
-  const queuedHistory: Array<Record<string, any>> = [];
-
-  const resolveHistory = (pending: typeof pendingHistory[number], history: Record<string, any>) => {
-    pending.resolve({
-      ...history,
-      requestId: history.requestId || pending.request.requestId,
-      requestedMessageVersion: history.requestedMessageVersion ?? pending.request.baseMessageVersion,
-    });
-  };
-
-  const api = {
-    id: 'socket-1',
-    handlers,
-    on: vi.fn((event: string, handler: (...args: any[]) => void) => {
-      const eventHandlers = handlers.get(event) || new Set();
-      eventHandlers.add(handler);
-      handlers.set(event, eventHandlers);
-    }),
-    off: vi.fn((event: string, handler: (...args: any[]) => void) => {
-      handlers.get(event)?.delete(handler);
-    }),
-    emit: vi.fn(),
-    trigger: (event: string, ...args: any[]) => {
-      if (event === 'message_history') {
-        const history = args[0] as Record<string, any>;
-        const pending = pendingHistory.shift();
-        if (pending) resolveHistory(pending, history);
-        else queuedHistory.push(history);
-        return;
-      }
-      handlers.get(event)?.forEach(handler => handler(...args));
+  const listeners = new Map<string, Set<(...args: any[]) => void>>();
+  class MockSocketRequestError extends Error {
+    constructor(readonly code: string | null, message: string) {
+      super(message);
+    }
+  }
+  return {
+    listeners,
+    requestSnapshot: vi.fn(),
+    requestEvents: vi.fn(),
+    SocketRequestError: MockSocketRequestError,
+    socket: {
+      connected: true,
+      id: 'socket-1',
+      on: vi.fn((event: string, listener: (...args: any[]) => void) => {
+        const eventListeners = listeners.get(event) || new Set();
+        eventListeners.add(listener);
+        listeners.set(event, eventListeners);
+      }),
+      off: vi.fn((event: string, listener: (...args: any[]) => void) => {
+        listeners.get(event)?.delete(listener);
+      }),
     },
-    requestHistory: vi.fn((request: Record<string, any>) => {
-      const { requestId: _requestId, ...loggedRequest } = request;
-      api.emit('get_room_messages', Object.fromEntries(
-        Object.entries(loggedRequest).filter(([, value]) => value !== undefined),
-      ));
-      return new Promise<Record<string, any>>(resolve => {
-        const pending = { request, resolve };
-        const queued = queuedHistory.shift();
-        if (queued) resolveHistory(pending, queued);
-        else pendingHistory.push(pending);
-      });
-    }),
-    reset: () => {
-      handlers.clear();
-      pendingHistory.splice(0);
-      queuedHistory.splice(0);
+    trigger(event: string, ...args: any[]) {
+      listeners.get(event)?.forEach(listener => listener(...args));
     },
   };
-  return api;
 });
 
-const cacheMock = vi.hoisted(() => ({
-  readMemoryRoomMessageWindow: vi.fn(),
-  readCachedRoomMessageWindow: vi.fn(),
-  writeCachedRoomMessageWindow: vi.fn(),
-  clearCachedRoomMessageWindow: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../utils/socket', () => ({
-  socket: socketMock,
-  clientId: 'client-1',
-  requestRoomMessages: socketMock.requestHistory,
+  requestRoomSnapshot: socketMock.requestSnapshot,
+  requestRoomEvents: socketMock.requestEvents,
+  SocketRequestError: socketMock.SocketRequestError,
+  socket: socketMock.socket,
 }));
 
-vi.mock('../utils/messageHistoryCache', () => cacheMock);
+const cacheMock = vi.hoisted(() => ({
+  memory: null as CachedRoomMessageWindow | null,
+  persistent: null as CachedRoomMessageWindow | null,
+  readMemoryRoomMessageWindow: vi.fn(() => cacheMock.memory),
+  readCachedRoomMessageWindow: vi.fn(async () => cacheMock.persistent),
+  writeCachedRoomMessageWindow: vi.fn(async () => undefined),
+  clearCachedRoomMessageWindow: vi.fn(async () => undefined),
+}));
+
+vi.mock('../utils/messageHistoryCache', () => ({
+  readMemoryRoomMessageWindow: cacheMock.readMemoryRoomMessageWindow,
+  readCachedRoomMessageWindow: cacheMock.readCachedRoomMessageWindow,
+  writeCachedRoomMessageWindow: cacheMock.writeCachedRoomMessageWindow,
+  clearCachedRoomMessageWindow: cacheMock.clearCachedRoomMessageWindow,
+}));
+
+const mediaCacheMock = vi.hoisted(() => ({
+  clearCachedMediaAsset: vi.fn(async () => undefined),
+  clearCachedMediaForRoom: vi.fn(async () => undefined),
+}));
+
+vi.mock('../utils/mediaCache', () => mediaCacheMock);
+vi.mock('../utils/roomDiagnostics', () => ({ logRoomMessageDiagnostic: vi.fn() }));
 
 const message = (overrides: Partial<Message> = {}): Message => ({
-  id: 'm1',
+  id: 'message-1',
+  roomId: 'room-1',
   clientId: 'client-1',
   content: 'hello',
-  roomId: 'room-1',
-  timestamp: '2026-05-03T10:00:00.000Z',
+  timestamp: '2026-07-20T00:00:00.000Z',
   messageType: 'text',
   ...overrides,
 });
 
-type UpdateMessages = (updater: SetStateAction<Message[]>) => void;
-type SetBoolean = Dispatch<SetStateAction<boolean>>;
-type SetNumber = Dispatch<SetStateAction<number>>;
-type SetNullableNumber = Dispatch<SetStateAction<number | null>>;
-type ScrollToBottom = (behavior?: ScrollBehavior) => void;
-type CloseModal = () => void;
-type MockedFunction<T extends (...args: any[]) => any> = T & Mock<T>;
-const EMPTY_MESSAGES: Message[] = [];
+const turn = (overrides: Partial<RoomAgentTurn> = {}): RoomAgentTurn => ({
+  id: 'turn-1',
+  roomId: 'room-1',
+  status: 'running',
+  startedAt: '2026-07-20T00:00:00.000Z',
+  backend: 'code-agent',
+  assistantName: 'Coco',
+  updatedAt: '2026-07-20T00:00:00.000Z',
+  ...overrides,
+});
+
+const event = (seq: number, overrides: Partial<RoomEvent> = {}): RoomEvent => ({
+  id: `room-1:${seq}`,
+  roomId: 'room-1',
+  seq,
+  type: 'messages.upserted',
+  payload: { messages: [message({ id: `message-${seq}` })], messageIds: [`message-${seq}`] },
+  createdAt: '2026-07-20T00:00:00.000Z',
+  ...overrides,
+});
+
+const room = (overrides: Partial<Room> = {}): Room => ({
+  id: 'room-1',
+  name: 'Room 1',
+  description: '',
+  createdAt: '2026-07-20T00:00:00.000Z',
+  creatorId: 'client-1',
+  ...overrides,
+});
+
+const snapshot = (overrides: Partial<RoomSnapshotPayload> = {}): RoomSnapshotPayload => ({
+  requestId: 'filled-by-mock',
+  roomId: 'room-1',
+  room: room(),
+  messages: [],
+  turns: [],
+  snapshotSeq: 0,
+  hasMore: false,
+  mode: 'replace',
+  ...overrides,
+});
+
+const eventPage = (requestId: string, afterSeq: number, overrides: Partial<RoomEventPagePayload> = {}): RoomEventPagePayload => ({
+  requestId,
+  roomId: 'room-1',
+  events: [],
+  headSeq: afterSeq,
+  minAvailableSeq: 1,
+  hasMore: false,
+  ...overrides,
+});
 
 type HarnessProps = {
   roomId?: string;
   isRoomSessionReady?: boolean;
   messageSyncRequestId?: number;
+  initialMessages?: Message[];
   messageToDeleteId?: string;
   messageToEditId?: string;
-  currentMessages?: Message[];
-  updateMessages: UpdateMessages;
-  setIsLoading: SetBoolean;
-  setIsLoadingMore: SetBoolean;
-  setHasMoreMessages: SetBoolean;
-  setMessageVersion: SetNumber;
-  setOldestMessageId: Dispatch<SetStateAction<string | undefined>>;
-  setSessionCostUsd: SetNullableNumber;
-  setShowScrollButton: SetBoolean;
-  scrollToBottom: ScrollToBottom;
-  closeDeleteModal: CloseModal;
-  closeEditModal: CloseModal;
-  externalRequestHistoryRef?: { current: RoomMessageHistoryRequest | null };
+  closeDeleteModal?: () => void;
+  closeEditModal?: () => void;
+  onRoomUpdated?: (room: Room) => void;
+  requestHistoryRef?: { current: RoomMessageHistoryRequest | null };
 };
 
-type HarnessTestProps = Omit<HarnessProps, 'roomId' | 'messageToDeleteId' | 'messageToEditId'> & {
-  updateMessages: MockedFunction<UpdateMessages>;
-  setIsLoading: MockedFunction<SetBoolean>;
-  setIsLoadingMore: MockedFunction<SetBoolean>;
-  setHasMoreMessages: MockedFunction<SetBoolean>;
-  setMessageVersion: MockedFunction<SetNumber>;
-  setOldestMessageId: MockedFunction<Dispatch<SetStateAction<string | undefined>>>;
-  setSessionCostUsd: MockedFunction<SetNullableNumber>;
-  setShowScrollButton: MockedFunction<SetBoolean>;
-  scrollToBottom: MockedFunction<ScrollToBottom>;
-  closeDeleteModal: MockedFunction<CloseModal>;
-  closeEditModal: MockedFunction<CloseModal>;
-};
+const noop = () => undefined;
 
 const Harness = ({
   roomId = 'room-1',
   isRoomSessionReady = true,
   messageSyncRequestId = 0,
+  initialMessages = [],
   messageToDeleteId,
   messageToEditId,
-  currentMessages = EMPTY_MESSAGES,
-  updateMessages,
-  setIsLoading,
-  setIsLoadingMore,
-  setHasMoreMessages,
-  setMessageVersion,
-  setOldestMessageId,
-  setSessionCostUsd,
-  setShowScrollButton,
-  scrollToBottom,
-  closeDeleteModal,
-  closeEditModal,
-  externalRequestHistoryRef,
+  closeDeleteModal = noop,
+  closeEditModal = noop,
+  onRoomUpdated,
+  requestHistoryRef: externalRequestHistoryRef,
 }: HarnessProps) => {
+  const [messages, setMessages] = useState(initialMessages);
+  const [turns, setTurns] = useState<RoomAgentTurn[]>([]);
+  const [lastAppliedSeq, setLastAppliedSeq] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>();
+  const [isLoading, setIsLoading] = useState(false);
+  const [, setIsLoadingMore] = useState(false);
+  const [, setSessionCostUsd] = useState<number | null>(null);
+  const [, setShowScrollButton] = useState(false);
+  const messagesRef = useRef(messages);
+  const turnsRef = useRef(turns);
+  messagesRef.current = messages;
+  turnsRef.current = turns;
+  const getCurrentMessages = useCallback(() => messagesRef.current, []);
+  const getCurrentAgentTurns = useCallback(() => turnsRef.current, []);
   const containerRef = useRef<HTMLDivElement>(null);
   const localRequestHistoryRef = useRef<RoomMessageHistoryRequest | null>(null);
   const requestHistoryRef = externalRequestHistoryRef || localRequestHistoryRef;
-  const getCurrentMessages = useCallback(() => currentMessages, [currentMessages]);
-  const [, setAgentTurns] = useState<RoomAgentTurn[]>([]);
+  const scrollToBottom = useCallback(noop, []);
 
   useRoomMessageEvents({
     roomId,
@@ -166,12 +181,13 @@ const Harness = ({
     messageSyncRequestId,
     containerRef,
     getCurrentMessages,
-    updateMessages,
-    setAgentTurns,
+    getCurrentAgentTurns,
+    updateMessages: setMessages,
+    setAgentTurns: setTurns,
     setIsLoading,
     setIsLoadingMore,
-    setHasMoreMessages,
-    setMessageVersion,
+    setHasMoreMessages: setHasMore,
+    setLastAppliedSeq,
     setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,
@@ -180,709 +196,349 @@ const Harness = ({
     closeEditModal,
     messageToDeleteId,
     messageToEditId,
+    onRoomUpdated,
     warningPrefix: 'Warning',
     requestHistoryRef,
   });
 
-  return <div ref={containerRef} data-testid="container" />;
+  return <div
+    ref={containerRef}
+    data-testid="state"
+    data-messages={messages.map(item => item.id).join(',')}
+    data-contents={messages.map(item => item.content).join('|')}
+    data-turns={turns.map(item => item.id).join(',')}
+    data-seq={lastAppliedSeq}
+    data-more={String(hasMore)}
+    data-oldest={oldestMessageId || ''}
+    data-loading={String(isLoading)}
+  />;
 };
 
-const mockFunction = <T extends (...args: any[]) => any>() => vi.fn<T>() as unknown as MockedFunction<T>;
-
-const createHarnessProps = (): HarnessTestProps => ({
-  updateMessages: mockFunction<UpdateMessages>(),
-  setIsLoading: mockFunction<SetBoolean>(),
-  setIsLoadingMore: mockFunction<SetBoolean>(),
-  setHasMoreMessages: mockFunction<SetBoolean>(),
-  setMessageVersion: mockFunction<SetNumber>(),
-  setOldestMessageId: mockFunction<Dispatch<SetStateAction<string | undefined>>>(),
-  setSessionCostUsd: mockFunction<SetNullableNumber>(),
-  setShowScrollButton: mockFunction<SetBoolean>(),
-  scrollToBottom: mockFunction<ScrollToBottom>(),
-  closeDeleteModal: mockFunction<CloseModal>(),
-  closeEditModal: mockFunction<CloseModal>(),
-});
-
-const resolveNextHistory = async (history: Record<string, unknown>) => {
-  await act(async () => {
-    socketMock.trigger('message_history', history);
-    await Promise.resolve();
-  });
+const installDefaultProtocolMocks = () => {
+  socketMock.requestSnapshot.mockImplementation(async (request: { requestId: string }) => (
+    snapshot({ requestId: request.requestId })
+  ));
+  socketMock.requestEvents.mockImplementation(async (request: { requestId: string; afterSeq: number }) => (
+    eventPage(request.requestId, request.afterSeq)
+  ));
 };
 
-describe('useRoomMessageEvents', () => {
+describe('useRoomMessageEvents event-log synchronization', () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
-    socketMock.reset();
     vi.clearAllMocks();
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue(null);
-    cacheMock.readCachedRoomMessageWindow.mockResolvedValue(null);
+    socketMock.listeners.clear();
+    cacheMock.memory = null;
+    cacheMock.persistent = null;
+    installDefaultProtocolMocks();
   });
 
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-  });
-
-  it('does not reset subscriptions or close modals when the active edit/delete target changes', async () => {
-    const props = createHarnessProps();
-    const { rerender } = render(<Harness {...props} />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
-    expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
-    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-      roomId: 'room-1',
-      limit: 80,
-      baseMessageVersion: 0,
-    });
-
-    props.closeEditModal.mockClear();
-    props.closeDeleteModal.mockClear();
-    socketMock.emit.mockClear();
-    socketMock.on.mockClear();
-    socketMock.off.mockClear();
-
-    rerender(
-      <Harness
-        {...props}
-        messageToEditId="m1"
-        messageToDeleteId="m2"
-      />
-    );
-
-    expect(props.closeEditModal).not.toHaveBeenCalled();
-    expect(props.closeDeleteModal).not.toHaveBeenCalled();
-    expect(socketMock.emit).not.toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
-    expect(socketMock.on).not.toHaveBeenCalled();
-    expect(socketMock.off).not.toHaveBeenCalled();
-  });
-
-  it('renders instantly from the in-memory cache without a loading flash', async () => {
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [message({ id: 'cached-1', content: 'cached' })],
-      messageVersion: 7,
+  it('loads a consistent snapshot and then drains from snapshotSeq', async () => {
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'snapshot-message' })],
+      snapshotSeq: 4,
       hasMore: true,
-      oldestMessageId: 'cached-1',
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
+      oldestMessageId: 'snapshot-message',
+    }));
 
-    expect(props.updateMessages).toHaveBeenCalledWith([message({ id: 'cached-1', content: 'cached' })]);
-    expect(props.setIsLoading).toHaveBeenCalledWith(false);
-    expect(props.setIsLoading).not.toHaveBeenCalledWith(true);
-    expect(props.setHasMoreMessages).toHaveBeenCalledWith(true);
-    expect(props.setMessageVersion).toHaveBeenCalledWith(7);
-    expect(cacheMock.readCachedRoomMessageWindow).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 7,
-      });
-    });
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('snapshot-message'));
+    expect(screen.getByTestId('state').dataset.seq).toBe('4');
+    expect(socketMock.requestEvents).toHaveBeenCalledWith(expect.objectContaining({ roomId: 'room-1', afterSeq: 4 }));
   });
 
-  it('hydrates the persistent cache before requesting authoritative history', async () => {
-    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
-    cacheMock.readCachedRoomMessageWindow.mockResolvedValue({
+  it('renders a cached baseline immediately and only requests missing events', async () => {
+    cacheMock.memory = {
       roomId: 'room-1',
-      messages: [cachedMessage],
-      messageVersion: 7,
+      messages: [message({ id: 'cached-message' })],
+      turns: [],
+      lastAppliedSeq: 5,
       hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
+      cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      events: [event(6)],
+      headSeq: 6,
+    }));
 
-    expect(socketMock.emit).not.toHaveBeenCalledWith(
-      'get_room_messages',
-      expect.objectContaining({ roomId: 'room-1', baseMessageVersion: 0 }),
-    );
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 7,
-      });
-    });
+    render(<Harness />);
 
-    props.updateMessages.mockClear();
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [cachedMessage, message({ id: 'missed-live-message', content: 'new' })],
-      messageVersion: 8,
-      requestedMessageVersion: 7,
-      hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).toHaveBeenCalledWith([
-      cachedMessage,
-      message({ id: 'missed-live-message', content: 'new' }),
-    ]);
+    expect(screen.getByTestId('state').dataset.messages).toContain('cached-message');
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('6'));
+    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(screen.getByTestId('state').dataset.messages).toBe('cached-message,message-6');
   });
 
-  it('requests history for a new message sync request without resetting subscriptions', async () => {
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [message({ id: 'cached-1' })],
-      messageVersion: 7,
-      hasMore: false,
-      oldestMessageId: 'cached-1',
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    const rendered = render(<Harness {...props} messageSyncRequestId={1} />);
-
-    socketMock.emit.mockClear();
-    socketMock.on.mockClear();
-    socketMock.off.mockClear();
-    props.closeEditModal.mockClear();
-    props.closeDeleteModal.mockClear();
-
-    rendered.rerender(<Harness {...props} messageSyncRequestId={2} />);
-
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 7,
-      });
-    });
-    expect(socketMock.on).not.toHaveBeenCalled();
-    expect(socketMock.off).not.toHaveBeenCalled();
-    expect(props.closeEditModal).not.toHaveBeenCalled();
-    expect(props.closeDeleteModal).not.toHaveBeenCalled();
-  });
-
-  it('requests a canonical snapshot when another client invalidates message history', async () => {
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [message()],
-      messageVersion: 1,
-      hasMore: false,
-      mode: 'replace',
-    });
-    socketMock.requestHistory.mockClear();
-
-    act(() => {
-      socketMock.trigger('message_history_invalidated', {
-        roomId: 'room-1',
-        reason: 'ai-retry-truncated',
-      });
-    });
-
-    await waitFor(() => {
-      expect(socketMock.requestHistory).toHaveBeenCalledWith(expect.objectContaining({
-        roomId: 'room-1',
-        baseMessageVersion: 1,
+  it('drains multiple bounded event pages without losing the first page', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        events: [event(2)], headSeq: 3, hasMore: true,
+      }))
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        events: [event(3)], headSeq: 3, hasMore: false,
       }));
-    });
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('3'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-2,message-3');
+    expect(socketMock.requestEvents.mock.calls.map(call => call[0].afterSeq)).toEqual([1, 2]);
   });
 
-  it('keeps cached messages visible but does not request history before the room session is ready', async () => {
-    const cachedMessage = message({ id: 'cached-during-reconnect', content: 'still visible' });
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [cachedMessage],
-      messageVersion: 7,
-      hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} isRoomSessionReady={false} messageSyncRequestId={1} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(props.updateMessages).toHaveBeenCalledWith([cachedMessage]);
-    socketMock.emit.mockClear();
-
-    socketMock.trigger('connect');
-
-    expect(socketMock.emit).not.toHaveBeenCalledWith(
-      'get_room_messages',
-      expect.objectContaining({ roomId: 'room-1' }),
-    );
-  });
-
-  it('does not replace or scroll again when server history matches the displayed cached window', async () => {
-    vi.useFakeTimers();
-    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [cachedMessage],
-      messageVersion: 7,
-      hasMore: true,
-      oldestMessageId: cachedMessage.id,
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} currentMessages={[cachedMessage]} />);
+  it('treats repeated wake-up notifications as idempotent hints', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementation(async request => eventPage(request.requestId, request.afterSeq, request.afterSeq === 1
+      ? { events: [event(2)], headSeq: 2 }
+      : { headSeq: 2 }));
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
 
     act(() => {
-      vi.advanceTimersByTime(0);
-    });
-    props.updateMessages.mockClear();
-    props.scrollToBottom.mockClear();
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [cachedMessage],
-      messageVersion: 7,
-      hasMore: true,
-      oldestMessageId: cachedMessage.id,
-      mode: 'replace',
-    });
-    act(() => {
-      vi.advanceTimersByTime(100);
+      socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 2 });
+      socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 2 });
     });
 
-    expect(props.updateMessages).not.toHaveBeenCalled();
-    expect(props.scrollToBottom).not.toHaveBeenCalled();
-    expect(props.setIsLoading).toHaveBeenCalledWith(false);
-    expect(props.setIsLoadingMore).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(socketMock.requestEvents.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-2');
   });
 
-  it('keeps loaded room history in server position order', async () => {
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-    props.updateMessages.mockClear();
+  it('resets from a snapshot when the retained cursor has expired', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'stale' })], lastAppliedSeq: 2, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_EXPIRED', 'expired'))
+      .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'fresh' })],
+      snapshotSeq: 10,
+    }));
 
-    await resolveNextHistory({
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('10'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('fresh');
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets from a snapshot when a database restore moves the stream head behind the cached cursor', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'future' })], lastAppliedSeq: 20, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_AHEAD', 'ahead'))
+      .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'restored' })],
+      snapshotSeq: 8,
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('restored');
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('detects a non-contiguous page and resets rather than applying it', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'baseline' })], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        events: [event(3)], headSeq: 3,
+      }))
+      .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'canonical' })],
+      snapshotSeq: 3,
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('canonical'));
+    expect(screen.getByTestId('state').dataset.messages).not.toContain('message-3');
+  });
+
+  it('applies edits and deletes and closes modals for the current target', async () => {
+    const closeDeleteModal = vi.fn();
+    const closeEditModal = vi.fn();
+    cacheMock.memory = {
       roomId: 'room-1',
       messages: [
-        message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
-        message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
-        message({ id: 'other-room', roomId: 'room-2' }),
+        message({ id: 'edit-me', content: 'old' }),
+        message({ id: 'delete-me', mediaAsset: { id: 'asset-1', kind: 'image', mimeType: 'image/png', byteSize: 1 } }),
       ],
-      messageVersion: 1,
+      lastAppliedSeq: 1,
       hasMore: false,
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).toHaveBeenCalledWith([
-      message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
-      message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
-    ]);
-  });
-
-  it('ignores a late history payload from the previously active room', async () => {
-    const props = createHarnessProps();
-    render(<Harness {...props} roomId="room-2" />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    props.updateMessages.mockClear();
-    props.setMessageVersion.mockClear();
-    props.setHasMoreMessages.mockClear();
-    props.setOldestMessageId.mockClear();
-    props.setIsLoading.mockClear();
-    props.setIsLoadingMore.mockClear();
-    cacheMock.writeCachedRoomMessageWindow.mockClear();
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [message({ id: 'late-room-1-message', roomId: 'room-1' })],
-      messageVersion: 99,
-      hasMore: true,
-      oldestMessageId: 'late-room-1-message',
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).not.toHaveBeenCalled();
-    expect(props.setMessageVersion).not.toHaveBeenCalled();
-    expect(props.setHasMoreMessages).not.toHaveBeenCalled();
-    expect(props.setOldestMessageId).not.toHaveBeenCalled();
-    expect(props.setIsLoading).not.toHaveBeenCalled();
-    expect(props.setIsLoadingMore).not.toHaveBeenCalled();
-    expect(cacheMock.writeCachedRoomMessageWindow).not.toHaveBeenCalled();
-  });
-
-  it('does not let an older replace response erase a newer live message', async () => {
-    const initialMessage = message({ id: 'initial' });
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [initialMessage],
-      messageVersion: 4,
-      hasMore: false,
-      oldestMessageId: initialMessage.id,
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 4,
-      });
-    });
-    socketMock.trigger('new_message', message({ id: 'newer-live-message' }));
-    props.updateMessages.mockClear();
-    cacheMock.writeCachedRoomMessageWindow.mockClear();
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [message({ id: 'stale-replacement' })],
-      messageVersion: 4,
-      requestedMessageVersion: 4,
-      hasMore: false,
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).not.toHaveBeenCalled();
-    expect(cacheMock.writeCachedRoomMessageWindow).not.toHaveBeenCalled();
-    expect(props.setIsLoadingMore).toHaveBeenLastCalledWith(false);
-  });
-
-  it('retries history reconciliation when a live message changes the window during a request', async () => {
-    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
-    const liveMessage = message({ id: 'live-3', content: 'live' });
-    const missedMessage = message({ id: 'missed-2', content: 'missed' });
-    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
-      roomId: 'room-1',
-      messages: [cachedMessage],
-      messageVersion: 7,
-      hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      cachedAt: 1,
-    });
-    const props = createHarnessProps();
-    render(<Harness {...props} messageSyncRequestId={1} />);
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 7,
-      });
-    });
-    socketMock.emit.mockClear();
-
-    socketMock.trigger('new_message', liveMessage);
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [cachedMessage, liveMessage],
-      messageVersion: 8,
-      requestedMessageVersion: 7,
-      hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      mode: 'replace',
-    });
-
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 7,
-      });
-    });
-    props.updateMessages.mockClear();
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [cachedMessage, missedMessage, liveMessage],
-      messageVersion: 9,
-      requestedMessageVersion: 7,
-      hasMore: false,
-      oldestMessageId: cachedMessage.id,
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).toHaveBeenCalledWith([cachedMessage, missedMessage, liveMessage]);
-  });
-
-  it('does not prepend a page requested before the room history was cleared', async () => {
-    const externalRequestHistoryRef: { current: RoomMessageHistoryRequest | null } = { current: null };
-    const props = createHarnessProps();
-    render(<Harness {...props} externalRequestHistoryRef={externalRequestHistoryRef} />);
-
-    await waitFor(() => {
-      expect(externalRequestHistoryRef.current).not.toBeNull();
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        limit: 80,
-        baseMessageVersion: 0,
-      });
-    });
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [],
-      messageVersion: 1,
-      requestedMessageVersion: 0,
-      hasMore: true,
-      mode: 'replace',
-    });
-    socketMock.emit.mockClear();
-
-    void externalRequestHistoryRef.current?.({
-      beforeMessageId: 'oldest',
-      limit: 80,
-      reason: 'pagination',
-    });
-    await waitFor(() => {
-      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
-        roomId: 'room-1',
-        beforeMessageId: 'oldest',
-        limit: 80,
-        baseMessageVersion: 1,
-      });
-    });
-    socketMock.trigger('messages_cleared', 'room-1');
-    props.updateMessages.mockClear();
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [message({ id: 'cleared-old-message' })],
-      messageVersion: 1,
-      requestedMessageVersion: 1,
-      hasMore: false,
-      mode: 'prepend',
-    });
-
-    expect(props.updateMessages).not.toHaveBeenCalled();
-    expect(props.setIsLoadingMore).toHaveBeenLastCalledWith(false);
-  });
-
-  it('preserves interleaved code-agent text and tool history after refresh', async () => {
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-    props.updateMessages.mockClear();
-
-    const sameTimestamp = '2026-05-03T10:00:00.000Z';
-    const firstAi = message({
-      id: 'z-ai-first',
-      clientId: 'ai_assistant',
-      messageType: 'ai',
-      content: 'First text',
-      timestamp: sameTimestamp,
-    });
-    const toolCall = message({
-      id: 'a-tool-call',
-      clientId: 'code_agent_runner',
-      messageType: 'tool_call',
-      content: 'Read README.md',
-      timestamp: sameTimestamp,
-    });
-    const toolResult = message({
-      id: 'b-tool-result',
-      clientId: 'code_agent_runner',
-      messageType: 'tool_result',
-      content: '# RoomTalk',
-      timestamp: sameTimestamp,
-    });
-    const secondAi = message({
-      id: 'c-ai-second',
-      clientId: 'ai_assistant',
-      messageType: 'ai',
-      content: 'Second text',
-      timestamp: sameTimestamp,
-    });
-    const agentTurn: RoomAgentTurn = {
-      id: 'turn-1',
-      roomId: 'room-1',
-      status: 'complete',
-      startedAt: sameTimestamp,
-      completedAt: sameTimestamp,
-      backend: 'code-agent',
-      assistantName: 'Coco',
-      updatedAt: sameTimestamp,
+      cachedAt: Date.now(),
     };
-
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [firstAi, toolCall, toolResult, secondAi],
-      turns: [agentTurn],
-      messageVersion: 1,
-      hasMore: false,
-      mode: 'replace',
-    });
-
-    expect(props.updateMessages).toHaveBeenCalledWith([
-      firstAi,
-      toolCall,
-      toolResult,
-      secondAi,
-    ]);
-    expect(cacheMock.writeCachedRoomMessageWindow).toHaveBeenCalledWith(expect.objectContaining({
-      roomId: 'room-1',
-      turns: [agentTurn],
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 3,
+      events: [
+        event(2, {
+          payload: { messageIds: ['edit-me'], messages: [message({ id: 'edit-me', content: 'new' })] },
+        }),
+        event(3, {
+          type: 'messages.deleted',
+          payload: { messageIds: ['delete-me'] },
+        }),
+      ],
     }));
+
+    render(<Harness
+      messageToDeleteId="delete-me"
+      messageToEditId="delete-me"
+      closeDeleteModal={closeDeleteModal}
+      closeEditModal={closeEditModal}
+    />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('3'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('new');
+    expect(mediaCacheMock.clearCachedMediaAsset).toHaveBeenCalledWith('asset-1');
+    expect(closeDeleteModal).toHaveBeenCalled();
+    expect(closeEditModal).toHaveBeenCalled();
   });
 
-  it('does not let a slower cached window overwrite a live mutation', async () => {
-    let resolveCache: (value: unknown) => void = () => {};
-    cacheMock.readCachedRoomMessageWindow.mockReturnValue(new Promise(resolve => {
-      resolveCache = resolve;
+  it('replays agent-turn updates through the same cursor', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], turns: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 2,
+      events: [event(2, {
+        type: 'agent_turns.upserted',
+        payload: { turnIds: ['turn-1'], turns: [turn()] },
+      })],
     }));
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-    props.updateMessages.mockClear();
 
-    socketMock.trigger('new_message', message({ id: 'live-message', content: 'live' }));
+    render(<Harness />);
 
-    expect(props.updateMessages).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.turns).toBe('turn-1'));
+    expect(screen.getByTestId('state').dataset.seq).toBe('2');
+  });
+
+  it('applies canonical room metadata from the same event cursor', async () => {
+    const onRoomUpdated = vi.fn();
+    const updatedRoom = room({ name: 'Renamed room', updatedAt: '2026-07-20T00:01:00.000Z' });
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], turns: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 2,
+      events: [event(2, {
+        type: 'room.updated',
+        payload: { roomId: 'room-1', room: updatedRoom },
+      })],
+    }));
+
+    render(<Harness onRoomUpdated={onRoomUpdated} />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(onRoomUpdated).toHaveBeenCalledWith(updatedRoom);
+  });
+
+  it('paginates older history without moving the live event cursor', async () => {
+    const requestHistoryRef: { current: RoomMessageHistoryRequest | null } = { current: null };
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'newest' })], lastAppliedSeq: 8, hasMore: true, oldestMessageId: 'newest', cachedAt: Date.now(),
+    };
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'older', timestamp: '2026-07-19T00:00:00.000Z' })],
+      snapshotSeq: 12,
+      hasMore: false,
+      oldestMessageId: 'older',
+      mode: 'prepend',
+    }));
+    render(<Harness requestHistoryRef={requestHistoryRef} />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
 
     await act(async () => {
-      resolveCache({
-        roomId: 'room-1',
-        messages: [message({ id: 'cached-message', content: 'cached' })],
-        messageVersion: 1,
-        hasMore: false,
-        cachedAt: 1,
-      });
-      await Promise.resolve();
+      await requestHistoryRef.current?.({ beforeMessageId: 'newest', limit: 80 });
     });
 
-    expect(props.updateMessages).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('state').dataset.messages).toBe('older,newest');
+    expect(screen.getByTestId('state').dataset.seq).toBe('8');
   });
 
-  it('updates the cached latest window when a visible new message arrives', async () => {
-    const initialMessage = message({ id: 'm1', content: 'first' });
-    let currentMessages = [initialMessage];
-    const props = createHarnessProps();
-    props.updateMessages.mockImplementation(updater => {
-      currentMessages = typeof updater === 'function'
-        ? updater(currentMessages)
-        : updater;
-    });
-    render(<Harness {...props} />);
+  it('checks for missed events after reconnect and page resume', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 4, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
 
-    await resolveNextHistory({
-      roomId: 'room-1',
-      messages: [initialMessage],
-      messageVersion: 4,
-      hasMore: false,
-      oldestMessageId: initialMessage.id,
-      mode: 'replace',
-    });
-    cacheMock.writeCachedRoomMessageWindow.mockClear();
+    act(() => socketMock.trigger('connect'));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(2));
 
-    socketMock.trigger('new_message', message({ id: 'm2', content: 'second' }));
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(3));
+  });
 
-    expect(currentMessages.map(item => item.id)).toEqual(['m1', 'm2']);
-    expect(cacheMock.writeCachedRoomMessageWindow).toHaveBeenCalledWith(expect.objectContaining({
-      roomId: 'room-1',
-      messageVersion: 4,
-      hasMore: false,
-      messages: currentMessages,
+  it('keeps browser-local optimistic messages while replacing a snapshot', async () => {
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'server-message' })],
+      snapshotSeq: 2,
     }));
+    render(<Harness initialMessages={[message({
+      id: 'temp-1',
+      clientMessageId: 'client-message-1',
+      deliveryStatus: 'pending',
+    })]} />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(screen.getByTestId('state').dataset.messages).toContain('temp-1');
+    expect(screen.getByTestId('state').dataset.messages).toContain('server-message');
   });
 
-  it('advances the cache boundary on clear and caches later messages normally', () => {
-    const initialMessage = message({ id: 'before-clear', content: 'before' });
-    const afterClear = message({ id: 'after-clear', content: 'after' });
-    let currentMessages = [initialMessage];
-    const props = createHarnessProps();
-    props.updateMessages.mockImplementation(updater => {
-      currentMessages = typeof updater === 'function'
-        ? updater(currentMessages)
-        : updater;
-    });
-    render(<Harness {...props} currentMessages={currentMessages} />);
-    cacheMock.writeCachedRoomMessageWindow.mockClear();
+  it('clears durable and media caches on a room deletion event', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message()], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 2,
+      events: [event(2, { type: 'room.deleted', payload: { roomId: 'room-1' } })],
+    }));
 
-    socketMock.trigger('messages_cleared', 'room-1');
+    render(<Harness />);
 
-    expect(currentMessages).toEqual([]);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
     expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+    expect(mediaCacheMock.clearCachedMediaForRoom).toHaveBeenCalledWith('room-1');
+  });
 
-    socketMock.trigger('new_message', afterClear);
-
-    expect(currentMessages).toEqual([afterClear]);
-    expect(cacheMock.writeCachedRoomMessageWindow).toHaveBeenLastCalledWith(expect.objectContaining({
+  it('keeps transient AI chunks outside the durable cursor and settles them on stream end', async () => {
+    cacheMock.memory = {
       roomId: 'room-1',
-      messages: [afterClear],
-    }));
-  });
+      messages: [message({ id: 'ai-1', clientId: 'ai_assistant', content: '', status: 'streaming' })],
+      lastAppliedSeq: 5,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
 
-  it('uses the persistent client id when deciding whether a new message should auto-scroll', () => {
-    vi.useFakeTimers();
-    const props = createHarnessProps();
-    const { getByTestId } = render(<Harness {...props} />);
-    const container = getByTestId('container');
-    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 1000 });
-    Object.defineProperty(container, 'scrollTop', { configurable: true, value: 0 });
-    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 100 });
+    act(() => socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai-1', chunk: 'partial' }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('partial');
+    expect(screen.getByTestId('state').dataset.seq).toBe('5');
 
-    act(() => {
-      socketMock.trigger('new_message', message({ id: 'own-message', clientId: 'client-1' }));
-      vi.advanceTimersByTime(100);
-    });
-
-    expect(props.scrollToBottom).toHaveBeenCalledWith('smooth');
-    expect(props.setShowScrollButton).not.toHaveBeenCalledWith(true);
-  });
-
-  it('debounces scheduled scrolls during AI streaming', () => {
-    vi.useFakeTimers();
-    const props = createHarnessProps();
-    render(<Harness {...props} />);
-
-    act(() => {
-      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'a' });
-      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'b' });
-      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'c' });
-      vi.advanceTimersByTime(49);
-    });
-    expect(props.scrollToBottom).not.toHaveBeenCalledWith('smooth');
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(props.scrollToBottom).toHaveBeenCalledTimes(1);
-    expect(props.scrollToBottom).toHaveBeenCalledWith('smooth');
-  });
-
-  it('uses the latest edit target when deciding whether an edit broadcast should close the modal', () => {
-    const props = createHarnessProps();
-    const { rerender } = render(<Harness {...props} />);
-
-    props.closeEditModal.mockClear();
-    rerender(<Harness {...props} messageToEditId="m1" />);
-    props.closeEditModal.mockClear();
-
-    socketMock.trigger('message_edited', message({ id: 'other' }));
-    expect(props.closeEditModal).not.toHaveBeenCalled();
-
-    socketMock.trigger('message_edited', message({ id: 'm1' }));
-    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses the latest delete target when deciding whether delete broadcasts should close modals', () => {
-    const props = createHarnessProps();
-    const { rerender } = render(<Harness {...props} />);
-
-    rerender(
-      <Harness
-        {...props}
-        messageToDeleteId="m2"
-        messageToEditId="m1"
-      />
-    );
-    props.closeDeleteModal.mockClear();
-    props.closeEditModal.mockClear();
-
-    socketMock.trigger('message_deleted', 'other', 'room-1');
-    expect(props.closeDeleteModal).not.toHaveBeenCalled();
-    expect(props.closeEditModal).not.toHaveBeenCalled();
-
-    socketMock.trigger('message_deleted', 'm2', 'room-1');
-    expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
-    expect(props.closeEditModal).not.toHaveBeenCalled();
-
-    socketMock.trigger('message_deleted', 'm1', 'room-1');
-    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
+    act(() => socketMock.trigger('ai_stream_end', { roomId: 'room-1', messageId: 'ai-1', content: 'final' }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('final');
+    expect(screen.getByTestId('state').dataset.seq).toBe('5');
   });
 });

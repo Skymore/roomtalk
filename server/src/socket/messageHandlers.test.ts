@@ -6,6 +6,7 @@ import path from 'path';
 import { registerMessageHandlers } from './messageHandlers';
 import { loadStickerCatalog } from '../stickers/catalog';
 import { Message, Room, RoomAICostTotal } from '../types';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError } from '../repositories/store';
 
 type SocketEmit = {
   event: string;
@@ -115,14 +116,41 @@ const createHarness = (clientId: string | null = 'client-1') => {
       if (options.beforeMessageId) {
         const targetIndex = roomMessages.findIndex(item => item.id === options.beforeMessageId);
         if (targetIndex === -1) {
-          return { roomId, messages: [], messageVersion: 1, hasMore: false };
+          return { roomId, messages: [], hasMore: false };
         }
         endIndex = targetIndex;
       }
 
       const startIndex = Math.max(0, endIndex - limit);
       const messages = roomMessages.slice(startIndex, endIndex);
-      return { roomId, messages, messageVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+      return { roomId, messages, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+    },
+    async readRoomSnapshot(roomId: string, options: { limit?: number; beforeMessageId?: string } = {}) {
+      const page = await this.readMessagePageByRoom(roomId, options);
+      return {
+        roomId,
+        room: this.rooms.find(item => item.id === roomId) || room({ id: roomId }),
+        messages: page.messages,
+        snapshotSeq: 4,
+        hasMore: page.hasMore,
+        oldestMessageId: page.oldestMessageId,
+      };
+    },
+    async readRoomEvents(roomId: string, options: { afterSeq: number }) {
+      return {
+        roomId,
+        events: [{
+          id: `${roomId}:${options.afterSeq + 1}`,
+          roomId,
+          seq: options.afterSeq + 1,
+          type: 'messages.upserted' as const,
+          payload: { messageIds: [this.messages[0].id], messages: [this.messages[0]] },
+          createdAt: '2026-05-03T00:00:00.000Z',
+        }],
+        headSeq: options.afterSeq + 1,
+        minAvailableSeq: 1,
+        hasMore: false,
+      };
     },
     async readRoomAICost(roomId: string) {
       return roomCost(roomId);
@@ -220,7 +248,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
 };
 
 describe('message socket handlers', () => {
-  it('returns message history and AI cost totals for a room', async () => {
+  it('rejects the retired message-version protocol with an explicit upgrade code', async () => {
     const { socket } = createHarness();
     let response: unknown;
 
@@ -233,16 +261,35 @@ describe('message socket handlers', () => {
     });
 
     assert.deepEqual(response, {
+      success: false,
+      code: 'UPGRADE_REQUIRED',
+      error: 'This client uses the retired message-version sync protocol. Reload to upgrade.',
+    });
+    assert.deepEqual(socket.emitted, []);
+  });
+
+  it('returns a room snapshot and AI cost totals for a room', async () => {
+    const { socket } = createHarness();
+    let response: unknown;
+
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-1',
+      roomId: 'room-1',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
       success: true,
-      history: {
-          requestId: 'history-1',
-          roomId: 'room-1',
-          messages: [message()],
-          messageVersion: 1,
-          hasMore: false,
-          oldestMessageId: 'message-1',
-          mode: 'replace',
-          requestedMessageVersion: 7,
+      snapshot: {
+        requestId: 'snapshot-1',
+        roomId: 'room-1',
+        room: room(),
+        messages: [message()],
+        snapshotSeq: 4,
+        hasMore: false,
+        oldestMessageId: 'message-1',
+        mode: 'replace',
       },
     });
     assert.deepEqual(socket.emitted, [{ event: 'ai_cost_total', args: [roomCost()] }]);
@@ -267,17 +314,16 @@ describe('message socket handlers', () => {
       }),
     ];
 
-    let response: { success?: boolean; history?: { messages: Message[] } } | undefined;
-    await socket.invoke('get_room_messages', {
-      requestId: 'history-media',
+    let response: { success?: boolean; snapshot?: { messages: Message[] } } | undefined;
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-media',
       roomId: 'room-1',
-      baseMessageVersion: 0,
     }, (result: typeof response) => {
       response = result;
     });
 
     assert.equal(response?.success, true);
-    const history = response?.history?.messages || [];
+    const history = response?.snapshot?.messages || [];
     assert.deepEqual(history, [store.messages[0]]);
     assert.equal(history[0].content, '');
     assert.equal('objectKey' in history[0].mediaAsset!, false);
@@ -289,10 +335,9 @@ describe('message socket handlers', () => {
     store.members.clear();
     let response: unknown;
 
-    await socket.invoke('get_room_messages', {
-      requestId: 'history-denied',
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-denied',
       roomId: 'room-1',
-      baseMessageVersion: 0,
     }, (result: unknown) => {
       response = result;
     });
@@ -305,46 +350,109 @@ describe('message socket handlers', () => {
     });
   });
 
-  it('rejects malformed room history requests before reading room state', async () => {
+  it('rejects malformed room snapshot requests before reading room state', async () => {
     const { socket } = createHarness();
     let response: unknown;
 
-    await socket.invoke('get_room_messages', {
+    await socket.invoke('get_room_snapshot', {
       roomId: 'room-1',
-      baseMessageVersion: 0,
     }, (result: unknown) => {
       response = result;
     });
 
     assert.deepEqual(response, {
       success: false,
-      code: 'INVALID_HISTORY_REQUEST',
-      error: 'Invalid message history request',
+      code: 'INVALID_SNAPSHOT_REQUEST',
+      error: 'Invalid room snapshot request',
     });
     assert.deepEqual(socket.emitted, []);
   });
 
-  it('returns a coded error when room history persistence fails', async () => {
+  it('returns a coded error when room snapshot persistence fails', async () => {
     const { socket, store } = createHarness();
-    store.readMessagePageByRoom = async () => {
+    store.readRoomSnapshot = async () => {
       throw new Error('database unavailable');
     };
     let response: unknown;
 
-    await socket.invoke('get_room_messages', {
-      requestId: 'history-failed',
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-failed',
       roomId: 'room-1',
-      baseMessageVersion: 0,
     }, (result: unknown) => {
       response = result;
     });
 
     assert.deepEqual(response, {
       success: false,
-      code: 'HISTORY_READ_FAILED',
-      error: 'Failed to load room messages',
+      code: 'SNAPSHOT_READ_FAILED',
+      error: 'Failed to load room snapshot',
     });
     assert.deepEqual(socket.emitted, []);
+  });
+
+  it('returns ordered room events after a cursor', async () => {
+    const { socket } = createHarness();
+    let response: any;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-1',
+      roomId: 'room-1',
+      afterSeq: 4,
+      limit: 100,
+      maxBytes: 256 * 1024,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.events.requestId, 'events-1');
+    assert.equal(response.events.events[0].seq, 5);
+    assert.equal(response.events.events[0].payload.messages[0].id, 'message-1');
+  });
+
+  it('returns CURSOR_EXPIRED when the retained event prefix passed the cursor', async () => {
+    const { socket, store } = createHarness();
+    store.readRoomEvents = async (roomId: string, options: { afterSeq: number }) => {
+      throw new RoomEventCursorExpiredError(roomId, options.afterSeq, 10);
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-expired',
+      roomId: 'room-1',
+      afterSeq: 2,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'CURSOR_EXPIRED',
+      error: 'The retained room event window no longer contains this cursor',
+      minAvailableSeq: 10,
+    });
+  });
+
+  it('returns CURSOR_AHEAD when a restored database has an older stream head', async () => {
+    const { socket, store } = createHarness();
+    store.readRoomEvents = async (roomId: string, options: { afterSeq: number }) => {
+      throw new RoomEventCursorAheadError(roomId, options.afterSeq, 3);
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-ahead',
+      roomId: 'room-1',
+      afterSeq: 9,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'CURSOR_AHEAD',
+      error: 'The room event cursor is ahead of the current stream and must be reset',
+    });
   });
 
   it('rejects unregistered or invalid sends and broadcasts valid messages', async () => {

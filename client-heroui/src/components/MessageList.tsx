@@ -138,6 +138,7 @@ interface MessageListProps {
   canUseRetainedRoomAccess?: boolean;
   ensureRoomSessionReady?: EnsureRoomSessionReady;
   messageSyncRequestId?: number;
+  onRoomUpdated?: (room: Room) => void;
 }
 
 export interface MessageListHandle {
@@ -172,6 +173,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   canUseRetainedRoomAccess = isRoomSessionReady,
   ensureRoomSessionReady,
   messageSyncRequestId = 0,
+  onRoomUpdated,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -190,7 +192,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
-  const [, setMessageVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.messageVersion ?? 0);
+  const [, setLastAppliedSeq] = useState(() => readMemoryRoomMessageWindow(roomId)?.lastAppliedSeq ?? 0);
   const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
   // Always points at the latest messages so item handlers can stay reference-stable.
   const messagesRef = useRef(messages);
@@ -954,7 +956,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,
-    setMessageVersion,
+    setLastAppliedSeq,
     setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,
@@ -964,6 +966,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     messageToDeleteId: messageToDelete?.id,
     messageToEditId: messageToEdit?.id,
     onAIStreamSettled: presentation === 'code-agent' ? handleCodeAgentTurnSettled : undefined,
+    onRoomUpdated,
     warningPrefix: t('warningPrefix'),
     requestHistoryRef,
   });

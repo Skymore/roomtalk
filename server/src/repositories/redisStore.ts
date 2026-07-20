@@ -9,7 +9,7 @@ import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, Audio
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
 export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
+const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:v2:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getRoomClientMessageIdsKey = (roomId: string) => `room:${roomId}:client_message_ids`;
 const getClientMessageIdField = (clientId: string, clientMessageId: string) => (
@@ -46,7 +46,7 @@ const CLIENT_ACCOUNT_LINKS_KEY = 'client:account_links';
 const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
 
 interface RoomMessagesCachePayload {
-  messageVersion: number;
+  eventSeq: number;
   messages: Array<Partial<Message>>;
 }
 
@@ -153,25 +153,12 @@ export const resolveRoomMessagesCacheMaxBytes = (env: NodeJS.ProcessEnv = proces
     : DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES;
 };
 
-// 原子房间写入:roomVersion 以"写入时刻存储中的值"为准自增,
-// 避免 TS 层 read-modify-write 在并发 handler 下产出重复版本号。
 const WRITE_ROOM_RECORD_SCRIPT = `
 local incomingJson = ARGV[2]
 local ok, room = pcall(cjson.decode, incomingJson)
 if not ok then
   return ''
 end
-
-local storedVersion = 0
-local storedJson = redis.call('HGET', KEYS[1], ARGV[1])
-if storedJson then
-  local okStored, stored = pcall(cjson.decode, storedJson)
-  if okStored and stored['roomVersion'] then
-    storedVersion = tonumber(stored['roomVersion']) or 0
-  end
-end
-
-room['roomVersion'] = storedVersion + 1
 local encoded = cjson.encode(room)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
@@ -205,7 +192,6 @@ if ARGV[7] == '' then
 else
   room['sandboxCodeAgentSourceRef'] = ARGV[7]
 end
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 room['updatedAt'] = ARGV[8]
 
 local encoded = cjson.encode(room)
@@ -266,7 +252,6 @@ elseif codeAgentBackendMode == 'clear' then
 end
 
 room['updatedAt'] = ARGV[2]
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 local encoded = cjson.encode(room)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
@@ -290,7 +275,6 @@ end
 
 room['name'] = ARGV[3]
 room['updatedAt'] = ARGV[4]
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 local encoded = cjson.encode(room)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return { 1, encoded }
@@ -368,8 +352,6 @@ local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
 if ARGV[3] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[3]
 end
-room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
 if dedupeField ~= '' then
@@ -394,8 +376,6 @@ local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
 if ARGV[3] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[3]
 end
-room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], ARGV[2])
 redis.call('HSET', KEYS[3], ARGV[4], ARGV[5])
@@ -416,8 +396,6 @@ if not ok then
 end
 
 room['lastActivityAt'] = ARGV[2]
-room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 redis.call('DEL', KEYS[3])
@@ -488,8 +466,6 @@ local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
 if ARGV[4] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[4]
 end
-room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 redis.call('DEL', KEYS[3])
@@ -537,8 +513,6 @@ for i = 1, #existing do
 end
 
 if found == 1 then
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 end
 
@@ -615,8 +589,6 @@ end
 
 if found == 1 then
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   redis.call('DEL', KEYS[3])
@@ -673,8 +645,6 @@ for i = 1, #existing do
 end
 
 if found == 1 then
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   room['updatedAt'] = ARGV[5]
   roomJson = cjson.encode(room)
   redis.call('HSET', KEYS[1], ARGV[1], roomJson)
@@ -722,8 +692,6 @@ if found == 1 then
   end
   redis.call('RPUSH', KEYS[2], materializedPayload)
   room['lastActivityAt'] = ARGV[5]
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   room['updatedAt'] = ARGV[5]
   roomJson = cjson.encode(room)
   redis.call('HSET', KEYS[1], ARGV[1], roomJson)
@@ -761,8 +729,6 @@ for i = 1, #existing do
 end
 
 if found == 1 then
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   room['updatedAt'] = ARGV[2]
   roomJson = cjson.encode(room)
   redis.call('HSET', KEYS[1], ARGV[1], roomJson)
@@ -874,8 +840,6 @@ end
 
 if found == 1 then
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   room['updatedAt'] = ARGV[4]
   roomJson = cjson.encode(room)
   redis.call('HSET', KEYS[1], ARGV[1], roomJson)
@@ -926,8 +890,6 @@ if found == 1 then
   end
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   redis.call('DEL', KEYS[3])
@@ -995,8 +957,6 @@ if found == 1 then
   end
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
-  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
-  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   redis.call('DEL', KEYS[3])
@@ -1046,14 +1006,6 @@ const normalizeMessagePageLimit = (limit?: number): number => {
   return Math.min(200, Math.max(1, Math.floor(limit || DEFAULT_ROOM_MESSAGE_PAGE_LIMIT)));
 };
 
-const bumpRoomMessageVersion = (room: Room): Room => ({
-  ...room,
-  messageVersion: (room.messageVersion || 0) + 1,
-});
-
-// updatedAt 仅作展示/兼容回落;排序真值是 roomVersion——
-// TS 写入经 WRITE_ROOM_RECORD_SCRIPT 原子自增,消息类 Lua 脚本各自 +1,
-// 两类路径共同保证行级严格单调(Lua 路径不盖 updatedAt,客户端按版本号比较)。
 const stampRoomRecord = (room: Room): Room => ({
   ...room,
   updatedAt: new Date().toISOString(),
@@ -1170,74 +1122,55 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async readCachedRoomMessages(roomId: string, messageVersion?: number): Promise<Message[] | null> {
+  async readCachedRoomMessages(roomId: string, eventSeq: number): Promise<Message[] | null> {
     const cacheKey = this.getRoomMessagesCacheKey(roomId);
-    const requiresVersion = typeof messageVersion === 'number' && Number.isFinite(messageVersion);
 
     try {
       const cached = await this.redisClient.get(cacheKey);
       if (!cached) {
-        this.logger.debug('Room message cache miss', { roomId, messageVersion });
+        this.logger.debug('Room message cache miss', { roomId, eventSeq });
         return null;
       }
 
       const parsed = JSON.parse(cached) as unknown;
-      let cachedMessageVersion: number | undefined;
-      let messages: Array<Partial<Message>> | null = null;
-
-      if (Array.isArray(parsed)) {
-        if (requiresVersion) {
-          await this.redisClient.del(cacheKey);
-          this.logger.debug('Legacy room message cache payload discarded', { roomId, expectedMessageVersion: messageVersion });
-          return null;
-        }
-        messages = parsed as Array<Partial<Message>>;
-      } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Partial<RoomMessagesCachePayload>).messages)) {
-        const payload = parsed as Partial<RoomMessagesCachePayload>;
-        cachedMessageVersion = payload.messageVersion;
-        if (requiresVersion && cachedMessageVersion !== messageVersion) {
-          await this.redisClient.del(cacheKey);
-          this.logger.debug('Stale room message cache payload discarded', {
-            roomId,
-            cachedMessageVersion,
-            expectedMessageVersion: messageVersion,
-          });
-          return null;
-        }
-        messages = payload.messages || null;
-      }
-
-      if (!messages) {
+      const payload = parsed && typeof parsed === 'object'
+        ? parsed as Partial<RoomMessagesCachePayload>
+        : null;
+      if (!payload || payload.eventSeq !== eventSeq || !Array.isArray(payload.messages)) {
         await this.redisClient.del(cacheKey);
-        this.logger.warn('Invalid room message cache payload discarded', { roomId });
+        this.logger.debug('Stale or invalid room message cache payload discarded', {
+          roomId,
+          cachedEventSeq: payload?.eventSeq,
+          expectedEventSeq: eventSeq,
+        });
         return null;
       }
 
-      this.logger.debug('Room message cache hit', { roomId, count: messages.length, messageVersion: cachedMessageVersion });
-      return messages.map(restoreRoomMessageFromCache);
+      this.logger.debug('Room message cache hit', { roomId, count: payload.messages.length, eventSeq });
+      return payload.messages.map(restoreRoomMessageFromCache);
     } catch (error) {
       this.logger.error('Error reading room message cache', { error, roomId });
       return null;
     }
   }
 
-  async writeRoomMessagesCache(roomId: string, messages: Message[], messageVersion?: number): Promise<void> {
+  async writeRoomMessagesCache(roomId: string, messages: Message[], eventSeq: number): Promise<void> {
     if (this.roomMessagesCacheTtlSeconds <= 0) {
       return;
     }
 
     try {
-      const versionedPayload = typeof messageVersion === 'number' && Number.isFinite(messageVersion)
-        ? { messageVersion, messages: messages.map(compactRoomMessageForCache) }
-        : messages.map(compactRoomMessageForCache);
-      const serializedPayload = JSON.stringify(versionedPayload);
+      const serializedPayload = JSON.stringify({
+        eventSeq,
+        messages: messages.map(compactRoomMessageForCache),
+      } satisfies RoomMessagesCachePayload);
       const byteSize = Buffer.byteLength(serializedPayload, 'utf8');
       if (byteSize > this.roomMessagesCacheMaxBytes) {
         await this.redisClient.del(this.getRoomMessagesCacheKey(roomId));
         this.logger.warn('Room message cache skipped because payload is too large', {
           roomId,
           count: messages.length,
-          messageVersion,
+          eventSeq,
           byteSize,
           maxBytes: this.roomMessagesCacheMaxBytes,
         });
@@ -1248,7 +1181,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.roomMessagesCacheTtlSeconds,
         serializedPayload
       );
-      this.logger.debug('Room message cache written', { roomId, count: messages.length, messageVersion, ttlSeconds: this.roomMessagesCacheTtlSeconds });
+      this.logger.debug('Room message cache written', { roomId, count: messages.length, eventSeq, ttlSeconds: this.roomMessagesCacheTtlSeconds });
     } catch (error) {
       this.logger.error('Error writing room message cache', { error, roomId });
     }
@@ -1701,7 +1634,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const room = await this.getRoomById(roomId);
       if (room) {
         await this.writeRoomRecord(roomId, {
-          ...bumpRoomMessageVersion(room),
+          ...room,
           lastActivityAt: room.createdAt,
         });
       }
@@ -1725,9 +1658,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
     try {
       const room = await this.getRoomById(roomId);
-      const messageVersion = room?.messageVersion || 0;
       if (!room) {
-        return { roomId, messages: [], messageVersion, hasMore: false };
+        return { roomId, messages: [], hasMore: false };
       }
 
       const allMessages = await this.readMessagesByRoom(roomId);
@@ -1735,7 +1667,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       if (options.beforeMessageId) {
         const targetIndex = allMessages.findIndex(message => message.id === options.beforeMessageId);
         if (targetIndex === -1) {
-          return { roomId, messages: [], messageVersion, hasMore: false };
+          return { roomId, messages: [], hasMore: false };
         }
         const target = allMessages[targetIndex];
         endIndex = target.turnId
@@ -1778,13 +1710,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         roomId,
         messages,
         turns,
-        messageVersion,
         hasMore: startIndex > 0,
         oldestMessageId: messages[0]?.id,
       };
     } catch (error) {
       this.logger.error('Error reading Redis room message page', { error, roomId, options });
-      return { roomId, messages: [], messageVersion: 0, hasMore: false };
+      return { roomId, messages: [], hasMore: false };
     }
   }
 
@@ -3043,7 +2974,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  // 所有 TS 层房间写入统一走这里:盖 updatedAt + Lua 原子自增 roomVersion
+  // Redis durable migration helpers still stamp metadata consistently even
+  // though production persistence now lives exclusively in PostgreSQL.
   private async writeRoomRecord(roomId: string, room: Room): Promise<Room> {
     const stamped = stampRoomRecord(room);
     const result = await (this.redisClient as any).eval(WRITE_ROOM_RECORD_SCRIPT, {

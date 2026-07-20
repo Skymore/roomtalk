@@ -61,8 +61,6 @@ class MemoryRedis {
     const updatedRoom = {
       ...parsedRoom,
       lastActivityAt: latest(parsedRoom.lastActivityAt || parsedRoom.createdAt, lastActivityAt),
-      // 镜像 Lua 脚本:每次房间写入自增 roomVersion
-      roomVersion: (Number(parsedRoom.roomVersion) || 0) + 1,
     };
     this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
     return updatedRoom;
@@ -273,19 +271,10 @@ class MemoryRedis {
       return 1;
     }
 
-    // WRITE_ROOM_RECORD_SCRIPT:原子写房间 + roomVersion 以存储值为准自增
+    // WRITE_ROOM_RECORD_SCRIPT: atomically replace the Redis migration record.
     if (script.includes('local incomingJson')) {
       const [roomId, incomingJson] = options.arguments;
-      const storedJson = this.hash('rooms').get(roomId);
-      let storedVersion = 0;
-      if (storedJson) {
-        try {
-          storedVersion = Number(JSON.parse(storedJson).roomVersion) || 0;
-        } catch {
-          storedVersion = 0;
-        }
-      }
-      const room = { ...JSON.parse(incomingJson), roomVersion: storedVersion + 1 };
+      const room = JSON.parse(incomingJson);
       const encoded = JSON.stringify(room);
       this.hash('rooms').set(roomId, encoded);
       return encoded;
@@ -341,7 +330,6 @@ class MemoryRedis {
       const updatedRoom = {
         ...room,
         updatedAt,
-        roomVersion: (Number(room.roomVersion) || 0) + 1,
       };
       const encoded = JSON.stringify(updatedRoom);
       this.hash('rooms').set(roomId, encoded);
@@ -362,7 +350,6 @@ class MemoryRedis {
         ...room,
         name,
         updatedAt,
-        roomVersion: (Number(room.roomVersion) || 0) + 1,
       };
       const encoded = JSON.stringify(updatedRoom);
       this.hash('rooms').set(roomId, encoded);
@@ -812,10 +799,9 @@ describe('RedisStore', () => {
 
     const storedRoom = await store.saveRoom(savedRoom);
     assert.ok(storedRoom);
-    // 每次房间写入都盖 updatedAt 并自增 roomVersion(客户端 last-write-wins 依赖它们)
+    // Legacy Redis migration records still carry a canonical updatedAt stamp.
     assert.equal(typeof storedRoom.updatedAt, 'string');
-    assert.equal(storedRoom.roomVersion, 1);
-    assert.deepEqual(storedRoom, { ...savedRoom, roomVersion: 1, updatedAt: storedRoom.updatedAt });
+    assert.deepEqual(storedRoom, { ...savedRoom, updatedAt: storedRoom.updatedAt });
     assert.equal(await store.countRooms(), 1);
     assert.deepEqual(await store.getRoomById('room-1'), storedRoom);
     assert.deepEqual(await store.readRoomsByUser('client-1'), [storedRoom]);
@@ -850,7 +836,7 @@ describe('RedisStore', () => {
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
     assert.deepEqual(await store.readRoomsByUser('client-1'), [updatedRoom]);
     assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [updatedRoom]);
-    await store.writeRoomMessagesCache('room-1', [message()]);
+    await store.writeRoomMessagesCache('room-1', [message()], 1);
     await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
     assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
@@ -858,7 +844,7 @@ describe('RedisStore', () => {
     assert.equal(await store.countRooms(), 0);
     assert.equal(await store.getRoomById('room-1'), null);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
     assert.deepEqual(await store.readRoomsByUser('client-2'), []);
     assert.deepEqual(await store.readSavedRoomsByUser('client-2'), []);
@@ -1064,7 +1050,7 @@ describe('RedisStore', () => {
     });
     await store.saveRoom(room());
     await redis.rPush('room:room-1:messages', JSON.stringify(legacy));
-    const versionBeforeRetry = (await store.getRoomById('room-1'))?.roomVersion;
+    const roomBeforeRetry = await store.getRoomById('room-1');
 
     const result = await store.appendMessageIdempotent(message({
       id: 'retry-server-id',
@@ -1074,7 +1060,7 @@ describe('RedisStore', () => {
 
     assert.equal(result?.inserted, false);
     assert.deepEqual(result?.message, legacy);
-    assert.equal(result?.room.roomVersion, versionBeforeRetry);
+    assert.deepEqual(result?.room, roomBeforeRetry);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [legacy]);
     assert.equal(
       await redis.hGet('room:room-1:client_message_ids', '8:client-1legacy-client-message'),
@@ -1222,9 +1208,8 @@ describe('RedisStore', () => {
 
     assert.equal(result?.found, true);
     assert.ok(result?.room);
-    const { updatedAt: roomUpdatedAt, roomVersion: resultRoomVersion, ...roomRest } = result.room;
+    const { updatedAt: roomUpdatedAt, ...roomRest } = result.room;
     assert.equal(typeof roomUpdatedAt, 'string');
-    assert.equal(typeof resultRoomVersion, 'number');
     assert.deepEqual(roomRest, baseRoom);
     assert.deepEqual(result?.updatedMessage, {
       ...legacyImage,
@@ -1242,9 +1227,8 @@ describe('RedisStore', () => {
     });
     const roomAfterReplace = await store.getRoomById('room-1');
     assert.ok(roomAfterReplace);
-    const { updatedAt: replaceRoomUpdatedAt, roomVersion: replaceRoomVersion, ...roomAfterReplaceRest } = roomAfterReplace;
+    const { updatedAt: replaceRoomUpdatedAt, ...roomAfterReplaceRest } = roomAfterReplace;
     assert.equal(typeof replaceRoomUpdatedAt, 'string');
-    assert.equal(typeof replaceRoomVersion, 'number');
     assert.deepEqual(roomAfterReplaceRest, baseRoom);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [result?.updatedMessage]);
 
@@ -1318,21 +1302,21 @@ describe('RedisStore', () => {
     const cachedMessages = [message({ id: 'cached-message' })];
     const cacheKey = store.getRoomMessagesCacheKey('room-1');
 
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
 
-    await store.writeRoomMessagesCache('room-1', cachedMessages);
+    await store.writeRoomMessagesCache('room-1', cachedMessages, 1);
     assert.equal(typeof await redis.get(cacheKey), 'string');
-    assert.deepEqual(await store.readCachedRoomMessages('room-1'), cachedMessages);
+    assert.deepEqual(await store.readCachedRoomMessages('room-1', 1), cachedMessages);
 
     await store.invalidateRoomMessagesCache('room-1');
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
 
-    await store.writeRoomMessagesCache('room-1', cachedMessages);
-    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })]);
+    await store.writeRoomMessagesCache('room-1', cachedMessages, 1);
+    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })], 1);
     await store.invalidateAllRoomMessagesCaches();
 
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
-    assert.equal(await store.readCachedRoomMessages('room-2'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
+    assert.equal(await store.readCachedRoomMessages('room-2', 1), null);
   });
 
   it('skips room message caches that exceed the configured byte limit', async () => {
@@ -1374,7 +1358,7 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readCachedRoomMessages('room-1', 2), [toolCall, toolResult]);
   });
 
-  it('validates room message caches by message version', async () => {
+  it('validates room message caches by room event sequence', async () => {
     const { redis, store } = createStore();
     const cachedMessages = [message({ id: 'cached-message' })];
     const cacheKey = store.getRoomMessagesCacheKey('room-1');
@@ -1383,7 +1367,7 @@ describe('RedisStore', () => {
 
     const raw = await redis.get(cacheKey);
     assert.equal(typeof raw, 'string');
-    assert.deepEqual(JSON.parse(raw as string), { messageVersion: 2, messages: cachedMessages });
+    assert.deepEqual(JSON.parse(raw as string), { eventSeq: 2, messages: cachedMessages });
     assert.deepEqual(await store.readCachedRoomMessages('room-1', 2), cachedMessages);
 
     assert.equal(await store.readCachedRoomMessages('room-1', 3), null);
@@ -1398,13 +1382,13 @@ describe('RedisStore', () => {
     const redis = new KeysOnlyRedis();
     const store = new RedisStore(redis as any, logger as any);
 
-    await store.writeRoomMessagesCache('room-1', [message({ id: 'cached-message-1' })]);
-    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })]);
+    await store.writeRoomMessagesCache('room-1', [message({ id: 'cached-message-1' })], 1);
+    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })], 1);
 
     await store.invalidateAllRoomMessagesCaches();
 
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
-    assert.equal(await store.readCachedRoomMessages('room-2'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
+    assert.equal(await store.readCachedRoomMessages('room-2', 1), null);
   });
 
   it('tracks member counts, client sessions, and per-socket room membership', async () => {
@@ -1550,11 +1534,11 @@ describe('RedisStore', () => {
       streamingMessage,
       completeMessage,
     ]);
-    await store.writeRoomMessagesCache('room-1', [streamingMessage, completeMessage]);
+    await store.writeRoomMessagesCache('room-1', [streamingMessage, completeMessage], 1);
     const roomBeforeRecovery = await store.getRoomById('room-1');
 
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 1);
-    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-1', 1), null);
     assert.deepEqual(await store.getRoomById('room-1'), roomBeforeRecovery);
 
     const recoveredMessages = await store.readMessagesByRoom('room-1');

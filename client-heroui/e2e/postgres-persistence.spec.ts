@@ -121,7 +121,12 @@ test('persists fake AI, image messages, and shared room joins in PostgreSQL mode
   await expect(page.getByTestId('attachment-draft')).toHaveCount(1);
   const sendButton = page.getByTestId('message-input-panel').getByRole('button', { name: 'Send' });
   await expect(sendButton).toBeEnabled();
+  const mediaCompletion = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+    && /\/api\/media\/uploads\/[^/]+\/complete$/.test(new URL(response.url()).pathname)
+  ));
   await sendButton.click();
+  expect((await mediaCompletion).status()).toBe(201);
   await expect(sendButton).not.toHaveAttribute('data-loading', 'true', { timeout: 20000 });
   await expect(page.getByTestId('attachment-draft')).toHaveCount(0, { timeout: 20000 });
   await expect(page.getByRole('img', { name: 'Shared image' }).first()).toBeVisible();
@@ -179,5 +184,32 @@ test('syncs PostgreSQL-backed room messages to a second client without refresh',
     }
   } finally {
     await peerContext.close();
+  }
+});
+
+test('replays only missed PostgreSQL room events after an offline reconnect', async ({ page, context, request }) => {
+  await expectPostgresMode(request);
+  const clientId = await seedClient(context, uniqueName('pg-replay-owner'));
+  const room = await createRoomViaApi(request, clientId, shortName('pg-replay'));
+
+  await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+
+  const baselineMessage = uniqueName('pg-replay-baseline');
+  await sendTextMessage(page, baselineMessage);
+  await expectMessage(page, baselineMessage).toBeVisible();
+
+  await context.setOffline(true);
+  const missedMessages = Array.from({ length: 3 }, (_, index) => uniqueName(`pg-missed-${index}`));
+  for (const content of missedMessages) {
+    await postMessageViaApi(request, room.id, clientId, content);
+  }
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+
+  await expectChatRoom(page, room.name);
+  await expectMessage(page, baselineMessage).toBeVisible();
+  for (const content of missedMessages) {
+    await expectMessage(page, content).toBeVisible();
   }
 });

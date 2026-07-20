@@ -105,7 +105,7 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
     CODE_AGENT_RUNNER_CLIENT: 'jsonl',
   };
   const config = resolveCodeAgentRuntimeConfig(migrationEnv);
-  const persistenceStore = (env.PERSISTENCE_STORE || 'redis').toLowerCase();
+  const persistenceStore = (env.PERSISTENCE_STORE || 'postgres').toLowerCase();
   if (persistenceStore !== 'postgres' && persistenceStore !== 'redis') {
     return { run: false, reason: `Unsupported PERSISTENCE_STORE for migration: ${persistenceStore}` };
   }
@@ -401,7 +401,6 @@ class PostgresSandboxMigrationRoomIndex implements SandboxMigrationRoomIndex {
       SET sandbox_id = $2,
         sandbox_status = 'ready',
         sandbox_updated_at = $3::timestamptz,
-        room_version = room_version + 1,
         updated_at = NOW()
       WHERE id = $1
         AND sandbox_id = $4`,
@@ -445,7 +444,6 @@ class RedisSandboxMigrationRoomIndex implements SandboxMigrationRoomIndex {
       sandboxId: nextSandboxId,
       sandboxStatus: 'ready',
       sandboxUpdatedAt: updatedAt,
-      roomVersion: (room.roomVersion || 0) + 1,
       updatedAt,
     }));
     return true;

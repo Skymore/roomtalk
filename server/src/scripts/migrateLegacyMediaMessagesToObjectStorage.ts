@@ -21,7 +21,6 @@ type RoomRow = {
   created_at: string | Date;
   last_activity_at: string | Date;
   creator_id: string;
-  message_version?: number | string | null;
   password_hash?: string | null;
   posting_schedule?: unknown;
   type?: RoomType | null;
@@ -30,7 +29,6 @@ type RoomRow = {
   sandbox_updated_at?: string | Date | null;
   code_agent_session_id?: string | null;
   code_agent_status?: RoomCodeAgentStatus | null;
-  room_version?: number | string | null;
   updated_at?: string | Date | null;
 };
 
@@ -87,7 +85,7 @@ type ParsedDataUrl = {
   body: Buffer;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, code_agent_session_id, code_agent_status, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, code_agent_session_id, code_agent_status, updated_at';
 
 const LEGACY_IMAGE_DATA_URL_RE = /^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/;
 
@@ -140,8 +138,6 @@ const mapRoom = (row: RoomRow): Room => {
     lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
     creatorId: row.creator_id,
   };
-  const messageVersion = Number(row.message_version || 0);
-  if (messageVersion > 0) room.messageVersion = messageVersion;
   if (row.password_hash) room.hasPassword = true;
   const postingSchedule = parseJsonValue<Room['postingSchedule']>(row.posting_schedule);
   if (postingSchedule) room.postingSchedule = postingSchedule;
@@ -151,8 +147,6 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.sandbox_updated_at) room.sandboxUpdatedAt = toIsoString(row.sandbox_updated_at);
   if (row.code_agent_session_id) room.codeAgentSessionId = row.code_agent_session_id;
   if (row.code_agent_status) room.codeAgentStatus = row.code_agent_status;
-  const roomVersion = Number(row.room_version || 0);
-  if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
   return room;
 };

@@ -14,11 +14,12 @@ import {
   RoomMediaHistoryKindFilter,
   RoomMediaHistoryPage,
   RoomMemberEvent,
-  RoomMessageHistoryPayload,
+  RoomEventPagePayload,
   RoomOnlineMember,
   RoomPermissions,
   RoomPostingSchedule,
   RoomRoleMember,
+  RoomSnapshotPayload,
   RoomType,
 } from './types';
 import type { CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from './codexSettings';
@@ -103,8 +104,12 @@ type EditMessageAckResponse = SocketAckResponse & {
   updatedMessage?: Message;
 };
 
-type RoomMessageHistoryAckResponse = SocketAckResponse & {
-  history?: RoomMessageHistoryPayload;
+type RoomSnapshotAckResponse = SocketAckResponse & {
+  snapshot?: RoomSnapshotPayload;
+};
+
+type RoomEventsAckResponse = SocketAckResponse & {
+  events?: RoomEventPagePayload;
 };
 
 type SendMessageAndAskAIAckResponse = SocketAckResponse & {
@@ -781,28 +786,51 @@ export const deleteMessage = (roomId: string, messageId: string): Promise<void> 
   ).then(() => undefined)
 );
 
-export const requestRoomMessages = (request: {
+export const requestRoomSnapshot = (request: {
   requestId: string;
   roomId: string;
   beforeMessageId?: string;
   limit?: number;
-  baseMessageVersion: number;
-}): Promise<RoomMessageHistoryPayload> => (
-  emitWithAck<RoomMessageHistoryAckResponse>(
-    'get_room_messages',
+}): Promise<RoomSnapshotPayload> => (
+  emitWithAck<RoomSnapshotAckResponse>(
+    'get_room_snapshot',
     request,
-    'Timed out while loading room messages',
-    'Failed to load room messages',
+    'Timed out while loading the room snapshot',
+    'Failed to load the room snapshot',
   ).then(response => {
     if (
-      !response.history
-      || response.history.requestId !== request.requestId
-      || response.history.roomId !== request.roomId
-      || response.history.requestedMessageVersion !== request.baseMessageVersion
+      !response.snapshot
+      || response.snapshot.requestId !== request.requestId
+      || response.snapshot.roomId !== request.roomId
+      || response.snapshot.room?.id !== request.roomId
     ) {
-      throw new SocketRequestError('INVALID_HISTORY_RESPONSE', 'Server returned an invalid message history response');
+      throw new SocketRequestError('INVALID_SNAPSHOT_RESPONSE', 'Server returned an invalid room snapshot response');
     }
-    return response.history;
+    return response.snapshot;
+  })
+);
+
+export const requestRoomEvents = (request: {
+  requestId: string;
+  roomId: string;
+  afterSeq: number;
+  limit?: number;
+  maxBytes?: number;
+}): Promise<RoomEventPagePayload> => (
+  emitWithAck<RoomEventsAckResponse>(
+    'get_room_events',
+    request,
+    'Timed out while loading room events',
+    'Failed to load room events',
+  ).then(response => {
+    if (
+      !response.events
+      || response.events.requestId !== request.requestId
+      || response.events.roomId !== request.roomId
+    ) {
+      throw new SocketRequestError('INVALID_EVENT_RESPONSE', 'Server returned an invalid room event response');
+    }
+    return response.events;
   })
 );
 

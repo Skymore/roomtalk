@@ -140,6 +140,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             canUseRetainedRoomAccess={canUseRetainedRoomAccess}
             ensureRoomSessionReady={ensureRoomSessionReady}
             messageSyncRequestId={messageSyncRequestId}
+            onRoomUpdated={onRoomUpdated}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />

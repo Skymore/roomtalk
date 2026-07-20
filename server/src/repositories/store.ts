@@ -1,4 +1,4 @@
-import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
+import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -8,6 +8,43 @@ export interface RoomMessagePageOptions {
   // count as one unit, so a page never splits an agent turn at its boundary.
   limit?: number;
   beforeMessageId?: string;
+}
+
+export interface RoomEventPageOptions {
+  afterSeq: number;
+  limit?: number;
+  maxBytes?: number;
+}
+
+export interface RoomEventRetentionOptions {
+  olderThan: string;
+  maxEventsPerRoom: number;
+}
+
+export class RoomEventCursorExpiredError extends Error {
+  readonly code = 'CURSOR_EXPIRED';
+
+  constructor(
+    readonly roomId: string,
+    readonly afterSeq: number,
+    readonly minAvailableSeq: number,
+  ) {
+    super(`Room event cursor ${afterSeq} is older than retained sequence ${minAvailableSeq} for ${roomId}`);
+    this.name = 'RoomEventCursorExpiredError';
+  }
+}
+
+export class RoomEventCursorAheadError extends Error {
+  readonly code = 'CURSOR_AHEAD';
+
+  constructor(
+    readonly roomId: string,
+    readonly afterSeq: number,
+    readonly headSeq: number,
+  ) {
+    super(`Room event cursor ${afterSeq} is ahead of sequence ${headSeq} for ${roomId}`);
+    this.name = 'RoomEventCursorAheadError';
+  }
 }
 
 export interface MessageUpdateResult {
@@ -289,6 +326,11 @@ export interface DurableRoomStore {
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions): Promise<RoomMessagePage>;
+  readRoomSnapshot?(roomId: string, options?: RoomMessagePageOptions): Promise<RoomSnapshot>;
+  readRoomEvents?(roomId: string, options: RoomEventPageOptions): Promise<RoomEventPage>;
+  readRoomEventHead?(roomId: string): Promise<number>;
+  canReadRoomEvents?(roomId: string, clientId: string): Promise<boolean>;
+  pruneRoomEvents?(options: RoomEventRetentionOptions): Promise<number>;
   upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
   readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
   failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
@@ -385,8 +427,8 @@ export interface RoomPresenceStore {
 }
 
 export interface RoomMessageCacheStore {
-  readCachedRoomMessages(roomId: string, messageVersion?: number): Promise<Message[] | null>;
-  writeRoomMessagesCache(roomId: string, messages: Message[], messageVersion?: number): Promise<void>;
+  readCachedRoomMessages(roomId: string, eventSeq: number): Promise<Message[] | null>;
+  writeRoomMessagesCache(roomId: string, messages: Message[], eventSeq: number): Promise<void>;
   invalidateRoomMessagesCache(roomId: string): Promise<void>;
   invalidateAllRoomMessagesCaches(): Promise<void>;
 }
@@ -569,17 +611,14 @@ export class CompositeRoomStore implements RoomStore {
   }
 
   async readMessagesByRoom(roomId: string) {
-    let cacheMessageVersion: number | undefined;
+    let cacheEventSeq: number | undefined;
 
-    if (this.messageCacheStore) {
+    if (this.messageCacheStore && this.durableStore.readRoomEventHead) {
       try {
-        const room = await this.durableStore.getRoomById(roomId);
-        if (typeof room?.messageVersion === 'number' && Number.isFinite(room.messageVersion)) {
-          cacheMessageVersion = room.messageVersion;
-          const cachedMessages = await this.messageCacheStore.readCachedRoomMessages(roomId, cacheMessageVersion);
-          if (cachedMessages) {
-            return cachedMessages;
-          }
+        cacheEventSeq = await this.durableStore.readRoomEventHead(roomId);
+        const cachedMessages = await this.messageCacheStore.readCachedRoomMessages(roomId, cacheEventSeq);
+        if (cachedMessages) {
+          return cachedMessages;
         }
       } catch {
         // Cache failures must fall through to durable reads.
@@ -587,11 +626,11 @@ export class CompositeRoomStore implements RoomStore {
     }
 
     const messages = await this.durableStore.readMessagesByRoom(roomId);
-    if (this.messageCacheStore && cacheMessageVersion !== undefined) {
+    if (this.messageCacheStore && this.durableStore.readRoomEventHead && cacheEventSeq !== undefined) {
       await this.ignoreCacheFailure(async () => {
-        const room = await this.durableStore.getRoomById(roomId);
-        if (room?.messageVersion === cacheMessageVersion) {
-          await this.messageCacheStore!.writeRoomMessagesCache(roomId, messages, cacheMessageVersion);
+        const currentEventSeq = await this.durableStore.readRoomEventHead!(roomId);
+        if (currentEventSeq === cacheEventSeq) {
+          await this.messageCacheStore!.writeRoomMessagesCache(roomId, messages, cacheEventSeq);
         }
       });
     }
@@ -600,6 +639,35 @@ export class CompositeRoomStore implements RoomStore {
 
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions) {
     return this.durableStore.readMessagePageByRoom(roomId, options);
+  }
+
+  readRoomSnapshot(roomId: string, options?: RoomMessagePageOptions) {
+    if (!this.durableStore.readRoomSnapshot) {
+      throw new Error('The durable store does not support room event snapshots');
+    }
+    return this.durableStore.readRoomSnapshot(roomId, options);
+  }
+
+  readRoomEvents(roomId: string, options: RoomEventPageOptions) {
+    if (!this.durableStore.readRoomEvents) {
+      throw new Error('The durable store does not support room event replay');
+    }
+    return this.durableStore.readRoomEvents(roomId, options);
+  }
+
+  readRoomEventHead(roomId: string) {
+    return this.durableStore.readRoomEventHead?.(roomId) || Promise.resolve(0);
+  }
+
+  canReadRoomEvents(roomId: string, clientId: string) {
+    if (this.durableStore.canReadRoomEvents) {
+      return this.durableStore.canReadRoomEvents(roomId, clientId);
+    }
+    return this.durableStore.getRoomMember(roomId, clientId).then(member => Boolean(member));
+  }
+
+  pruneRoomEvents(options: RoomEventRetentionOptions) {
+    return this.durableStore.pruneRoomEvents?.(options) || Promise.resolve(0);
   }
 
   upsertRoomAgentTurn(turn: RoomAgentTurn) {

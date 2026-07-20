@@ -7,7 +7,8 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
-import { A2UIActionEvent, Message } from '../types';
+import { A2UIActionEvent, Message, RoomEventPage, RoomSnapshot } from '../types';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError } from '../repositories/store';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
@@ -84,26 +85,30 @@ const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
-  socket.on('get_room_messages', async (request: {
+  socket.on('get_room_messages', (_request: unknown, callback?: (response: {
+    success: false;
+    code: 'UPGRADE_REQUIRED';
+    error: string;
+  }) => void) => {
+    callback?.({
+      success: false,
+      code: 'UPGRADE_REQUIRED',
+      error: 'This client uses the retired message-version sync protocol. Reload to upgrade.',
+    });
+  });
+
+  socket.on('get_room_snapshot', async (request: {
     requestId: string;
     roomId: string;
     beforeMessageId?: string;
     limit?: number;
-    baseMessageVersion: number;
   }, callback?: (response: {
     success: boolean;
     code?: string;
     error?: string;
-    history?: {
+    snapshot?: RoomSnapshot & {
       requestId: string;
-      roomId: string;
-      messages: Message[];
-      turns?: unknown[];
-      messageVersion: number;
-      hasMore: boolean;
-      oldestMessageId?: string;
       mode: 'replace' | 'prepend';
-      requestedMessageVersion: number;
     };
   }) => void) => {
     if (
@@ -112,17 +117,15 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       || !isBoundedSocketIdentifier(request.roomId)
       || (request.beforeMessageId !== undefined && !isBoundedSocketIdentifier(request.beforeMessageId))
       || (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 200))
-      || !Number.isSafeInteger(request.baseMessageVersion)
-      || request.baseMessageVersion < 0
     ) {
-      callback?.({ success: false, code: 'INVALID_HISTORY_REQUEST', error: 'Invalid message history request' });
+      callback?.({ success: false, code: 'INVALID_SNAPSHOT_REQUEST', error: 'Invalid room snapshot request' });
       return;
     }
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
     const limit = request?.limit;
     const userId = await store.getClientId(socket.id);
-    socketLogger.debug('Client requested message history', { socketId: socket.id, userId, roomId, beforeMessageId, limit });
+    socketLogger.debug('Client requested room snapshot', { socketId: socket.id, userId, roomId, beforeMessageId, limit });
 
     if (!userId) {
       socket.emit('error', { message: 'You are not registered' });
@@ -137,19 +140,22 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     }
 
     try {
-      const page = await store.readMessagePageByRoom(roomId, { beforeMessageId, limit });
+      if (!store.readRoomSnapshot) {
+        callback?.({ success: false, code: 'EVENT_SYNC_UNAVAILABLE', error: 'Room event sync is unavailable' });
+        return;
+      }
+      const snapshot = await store.readRoomSnapshot(roomId, { beforeMessageId, limit });
       callback?.({
         success: true,
-        history: {
+        snapshot: {
           requestId: request.requestId,
-          ...page,
+          ...snapshot,
           mode: beforeMessageId ? 'prepend' : 'replace',
-          requestedMessageVersion: request.baseMessageVersion,
         },
       });
     } catch (error) {
-      socketLogger.error('Failed to load message history', { socketId: socket.id, userId, roomId, error });
-      callback?.({ success: false, code: 'HISTORY_READ_FAILED', error: 'Failed to load room messages' });
+      socketLogger.error('Failed to load room snapshot', { socketId: socket.id, userId, roomId, error });
+      callback?.({ success: false, code: 'SNAPSHOT_READ_FAILED', error: 'Failed to load room snapshot' });
       return;
     }
 
@@ -157,6 +163,85 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
     } catch (error) {
       socketLogger.error('Failed to load room AI cost after message history', { socketId: socket.id, userId, roomId, error });
+    }
+  });
+
+  socket.on('get_room_events', async (request: {
+    requestId: string;
+    roomId: string;
+    afterSeq: number;
+    limit?: number;
+    maxBytes?: number;
+  }, callback?: (response: {
+    success: boolean;
+    code?: string;
+    error?: string;
+    minAvailableSeq?: number;
+    events?: RoomEventPage & { requestId: string };
+  }) => void) => {
+    if (
+      !isRecord(request)
+      || !isBoundedSocketIdentifier(request.requestId)
+      || !isBoundedSocketIdentifier(request.roomId)
+      || !Number.isSafeInteger(request.afterSeq)
+      || request.afterSeq < 0
+      || (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 500))
+      || (request.maxBytes !== undefined && (!Number.isSafeInteger(request.maxBytes) || request.maxBytes < 16 * 1024 || request.maxBytes > 1024 * 1024))
+    ) {
+      callback?.({ success: false, code: 'INVALID_EVENT_REQUEST', error: 'Invalid room event request' });
+      return;
+    }
+
+    const userId = await store.getClientId(socket.id);
+    if (!userId) {
+      callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
+      return;
+    }
+    const canReadEvents = store.canReadRoomEvents
+      ? await store.canReadRoomEvents(request.roomId, userId)
+      : await hasRoomAccess(store, request.roomId, userId);
+    if (!canReadEvents) {
+      callback?.({ success: false, code: 'ROOM_ACCESS_DENIED', error: 'You are not authorized to access this room' });
+      return;
+    }
+    if (!store.readRoomEvents) {
+      callback?.({ success: false, code: 'EVENT_SYNC_UNAVAILABLE', error: 'Room event sync is unavailable' });
+      return;
+    }
+
+    try {
+      const events = await store.readRoomEvents(request.roomId, {
+        afterSeq: request.afterSeq,
+        limit: request.limit,
+        maxBytes: request.maxBytes,
+      });
+      callback?.({ success: true, events: { requestId: request.requestId, ...events } });
+    } catch (error) {
+      if (error instanceof RoomEventCursorExpiredError) {
+        callback?.({
+          success: false,
+          code: error.code,
+          error: 'The retained room event window no longer contains this cursor',
+          minAvailableSeq: error.minAvailableSeq,
+        });
+        return;
+      }
+      if (error instanceof RoomEventCursorAheadError) {
+        callback?.({
+          success: false,
+          code: error.code,
+          error: 'The room event cursor is ahead of the current stream and must be reset',
+        });
+        return;
+      }
+      socketLogger.error('Failed to load room events', {
+        socketId: socket.id,
+        userId,
+        roomId: request.roomId,
+        afterSeq: request.afterSeq,
+        error,
+      });
+      callback?.({ success: false, code: 'EVENT_READ_FAILED', error: 'Failed to load room events' });
     }
   });
 

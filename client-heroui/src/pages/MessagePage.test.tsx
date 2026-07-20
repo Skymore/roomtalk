@@ -1756,7 +1756,7 @@ describe('MessagePage room session restore', () => {
 
   it('keeps the newer broadcast when a stale rejoin ack resolves before React commits', async () => {
     socketApiMock.joinRoom.mockResolvedValue({
-      room: room({ postingSchedule: enabledSchedule(), roomVersion: 1 }),
+      room: room({ postingSchedule: enabledSchedule(), updatedAt: '2026-04-08T00:00:01.000Z' }),
       permissions: permissions(),
       memberCount: 2,
     });
@@ -1780,9 +1780,9 @@ describe('MessagePage room session restore', () => {
     // 同一批次(React commit 之前):先到 room_updated(v3, 排期已关),
     // 再 resolve 携带 v2 旧状态的 rejoin ack —— v3 不得被回踩
     await act(async () => {
-      socketMock.trigger('room_updated', room({ roomVersion: 3 }));
+      socketMock.trigger('room_updated', room({ updatedAt: '2026-04-08T00:00:03.000Z' }));
       resolveStaleRejoin({
-        room: room({ postingSchedule: enabledSchedule(), roomVersion: 2 }),
+        room: room({ postingSchedule: enabledSchedule(), updatedAt: '2026-04-08T00:00:02.000Z' }),
         permissions: permissions(),
         memberCount: 2,
       });

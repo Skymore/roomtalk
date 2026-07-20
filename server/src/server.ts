@@ -75,6 +75,7 @@ import { PostgresCodexConnectionStore, RedisCodexConnectionStore } from './servi
 import { GitHubConnectionService, GitHubTokenCipher } from './services/githubConnection';
 import { resolveGitHubConnectionConfig } from './services/githubConnectionConfig';
 import { PostgresGitHubConnectionStore, RedisGitHubConnectionStore } from './services/githubConnectionStore';
+import { RoomEventNotifier } from './services/roomEventNotifier';
 
 dotenv.config();
 
@@ -160,25 +161,18 @@ const redisClient: RedisClientType = createClient({
 });
 const redisStore = new RedisStore(redisClient, redisLogger);
 
-const PERSISTENCE_STORE = (process.env.PERSISTENCE_STORE || 'redis').toLowerCase();
-let activePersistenceStore = 'redis';
-let store: RoomStore = redisStore;
-let postgresStore: PostgresStore | null = null;
-let postgresPool: PostgresPool | null = null;
-
-if (PERSISTENCE_STORE === 'postgres') {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('PERSISTENCE_STORE=postgres requires DATABASE_URL');
-  }
-
-  postgresPool = createPostgresPool(databaseUrl, postgresLogger);
-  postgresStore = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage);
-  store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
-  activePersistenceStore = 'postgres';
-} else if (PERSISTENCE_STORE !== 'redis') {
-  serverLogger.warn('Unknown PERSISTENCE_STORE value, falling back to Redis', { persistenceStore: PERSISTENCE_STORE });
+const PERSISTENCE_STORE = (process.env.PERSISTENCE_STORE || 'postgres').toLowerCase();
+if (PERSISTENCE_STORE !== 'postgres') {
+  throw new Error('Room event sync requires PERSISTENCE_STORE=postgres; Redis is realtime/cache only');
 }
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error('PostgreSQL persistence requires DATABASE_URL');
+}
+const activePersistenceStore = 'postgres';
+const postgresPool: PostgresPool = createPostgresPool(databaseUrl, postgresLogger);
+const postgresStore = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage);
+const store: RoomStore = new CompositeRoomStore(postgresStore, redisStore, redisStore);
 
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
@@ -299,6 +293,10 @@ const io = new Server(server, {
   pingTimeout: 60000, // 60秒超时
   pingInterval: 25000 // 25秒ping一次
 });
+const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, event => {
+  io.to(event.roomId).emit('room_event_available', event);
+});
+let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
 
 const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
   apiKey: process.env.E2B_API_KEY,
@@ -446,17 +444,30 @@ const infrastructureReady = (async () => {
     // 设置 Socket.IO Redis 适配器
     io.adapter(createAdapter(pubClient, subClient));
 
-    if (postgresStore) {
-      await postgresStore.initializeSchema();
+    await postgresStore.initializeSchema();
+    await roomEventNotifier.start();
+    const retentionDays = parsePositiveIntegerEnv('OBSERVABILITY_EVENT_RETENTION_DAYS', 60);
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const deletedCount = await (observabilityRecorder as PostgresObservabilityEventRecorder).deleteEventsBefore(cutoff);
+    if (deletedCount > 0) {
+      serverLogger.info('Deleted old observability events', { deletedCount, retentionDays, cutoff });
     }
-    if (postgresPool) {
-      const retentionDays = parsePositiveIntegerEnv('OBSERVABILITY_EVENT_RETENTION_DAYS', 60);
-      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
-      const deletedCount = await (observabilityRecorder as PostgresObservabilityEventRecorder).deleteEventsBefore(cutoff);
-      if (deletedCount > 0) {
-        serverLogger.info('Deleted old observability events', { deletedCount, retentionDays, cutoff });
+    const pruneRoomEvents = async () => {
+      const roomEventRetentionDays = parsePositiveIntegerEnv('ROOM_EVENT_RETENTION_DAYS', 7);
+      const maxEventsPerRoom = parsePositiveIntegerEnv('ROOM_EVENT_MAX_PER_ROOM', 10_000);
+      const olderThan = new Date(Date.now() - roomEventRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+      const prunedCount = await postgresStore.pruneRoomEvents({ olderThan, maxEventsPerRoom });
+      if (prunedCount > 0) {
+        serverLogger.info('Pruned retained room events', { prunedCount, roomEventRetentionDays, maxEventsPerRoom });
       }
-    }
+    };
+    await pruneRoomEvents();
+    roomEventPruneTimer = setInterval(() => {
+      void pruneRoomEvents().catch(error => {
+        serverLogger.error('Failed to prune retained room events', { error });
+      });
+    }, parsePositiveIntegerEnv('ROOM_EVENT_PRUNE_INTERVAL_MS', 60 * 60 * 1000));
+    roomEventPruneTimer.unref?.();
     if (process.env.E2E_TEST_MODE === 'true' && process.env.E2E_RESET_ON_START === 'true') {
       await store.resetAllDataForTests?.();
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
@@ -653,6 +664,11 @@ const shutdown = () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   outboxWorker?.stop();
+  if (roomEventPruneTimer) {
+    clearInterval(roomEventPruneTimer);
+    roomEventPruneTimer = null;
+  }
+  void roomEventNotifier.stop();
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();

@@ -1,8 +1,8 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventRetentionOptions, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
@@ -22,8 +22,11 @@ export interface PostgresClient {
 export interface PostgresPool {
   query<T = any>(sql: string, params?: unknown[]): Promise<PostgresQueryResult<T>>;
   connect(): Promise<PostgresClient>;
+  on?(event: 'error', listener: (error: Error) => void): this;
   end?(): Promise<void>;
 }
+
+type PostgresQueryable = Pick<PostgresPool, 'query'>;
 
 type RoomRow = {
   id: string;
@@ -32,7 +35,6 @@ type RoomRow = {
   created_at: string | Date;
   last_activity_at: string | Date;
   creator_id: string;
-  message_version?: number | string | null;
   password_hash?: string | null;
   posting_schedule?: unknown;
   type?: RoomType | null;
@@ -46,8 +48,15 @@ type RoomRow = {
   code_agent_access?: string | null;
   code_agent_mode?: string | null;
   code_agent_backend?: string | null;
-  room_version?: number | string | null;
   updated_at?: string | Date | null;
+};
+
+type RoomEventRow = {
+  room_id: string;
+  seq: number | string;
+  event_type: RoomEventType;
+  payload: unknown;
+  created_at: string | Date;
 };
 
 type MessageRow = {
@@ -228,7 +237,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -319,8 +328,6 @@ const mapRoom = (row: RoomRow): Room => {
     lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
     creatorId: row.creator_id,
   };
-  const messageVersion = Number(row.message_version || 0);
-  if (messageVersion > 0) room.messageVersion = messageVersion;
   if (row.password_hash) room.hasPassword = true;
   const postingSchedule = parseJsonValue<RoomPostingSchedule>(row.posting_schedule);
   if (postingSchedule) room.postingSchedule = postingSchedule;
@@ -335,8 +342,6 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.code_agent_access) room.codeAgentAccess = row.code_agent_access as Room['codeAgentAccess'];
   if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
   if (row.code_agent_backend) room.codeAgentBackend = row.code_agent_backend as Room['codeAgentBackend'];
-  const roomVersion = Number(row.room_version || 0);
-  if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
   return room;
 };
@@ -929,8 +934,7 @@ export class PostgresStore implements DurableRoomStore {
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
-            message_version = message_version + 1,
-            room_version = room_version + 1, updated_at = NOW()
+            updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
@@ -987,8 +991,7 @@ export class PostgresStore implements DurableRoomStore {
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
-            message_version = message_version + 1,
-            room_version = room_version + 1, updated_at = NOW()
+            updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [mediaMessage.roomId, mediaMessage.timestamp]
@@ -1030,8 +1033,7 @@ export class PostgresStore implements DurableRoomStore {
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
-            message_version = message_version + 1,
-            room_version = room_version + 1, updated_at = NOW()
+            updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
@@ -1070,7 +1072,7 @@ export class PostgresStore implements DurableRoomStore {
           return { room: mapRoom(room.rows[0]), found: false };
         }
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         if (!updatedRoom) {
           return null;
         }
@@ -1123,7 +1125,7 @@ export class PostgresStore implements DurableRoomStore {
           return { room: mapRoom(room.rows[0]), found: false };
         }
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         return updatedRoom
           ? { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) }
           : null;
@@ -1174,7 +1176,7 @@ export class PostgresStore implements DurableRoomStore {
           return { room: mapRoom(room.rows[0]), found: false };
         }
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         return updatedRoom
           ? { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) }
           : null;
@@ -1228,7 +1230,7 @@ export class PostgresStore implements DurableRoomStore {
         if (claimed.rows.length === 0) {
           return null;
         }
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         return updatedRoom ? { room: updatedRoom, message: mapMessage(claimed.rows[0]) } : null;
       });
     } catch (error) {
@@ -1260,7 +1262,7 @@ export class PostgresStore implements DurableRoomStore {
         if (deleted.rows.length === 0) {
           return { room: mapRoom(room.rows[0]), deleted: false };
         }
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         return updatedRoom ? { room: updatedRoom, deleted: true } : null;
       });
     } catch (error) {
@@ -1314,7 +1316,7 @@ export class PostgresStore implements DurableRoomStore {
 
         orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         if (!updatedRoom) {
           return null;
         }
@@ -1371,7 +1373,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId, Number(target.rows[0].position)]
         );
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         if (!updatedRoom) {
           return null;
         }
@@ -1448,7 +1450,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId, Number(target.rows[0].position)]
         );
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
         if (!updatedRoom) {
           return null;
         }
@@ -1492,8 +1494,7 @@ export class PostgresStore implements DurableRoomStore {
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
           SET last_activity_at = $2,
-            message_version = message_version + 1,
-            room_version = room_version + 1, updated_at = NOW()
+            updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [roomId, lastActivityAt]
@@ -1524,9 +1525,8 @@ export class PostgresStore implements DurableRoomStore {
         if (removed > 0) {
           await client.query(
             `UPDATE rooms
-            SET message_version = message_version + 1,
-              last_activity_at = created_at,
-              room_version = room_version + 1, updated_at = NOW()
+            SET last_activity_at = created_at,
+              updated_at = NOW()
             WHERE id = $1`,
             [roomId]
           );
@@ -1559,101 +1559,147 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async readMessagePageByRoom(roomId: string, options: RoomMessagePageOptions = {}) {
-    const limit = normalizeMessagePageLimit(options.limit);
-
     try {
-      const room = await this.pool.query<RoomRow>(
-        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1`,
-        [roomId]
-      );
-      const messageVersion = Number(room.rows[0]?.message_version || 0);
-      if (room.rows.length === 0) {
-        return { roomId, messages: [], messageVersion, hasMore: false };
-      }
-
-      let boundaryPosition: number | undefined;
-      if (options.beforeMessageId) {
-        const target = await this.pool.query<{ position: number | string; turn_id: string | null; client_id: string; client_batch_id: string | null }>(
-          'SELECT position, turn_id, client_id, client_batch_id FROM room_messages WHERE room_id = $1 AND id = $2',
-          [roomId, options.beforeMessageId]
-        );
-        if (target.rows.length === 0) {
-          return { roomId, messages: [], messageVersion, hasMore: false };
-        }
-        boundaryPosition = Number(target.rows[0].position);
-        if (target.rows[0].turn_id) {
-          const turnStart = await this.pool.query<{ position: number | string }>(
-            'SELECT MIN(position) AS position FROM room_messages WHERE room_id = $1 AND turn_id = $2',
-            [roomId, target.rows[0].turn_id]
-          );
-          boundaryPosition = Number(turnStart.rows[0]?.position ?? boundaryPosition);
-        } else if (target.rows[0].client_batch_id) {
-          const batchStart = await this.pool.query<{ position: number | string }>(
-            'SELECT MIN(position) AS position FROM room_messages WHERE room_id = $1 AND client_id = $2 AND client_batch_id = $3',
-            [roomId, target.rows[0].client_id, target.rows[0].client_batch_id]
-          );
-          boundaryPosition = Number(batchStart.rows[0]?.position ?? boundaryPosition);
-        }
-      }
-
-      const units = await this.pool.query<{ unit_key: string; max_position: number | string }>(
-        `SELECT CASE
-            WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
-            WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
-            ELSE 'message:' || id
-          END AS unit_key,
-          MAX(position) AS max_position
-        FROM room_messages
-        WHERE room_id = $1 AND ($2::bigint IS NULL OR position < $2)
-        GROUP BY unit_key
-        ORDER BY max_position DESC
-        LIMIT $3`,
-        [roomId, boundaryPosition ?? null, limit + 1]
-      );
-      const selectedUnitKeys = units.rows.slice(0, limit).map(row => row.unit_key);
-      let rows: MessageRow[] = [];
-      let hasMore = false;
-      if (selectedUnitKeys.length > 0) {
-        const start = await this.pool.query<{ position: number | string }>(
-          `SELECT MIN(position) AS position
-          FROM room_messages
-          WHERE room_id = $1
-            AND CASE
-              WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
-              WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
-              ELSE 'message:' || id
-            END = ANY($2::text[])`,
-          [roomId, selectedUnitKeys]
-        );
-        const pageStartPosition = Number(start.rows[0]?.position);
-        const page = await this.pool.query<MessageRow>(
-          `SELECT ${MESSAGE_COLUMNS}, position
-          FROM room_messages
-          WHERE room_id = $1 AND position >= $2 AND ($3::bigint IS NULL OR position < $3)
-          ORDER BY position ASC, timestamp ASC`,
-          [roomId, pageStartPosition, boundaryPosition ?? null]
-        );
-        rows = page.rows;
-        const older = await this.pool.query<{ exists: boolean }>(
-          'SELECT EXISTS(SELECT 1 FROM room_messages WHERE room_id = $1 AND position < $2) AS exists',
-          [roomId, pageStartPosition]
-        );
-        hasMore = Boolean(older.rows[0]?.exists);
-      }
-      const messages = orderMessageBatches(await this.attachMediaAssets(roomId, rows.map(mapMessage)));
-      const turns = await this.readRoomAgentTurns(roomId, Array.from(new Set(messages.map(message => message.turnId).filter((id): id is string => Boolean(id)))));
-      return {
-        roomId,
-        messages,
-        turns,
-        messageVersion,
-        hasMore,
-        oldestMessageId: messages[0]?.id,
-      };
+      return await this.readMessagePageWithQueryable(this.pool, roomId, options);
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room message page', { error, roomId, options });
-      return { roomId, messages: [], messageVersion: 0, hasMore: false };
+      return { roomId, messages: [], hasMore: false };
     }
+  }
+
+  async readRoomSnapshot(roomId: string, options: RoomMessagePageOptions = {}): Promise<RoomSnapshot> {
+    return this.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+      const page = await this.readMessagePageWithQueryable(client, roomId, options);
+      const stream = await client.query<{ head_seq: number | string }>(
+        'SELECT head_seq FROM room_event_streams WHERE room_id = $1',
+        [roomId]
+      );
+      if (!page.room) {
+        throw new Error(`Cannot read a snapshot for missing room ${roomId}`);
+      }
+      return {
+        roomId,
+        room: page.room,
+        messages: page.messages,
+        turns: page.turns,
+        hasMore: page.hasMore,
+        oldestMessageId: page.oldestMessageId,
+        snapshotSeq: Number(stream.rows[0]?.head_seq || 0),
+      };
+    });
+  }
+
+  async readRoomEventHead(roomId: string): Promise<number> {
+    const result = await this.pool.query<{ head_seq: number | string }>(
+      'SELECT head_seq FROM room_event_streams WHERE room_id = $1',
+      [roomId]
+    );
+    return Number(result.rows[0]?.head_seq || 0);
+  }
+
+  async canReadRoomEvents(roomId: string, clientId: string): Promise<boolean> {
+    const result = await this.pool.query<{ allowed: boolean }>(
+      `SELECT (
+        EXISTS (
+          SELECT 1 FROM room_members
+          WHERE room_id = $1 AND client_id = $2
+        )
+        OR EXISTS (
+          SELECT 1 FROM room_event_streams
+          WHERE room_id = $1 AND $2 = ANY(deleted_reader_ids)
+        )
+      ) AS allowed`,
+      [roomId, clientId],
+    );
+    return Boolean(result.rows[0]?.allowed);
+  }
+
+  async readRoomEvents(roomId: string, options: RoomEventPageOptions): Promise<RoomEventPage> {
+    const afterSeq = Number(options.afterSeq);
+    const limit = Math.min(500, Math.max(1, Math.floor(options.limit || 100)));
+    const maxBytes = Math.min(1024 * 1024, Math.max(16 * 1024, Math.floor(options.maxBytes || 256 * 1024)));
+    const stream = await this.pool.query<{ head_seq: number | string; min_available_seq: number | string }>(
+      'SELECT head_seq, min_available_seq FROM room_event_streams WHERE room_id = $1',
+      [roomId]
+    );
+    const headSeq = Number(stream.rows[0]?.head_seq || 0);
+    const minAvailableSeq = Number(stream.rows[0]?.min_available_seq || 1);
+    if (afterSeq < minAvailableSeq - 1) {
+      throw new RoomEventCursorExpiredError(roomId, afterSeq, minAvailableSeq);
+    }
+    if (afterSeq > headSeq) {
+      throw new RoomEventCursorAheadError(roomId, afterSeq, headSeq);
+    }
+
+    const result = await this.pool.query<RoomEventRow>(
+      `SELECT room_id, seq, event_type, payload, created_at
+      FROM room_events
+      WHERE room_id = $1 AND seq > $2
+      ORDER BY seq ASC
+      LIMIT $3`,
+      [roomId, afterSeq, limit + 1]
+    );
+    const hydrated = await this.hydrateRoomEvents(roomId, result.rows.slice(0, limit));
+    const events: RoomEvent[] = [];
+    let usedBytes = 0;
+    for (const event of hydrated) {
+      const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
+      if (events.length > 0 && usedBytes + eventBytes > maxBytes) break;
+      events.push(event);
+      usedBytes += eventBytes;
+    }
+    const lastSeq = events.length > 0 ? events[events.length - 1].seq : afterSeq;
+    return {
+      roomId,
+      events,
+      headSeq,
+      minAvailableSeq,
+      hasMore: lastSeq < headSeq,
+    };
+  }
+
+  async pruneRoomEvents(options: RoomEventRetentionOptions): Promise<number> {
+    return this.transaction(async client => {
+      const deleted = await client.query<{ room_id: string }>(
+        `WITH ranked AS (
+          SELECT room_id,
+            seq,
+            created_at,
+            ROW_NUMBER() OVER (PARTITION BY room_id ORDER BY seq DESC) AS reverse_rank
+          FROM room_events
+        ), cutoffs AS (
+          SELECT room_id, MAX(seq) AS delete_through
+          FROM ranked
+          WHERE created_at < $1::timestamptz OR reverse_rank > $2
+          GROUP BY room_id
+        )
+        DELETE FROM room_events AS event
+        USING cutoffs
+        WHERE event.room_id = cutoffs.room_id
+          AND event.seq <= cutoffs.delete_through
+        RETURNING event.room_id`,
+        [options.olderThan, Math.max(1, Math.floor(options.maxEventsPerRoom))]
+      );
+      await client.query(
+        `UPDATE room_event_streams AS stream
+        SET min_available_seq = COALESCE(
+            (SELECT MIN(event.seq) FROM room_events AS event WHERE event.room_id = stream.room_id),
+            stream.head_seq + 1
+          ),
+          updated_at = NOW()`
+      );
+      await client.query(
+        `DELETE FROM room_event_streams AS stream
+        WHERE stream.deleted_at IS NOT NULL
+          AND stream.deleted_at < $1::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM room_events AS event WHERE event.room_id = stream.room_id
+          )`,
+        [options.olderThan],
+      );
+      return deleted.rowCount || 0;
+    });
   }
 
   async upsertRoomAgentTurn(turn: RoomAgentTurn): Promise<RoomAgentTurn | null> {
@@ -2395,10 +2441,9 @@ export class PostgresStore implements DurableRoomStore {
             code_agent_access,
             code_agent_mode,
             code_agent_backend,
-            room_version,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             description = EXCLUDED.description,
@@ -2414,7 +2459,7 @@ export class PostgresStore implements DurableRoomStore {
             code_agent_access = COALESCE(EXCLUDED.code_agent_access, rooms.code_agent_access),
             code_agent_mode = COALESCE(EXCLUDED.code_agent_mode, rooms.code_agent_mode),
             code_agent_backend = COALESCE(EXCLUDED.code_agent_backend, rooms.code_agent_backend),
-            room_version = rooms.room_version + 1, updated_at = NOW()
+            updated_at = NOW()
           RETURNING ${ROOM_COLUMNS}`,
           [
             room.id,
@@ -2829,7 +2874,7 @@ export class PostgresStore implements DurableRoomStore {
           code_agent_access = CASE WHEN $6::boolean THEN $7 ELSE code_agent_access END,
           code_agent_mode = CASE WHEN $8::boolean THEN $9 ELSE code_agent_mode END,
           code_agent_backend = CASE WHEN $10::boolean THEN $11 ELSE code_agent_backend END,
-          room_version = room_version + 1, updated_at = NOW()
+          updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
         [
@@ -2906,7 +2951,7 @@ export class PostgresStore implements DurableRoomStore {
 
         const updated = await client.query<RoomRow>(
           `UPDATE rooms
-          SET creator_id = $2, room_version = room_version + 1, updated_at = NOW()
+          SET creator_id = $2, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [roomId, newOwnerClientId]
@@ -3042,7 +3087,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomRow>(
         `UPDATE rooms
-        SET name = $3, room_version = room_version + 1, updated_at = NOW()
+        SET name = $3, updated_at = NOW()
         WHERE id = $1 AND creator_id = $2
         RETURNING ${ROOM_COLUMNS}`,
         [roomId, creatorId, name]
@@ -3123,7 +3168,6 @@ export class PostgresStore implements DurableRoomStore {
         `UPDATE rooms
         SET sandbox_status = $3,
           sandbox_updated_at = $4::timestamptz,
-          room_version = room_version + 1,
           updated_at = NOW()
         WHERE id = $1
           AND COALESCE(sandbox_status, 'none') = ANY($2::text[])
@@ -3150,7 +3194,6 @@ export class PostgresStore implements DurableRoomStore {
           sandbox_updated_at = $5::timestamptz,
           sandbox_artifact_version = $6,
           sandbox_code_agent_source_ref = $7,
-          room_version = room_version + 1,
           updated_at = NOW()
         WHERE id = $1
           AND sandbox_id = $2
@@ -3211,7 +3254,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE github_connections, codex_connections, outbox_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE github_connections, codex_connections, outbox_events, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
@@ -3251,7 +3294,7 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  private async updateRoomLastActivityFromMessages(client: PostgresClient, roomId: string, fallbackTimestamp: string, incrementMessageVersion = false): Promise<Room | null> {
+  private async updateRoomLastActivityFromMessages(client: PostgresClient, roomId: string, fallbackTimestamp: string): Promise<Room | null> {
     const latestMessage = await client.query<{ timestamp: string | Date }>(
       'SELECT timestamp FROM room_messages WHERE room_id = $1 ORDER BY timestamp DESC LIMIT 1',
       [roomId]
@@ -3263,11 +3306,10 @@ export class PostgresStore implements DurableRoomStore {
     const updatedRoom = await client.query<RoomRow>(
       `UPDATE rooms
       SET last_activity_at = $2,
-        message_version = message_version + $3,
-        room_version = room_version + 1, updated_at = NOW()
+        updated_at = NOW()
       WHERE id = $1
       RETURNING ${ROOM_COLUMNS}`,
-      [roomId, lastActivityAt, incrementMessageVersion ? 1 : 0]
+      [roomId, lastActivityAt]
     );
     return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
   }
@@ -3354,6 +3396,212 @@ export class PostgresStore implements DurableRoomStore {
         mediaAsset: toMessageMediaAsset(asset),
       };
     });
+  }
+
+  private async readMessagePageWithQueryable(
+    queryable: PostgresQueryable,
+    roomId: string,
+    options: RoomMessagePageOptions,
+  ) {
+    const limit = normalizeMessagePageLimit(options.limit);
+    const room = await queryable.query<RoomRow>(
+      `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1`,
+      [roomId]
+    );
+    if (room.rows.length === 0) {
+      return { roomId, messages: [], turns: [], hasMore: false };
+    }
+
+    let boundaryPosition: number | undefined;
+    if (options.beforeMessageId) {
+      const target = await queryable.query<{ position: number | string; turn_id: string | null; client_id: string; client_batch_id: string | null }>(
+        'SELECT position, turn_id, client_id, client_batch_id FROM room_messages WHERE room_id = $1 AND id = $2',
+        [roomId, options.beforeMessageId]
+      );
+      if (target.rows.length === 0) {
+        return { roomId, messages: [], turns: [], hasMore: false };
+      }
+      boundaryPosition = Number(target.rows[0].position);
+      if (target.rows[0].turn_id) {
+        const turnStart = await queryable.query<{ position: number | string }>(
+          'SELECT MIN(position) AS position FROM room_messages WHERE room_id = $1 AND turn_id = $2',
+          [roomId, target.rows[0].turn_id]
+        );
+        boundaryPosition = Number(turnStart.rows[0]?.position ?? boundaryPosition);
+      } else if (target.rows[0].client_batch_id) {
+        const batchStart = await queryable.query<{ position: number | string }>(
+          'SELECT MIN(position) AS position FROM room_messages WHERE room_id = $1 AND client_id = $2 AND client_batch_id = $3',
+          [roomId, target.rows[0].client_id, target.rows[0].client_batch_id]
+        );
+        boundaryPosition = Number(batchStart.rows[0]?.position ?? boundaryPosition);
+      }
+    }
+
+    const units = await queryable.query<{ unit_key: string; max_position: number | string }>(
+      `SELECT CASE
+          WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
+          WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
+          ELSE 'message:' || id
+        END AS unit_key,
+        MAX(position) AS max_position
+      FROM room_messages
+      WHERE room_id = $1 AND ($2::bigint IS NULL OR position < $2)
+      GROUP BY unit_key
+      ORDER BY max_position DESC
+      LIMIT $3`,
+      [roomId, boundaryPosition ?? null, limit + 1]
+    );
+    const selectedUnitKeys = units.rows.slice(0, limit).map(row => row.unit_key);
+    let rows: MessageRow[] = [];
+    let hasMore = false;
+    if (selectedUnitKeys.length > 0) {
+      const start = await queryable.query<{ position: number | string }>(
+        `SELECT MIN(position) AS position
+        FROM room_messages
+        WHERE room_id = $1
+          AND CASE
+            WHEN turn_id IS NOT NULL THEN 'turn:' || turn_id
+            WHEN client_batch_id IS NOT NULL THEN 'batch:' || client_id || ':' || client_batch_id
+            ELSE 'message:' || id
+          END = ANY($2::text[])`,
+        [roomId, selectedUnitKeys]
+      );
+      const pageStartPosition = Number(start.rows[0]?.position);
+      const page = await queryable.query<MessageRow>(
+        `SELECT ${MESSAGE_COLUMNS}, position
+        FROM room_messages
+        WHERE room_id = $1 AND position >= $2 AND ($3::bigint IS NULL OR position < $3)
+        ORDER BY position ASC, timestamp ASC`,
+        [roomId, pageStartPosition, boundaryPosition ?? null]
+      );
+      rows = page.rows;
+      const older = await queryable.query<{ exists: boolean }>(
+        'SELECT EXISTS(SELECT 1 FROM room_messages WHERE room_id = $1 AND position < $2) AS exists',
+        [roomId, pageStartPosition]
+      );
+      hasMore = Boolean(older.rows[0]?.exists);
+    }
+
+    const messages = orderMessageBatches(await this.attachMediaAssetsWithQueryable(queryable, roomId, rows.map(mapMessage)));
+    const turnIds = Array.from(new Set(messages.map(message => message.turnId).filter((id): id is string => Boolean(id))));
+    const turns = await this.readRoomAgentTurnsWithQueryable(queryable, roomId, turnIds);
+    return {
+      roomId,
+      messages,
+      turns,
+      hasMore,
+      oldestMessageId: messages[0]?.id,
+      room: mapRoom(room.rows[0]),
+    };
+  }
+
+  private async hydrateRoomEvents(roomId: string, rows: RoomEventRow[]): Promise<RoomEvent[]> {
+    const parsedPayloads = rows.map(row => parseJsonValue<Record<string, unknown>>(row.payload) || {});
+    const readIds = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string')
+      : [];
+    const messageIds = Array.from(new Set(parsedPayloads.flatMap(payload => readIds(payload.messageIds))));
+    const turnIds = Array.from(new Set(parsedPayloads.flatMap(payload => readIds(payload.turnIds))));
+
+    let messages: Message[] = [];
+    if (messageIds.length > 0) {
+      const messageRows = await this.pool.query<MessageRow>(
+        `SELECT ${MESSAGE_COLUMNS}, position
+        FROM room_messages
+        WHERE room_id = $1 AND id = ANY($2::text[])
+        ORDER BY position ASC, timestamp ASC`,
+        [roomId, messageIds]
+      );
+      messages = orderMessageBatches(await this.attachMediaAssets(roomId, messageRows.rows.map(mapMessage)));
+    }
+    const messagesById = new Map(messages.map(message => [message.id, message]));
+
+    const turns = turnIds.length > 0
+      ? await this.readRoomAgentTurns(roomId, turnIds)
+      : [];
+    const turnsById = new Map(turns.map(turn => [turn.id, turn]));
+
+    const needsRoom = rows.some(row => row.event_type === 'room.updated');
+    const currentRoom = needsRoom ? await this.getRoomById(roomId) : null;
+
+    return rows.map((row, index) => {
+      const seq = Number(row.seq);
+      const rawPayload = parsedPayloads[index];
+      const ids = readIds(rawPayload.messageIds);
+      const eventTurns = readIds(rawPayload.turnIds);
+      const payload: RoomEvent['payload'] = {};
+      switch (row.event_type) {
+        case 'messages.upserted':
+          payload.messageIds = ids;
+          payload.messages = ids.flatMap(id => {
+            const message = messagesById.get(id);
+            return message ? [message] : [];
+          });
+          break;
+        case 'messages.deleted':
+          payload.messageIds = ids;
+          break;
+        case 'agent_turns.upserted':
+          payload.turnIds = eventTurns;
+          payload.turns = eventTurns.flatMap(id => {
+            const turn = turnsById.get(id);
+            return turn ? [turn] : [];
+          });
+          break;
+        case 'agent_turns.deleted':
+          payload.turnIds = eventTurns;
+          break;
+        case 'room.updated':
+          payload.roomId = roomId;
+          if (currentRoom) payload.room = currentRoom;
+          break;
+        case 'room.deleted':
+          payload.roomId = roomId;
+          break;
+      }
+      return {
+        id: `${roomId}:${seq}`,
+        roomId,
+        seq,
+        type: row.event_type,
+        payload,
+        createdAt: toIsoString(row.created_at),
+      };
+    });
+  }
+
+  private async readRoomAgentTurnsWithQueryable(
+    queryable: PostgresQueryable,
+    roomId: string,
+    turnIds?: string[],
+  ): Promise<RoomAgentTurn[]> {
+    if (turnIds && turnIds.length === 0) return [];
+    const result = turnIds
+      ? await queryable.query<RoomAgentTurnRow>(
+        `SELECT ${ROOM_AGENT_TURN_COLUMNS} FROM room_agent_turns WHERE room_id = $1 AND id = ANY($2::text[]) ORDER BY started_at ASC`,
+        [roomId, turnIds]
+      )
+      : await queryable.query<RoomAgentTurnRow>(
+        `SELECT ${ROOM_AGENT_TURN_COLUMNS} FROM room_agent_turns WHERE room_id = $1 ORDER BY started_at ASC`,
+        [roomId]
+      );
+    return result.rows.map(mapRoomAgentTurn);
+  }
+
+  private async attachMediaAssetsWithQueryable(
+    queryable: PostgresQueryable,
+    roomId: string,
+    messages: Message[],
+  ): Promise<Message[]> {
+    if (!messages.some(message => message.messageType === 'media')) return messages;
+    const assets = await queryable.query<MediaAssetRow>(
+      `SELECT ${MEDIA_ASSET_COLUMNS}
+      FROM media_assets
+      WHERE room_id = $1
+      ORDER BY created_at ASC`,
+      [roomId]
+    );
+    return this.attachMediaAssetsFromAssets(messages, assets.rows.map(mapMediaAsset));
   }
 
   private async readMessagesByRoomInTransaction(client: PostgresClient, roomId: string): Promise<Message[]> {

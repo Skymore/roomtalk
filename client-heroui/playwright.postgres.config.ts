@@ -40,6 +40,7 @@ const requireSafeE2EDatabaseUrl = () => {
 };
 
 const databaseUrl = requireSafeE2EDatabaseUrl();
+const redisUrl = process.env.E2E_REDIS_URL || 'redis://127.0.0.1:6379/15';
 
 export default defineConfig({
   testDir: './e2e',
@@ -68,7 +69,7 @@ export default defineConfig({
         `PORT=${serverPort}`,
         'NODE_ENV=test',
         `CLIENT_URL=${clientURL}`,
-        'REDIS_URL=redis://127.0.0.1:6379/15',
+        `REDIS_URL=${shellQuote(redisUrl)}`,
         'PERSISTENCE_STORE=postgres',
         `DATABASE_URL=${shellQuote(databaseUrl)}`,
         `LOCAL_MEDIA_DIR=${shellQuote(localMediaDir)}`,

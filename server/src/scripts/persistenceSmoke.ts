@@ -2,7 +2,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { createServer } from 'net';
 import path from 'path';
 
-type PersistenceMode = 'redis' | 'postgres';
+type PersistenceMode = 'postgres';
 
 interface SmokeServer {
   name: string;
@@ -303,13 +303,11 @@ async function main() {
   const results: SmokeResult[] = [];
 
   log(`Persistence smoke using Redis: ${redisUrl}`);
-  results.push(await runModeSmoke('redis', redisUrl));
 
   if (databaseUrl) {
     results.push(await runModeSmoke('postgres', redisUrl, databaseUrl));
-    results.push(await runModeSmoke('redis', redisUrl));
   } else {
-    log('↷ postgres-mode smoke skipped: set TEST_DATABASE_URL or E2E_DATABASE_URL to a disposable test database whose name includes test/e2e.');
+    log('↷ postgres-mode smoke skipped: set TEST_DATABASE_URL or E2E_DATABASE_URL to a disposable test database whose name includes test/e2e. Redis-only runtime is no longer supported.');
     results.push({ name: 'postgres-mode', skipped: true });
   }
 

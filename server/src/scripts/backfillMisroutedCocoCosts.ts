@@ -265,9 +265,7 @@ export const backfillMisroutedCocoCosts = async (
     );
     await client.query(
       `UPDATE rooms
-      SET message_version = message_version + 1,
-        room_version = room_version + 1,
-        updated_at = NOW()
+      SET updated_at = NOW()
       WHERE id = $1`,
       [roomId]
     );

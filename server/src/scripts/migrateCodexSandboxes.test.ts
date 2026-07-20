@@ -14,6 +14,7 @@ const baseEnv = {
   CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
   CODE_AGENT_RUNNER_CLIENT: 'jsonl',
   CODEX_CLI_BACKEND_ENABLED: 'true',
+  DATABASE_URL: 'postgres://localhost/message_system_test',
 } as const;
 
 const handle: CodeAgentSandboxHandle = {
@@ -38,7 +39,7 @@ describe('buildCodexSandboxMigrationPlan', () => {
     assert.equal(plan.run, true);
     if (!plan.run) return;
     assert.equal(plan.dryRun, true);
-    assert.equal(plan.persistenceStore, 'redis');
+    assert.equal(plan.persistenceStore, 'postgres');
     assert.equal(plan.e2bTemplateId, 'roomtalk-code-agent-dual-cli');
     assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner');
     assert.equal(plan.runnerEnv.PLAYWRIGHT_BROWSERS_PATH, '/ms-playwright');
@@ -49,6 +50,7 @@ describe('buildCodexSandboxMigrationPlan', () => {
     assert.deepEqual(buildCodexSandboxMigrationPlan({
       ...baseEnv,
       PERSISTENCE_STORE: 'postgres',
+      DATABASE_URL: '',
     }), {
       run: false,
       reason: 'PERSISTENCE_STORE=postgres requires DATABASE_URL',

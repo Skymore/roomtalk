@@ -572,6 +572,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               canUseRetainedRoomAccess={canUseRetainedRoomAccess}
               ensureRoomSessionReady={ensureRoomSessionReady}
               messageSyncRequestId={messageSyncRequestId}
+              onRoomUpdated={onRoomUpdated}
               bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
               onScrollButtonVisibilityChange={setShowScrollButton}
             />

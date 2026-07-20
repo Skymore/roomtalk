@@ -185,12 +185,8 @@ export interface Room {
   codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
-  messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
-  // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
-  // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
-  roomVersion?: number;
   updatedAt?: string;
 }
 
@@ -224,23 +220,54 @@ export interface RoomPermissions {
   postingRestrictionReason?: string;
 }
 
-export interface RoomMessageHistoryPayload {
+export type RoomEventType =
+  | 'messages.upserted'
+  | 'messages.deleted'
+  | 'agent_turns.upserted'
+  | 'agent_turns.deleted'
+  | 'room.updated'
+  | 'room.deleted';
+
+export interface RoomEvent {
+  id: string;
+  roomId: string;
+  seq: number;
+  type: RoomEventType;
+  payload: {
+    messages?: Message[];
+    messageIds?: string[];
+    turns?: RoomAgentTurn[];
+    turnIds?: string[];
+    room?: Room;
+    roomId?: string;
+  };
+  createdAt: string;
+}
+
+export interface RoomSnapshotPayload {
   requestId: string;
   roomId: string;
+  room: Room;
   messages: Message[];
   turns?: RoomAgentTurn[];
-  messageVersion: number;
+  snapshotSeq: number;
   hasMore: boolean;
   oldestMessageId?: string;
   mode?: 'replace' | 'prepend';
-  // Echoed from the request. It binds a page to the client window that asked
-  // for it, so a clear/new mutation cannot be overwritten by a late page.
-  requestedMessageVersion: number;
 }
 
-export interface RoomMessageHistoryInvalidatedEvent {
+export interface RoomEventPagePayload {
+  requestId: string;
   roomId: string;
-  reason: string;
+  events: RoomEvent[];
+  headSeq: number;
+  minAvailableSeq: number;
+  hasMore: boolean;
+}
+
+export interface RoomEventAvailable {
+  roomId: string;
+  headSeq: number;
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

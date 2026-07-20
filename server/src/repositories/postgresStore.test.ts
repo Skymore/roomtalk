@@ -184,7 +184,8 @@ describe('PostgresStore', () => {
         rows: [roomRow({ name: 'Saved Room', description: 'desc' })],
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO rooms/);
-          assert.match(call.sql, /room_version = rooms\.room_version \+ 1/);
+          assert.match(call.sql, /updated_at = NOW\(\)/);
+          assert.doesNotMatch(call.sql, /room_version|message_version/);
           assert.match(call.sql, /type = CASE WHEN \$18::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
           assert.doesNotMatch(call.sql, /creator_id = EXCLUDED\.creator_id/);
           assert.equal(call.params?.[1], 'Saved Room');
@@ -413,7 +414,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },
@@ -1108,7 +1109,7 @@ describe('PostgresStore', () => {
       { rows: [], assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE room_id = \$1 RETURNING object_key/) },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM room_agent_turns/) },
       { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
-      { rowCount: 1, assertCall: call => assert.match(call.sql, /message_version = message_version \+ 1/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /SET last_activity_at = created_at/) },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
     ]);
     const pool = new ScriptedPool([

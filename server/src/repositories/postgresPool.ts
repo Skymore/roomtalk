@@ -23,6 +23,17 @@ export function resolvePostgresSslConfig(env: NodeJS.ProcessEnv = process.env) {
   return sslConfig;
 }
 
+export function attachPostgresPoolErrorHandler(pool: PostgresPool, logger: Logger): PostgresPool {
+  pool.on?.('error', error => {
+    // node-postgres emits this for idle clients when PostgreSQL restarts or a
+    // network path disappears. The pool evicts that client automatically; the
+    // listener prevents the EventEmitter error from becoming an uncaught
+    // exception while subsequent queries reconnect through a fresh client.
+    logger.warn('PostgreSQL idle client disconnected; pool will reconnect on demand', { error });
+  });
+  return pool;
+}
+
 export function createPostgresPool(connectionString: string, logger: Logger): PostgresPool {
   let pg: PgModule;
   try {
@@ -33,8 +44,9 @@ export function createPostgresPool(connectionString: string, logger: Logger): Po
     throw error;
   }
 
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString,
     ssl: resolvePostgresSslConfig(),
   });
+  return attachPostgresPoolErrorHandler(pool, logger);
 }

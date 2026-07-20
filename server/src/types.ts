@@ -196,7 +196,6 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
-  messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
   type?: RoomType;
@@ -210,9 +209,6 @@ export interface Room {
   codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
-  // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
-  // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
-  roomVersion?: number;
   updatedAt?: string;
 }
 
@@ -220,9 +216,45 @@ export interface RoomMessagePage {
   roomId: string;
   messages: Message[];
   turns?: RoomAgentTurn[];
-  messageVersion: number;
   hasMore: boolean;
   oldestMessageId?: string;
+}
+
+export type RoomEventType =
+  | 'messages.upserted'
+  | 'messages.deleted'
+  | 'agent_turns.upserted'
+  | 'agent_turns.deleted'
+  | 'room.updated'
+  | 'room.deleted';
+
+export interface RoomEvent {
+  id: string;
+  roomId: string;
+  seq: number;
+  type: RoomEventType;
+  payload: {
+    messages?: Message[];
+    messageIds?: string[];
+    turns?: RoomAgentTurn[];
+    turnIds?: string[];
+    room?: Room;
+    roomId?: string;
+  };
+  createdAt: string;
+}
+
+export interface RoomSnapshot extends RoomMessagePage {
+  room: Room;
+  snapshotSeq: number;
+}
+
+export interface RoomEventPage {
+  roomId: string;
+  events: RoomEvent[];
+  headSeq: number;
+  minAvailableSeq: number;
+  hasMore: boolean;
 }
 
 export type RoomMemberRole = 'owner' | 'admin' | 'member';

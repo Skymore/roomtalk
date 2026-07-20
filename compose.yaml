@@ -46,6 +46,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:${POSTGRES_HOST_PORT:-54329}:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-roomtalk} -d ${POSTGRES_DB:-message_system}"]
       interval: 5s
@@ -58,6 +60,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - 127.0.0.1:${REDIS_HOST_PORT:-63799}:6379
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

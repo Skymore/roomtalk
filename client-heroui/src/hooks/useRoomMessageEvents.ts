@@ -1,13 +1,32 @@
-import { Dispatch, MutableRefObject, RefObject, SetStateAction, useEffect, useRef, useState } from 'react';
-import { clientId, requestRoomMessages, socket } from '../utils/socket';
-import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomAgentTurn, RoomMessageHistoryInvalidatedEvent, RoomMessageHistoryPayload } from '../utils/types';
+import { Dispatch, MutableRefObject, RefObject, SetStateAction, useEffect, useRef } from 'react';
+import { requestRoomEvents, requestRoomSnapshot, SocketRequestError, socket } from '../utils/socket';
+import {
+  A2UIUpdateEvent,
+  AICostTotalEvent,
+  AIChunkEvent,
+  AIStreamEndEvent,
+  AIStreamErrorEvent,
+  AIUsageUpdateEvent,
+  Message,
+  Room,
+  RoomAgentTurn,
+  RoomEvent,
+  RoomEventAvailable,
+  RoomSnapshotPayload,
+} from '../utils/types';
 import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
-import { clearCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import {
+  clearCachedRoomMessageWindow,
+  readCachedRoomMessageWindow,
+  readMemoryRoomMessageWindow,
+  writeCachedRoomMessageWindow,
+} from '../utils/messageHistoryCache';
 import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCache';
 import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
-const ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT = 3;
+const ROOM_EVENT_PAGE_LIMIT = 100;
+const ROOM_EVENT_PAGE_MAX_BYTES = 256 * 1024;
 const getEmptyAgentTurns = () => [] as RoomAgentTurn[];
 
 interface UseRoomMessageEventsArgs {
@@ -22,7 +41,7 @@ interface UseRoomMessageEventsArgs {
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsLoadingMore: Dispatch<SetStateAction<boolean>>;
   setHasMoreMessages: Dispatch<SetStateAction<boolean>>;
-  setMessageVersion: Dispatch<SetStateAction<number>>;
+  setLastAppliedSeq: Dispatch<SetStateAction<number>>;
   setOldestMessageId: Dispatch<SetStateAction<string | undefined>>;
   setSessionCostUsd: Dispatch<SetStateAction<number | null>>;
   setShowScrollButton: Dispatch<SetStateAction<boolean>>;
@@ -32,6 +51,7 @@ interface UseRoomMessageEventsArgs {
   messageToDeleteId?: string;
   messageToEditId?: string;
   onAIStreamSettled?: () => void;
+  onRoomUpdated?: (room: Room) => void;
   warningPrefix: string;
   requestHistoryRef: MutableRefObject<RoomMessageHistoryRequest | null>;
 }
@@ -41,6 +61,69 @@ export type RoomMessageHistoryRequest = (options?: {
   limit?: number;
   reason?: string;
 }) => Promise<void>;
+
+const mergeSnapshotWithOptimisticMessages = (snapshot: Message[], current: Message[]) => {
+  let merged = current.filter(message => message.deliveryStatus === 'pending' || message.deliveryStatus === 'failed');
+  snapshot.forEach(message => {
+    merged = upsertMessage(merged, message);
+  });
+  return merged;
+};
+
+const reduceRoomEvents = (
+  events: RoomEvent[],
+  messages: Message[],
+  turns: RoomAgentTurn[],
+) => {
+  let nextMessages = messages;
+  let nextTurns = turns;
+  const deletedMediaAssetIds: string[] = [];
+  let roomDeleted = false;
+  let updatedRoom: Room | undefined;
+
+  events.forEach(event => {
+    switch (event.type) {
+      case 'messages.upserted':
+        (event.payload.messages || []).forEach(message => {
+          nextMessages = upsertMessage(nextMessages, message);
+        });
+        break;
+      case 'messages.deleted': {
+        const deletedIds = new Set(event.payload.messageIds || []);
+        nextMessages.forEach(message => {
+          if (deletedIds.has(message.id) && message.mediaAsset?.id) {
+            deletedMediaAssetIds.push(message.mediaAsset.id);
+          }
+        });
+        nextMessages = nextMessages.filter(message => !deletedIds.has(message.id));
+        break;
+      }
+      case 'agent_turns.upserted': {
+        const byId = new Map(nextTurns.map(turn => [turn.id, turn]));
+        (event.payload.turns || []).forEach(turn => byId.set(turn.id, turn));
+        nextTurns = Array.from(byId.values()).sort((left, right) => (
+          Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id)
+        ));
+        break;
+      }
+      case 'agent_turns.deleted': {
+        const deletedIds = new Set(event.payload.turnIds || []);
+        nextTurns = nextTurns.filter(turn => !deletedIds.has(turn.id));
+        break;
+      }
+      case 'room.deleted':
+        roomDeleted = true;
+        nextMessages = [];
+        nextTurns = [];
+        break;
+      case 'room.updated':
+        if (event.payload.room) updatedRoom = event.payload.room;
+        break;
+    }
+  });
+
+  return { messages: nextMessages, turns: nextTurns, deletedMediaAssetIds, roomDeleted, updatedRoom };
+};
 
 export const useRoomMessageEvents = ({
   roomId,
@@ -54,7 +137,7 @@ export const useRoomMessageEvents = ({
   setIsLoading,
   setIsLoadingMore,
   setHasMoreMessages,
-  setMessageVersion,
+  setLastAppliedSeq,
   setOldestMessageId,
   setSessionCostUsd,
   setShowScrollButton,
@@ -64,23 +147,16 @@ export const useRoomMessageEvents = ({
   messageToDeleteId,
   messageToEditId,
   onAIStreamSettled,
+  onRoomUpdated,
   warningPrefix,
   requestHistoryRef,
 }: UseRoomMessageEventsArgs) => {
   const messageToDeleteIdRef = useRef(messageToDeleteId);
   const messageToEditIdRef = useRef(messageToEditId);
-  const messageVersionRef = useRef(0);
-  const hasMoreMessagesRef = useRef(false);
-  const oldestMessageIdRef = useRef<string | undefined>();
-  const messageSyncRequestIdRef = useRef(messageSyncRequestId);
-  messageSyncRequestIdRef.current = messageSyncRequestId;
-  const historyRetryContextRef = useRef('');
-  const historyRetryCountRef = useRef(0);
-  const historyRetryScheduledRef = useRef(false);
-  const mutationRevisionRef = useRef(0);
-  const historyRequestSequenceRef = useRef(0);
-  const latestReplaceRequestIdRef = useRef<string | null>(null);
-  const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
+  const sessionReadyRef = useRef(isRoomSessionReady);
+  const syncRequestIdRef = useRef(messageSyncRequestId);
+  sessionReadyRef.current = isRoomSessionReady;
+  syncRequestIdRef.current = messageSyncRequestId;
 
   useEffect(() => {
     messageToDeleteIdRef.current = messageToDeleteId;
@@ -91,575 +167,414 @@ export const useRoomMessageEvents = ({
   }, [messageToEditId]);
 
   useEffect(() => {
+    let cancelled = false;
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+    let requestSequence = 0;
+    let snapshotSequence = 0;
+    let hasBaseline = false;
+    let syncRunning = false;
+    let syncAgain = false;
+    let desiredHeadSeq = 0;
+    let lastAppliedSeq = 0;
+    let hasMoreMessages = false;
+    let oldestMessageId: string | undefined;
+    let canonicalMessages: Message[] = [];
+    let canonicalTurns: RoomAgentTurn[] = [];
+
     setSessionCostUsd(null);
     setAgentTurns([]);
     setShowScrollButton(false);
     closeDeleteModal();
     closeEditModal();
-    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-    let serverHistoryLoaded = false;
-    let cacheHydrationPromise = Promise.resolve();
 
-    const memoryWindow = readMemoryRoomMessageWindow(roomId);
-    const filterRoomMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
-    const memoryMessages = memoryWindow ? filterRoomMessages(memoryWindow.messages) : [];
-    const memoryTurns = memoryWindow?.turns?.filter(turn => turn.roomId === roomId) || [];
-
-    messageVersionRef.current = memoryWindow?.messageVersion ?? 0;
-    mutationRevisionRef.current = 0;
-    latestReplaceRequestIdRef.current = null;
-    hasMoreMessagesRef.current = memoryWindow?.hasMore ?? false;
-    oldestMessageIdRef.current = memoryWindow?.oldestMessageId;
-
-    const setMessageVersionState = (messageVersion: number) => {
-      messageVersionRef.current = messageVersion;
-      setMessageVersion(messageVersion);
+    const filterMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
+    const filterTurns = (turns: RoomAgentTurn[]) => turns.filter(turn => turn.roomId === roomId);
+    const setCursor = (seq: number) => {
+      lastAppliedSeq = seq;
+      setLastAppliedSeq(seq);
     };
-
-    const setHasMoreMessagesState = (hasMore: boolean) => {
-      hasMoreMessagesRef.current = hasMore;
-      setHasMoreMessages(hasMore);
+    const setHasMore = (value: boolean) => {
+      hasMoreMessages = value;
+      setHasMoreMessages(value);
     };
-
-    const setOldestMessageIdState = (oldestMessageId?: string) => {
-      oldestMessageIdRef.current = oldestMessageId;
-      setOldestMessageId(oldestMessageId);
+    const setOldest = (value?: string) => {
+      oldestMessageId = value;
+      setOldestMessageId(value);
     };
-
-    const markLocalMutation = () => {
-      mutationRevisionRef.current += 1;
-      return mutationRevisionRef.current;
-    };
-
-    const cacheCurrentWindow = (
-      messages: Message[],
-      messageVersion = messageVersionRef.current,
-      hasMore = hasMoreMessagesRef.current,
-      oldestMessageId = oldestMessageIdRef.current,
-      turns = getCurrentAgentTurns(),
-    ) => {
-      writeCachedRoomMessageWindow({
-        roomId,
-        messages: filterRoomMessages(messages),
-        turns: turns.filter(turn => turn.roomId === roomId),
-        messageVersion,
-        hasMore,
-        oldestMessageId,
-        cachedAt: Date.now(),
-      });
-    };
-
-    const isSameMessageWindow = (left: Message[], right: Message[]) => (
-      left.length === right.length &&
-      left.every((message, index) => {
-        const other = right[index];
-        return other && message.id === other.id && message.updatedAt === other.updatedAt && message.status === other.status;
-      })
-    );
-
     const scheduleScroll = (behavior: ScrollBehavior, delayMs: number) => {
-      if (scrollTimer) {
-        clearTimeout(scrollTimer);
-      }
-
+      if (scrollTimer) clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => {
         scrollTimer = null;
         scrollToBottom(behavior);
       }, delayMs);
     };
-
-    if (memoryWindow) {
-      logRoomMessageDiagnostic('memory-cache-hit', {
+    const cacheWindow = (
+      messages: Message[],
+      turns = getCurrentAgentTurns(),
+      seq = lastAppliedSeq,
+      more = hasMoreMessages,
+      oldest = oldestMessageId,
+    ) => {
+      void writeCachedRoomMessageWindow({
         roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        messageVersion: memoryWindow.messageVersion,
-        messageCount: memoryMessages.length,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
+        messages: filterMessages(messages),
+        turns: filterTurns(turns),
+        lastAppliedSeq: seq,
+        hasMore: more,
+        oldestMessageId: oldest,
+        cachedAt: Date.now(),
       });
-      // Synchronous in-memory hit: render instantly, no blank/loading flash.
-      updateMessages(memoryMessages);
-      setAgentTurns(memoryTurns);
-      setMessageVersionState(memoryWindow.messageVersion);
-      setHasMoreMessagesState(memoryWindow.hasMore);
-      setOldestMessageIdState(memoryWindow.oldestMessageId);
+    };
+
+    const applySnapshot = (snapshot: RoomSnapshotPayload) => {
+      onRoomUpdated?.(snapshot.room);
+      if (snapshot.mode === 'prepend') {
+        const byId = new Map(canonicalTurns.map(turn => [turn.id, turn]));
+        filterTurns(snapshot.turns || []).forEach(turn => byId.set(turn.id, turn));
+        canonicalTurns = Array.from(byId.values());
+        const existingIds = new Set(canonicalMessages.map(message => message.id));
+        canonicalMessages = [
+          ...filterMessages(snapshot.messages).filter(message => !existingIds.has(message.id)),
+          ...canonicalMessages,
+        ];
+        setAgentTurns(canonicalTurns);
+        updateMessages(canonicalMessages);
+        setHasMore(snapshot.hasMore);
+        setOldest(snapshot.oldestMessageId);
+        cacheWindow(canonicalMessages, canonicalTurns, lastAppliedSeq, snapshot.hasMore, snapshot.oldestMessageId);
+        setIsLoadingMore(false);
+        return;
+      }
+
+      const nextMessages = mergeSnapshotWithOptimisticMessages(
+        filterMessages(snapshot.messages),
+        filterMessages(getCurrentMessages()),
+      );
+      const nextTurns = filterTurns(snapshot.turns || []);
+      canonicalMessages = nextMessages;
+      canonicalTurns = nextTurns;
+      hasBaseline = true;
+      desiredHeadSeq = Math.max(desiredHeadSeq, snapshot.snapshotSeq);
+      setCursor(snapshot.snapshotSeq);
+      setHasMore(snapshot.hasMore);
+      setOldest(snapshot.oldestMessageId);
+      updateMessages(nextMessages);
+      setAgentTurns(nextTurns);
+      cacheWindow(nextMessages, nextTurns, snapshot.snapshotSeq, snapshot.hasMore, snapshot.oldestMessageId);
+      setIsLoading(false);
+      setShowScrollButton(false);
+      scheduleScroll('auto', 0);
+    };
+
+    const loadSnapshot = async (options: { beforeMessageId?: string; limit?: number; reason?: string } = {}) => {
+      const mode = options.beforeMessageId ? 'prepend' : 'replace';
+      const localSnapshotSequence = ++snapshotSequence;
+      if (mode === 'prepend') setIsLoadingMore(true);
+      else setIsLoading(true);
+      const requestId = `${Date.now()}-${++requestSequence}`;
+      logRoomMessageDiagnostic('snapshot-request', {
+        requestId,
+        roomId,
+        mode,
+        reason: options.reason || 'room-sync',
+        beforeMessageId: options.beforeMessageId ?? null,
+        lastAppliedSeq,
+        messageSyncRequestId: syncRequestIdRef.current,
+      });
+      try {
+        const snapshot = await requestRoomSnapshot({
+          requestId,
+          roomId,
+          beforeMessageId: options.beforeMessageId,
+          limit: options.limit ?? ROOM_MESSAGE_PAGE_LIMIT,
+        });
+        if (cancelled || localSnapshotSequence !== snapshotSequence) return false;
+        applySnapshot(snapshot);
+        return true;
+      } catch (error) {
+        if (!cancelled) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+          logRoomMessageDiagnostic('snapshot-request-failed', {
+            requestId,
+            roomId,
+            mode,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return false;
+      }
+    };
+
+    const applyEventPage = (events: RoomEvent[]) => {
+      const accepted: RoomEvent[] = [];
+      let expectedSeq = lastAppliedSeq + 1;
+      for (const event of events) {
+        if (event.roomId !== roomId || event.seq <= lastAppliedSeq) continue;
+        if (event.seq !== expectedSeq) {
+          return false;
+        }
+        accepted.push(event);
+        expectedSeq += 1;
+      }
+      if (accepted.length === 0) return true;
+
+      let eventBase = canonicalMessages;
+      filterMessages(getCurrentMessages())
+        .filter(message => message.deliveryStatus === 'pending' || message.deliveryStatus === 'failed')
+        .forEach(message => {
+          eventBase = upsertMessage(eventBase, message);
+        });
+      const reduced = reduceRoomEvents(accepted, eventBase, canonicalTurns);
+      const nextSeq = accepted[accepted.length - 1].seq;
+      canonicalMessages = reduced.messages;
+      canonicalTurns = reduced.turns;
+      reduced.deletedMediaAssetIds.forEach(assetId => void clearCachedMediaAsset(assetId));
+      if (reduced.roomDeleted) {
+        void clearCachedRoomMessageWindow(roomId);
+        void clearCachedMediaForRoom(roomId);
+      }
+      if (reduced.updatedRoom) onRoomUpdated?.(reduced.updatedRoom);
+      updateMessages(reduced.messages);
+      setAgentTurns(reduced.turns);
+      setCursor(nextSeq);
+      setOldest(reduced.messages[0]?.id);
+      if (reduced.messages.length === 0) setHasMore(false);
+      cacheWindow(reduced.messages, reduced.turns, nextSeq);
+
+      const deletedIds = new Set(accepted.flatMap(event => event.payload.messageIds || []));
+      if (messageToDeleteIdRef.current && deletedIds.has(messageToDeleteIdRef.current)) closeDeleteModal();
+      if (messageToEditIdRef.current && deletedIds.has(messageToEditIdRef.current)) closeEditModal();
+      return true;
+    };
+
+    const syncFromCursor = async () => {
+      syncAgain = true;
+      if (syncRunning || cancelled || !sessionReadyRef.current) return;
+      syncRunning = true;
+      try {
+        while (syncAgain && !cancelled && sessionReadyRef.current) {
+          syncAgain = false;
+          if (!hasBaseline) {
+            const loaded = await loadSnapshot({ reason: 'initial-snapshot' });
+            if (!loaded) break;
+          }
+
+          let keepReading = true;
+          while (keepReading && !cancelled && sessionReadyRef.current) {
+            const requestId = `${Date.now()}-${++requestSequence}`;
+            try {
+              const page = await requestRoomEvents({
+                requestId,
+                roomId,
+                afterSeq: lastAppliedSeq,
+                limit: ROOM_EVENT_PAGE_LIMIT,
+                maxBytes: ROOM_EVENT_PAGE_MAX_BYTES,
+              });
+              desiredHeadSeq = Math.max(desiredHeadSeq, page.headSeq);
+              if (page.events.length === 0 && lastAppliedSeq < page.headSeq) {
+                const loaded = await loadSnapshot({ reason: 'event-gap-empty-page' });
+                if (!loaded) return;
+                continue;
+              }
+              if (!applyEventPage(page.events)) {
+                const loaded = await loadSnapshot({ reason: 'event-sequence-gap' });
+                if (!loaded) return;
+                continue;
+              }
+              keepReading = page.hasMore || lastAppliedSeq < desiredHeadSeq;
+            } catch (error) {
+              if (
+                error instanceof SocketRequestError
+                && (error.code === 'CURSOR_EXPIRED' || error.code === 'CURSOR_AHEAD')
+              ) {
+                const loaded = await loadSnapshot({ reason: 'cursor-expired' });
+                if (!loaded) return;
+                keepReading = true;
+                continue;
+              }
+              logRoomMessageDiagnostic('event-request-failed', {
+                requestId,
+                roomId,
+                afterSeq: lastAppliedSeq,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              keepReading = false;
+            }
+          }
+        }
+      } finally {
+        syncRunning = false;
+        setIsLoading(false);
+        setIsLoadingMore(false);
+        if (syncAgain && !cancelled) void syncFromCursor();
+      }
+    };
+
+    const memoryWindow = readMemoryRoomMessageWindow(roomId);
+    let cacheHydrationPromise: Promise<void>;
+    if (memoryWindow) {
+      const messages = filterMessages(memoryWindow.messages);
+      const turns = filterTurns(memoryWindow.turns || []);
+      canonicalMessages = messages;
+      canonicalTurns = turns;
+      hasBaseline = true;
+      lastAppliedSeq = memoryWindow.lastAppliedSeq;
+      hasMoreMessages = memoryWindow.hasMore;
+      oldestMessageId = memoryWindow.oldestMessageId;
+      updateMessages(messages);
+      setAgentTurns(turns);
+      setLastAppliedSeq(lastAppliedSeq);
+      setHasMoreMessages(hasMoreMessages);
+      setOldestMessageId(oldestMessageId);
       setIsLoading(false);
       scheduleScroll('auto', 0);
+      cacheHydrationPromise = Promise.resolve();
     } else {
-      logRoomMessageDiagnostic('persistent-cache-read-start', {
-        roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      updateMessages([]);
+      canonicalMessages = filterMessages(getCurrentMessages()).filter(
+        message => message.deliveryStatus === 'pending' || message.deliveryStatus === 'failed',
+      );
+      canonicalTurns = [];
+      updateMessages(canonicalMessages);
       setIsLoading(true);
-      // Fall back to the async IndexedDB cache (cold start / new tab).
       cacheHydrationPromise = readCachedRoomMessageWindow(roomId)
         .then(cachedWindow => {
-          if (!cachedWindow) {
-            logRoomMessageDiagnostic('persistent-cache-miss', {
-              roomId,
-              messageSyncRequestId: messageSyncRequestIdRef.current,
-            });
-            return;
-          }
-          if (cancelled || serverHistoryLoaded) {
-            logRoomMessageDiagnostic('persistent-cache-skipped', {
-              roomId,
-              messageSyncRequestId: messageSyncRequestIdRef.current,
-              cancelled,
-              serverHistoryLoaded,
-              messageVersion: cachedWindow.messageVersion,
-              messageCount: cachedWindow.messages.length,
-            });
-            return;
-          }
-
-          const cachedMessages = filterRoomMessages(cachedWindow.messages);
-          logRoomMessageDiagnostic('persistent-cache-hit', {
-            roomId,
-            messageSyncRequestId: messageSyncRequestIdRef.current,
-            messageVersion: cachedWindow.messageVersion,
-            messageCount: cachedMessages.length,
-          });
-          updateMessages(cachedMessages);
-          setAgentTurns(cachedWindow.turns?.filter(turn => turn.roomId === roomId) || []);
-          setMessageVersionState(cachedWindow.messageVersion);
-          setHasMoreMessagesState(cachedWindow.hasMore);
-          setOldestMessageIdState(cachedWindow.oldestMessageId);
+          if (cancelled || !cachedWindow || hasBaseline) return;
+          const messages = filterMessages(cachedWindow.messages);
+          const turns = filterTurns(cachedWindow.turns || []);
+          canonicalMessages = messages;
+          canonicalTurns = turns;
+          hasBaseline = true;
+          lastAppliedSeq = cachedWindow.lastAppliedSeq;
+          hasMoreMessages = cachedWindow.hasMore;
+          oldestMessageId = cachedWindow.oldestMessageId;
+          updateMessages(messages);
+          setAgentTurns(turns);
+          setLastAppliedSeq(lastAppliedSeq);
+          setHasMoreMessages(hasMoreMessages);
+          setOldestMessageId(oldestMessageId);
           setIsLoading(false);
           scheduleScroll('auto', 0);
         })
         .catch(error => {
           logRoomMessageDiagnostic('persistent-cache-read-failed', {
             roomId,
-            messageSyncRequestId: messageSyncRequestIdRef.current,
             error: error instanceof Error ? error.message : String(error),
           });
         });
     }
-    const handleMessageHistory = (
-      historyPayload: RoomMessageHistoryPayload,
-      requestedMutationRevision: number,
-    ) => {
-      if (historyPayload.roomId !== roomId) return;
 
-      const mode = historyPayload.mode || 'replace';
-      const serverMessageVersion = historyPayload.messageVersion;
-      const requestedMessageVersion = historyPayload.requestedMessageVersion;
-      const newerReplaceRequestStarted = mode === 'replace'
-        && latestReplaceRequestIdRef.current !== historyPayload.requestId;
-      const canonicalWindowChanged = requestedMessageVersion !== messageVersionRef.current;
-      const localWindowChanged = requestedMutationRevision !== mutationRevisionRef.current;
-      const serverWindowIsOlder = serverMessageVersion < messageVersionRef.current;
-      const ignored = newerReplaceRequestStarted
-        || canonicalWindowChanged
-        || localWindowChanged
-        || serverWindowIsOlder;
-      const ignoreReason = newerReplaceRequestStarted
-        ? 'newer-replace-request-started'
-        : serverWindowIsOlder
-          ? 'server-window-older'
-          : canonicalWindowChanged
-            ? 'canonical-window-changed-after-request'
-            : localWindowChanged
-              ? 'local-window-changed-after-request'
-              : null;
-      logRoomMessageDiagnostic('history-response', {
-        requestId: historyPayload.requestId,
-        roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        requestedMessageVersion,
-        currentMessageVersion: messageVersionRef.current,
-        serverMessageVersion,
-        messageCount: historyPayload.messages.length,
-        requestedMutationRevision,
-        currentMutationRevision: mutationRevisionRef.current,
-        mode,
-        decision: ignored ? 'ignored' : 'accepted',
-        ignoreReason,
-      });
-      if (ignored) {
-        setIsLoading(false);
-        setIsLoadingMore(false);
-        if (
-          mode === 'replace'
-          && !newerReplaceRequestStarted
-          && !historyRetryScheduledRef.current
-          && historyRetryCountRef.current < ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT
-        ) {
-          historyRetryScheduledRef.current = true;
-          historyRetryCountRef.current += 1;
-          logRoomMessageDiagnostic('history-reconciliation-scheduled', {
-            roomId,
-            messageSyncRequestId: messageSyncRequestIdRef.current,
-            retry: historyRetryCountRef.current,
-            retryLimit: ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT,
-            nextBaseMessageVersion: messageVersionRef.current,
-          });
-          queueMicrotask(() => {
-            historyRetryScheduledRef.current = false;
-            if (!cancelled) {
-              setHistoryRefreshNonce(current => current + 1);
-            }
-          });
-        } else if (historyRetryCountRef.current >= ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT) {
-          logRoomMessageDiagnostic('history-reconciliation-exhausted', {
-            roomId,
-            messageSyncRequestId: messageSyncRequestIdRef.current,
-            retryLimit: ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT,
-            currentMessageVersion: messageVersionRef.current,
-            serverMessageVersion,
-          });
-        }
+    const issueHistoryRequest: RoomMessageHistoryRequest = async (options = {}) => {
+      await cacheHydrationPromise;
+      if (cancelled) return;
+      if (options.beforeMessageId) {
+        await loadSnapshot(options);
         return;
       }
-      serverHistoryLoaded = true;
-      historyRetryCountRef.current = 0;
-      const roomMessages = filterRoomMessages(historyPayload.messages);
-
-      if (mode === 'prepend') {
-        setAgentTurns(previous => {
-          const next = new Map(previous.map(turn => [turn.id, turn]));
-          (historyPayload.turns || []).forEach(turn => next.set(turn.id, turn));
-          return Array.from(next.values());
-        });
-        updateMessages(prev => {
-          const existingIds = new Set(prev.map(message => message.id));
-          return [...roomMessages.filter(message => !existingIds.has(message.id)), ...prev];
-        });
-      } else {
-        setAgentTurns(historyPayload.turns || []);
-        const currentMessages = filterRoomMessages(getCurrentMessages());
-        const windowChanged = !isSameMessageWindow(currentMessages, roomMessages);
-
-        if (windowChanged) {
-          updateMessages(roomMessages);
-          setShowScrollButton(false);
-          scheduleScroll('auto', 0);
-        }
-        cacheCurrentWindow(
-          roomMessages,
-          serverMessageVersion,
-          historyPayload.hasMore,
-          historyPayload.oldestMessageId,
-          historyPayload.turns || [],
-        );
-      }
-
-      setHasMoreMessagesState(historyPayload.hasMore);
-      if (mode === 'replace') {
-        setMessageVersionState(serverMessageVersion);
-      }
-      setOldestMessageIdState(historyPayload.oldestMessageId);
-
-      setIsLoading(false);
-      setIsLoadingMore(false);
+      syncAgain = true;
+      await syncFromCursor();
     };
+    requestHistoryRef.current = issueHistoryRequest;
 
-    const handleNewMessage = (message: Message) => {
-      if (message.roomId !== roomId) return;
-
-      serverHistoryLoaded = true;
-      const mutationRevision = markLocalMutation();
-      logRoomMessageDiagnostic('new-message', {
-        roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        messageId: message.id,
-        messageType: message.messageType,
-        mutationRevision,
-        canonicalMessageVersion: messageVersionRef.current,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-      updateMessages(prev => {
-        const next = upsertMessage(prev, message);
-        cacheCurrentWindow(next);
-        return next;
-      });
-
-      const container = containerRef.current;
-      if (container) {
-        const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-        if (isAtBottom || message.clientId === clientId || message.clientId === 'ai_assistant') {
-          scheduleScroll('smooth', 100);
-        } else {
-          setShowScrollButton(true);
-        }
-      }
+    const handleRoomEventAvailable = (event: RoomEventAvailable) => {
+      if (event.roomId !== roomId || !Number.isSafeInteger(event.headSeq)) return;
+      desiredHeadSeq = Math.max(desiredHeadSeq, event.headSeq);
+      void syncFromCursor();
     };
-
-    const handleAgentTurnUpdated = (turn: RoomAgentTurn) => {
-      if (turn.roomId !== roomId) return;
-      markLocalMutation();
-      setAgentTurns(previous => {
-        const index = previous.findIndex(item => item.id === turn.id);
-        const next = index === -1 ? [...previous, turn] : [...previous];
-        if (index !== -1) next[index] = turn;
-        cacheCurrentWindow(getCurrentMessages(), messageVersionRef.current, hasMoreMessagesRef.current, oldestMessageIdRef.current, next);
-        return next;
-      });
+    const handleReconnect = () => void syncFromCursor();
+    const handlePageResume = () => {
+      if (document.visibilityState === 'visible') void syncFromCursor();
     };
 
     const handleAIChunk = (data: AIChunkEvent) => {
       if (data.roomId !== roomId) return;
-      markLocalMutation();
-      updateMessages(prev => appendAIChunk(prev, data.messageId, data.chunk));
-
+      updateMessages(previous => {
+        canonicalMessages = appendAIChunk(previous, data.messageId, data.chunk);
+        return canonicalMessages;
+      });
       const container = containerRef.current;
-      if (container) {
-        const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-        if (isAtBottom) {
-          scheduleScroll('smooth', 50);
-        }
+      if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) {
+        scheduleScroll('smooth', 50);
       }
     };
-
     const handleA2UIUpdate = (data: A2UIUpdateEvent) => {
       if (data.roomId !== roomId) return;
-      markLocalMutation();
-      updateMessages(prev => appendA2UIPayload(prev, data.messageId, data.uiPayload));
-
-      const container = containerRef.current;
-      if (container) {
-        const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-        if (isAtBottom) {
-          scheduleScroll('smooth', 50);
-        }
-      }
+      updateMessages(previous => {
+        canonicalMessages = appendA2UIPayload(previous, data.messageId, data.uiPayload);
+        return canonicalMessages;
+      });
     };
-
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
-      serverHistoryLoaded = true;
-      markLocalMutation();
-      updateMessages(prev => {
-        const next = completeAIMessage(prev, data.messageId, {
+      updateMessages(previous => {
+        const next = completeAIMessage(previous, data.messageId, {
           content: data.content,
           uiPayload: data.uiPayload,
           aiModel: data.aiModel,
           usage: data.usage,
           cost: data.cost,
         });
-        cacheCurrentWindow(next);
+        canonicalMessages = next;
+        cacheWindow(next);
         return next;
       });
-      if (data.sessionCost) {
-        setSessionCostUsd(data.sessionCost.totalUsd);
-      }
+      if (data.sessionCost) setSessionCostUsd(data.sessionCost.totalUsd);
       onAIStreamSettled?.();
     };
-
     const handleAIUsageUpdate = (data: AIUsageUpdateEvent) => {
       if (data.roomId !== roomId) return;
-      markLocalMutation();
-      updateMessages(prev => prev.map(message => (
-        message.id === data.messageId ? { ...message, usage: data.usage } : message
-      )));
+      updateMessages(previous => {
+        canonicalMessages = previous.map(message => (
+          message.id === data.messageId ? { ...message, usage: data.usage } : message
+        ));
+        return canonicalMessages;
+      });
     };
-
     const handleAICostTotal = (data: AICostTotalEvent) => {
-      if (data.roomId !== roomId) return;
-      setSessionCostUsd(data.totalUsd);
+      if (data.roomId === roomId) setSessionCostUsd(data.totalUsd);
     };
-
     const handleAIStreamError = (data: AIStreamErrorEvent) => {
       if (data.roomId !== roomId) return;
-      serverHistoryLoaded = true;
-      console.error('AI stream error for message:', data.messageId, data.error);
-      markLocalMutation();
-      updateMessages(prev => {
-        const next = prev.map(msg =>
-          msg.id === data.messageId
-            ? { ...msg, content: (msg.content || '') + `\n\n${warningPrefix}: ` + data.error, status: 'error' as const }
-            : msg
-        );
-        cacheCurrentWindow(next);
+      updateMessages(previous => {
+        const next = previous.map(message => message.id === data.messageId
+          ? { ...message, content: `${message.content || ''}\n\n${warningPrefix}: ${data.error}`, status: 'error' as const }
+          : message);
+        canonicalMessages = next;
+        cacheWindow(next);
         return next;
       });
       onAIStreamSettled?.();
     };
 
-    const handleMessagesCleared = (clearedRoomId: string) => {
-      if (clearedRoomId === roomId) {
-        serverHistoryLoaded = true;
-        updateMessages([]);
-        setAgentTurns([]);
-        void clearCachedRoomMessageWindow(roomId);
-        void clearCachedMediaForRoom(roomId);
-        markLocalMutation();
-        setHasMoreMessagesState(false);
-        setOldestMessageIdState(undefined);
-        setShowScrollButton(false);
-        closeEditModal();
-        closeDeleteModal();
-      }
-    };
-
-    const handleMessageEdited = (updatedMessage: Message) => {
-      if (updatedMessage.roomId === roomId) {
-        serverHistoryLoaded = true;
-        markLocalMutation();
-        updateMessages(prev => {
-          let changed = false;
-          const next = prev.map(msg => {
-            if (msg.id !== updatedMessage.id) {
-              return msg;
-            }
-            changed = true;
-            return updatedMessage;
-          });
-          if (changed) {
-            cacheCurrentWindow(next);
-          }
-          return next;
-        });
-        if (messageToEditIdRef.current === updatedMessage.id) {
-          closeEditModal();
-        }
-      }
-    };
-
-    const handleMessageDeleted = (deletedMessageId: string, deletedRoomId: string) => {
-      if (deletedRoomId === roomId) {
-        serverHistoryLoaded = true;
-        markLocalMutation();
-        updateMessages(prev => {
-          const deletedMessage = prev.find(msg => msg.id === deletedMessageId);
-          if (deletedMessage?.mediaAsset?.id) {
-            void clearCachedMediaAsset(deletedMessage.mediaAsset.id);
-          }
-          const next = prev.filter(msg => msg.id !== deletedMessageId);
-          if (next.length !== prev.length) {
-            if (oldestMessageIdRef.current === deletedMessageId) {
-              setOldestMessageIdState(next[0]?.id);
-            }
-            cacheCurrentWindow(next);
-          }
-          return next;
-        });
-        if (messageToDeleteIdRef.current === deletedMessageId) {
-          closeDeleteModal();
-        }
-        if (messageToEditIdRef.current === deletedMessageId) {
-          closeEditModal();
-        }
-      }
-    };
-
-    const issueHistoryRequest: RoomMessageHistoryRequest = async (options = {}) => {
-      const mode = options.beforeMessageId ? 'prepend' : 'replace';
-      if (mode === 'replace') {
-        await cacheHydrationPromise;
-      }
-      if (cancelled) return;
-
-      const requestId = `${Date.now()}-${++historyRequestSequenceRef.current}`;
-      const requestedMutationRevision = mutationRevisionRef.current;
-      const baseMessageVersion = messageVersionRef.current;
-      if (mode === 'replace') {
-        latestReplaceRequestIdRef.current = requestId;
-      }
-      logRoomMessageDiagnostic('history-request', {
-        requestId,
-        roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        reason: options.reason || (mode === 'prepend' ? 'pagination' : 'session-sync'),
-        baseMessageVersion,
-        requestedMutationRevision,
-        beforeMessageId: options.beforeMessageId ?? null,
-        limit: options.limit ?? ROOM_MESSAGE_PAGE_LIMIT,
-        socketId: socket.id ?? null,
-        socketConnected: socket.connected,
-      });
-
-      try {
-        const history = await requestRoomMessages({
-          requestId,
-          roomId,
-          beforeMessageId: options.beforeMessageId,
-          limit: options.limit ?? ROOM_MESSAGE_PAGE_LIMIT,
-          baseMessageVersion,
-        });
-        if (!cancelled) {
-          handleMessageHistory(history, requestedMutationRevision);
-        }
-      } catch (error) {
-        if (cancelled) return;
-        setIsLoading(false);
-        setIsLoadingMore(false);
-        logRoomMessageDiagnostic('history-request-failed', {
-          requestId,
-          roomId,
-          messageSyncRequestId: messageSyncRequestIdRef.current,
-          mode,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (
-          mode === 'replace'
-          && !historyRetryScheduledRef.current
-          && historyRetryCountRef.current < ROOM_HISTORY_RECONCILIATION_RETRY_LIMIT
-        ) {
-          historyRetryScheduledRef.current = true;
-          historyRetryCountRef.current += 1;
-          queueMicrotask(() => {
-            historyRetryScheduledRef.current = false;
-            if (!cancelled) setHistoryRefreshNonce(current => current + 1);
-          });
-        }
-      }
-    };
-    requestHistoryRef.current = issueHistoryRequest;
-    const handleMessageHistoryInvalidated = (event: RoomMessageHistoryInvalidatedEvent) => {
-      if (event.roomId !== roomId) return;
-      logRoomMessageDiagnostic('history-invalidated', {
-        roomId,
-        messageSyncRequestId: messageSyncRequestIdRef.current,
-        reason: event.reason,
-      });
-      void issueHistoryRequest({ reason: `server-${event.reason}` });
-    };
-
-    socket.on('new_message', handleNewMessage);
-    socket.on('message_history_invalidated', handleMessageHistoryInvalidated);
-    socket.on('agent_turn_updated', handleAgentTurnUpdated);
+    socket.on('room_event_available', handleRoomEventAvailable);
+    socket.on('connect', handleReconnect);
     socket.on('ai_chunk', handleAIChunk);
     socket.on('a2ui_update', handleA2UIUpdate);
     socket.on('ai_stream_end', handleAIStreamEnd);
     socket.on('ai_usage_update', handleAIUsageUpdate);
     socket.on('ai_cost_total', handleAICostTotal);
     socket.on('ai_stream_error', handleAIStreamError);
-    socket.on('messages_cleared', handleMessagesCleared);
-    socket.on('message_edited', handleMessageEdited);
-    socket.on('message_deleted', handleMessageDeleted);
+    window.addEventListener('focus', handlePageResume);
+    window.addEventListener('pageshow', handlePageResume);
+    document.addEventListener('visibilitychange', handlePageResume);
 
-    const loadingTimeout = setTimeout(() => {
-      setIsLoading(false);
-    }, 5000);
-
+    const loadingTimeout = setTimeout(() => setIsLoading(false), 5_000);
     return () => {
       cancelled = true;
       clearTimeout(loadingTimeout);
-      if (scrollTimer) {
-        clearTimeout(scrollTimer);
-      }
-      if (requestHistoryRef.current === issueHistoryRequest) {
-        requestHistoryRef.current = null;
-      }
-      socket.off('new_message', handleNewMessage);
-      socket.off('message_history_invalidated', handleMessageHistoryInvalidated);
-      socket.off('agent_turn_updated', handleAgentTurnUpdated);
+      if (scrollTimer) clearTimeout(scrollTimer);
+      if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
+      socket.off('room_event_available', handleRoomEventAvailable);
+      socket.off('connect', handleReconnect);
       socket.off('ai_chunk', handleAIChunk);
       socket.off('a2ui_update', handleA2UIUpdate);
       socket.off('ai_stream_end', handleAIStreamEnd);
       socket.off('ai_usage_update', handleAIUsageUpdate);
       socket.off('ai_cost_total', handleAICostTotal);
       socket.off('ai_stream_error', handleAIStreamError);
-      socket.off('messages_cleared', handleMessagesCleared);
-      socket.off('message_edited', handleMessageEdited);
-      socket.off('message_deleted', handleMessageDeleted);
+      window.removeEventListener('focus', handlePageResume);
+      window.removeEventListener('pageshow', handlePageResume);
+      document.removeEventListener('visibilitychange', handlePageResume);
     };
   }, [
     roomId,
@@ -671,7 +586,7 @@ export const useRoomMessageEvents = ({
     setIsLoading,
     setIsLoadingMore,
     setHasMoreMessages,
-    setMessageVersion,
+    setLastAppliedSeq,
     setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,
@@ -679,22 +594,16 @@ export const useRoomMessageEvents = ({
     closeDeleteModal,
     closeEditModal,
     onAIStreamSettled,
+    onRoomUpdated,
     warningPrefix,
     requestHistoryRef,
   ]);
 
   useEffect(() => {
     if (!isRoomSessionReady) return;
-
-    const retryContext = `${roomId}:${messageSyncRequestId}`;
-    if (historyRetryContextRef.current !== retryContext) {
-      historyRetryContextRef.current = retryContext;
-      historyRetryCountRef.current = 0;
-      historyRetryScheduledRef.current = false;
-    }
     void requestHistoryRef.current?.({
       limit: ROOM_MESSAGE_PAGE_LIMIT,
-      reason: historyRetryCountRef.current > 0 ? 'version-reconciliation' : 'session-sync',
+      reason: 'session-sync',
     });
-  }, [historyRefreshNonce, isRoomSessionReady, messageSyncRequestId, requestHistoryRef, roomId]);
+  }, [isRoomSessionReady, messageSyncRequestId, requestHistoryRef, roomId]);
 };
