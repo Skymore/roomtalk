@@ -38,6 +38,7 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 
 | Variable | Purpose |
 | --- | --- |
+| `MEDIA_STORAGE_MODE` | Optional explicit mode: `local` for a filesystem volume or `s3` for cloud object storage. Explicit `s3` fails startup without a bucket. |
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket. |
 | `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
@@ -48,13 +49,14 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 | `MEDIA_STORAGE_MAX_ATTEMPTS` | Maximum object-storage attempts, including the initial request; defaults to `2`. |
 | `MEDIA_STORAGE_SLOW_REQUEST_MS` | Log object-storage operations slower than this threshold; defaults to `2000`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Storage credentials. |
-| `LOCAL_MEDIA_DIR` | Local development media directory. |
-| `DISABLE_LOCAL_MEDIA_STORAGE` | Disables the development fallback. |
+| `LOCAL_MEDIA_DIR` | Filesystem root for explicit/local-development media storage. |
+| `LOCAL_MEDIA_SIGNING_SECRET` | Optional dedicated HMAC key for expiring local-media URLs. Production local mode may derive it from a 16+ character `POSTGRES_PASSWORD` when omitted. |
+| `DISABLE_LOCAL_MEDIA_STORAGE` | Disables the implicit development fallback; conflicts with explicit `local` mode. |
 | `CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL` | Public static-publish base fallback. |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | Signs room/client/turn/mode-scoped publish tokens. |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish-token lifetime. |
 
-Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts.
+Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts. Local Compose explicitly uses `local`; Fly/AWS use `s3` or the existing bucket-based inference.
 
 ## Chat AI and Optional Services
 

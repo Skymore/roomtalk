@@ -60,7 +60,7 @@ flowchart LR
   Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
 
   Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
-  Control --> Media["S3/Tigris\nprivate media + published artifacts"]
+  Control --> Media["本地 volume 或 S3/Tigris\n私有媒体 + published artifacts"]
 
   Control --> Lifecycle["Sandbox lifecycle + access control"]
   Lifecycle --> E2B["Per-room E2B sandbox"]
@@ -106,7 +106,7 @@ docs/                             架构、runbook、方案和复盘
 - PostgreSQL 与 Redis。PostgreSQL 是强制 durable store；Redis 只保存可重建实时/缓存状态。
 - 真实 Code Agent 房间还需要 E2B 凭据和固定 template 配置。
 
-最快的完整本地运行方式是 `cp .env.compose.example .env.compose && docker compose up -d --build`。手动开发时，在 `server/.env` 中把 `DATABASE_URL` 与 `REDIS_URL` 指向本地服务。
+最快的完整本地运行方式是 `cp .env.compose.example .env.compose && docker compose --env-file .env.compose up -d --build`。PostgreSQL 与媒体使用持久 named volume，Redis 可丢弃。手动开发时，在 `server/.env` 中把 `DATABASE_URL` 与 `REDIS_URL` 指向本地服务。
 
 安装依赖并创建本地配置：
 
@@ -167,7 +167,7 @@ npm run test:e2e:postgres
 | HTTP 与 origin | `PORT`、`CLIENT_URL`、`CLIENT_URLS`、`NODE_ENV` |
 | 持久/实时存储 | `PERSISTENCE_STORE`、`DATABASE_URL`、`REDIS_URL`、PostgreSQL TLS、message cache TTL |
 | 普通 Chat AI | Provider API key、默认模型、OpenRouter 路由 metadata |
-| 媒体与 artifact | S3/Tigris bucket、endpoint、region 和 AWS 兼容凭据 |
+| 媒体与 artifact | `MEDIA_STORAGE_MODE`；本地目录/签名 key，或 S3 bucket、endpoint、region 与凭据 |
 | 可选服务 | Google OAuth、AssemblyAI、Web Push VAPID |
 | Code Agent control plane | Backend allowlist、E2B template/artifact pin、TTL/配额、model gateway 与 publish token secret |
 
@@ -182,7 +182,7 @@ npm run test:e2e:postgres
 - Runtime 启动强制要求 `PERSISTENCE_STORE=postgres` 与 `DATABASE_URL`。PostgreSQL 保存 canonical record 和有界 room-event replay log。
 - Redis 负责可重建的 presence、socket session、pub/sub、counter 和短 TTL message cache；Redis 仍必需，但不再是 durable authority。
 - `migrate:redis-to-postgres` 只保留为旧 Redis durable snapshot 的可重复、支持 dry-run 的 importer，不是受支持 serving mode 或回滚目标。
-- S3/Tigris 兼容存储保存私有媒体和版本化静态站点 artifact；开发环境可使用本地对象存储实现。
+- 本地 Compose 通过带签名 URL 的文件系统 volume 持久保存私有媒体和版本化静态站点 artifact；Fly/AWS 通过同一抽象使用 S3/Tigris-compatible 存储。
 
 迁移和上线参考：
 
@@ -212,7 +212,7 @@ npm run test:e2e:postgres
 当前架构与历史记录都是工程证据的一部分：
 
 - [Redis 到 PostgreSQL 生产迁移](docs/postgres-migration-development-summary.zh.md)：写入冻结切换、provider 响应限制、幂等、回滚边界，以及真正零停机所需的设计。
-- [房间可靠性架构](docs/room-reliability-architecture.zh.md)：当前 session recovery、消息/媒体连续性、room-version 收敛、read-your-write ack、posting boundary 与生产诊断的完整合约。
+- [房间可靠性架构](docs/room-reliability-architecture.zh.md)：当前 session recovery、消息/媒体连续性、event-cursor 收敛、read-your-write ack、posting boundary 与生产诊断的完整合约。
 - [Code Agent 工具顺序](docs/code-agent-tool-ordering-fix-plan.zh.md)：从 engine 源头到持久化和渲染，保留文本/工具/model event 的交错顺序。
 - [A2UI streaming 实现](docs/a2ui-streaming-implementation.zh.md)：结构化 UI streaming、持久化、修复和 provider-independent validation。
 - [CI/CD 构建优化](docs/ci-cd-build-optimization.zh.md)：Docker build 边界、cache 行为、release detection 和生产验证。

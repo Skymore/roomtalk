@@ -38,6 +38,7 @@
 
 | 变量 | 用途 |
 | --- | --- |
+| `MEDIA_STORAGE_MODE` | 可选显式模式：文件系统 volume 使用 `local`，云对象存储使用 `s3`；显式 `s3` 未配置 bucket 时启动失败。 |
 | `MEDIA_BUCKET_NAME` | S3/Tigris bucket。 |
 | `MEDIA_STORAGE_REGION` | 存储 region；Tigris 通常为 `auto`。 |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint。 |
@@ -48,13 +49,14 @@
 | `MEDIA_STORAGE_MAX_ATTEMPTS` | 对象存储最大尝试次数（包含首次请求），默认 `2`。 |
 | `MEDIA_STORAGE_SLOW_REQUEST_MS` | 超过该耗时的对象存储操作会记录慢请求日志，默认 `2000`。 |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | 存储凭据。 |
-| `LOCAL_MEDIA_DIR` | 本地开发媒体目录。 |
-| `DISABLE_LOCAL_MEDIA_STORAGE` | 禁用开发环境 fallback。 |
+| `LOCAL_MEDIA_DIR` | 显式 local / 开发 fallback 的文件系统根目录。 |
+| `LOCAL_MEDIA_SIGNING_SECRET` | 本地媒体过期 URL 的可选独立 HMAC key；生产 local 模式未设置时可从至少 16 字符的 `POSTGRES_PASSWORD` 派生。 |
+| `DISABLE_LOCAL_MEDIA_STORAGE` | 禁用隐式开发 fallback；不能与显式 `local` 同时使用。 |
 | `CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL` | 静态发布公开 base fallback。 |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | 签名 room/client/turn/mode-scoped publish token。 |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish token 生命期。 |
 
-私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。
+私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。本地 Compose 显式使用 `local`；Fly/AWS 使用 `s3` 或已有的 bucket 自动推断。
 
 ## Chat AI 与可选服务
 

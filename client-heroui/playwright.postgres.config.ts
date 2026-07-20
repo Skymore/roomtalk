@@ -67,11 +67,13 @@ export default defineConfig({
     {
       command: [
         `PORT=${serverPort}`,
-        'NODE_ENV=test',
+        'NODE_ENV=production',
         `CLIENT_URL=${clientURL}`,
         `REDIS_URL=${shellQuote(redisUrl)}`,
         'PERSISTENCE_STORE=postgres',
         `DATABASE_URL=${shellQuote(databaseUrl)}`,
+        'MEDIA_STORAGE_MODE=local',
+        'LOCAL_MEDIA_SIGNING_SECRET=roomtalk-postgres-e2e-local-media-signing-secret',
         `LOCAL_MEDIA_DIR=${shellQuote(localMediaDir)}`,
         'DISABLE_LOCAL_MEDIA_STORAGE=false',
         'E2E_TEST_MODE=true',

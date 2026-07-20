@@ -1,6 +1,7 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
@@ -116,12 +117,68 @@ export const decodeLocalMediaObjectKey = (encodedObjectKey: string): string | nu
 export class LocalMediaObjectStorage implements MediaObjectStorage {
   private readonly rootDir: string;
 
-  constructor(rootDir: string, private readonly logger: Logger) {
+  constructor(
+    rootDir: string,
+    private readonly logger: Logger,
+    private readonly signingSecret?: string,
+  ) {
     this.rootDir = path.resolve(rootDir);
   }
 
   isConfigured() {
     return true;
+  }
+
+  hasSignedUrls() {
+    return Boolean(this.signingSecret);
+  }
+
+  private createLocalUrl(method: 'GET' | 'PUT', objectKey: string, expiresInSeconds: number) {
+    const basePath = `/api/media/local-objects/${encodeLocalMediaObjectKey(objectKey)}`;
+    const expiresEpochSeconds = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    const expiresAt = new Date(expiresEpochSeconds * 1000).toISOString();
+    if (!this.signingSecret) {
+      return { url: basePath, expiresAt };
+    }
+
+    const signature = createHmac('sha256', this.signingSecret)
+      .update(`${method}\n${objectKey}\n${expiresEpochSeconds}`)
+      .digest('hex');
+    const query = new URLSearchParams({
+      expires: String(expiresEpochSeconds),
+      signature,
+    });
+    return { url: `${basePath}?${query.toString()}`, expiresAt };
+  }
+
+  verifySignedUrl(input: {
+    method: 'GET' | 'PUT';
+    objectKey: string;
+    expires: unknown;
+    signature: unknown;
+    nowMs?: number;
+  }) {
+    if (!this.signingSecret) {
+      return true;
+    }
+    if (typeof input.expires !== 'string' || !/^\d+$/.test(input.expires)) {
+      return false;
+    }
+    if (typeof input.signature !== 'string' || !/^[a-f0-9]{64}$/i.test(input.signature)) {
+      return false;
+    }
+
+    const expiresEpochSeconds = Number(input.expires);
+    const nowEpochSeconds = Math.floor((input.nowMs ?? Date.now()) / 1000);
+    if (!Number.isSafeInteger(expiresEpochSeconds) || expiresEpochSeconds < nowEpochSeconds) {
+      return false;
+    }
+
+    const expected = createHmac('sha256', this.signingSecret)
+      .update(`${input.method}\n${input.objectKey}\n${expiresEpochSeconds}`)
+      .digest();
+    const provided = Buffer.from(input.signature, 'hex');
+    return provided.length === expected.length && timingSafeEqual(provided, expected);
   }
 
   private resolveObjectPath(objectKey: string) {
@@ -162,10 +219,7 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
     expiresInSeconds?: number;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
-    return {
-      url: `/api/media/local-objects/${encodeLocalMediaObjectKey(input.objectKey)}`,
-      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
-    };
+    return this.createLocalUrl('PUT', input.objectKey, expiresInSeconds);
   }
 
   async createReadUrl(input: {
@@ -175,10 +229,7 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
     responseCacheControl?: string;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
-    return {
-      url: `/api/media/local-objects/${encodeLocalMediaObjectKey(input.objectKey)}`,
-      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
-    };
+    return this.createLocalUrl('GET', input.objectKey, expiresInSeconds);
   }
 
   private async readMetadata(objectKey: string): Promise<LocalMediaMetadata | null> {
@@ -439,8 +490,33 @@ export const resolveMediaObjectStorageConfig = (env: NodeJS.ProcessEnv = process
 };
 
 export const createMediaObjectStorageFromEnv = (logger: Logger, env: NodeJS.ProcessEnv = process.env): MediaObjectStorage => {
+  const requestedMode = env.MEDIA_STORAGE_MODE?.trim().toLowerCase();
+  if (requestedMode && requestedMode !== 'local' && requestedMode !== 's3') {
+    throw new Error('MEDIA_STORAGE_MODE must be "local" or "s3"');
+  }
+
+  if (requestedMode === 'local') {
+    if (env.DISABLE_LOCAL_MEDIA_STORAGE === 'true') {
+      throw new Error('MEDIA_STORAGE_MODE=local conflicts with DISABLE_LOCAL_MEDIA_STORAGE=true');
+    }
+    const rootDir = env.LOCAL_MEDIA_DIR || path.resolve(process.cwd(), '.local-media');
+    const signingSource = env.LOCAL_MEDIA_SIGNING_SECRET || env.POSTGRES_PASSWORD;
+    const isProduction = (env.NODE_ENV || 'development') === 'production';
+    if (isProduction && (!signingSource || signingSource.length < 16)) {
+      throw new Error('Production MEDIA_STORAGE_MODE=local requires LOCAL_MEDIA_SIGNING_SECRET or POSTGRES_PASSWORD with at least 16 characters');
+    }
+    const signingSecret = signingSource
+      ? createHash('sha256').update('roomtalk-local-media-signing-v1\0').update(signingSource).digest('hex')
+      : undefined;
+    logger.info('Local media object storage configured', { rootDir, signedUrls: Boolean(signingSecret) });
+    return new LocalMediaObjectStorage(rootDir, logger, signingSecret);
+  }
+
   const config = resolveMediaObjectStorageConfig(env);
   if (!config) {
+    if (requestedMode === 's3') {
+      throw new Error('MEDIA_STORAGE_MODE=s3 requires MEDIA_BUCKET_NAME or another supported bucket variable');
+    }
     if ((env.NODE_ENV || 'development') !== 'production' && env.DISABLE_LOCAL_MEDIA_STORAGE !== 'true') {
       const rootDir = env.LOCAL_MEDIA_DIR || path.resolve(process.cwd(), '.local-media');
       logger.warn('Media object storage is not configured; using local development media storage', { rootDir });

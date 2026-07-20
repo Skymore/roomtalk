@@ -99,19 +99,21 @@ PostgreSQL `NOTIFY` 和 Socket.IO 只负责唤醒。多个 app 实例经 Redis a
 | app container | Fly Machine | ECS Fargate 或 EKS |
 | PostgreSQL 17 volume | Supabase/托管 PostgreSQL | RDS PostgreSQL |
 | Redis 7，可重建 | 托管 Redis | ElastiCache |
-| local/S3-compatible media | Tigris/S3-compatible | S3 |
+| 持久本地媒体 volume | Tigris/S3-compatible | S3 |
 
-Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是镜像、PostgreSQL schema/dump/WAL 合约、Redis 可丢弃定位和 S3-compatible 对象。
+Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是镜像、PostgreSQL schema/dump/WAL 合约、Redis 可丢弃定位和媒体存储边界。本地 Compose 显式选择持久文件系统实现，Fly/AWS 通过环境变量选择 S3-compatible 存储。
 
 本地启动与备份：
 
 ```bash
 cp .env.compose.example .env.compose
-docker compose up -d --build
-docker compose --profile ops run --rm postgres-backup
+docker compose --env-file .env.compose up -d --build
+docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-PostgreSQL/Redis 的维护端口只绑定 loopback。Named volume 不是备份；生产必须有加密异地副本和实际 restore 演练。
+必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。Backup job 会同时生成 PostgreSQL custom archive 与对应的本地媒体 tarball。PostgreSQL/Redis 的维护端口只绑定 loopback；named volume 和本地 `backups/` 目录都不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
+
+生产式本地媒体 URL 会对 method、object key 与 expiry 做 HMAC 签名；缺失签名、过期、跨 method 或篡改的 URL 都会被拒绝。优先配置 `LOCAL_MEDIA_SIGNING_SECRET`；未配置时，Compose 可从足够长的本地 PostgreSQL 密码派生独立 signing key。
 
 ## 一次性生产切换边界
 

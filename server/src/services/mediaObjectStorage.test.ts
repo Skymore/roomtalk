@@ -140,6 +140,32 @@ describe('LocalMediaObjectStorage', () => {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it('signs production-style local URLs by method, object key, and expiry', async () => {
+    const storage = new LocalMediaObjectStorage('/tmp/roomtalk-signed-media', new Logger('LocalMediaObjectStorageTest'), 'test-signing-secret');
+    const objectKey = 'rooms/room-1/media/image/asset-1';
+    const writeUrl = await storage.createWriteUrl({
+      objectKey,
+      mimeType: 'image/png',
+      byteSize: 10,
+      expiresInSeconds: 60,
+    });
+    const parsed = new URL(writeUrl.url, 'http://localhost');
+    const expires = parsed.searchParams.get('expires');
+    const signature = parsed.searchParams.get('signature');
+
+    assert.ok(storage.hasSignedUrls());
+    assert.ok(storage.verifySignedUrl({ method: 'PUT', objectKey, expires, signature }));
+    assert.equal(storage.verifySignedUrl({ method: 'GET', objectKey, expires, signature }), false);
+    assert.equal(storage.verifySignedUrl({ method: 'PUT', objectKey: `${objectKey}-other`, expires, signature }), false);
+    assert.equal(storage.verifySignedUrl({
+      method: 'PUT',
+      objectKey,
+      expires,
+      signature,
+      nowMs: (Number(expires) + 1) * 1000,
+    }), false);
+  });
 });
 
 describe('createMediaObjectStorageFromEnv', () => {
@@ -152,12 +178,64 @@ describe('createMediaObjectStorageFromEnv', () => {
     assert.ok(storage instanceof LocalMediaObjectStorage);
   });
 
+  it('allows an explicit persistent local media store in production', () => {
+    const storage = createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+      NODE_ENV: 'production',
+      MEDIA_STORAGE_MODE: 'local',
+      LOCAL_MEDIA_DIR: '/var/lib/roomtalk/media',
+      POSTGRES_PASSWORD: 'roomtalk-test-password-32-bytes',
+    } as NodeJS.ProcessEnv);
+
+    assert.ok(storage instanceof LocalMediaObjectStorage);
+  });
+
+  it('fails closed when production local media has no signing secret', () => {
+    assert.throws(
+      () => createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+        NODE_ENV: 'production',
+        MEDIA_STORAGE_MODE: 'local',
+        LOCAL_MEDIA_DIR: '/var/lib/roomtalk/media',
+      } as NodeJS.ProcessEnv),
+      /requires LOCAL_MEDIA_SIGNING_SECRET or POSTGRES_PASSWORD/
+    );
+  });
+
   it('keeps production media uploads disabled when no bucket is configured', () => {
     const storage = createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
       NODE_ENV: 'production',
     } as NodeJS.ProcessEnv);
 
     assert.ok(storage instanceof MissingMediaObjectStorage);
+  });
+
+  it('fails fast when an explicit S3 mode has no bucket', () => {
+    assert.throws(
+      () => createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+        NODE_ENV: 'production',
+        MEDIA_STORAGE_MODE: 's3',
+      } as NodeJS.ProcessEnv),
+      /MEDIA_STORAGE_MODE=s3 requires MEDIA_BUCKET_NAME/
+    );
+  });
+
+  it('selects the S3 implementation for an explicit cloud mode', () => {
+    const storage = createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+      NODE_ENV: 'production',
+      MEDIA_STORAGE_MODE: 's3',
+      MEDIA_BUCKET_NAME: 'roomtalk-media',
+      MEDIA_STORAGE_REGION: 'us-west-2',
+    } as NodeJS.ProcessEnv);
+
+    assert.ok(storage instanceof S3MediaObjectStorage);
+  });
+
+  it('rejects unknown media storage modes', () => {
+    assert.throws(
+      () => createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+        MEDIA_STORAGE_MODE: 'other',
+      } as NodeJS.ProcessEnv),
+      /MEDIA_STORAGE_MODE must be "local" or "s3"/
+    );
   });
 
   it('loads bounded S3 transport settings from the environment', () => {

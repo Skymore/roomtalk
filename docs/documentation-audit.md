@@ -21,7 +21,7 @@ This audit classifies repository documentation and records quality controls. It 
 | --- | --- |
 | `README.md` / `README.zh.md` | Product, technical highlights, architecture, local development, persistence, release model, selected retrospectives, and concise navigation. |
 | `docs/README.md` / `docs/README.zh.md` | Complete categorized bilingual documentation index. |
-| `docs/room-reliability-architecture*.md` | Current room-session ownership, message/media continuity, room-version convergence, acknowledgement, posting-boundary, diagnostics, and backend ordering contract. |
+| `docs/room-reliability-architecture*.md` | Current room-session ownership, message/media continuity, event-cursor convergence, acknowledgement, posting-boundary, diagnostics, and backend ordering contract. |
 | `docs/code-agent-runtime-architecture*.md` | Current code-agent control/execution plane, lifecycle, security, workspace, recovery, persistence, and release boundaries. |
 | `DeploymentGuide.md` / `部署指南.md` | Current GitHub Actions/Fly production runbook. |
 | `docs/configuration*.md` | Operator-facing configuration groups and source-of-truth boundaries. |

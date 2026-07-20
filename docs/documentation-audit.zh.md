@@ -21,7 +21,7 @@
 | --- | --- |
 | `README.md` / `README.zh.md` | 产品、技术亮点、架构、本地开发、持久化、发布模型、精选复盘和简洁导航。 |
 | `docs/README.md` / `docs/README.zh.md` | 完整分类双语文档索引。 |
-| `docs/room-reliability-architecture*.md` | 当前 room-session ownership、消息/媒体连续性、room-version 收敛、ack、posting boundary、诊断日志与后端 ordering contract。 |
+| `docs/room-reliability-architecture*.md` | 当前 room-session ownership、消息/媒体连续性、event-cursor 收敛、ack、posting boundary、诊断日志与后端 ordering contract。 |
 | `docs/code-agent-runtime-architecture*.md` | 当前 Code Agent control/execution plane、lifecycle、security、workspace、recovery、persistence 和 release 边界。 |
 | `DeploymentGuide.md` / `部署指南.md` | 当前 GitHub Actions/Fly 生产 runbook。 |
 | `docs/configuration*.md` | Operator-facing 配置分组与事实源边界。 |

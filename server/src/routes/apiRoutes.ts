@@ -376,7 +376,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   const shouldRegisterLocalMediaRoutes =
     mediaObjectStorage instanceof LocalMediaObjectStorage &&
-    (process.env.NODE_ENV || 'development') !== 'production';
+    ((process.env.NODE_ENV || 'development') !== 'production' || mediaObjectStorage.hasSignedUrls());
 
   if (shouldRegisterLocalMediaRoutes) {
     app.put('/api/media/local-objects/:encodedObjectKey', express.raw({ type: '*/*', limit: MEDIA_UPLOAD_LIMIT_BYTES.video }), async (req: Request, res: Response) => {
@@ -387,6 +387,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
         if (!objectKey || !body || body.length === 0) {
           return res.status(400).json({ error: 'Valid media object key and body are required' });
+        }
+        if (!mediaObjectStorage.verifySignedUrl({
+          method: 'PUT',
+          objectKey,
+          expires: req.query.expires,
+          signature: req.query.signature,
+        })) {
+          return res.status(403).json({ error: 'Invalid or expired media upload URL' });
         }
 
         await mediaObjectStorage.putMediaObject({
@@ -408,6 +416,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);
         if (!objectKey || !mediaObjectStorage.getMediaObject) {
           return res.status(404).json({ error: 'Media object not found' });
+        }
+        if (!mediaObjectStorage.verifySignedUrl({
+          method: 'GET',
+          objectKey,
+          expires: req.query.expires,
+          signature: req.query.signature,
+        })) {
+          return res.status(403).json({ error: 'Invalid or expired media download URL' });
         }
 
         const head = await mediaObjectStorage.headObject({ objectKey });
@@ -1508,6 +1524,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         status: 'online',
         persistenceStore,
         redis: redisStatus,
+        mediaStorage: mediaObjectStorage.isConfigured() ? 'configured' : 'missing',
         socketAdapterReady: io.of('/').adapter ? true : false,
         features: {
           codeAgent: {

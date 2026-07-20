@@ -99,19 +99,21 @@ The same root `Dockerfile` runs locally, on Fly, and later on AWS. Platform diff
 | app container | Fly Machine | ECS Fargate or EKS |
 | PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
 | Redis 7, rebuildable | managed Redis | ElastiCache |
-| local/S3-compatible media | Tigris/S3-compatible | S3 |
+| persistent local media volume | Tigris/S3-compatible | S3 |
 
-Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and S3-compatible objects.
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the media-storage boundary. Compose selects the persistent filesystem implementation explicitly; Fly/AWS select S3-compatible storage with environment variables.
 
 Local start and backup:
 
 ```bash
 cp .env.compose.example .env.compose
-docker compose up -d --build
-docker compose --profile ops run --rm postgres-backup
+docker compose --env-file .env.compose up -d --build
+docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-PostgreSQL and Redis maintenance ports bind to loopback only. A named volume is not a backup; production needs encrypted off-host copies and restore drills.
+`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. The backup job writes a PostgreSQL custom archive and a matching local-media tarball. PostgreSQL and Redis maintenance ports bind to loopback only. Named volumes and the local `backups/` directory are not off-host backups; production needs encrypted external copies and restore drills.
+
+Production-style local media URLs are HMAC-signed over method, object key, and expiry. Unsigned, expired, cross-method, or tampered URLs are rejected. `LOCAL_MEDIA_SIGNING_SECRET` is preferred; Compose can derive a separate signing key from a sufficiently long local PostgreSQL password when it is omitted.
 
 ## Direct production cutover boundary
 

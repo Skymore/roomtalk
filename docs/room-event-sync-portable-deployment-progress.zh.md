@@ -24,6 +24,7 @@
 | 1 | 架构决策、进度账本、初版 Compose runtime | 完成 | `ec0ac9af` |
 | 2 | PostgreSQL event stream、Socket/client 直接切换、version 退役、integration/E2E | 完成 | `d2c051ab` |
 | 3 | 运维演练、当前文档清理、最终证据 | 完成 | 本文档 commit |
+| 4 | 完成性审计：本地持久媒体、签名 URL、env interpolation、成对恢复 | 完成 | 本次收尾 commit |
 
 没有 push 任何 commit，也没有修改 Fly 服务、Supabase 数据库、生产 DNS 或生产数据。
 
@@ -37,6 +38,8 @@
 - 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
 - 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
 - AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
+- 本地 Compose 显式使用持久媒体 volume 与带过期时间的 HMAC URL；云端选择 S3 实现，`/api/status` 会报告媒体是否就绪。
+- Compose 命令强制带 `--env-file .env.compose`，确保 app 与 PostgreSQL 使用同一份配置凭据，而不是各自落到无关默认值。
 
 ## 服务端交付清单
 
@@ -77,6 +80,7 @@
 - [x] edit、单条 delete、clear、truncate before/after、retry、edit-and-ask 收敛。
 - [x] AI streaming 临时 chunk 不入日志；final/error 与 agent turn 可恢复。
 - [x] media completion、图片刷新、Code Agent tool/final 路径使用有界 canonical event。
+- [x] 生产 local media 的签名/过期/method 约束、浏览器上传刷新、app restart 后字节持久化，以及 database/media 成对恢复。
 - [x] 无权限用户不能读 snapshot/delta；删除前有权限用户可重放 `room.deleted` tombstone。
 - [x] 房间删除 cascade 后 tombstone 仍可读，retention 后连同授权 stream 清理。
 
@@ -84,7 +88,7 @@
 
 | 验证 | 结果 |
 | --- | --- |
-| Server full suite | 740/740 |
+| Server full suite | 747/747 |
 | Client full suite | 985/985 |
 | Event hook focused | 15/15 |
 | Message socket focused | 29/29 |
@@ -94,12 +98,14 @@
 | 根 Dockerfile 独立构建 | 通过，不依赖 Compose build 输入 |
 | Client ESLint / i18n | 通过 |
 | PostgreSQL persistence smoke | 正向 API 通过；不可用数据库在 listen 前非零退出 |
-| Compose config/build/health | 通过；status 为 PostgreSQL，app/PostgreSQL/Redis healthy |
+| Compose config/build/health | 全新隔离栈与标准栈均通过；status 为 PostgreSQL、Redis 与 configured media |
 | PostgreSQL restart persistence | marker 与 event head 保留 |
 | Listener/pool restart recovery | pool 处理断连，LISTEN 1 秒内恢复，无 uncaught exception |
-| Backup -> fresh restore | PostgreSQL 17 custom archive，170 TOC entries，恢复成功 |
+| Backup -> fresh restore | 同时间戳 PostgreSQL 17 custom archive（170 TOC）与 media tarball 均恢复到全新目标 |
 
-全新恢复库中有 1 个 room、member、message、stream 和 2 个有序 event（`headSeq=2`）。九个 event trigger 与一个 room 单调时间 trigger 全部存在，退役 version column 数量为 0。验证后已删除源库 marker 和临时 restore database；最终 dump 为 ignored `backups/roomtalk-20260720T122146Z.dump`。
+Event schema 演练的全新恢复库中有 1 个 room、member、message、stream 和 2 个有序 event（`headSeq=2`）。九个 event trigger 与一个 room 单调时间 trigger 全部存在，退役 version column 数量为 0。后续成对演练把 `backups/roomtalk-20260720T123725Z.dump` 恢复到全新数据库，并把 `backups/roomtalk-media-20260720T123725Z.tar.gz` 恢复到全新 volume；room/media/message 关系一致，媒体对象 SHA-256 与源文件逐字节相同。临时数据库、volume、marker 和隔离 Compose 项目均已删除。
+
+完成性审计还使用自定义 `.env.compose` 密码渲染 Compose，证明 PostgreSQL service password 与 app `DATABASE_URL` 一致。只读检查确认当前 Fly 环境具备同一根镜像需要的 PostgreSQL、Redis、bucket、endpoint 与 S3 credential；没有修改任何云端状态。
 
 重启演练第一次发现 node-postgres idle client 断连会冒泡到全局 `uncaughtException`。已增加 pool-level error handler 和单测；第二次真实 PostgreSQL restart 只记录预期 handled warning，API 继续健康且 `LISTEN room_event_committed` 自动恢复。
 

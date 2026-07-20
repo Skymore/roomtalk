@@ -623,6 +623,7 @@ describe('API routes', () => {
       status: string;
       persistenceStore: string;
       redis: string;
+      mediaStorage: string;
       rooms: number;
       features: {
         codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
@@ -633,6 +634,7 @@ describe('API routes', () => {
     assert.equal(status.status, 'online');
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
+    assert.equal(status.mediaStorage, 'configured');
     assert.equal(status.rooms, 1);
     assert.deepEqual(status.features.codeAgent, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
@@ -1722,6 +1724,87 @@ describe('API routes', () => {
       assert.equal(downloadResponse.status, 200);
       assert.equal(downloadResponse.headers.get('content-type'), 'image/webp');
       assert.equal(Buffer.from(await downloadResponse.arrayBuffer()).toString('utf8'), 'image-bytes');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires expiring signed local media URLs in production mode', async () => {
+    await server.close();
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), 'roomtalk-route-signed-media-'));
+    const storage = new LocalMediaObjectStorage(rootDir, new Logger('SignedLocalMediaRouteTest'), 'route-signing-secret');
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      server = await createTestServer({ mediaObjectStorage: storage });
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    }
+
+    try {
+      server.store.members.add('room-1:client-signed-file');
+      const bytes = Buffer.from('signed-image-bytes');
+      const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-signed-file',
+          roomId: 'room-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: bytes.length,
+        }),
+      });
+      assert.equal(uploadResponse.status, 201);
+      const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
+      assert.match(upload.uploadUrl, /[?&]expires=\d+/);
+      assert.match(upload.uploadUrl, /[?&]signature=[a-f0-9]{64}/);
+
+      const unsignedUploadUrl = upload.uploadUrl.split('?')[0];
+      const unsignedPut = await fetch(`${server.baseUrl}${unsignedUploadUrl}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'image/webp' },
+        body: bytes,
+      });
+      assert.equal(unsignedPut.status, 403);
+
+      const signedPut = await fetch(`${server.baseUrl}${upload.uploadUrl}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'image/webp' },
+        body: bytes,
+      });
+      assert.equal(signedPut.status, 204);
+
+      const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-signed-file',
+          roomId: 'room-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: bytes.length,
+          objectKey: upload.objectKey,
+        }),
+      });
+      assert.equal(completeResponse.status, 201);
+
+      const downloadUrlResponse = await fetch(`${server.baseUrl}/api/media/${upload.assetId}/download-url?roomId=room-1&clientId=client-signed-file`);
+      assert.equal(downloadUrlResponse.status, 200);
+      const download = await downloadUrlResponse.json() as { url: string };
+      assert.match(download.url, /[?&]signature=[a-f0-9]{64}/);
+
+      const wrongMethodResponse = await fetch(`${server.baseUrl}${upload.uploadUrl}`);
+      assert.equal(wrongMethodResponse.status, 403);
+      const unsignedDownloadResponse = await fetch(`${server.baseUrl}${download.url.split('?')[0]}`);
+      assert.equal(unsignedDownloadResponse.status, 403);
+      const signedDownloadResponse = await fetch(`${server.baseUrl}${download.url}`);
+      assert.equal(signedDownloadResponse.status, 200);
+      assert.equal(Buffer.from(await signedDownloadResponse.arrayBuffer()).toString('utf8'), 'signed-image-bytes');
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

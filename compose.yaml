@@ -18,11 +18,15 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:-roomtalk-local-only}@postgres:5432/${POSTGRES_DB:-message_system}
       POSTGRES_SSL: "false"
       REDIS_URL: redis://redis:6379
+      MEDIA_STORAGE_MODE: ${MEDIA_STORAGE_MODE:-local}
+      LOCAL_MEDIA_DIR: /var/lib/roomtalk/media
       CODE_AGENT_ENABLED: ${CODE_AGENT_ENABLED:-false}
       CODEX_CONNECTIONS_ENABLED: ${CODEX_CONNECTIONS_ENABLED:-false}
       GITHUB_CONNECTIONS_ENABLED: ${GITHUB_CONNECTIONS_ENABLED:-false}
     ports:
       - 127.0.0.1:${ROOMTALK_PORT:-3012}:3012
+    volumes:
+      - media_data:/var/lib/roomtalk/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,12 +87,15 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-roomtalk-local-only}
     volumes:
       - ./backups:/backups
+      - media_data:/media:ro
     entrypoint:
       - /bin/sh
       - -ec
       - |
         umask 077
-        pg_dump --format=custom --file="/backups/roomtalk-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+        timestamp="$$(date -u +%Y%m%dT%H%M%SZ)"
+        pg_dump --format=custom --file="/backups/roomtalk-$${timestamp}.dump"
+        tar -czf "/backups/roomtalk-media-$${timestamp}.tar.gz" -C /media .
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,6 +104,7 @@ services:
 
 volumes:
   postgres_data:
+  media_data:
 
 networks:
   roomtalk:
