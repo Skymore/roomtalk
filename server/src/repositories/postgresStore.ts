@@ -2,10 +2,11 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventRetentionOptions, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
+import { validateStoredRoomEventPayload } from './roomEventPayload';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -3543,26 +3544,28 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   private decodeRoomEvents(rows: RoomEventRow[]): RoomEvent[] {
-    const readObjects = <T>(value: unknown): T[] => Array.isArray(value)
-      ? value.filter((item): item is T => Boolean(item) && typeof item === 'object')
-      : [];
-    const readIds = (value: unknown): string[] => Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === 'string')
-      : [];
-
     return rows.map(row => {
       const schemaVersion = Number(row.schema_version);
       if (schemaVersion !== 1) {
-        throw new Error(`Unsupported room event schema version ${schemaVersion} for ${row.room_id}:${row.seq}`);
+        throw new RoomEventPayloadInvalidError(
+          row.room_id,
+          Number(row.seq),
+          `unsupported schema version ${schemaVersion}`,
+        );
       }
       const seq = Number(row.seq);
-      const rawPayload = parseJsonValue<Record<string, unknown>>(row.payload) || {};
+      const parsedPayload = parseJsonValue<unknown>(row.payload);
+      const invalidReason = validateStoredRoomEventPayload(row.event_type, parsedPayload, row.room_id);
+      if (invalidReason) {
+        throw new RoomEventPayloadInvalidError(row.room_id, seq, invalidReason);
+      }
+      const rawPayload = parsedPayload as Record<string, unknown>;
       const payload: RoomEvent['payload'] = {};
       switch (row.event_type) {
         case 'messages.upserted': {
-          const messages = orderMessageBatches(readObjects<MessageRow>(rawPayload.messageRows).map(mapMessage));
+          const messages = orderMessageBatches((rawPayload.messageRows as MessageRow[]).map(mapMessage));
           const mediaByMessageId = new Map(
-            readObjects<StoredMediaAssetSnapshotRow>(rawPayload.mediaAssets).map(asset => {
+            (rawPayload.mediaAssets as StoredMediaAssetSnapshotRow[]).map(asset => {
               const media: MessageMediaAsset = {
                 id: asset.id,
                 kind: asset.kind,
@@ -3587,21 +3590,16 @@ export class PostgresStore implements DurableRoomStore {
           break;
         }
         case 'messages.deleted':
-          payload.messageIds = readIds(rawPayload.messageIds);
+          payload.messageIds = rawPayload.messageIds as string[];
           break;
         case 'agent_turns.upserted':
-          payload.turns = readObjects<RoomAgentTurnRow>(rawPayload.turnRows).map(mapRoomAgentTurn);
+          payload.turns = (rawPayload.turnRows as RoomAgentTurnRow[]).map(mapRoomAgentTurn);
           payload.turnIds = payload.turns.map(turn => turn.id);
           break;
         case 'agent_turns.deleted':
-          payload.turnIds = readIds(rawPayload.turnIds);
+          payload.turnIds = rawPayload.turnIds as string[];
           break;
-        case 'members.upserted':
-          payload.members = readObjects<RoomMemberRow>(rawPayload.memberRows).map(mapRoomMember);
-          payload.memberClientIds = payload.members.map(member => member.clientId);
-          break;
-        case 'members.deleted':
-          payload.memberClientIds = readIds(rawPayload.memberClientIds);
+        case 'members.changed':
           break;
         case 'room.updated': {
           payload.roomId = row.room_id;

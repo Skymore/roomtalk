@@ -232,8 +232,7 @@ export type RoomEventType =
   | 'messages.deleted'
   | 'agent_turns.upserted'
   | 'agent_turns.deleted'
-  | 'members.upserted'
-  | 'members.deleted'
+  | 'members.changed'
   | 'room.updated'
   | 'room.deleted';
 
@@ -248,8 +247,6 @@ export interface RoomEvent {
     messageIds?: string[];
     turns?: RoomAgentTurn[];
     turnIds?: string[];
-    members?: RoomMember[];
-    memberClientIds?: string[];
     room?: Room;
     roomId?: string;
     deletedAt?: string;

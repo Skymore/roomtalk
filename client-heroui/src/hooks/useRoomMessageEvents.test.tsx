@@ -207,6 +207,8 @@ const Harness = ({
     data-testid="state"
     data-messages={messages.map(item => item.id).join(',')}
     data-contents={messages.map(item => item.content).join('|')}
+    data-statuses={messages.map(item => item.status || '').join('|')}
+    data-ui-messages={messages.reduce((total, item) => total + (item.uiPayload?.messages.length || 0), 0)}
     data-turns={turns.map(item => item.id).join(',')}
     data-seq={lastAppliedSeq}
     data-more={String(hasMore)}
@@ -698,5 +700,133 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     act(() => socketMock.trigger('ai_stream_end', { roomId: 'room-1', messageId: 'ai-1', content: 'final' }));
     expect(screen.getByTestId('state').dataset.contents).toBe('final');
     expect(screen.getByTestId('state').dataset.seq).toBe('5');
+  });
+
+  it('buffers an AI chunk that arrives before its durable placeholder event', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-early', chunk: 'early chunk',
+    }));
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
+
+    const placeholder = message({
+      id: 'ai-early', clientId: 'ai_assistant', content: '', status: 'streaming', messageType: 'ai',
+    });
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 1,
+      events: [event(1, {
+        payload: { messages: [placeholder], messageIds: [placeholder.id] },
+      })],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('ai-early'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('early chunk');
+    expect(screen.getByTestId('state').dataset.statuses).toBe('streaming');
+    expect(screen.getByTestId('state').dataset.seq).toBe('1');
+  });
+
+  it('drains early A2UI and stream-end events in arrival order after the placeholder appears', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+
+    act(() => socketMock.trigger('a2ui_update', {
+      roomId: 'room-1',
+      messageId: 'ai-early',
+      uiPayload: {
+        format: 'a2ui',
+        version: 'v0.9',
+        messages: [{
+          version: 'v0.9',
+          createSurface: { surfaceId: 'surface-1', catalogId: 'catalog-1' },
+        }],
+      },
+    }));
+    act(() => socketMock.trigger('ai_stream_end', {
+      roomId: 'room-1', messageId: 'ai-early', content: 'final answer',
+    }));
+
+    const placeholder = message({
+      id: 'ai-early', clientId: 'ai_assistant', content: '', status: 'streaming', messageType: 'ai',
+    });
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 1,
+      events: [event(1, {
+        payload: { messages: [placeholder], messageIds: [placeholder.id] },
+      })],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.statuses).toBe('complete'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('final answer');
+    expect(screen.getByTestId('state').dataset.uiMessages).toBe('1');
+  });
+
+  it('keeps a final durable after-image authoritative over an earlier buffered chunk', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-fast', chunk: 'final answer',
+    }));
+    const finalMessage = message({
+      id: 'ai-fast',
+      clientId: 'ai_assistant',
+      content: 'final answer',
+      status: 'complete',
+      messageType: 'ai',
+    });
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 2,
+      events: [
+        event(1, {
+          payload: {
+            messages: [{ ...finalMessage, content: '', status: 'streaming' }],
+            messageIds: [finalMessage.id],
+          },
+        }),
+        event(2, {
+          payload: { messages: [finalMessage], messageIds: [finalMessage.id] },
+        }),
+      ],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('final answer');
+    expect(screen.getByTestId('state').dataset.statuses).toBe('complete');
+  });
+
+  it('replaces state from a snapshot when the server rejects a corrupt event payload', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'stale' })], lastAppliedSeq: 5, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockRejectedValueOnce(new socketMock.SocketRequestError(
+      'EVENT_PAYLOAD_INVALID',
+      'invalid event payload',
+    ));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'canonical' })],
+      snapshotSeq: 7,
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('7'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('canonical');
+    expect(socketMock.requestSnapshot).toHaveBeenCalled();
+    expect(socketMock.requestEvents.mock.calls.some(call => call[0].afterSeq === 6)).toBe(false);
   });
 });

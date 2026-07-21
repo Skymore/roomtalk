@@ -6,7 +6,7 @@ import path from 'path';
 import { registerMessageHandlers } from './messageHandlers';
 import { loadStickerCatalog } from '../stickers/catalog';
 import { Message, Room, RoomAICostTotal } from '../types';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError } from '../repositories/store';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from '../repositories/store';
 
 type SocketEmit = {
   event: string;
@@ -452,6 +452,28 @@ describe('message socket handlers', () => {
       success: false,
       code: 'CURSOR_AHEAD',
       error: 'The room event cursor is ahead of the current stream and must be reset',
+    });
+  });
+
+  it('returns EVENT_PAYLOAD_INVALID instead of acknowledging a corrupt stored event', async () => {
+    const { socket, store } = createHarness();
+    store.readRoomEvents = async () => {
+      throw new RoomEventPayloadInvalidError('room-1', 6, 'payload.messageRows must be non-empty');
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-invalid',
+      roomId: 'room-1',
+      afterSeq: 5,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'EVENT_PAYLOAD_INVALID',
+      error: 'A stored room event is invalid; reload from a canonical snapshot',
     });
   });
 

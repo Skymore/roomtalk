@@ -73,6 +73,10 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 - Recorded the multi-instance boundary as PostgreSQL fan-out plus per-listener `io.local`, and documented local `room_sync_required` anti-entropy after a successful listener reconnect.
 - Documented the one-time legacy-event migration: advisory-locked concurrent startup, preserved stream heads, active cursor expiry, and authorized V1 deleted-room tombstones. The source is verified but intentionally not deployed by this change.
 - Recorded why room replay needs neither a realtime delivery outbox nor `messageVersion`, and kept transient typing/presence/AI chunk/voice/WebRTC traffic outside the durable sequence.
+- Hardened the public event contract so membership changes reveal no IDs or roles; privileged member data remains behind `get_room_role_members`, and migration `0004` scrubs any pre-production member payloads.
+- Documented strict V1 payload decoding: malformed stored events return `EVENT_PAYLOAD_INVALID`, do not advance the cursor, and converge through a canonical snapshot.
+- Documented the bounded client buffer for AI chunk/A2UI/end events that arrive before their durable placeholder, including durable-final precedence and the 60-second / 64-ID / 512-event / 512-KiB limits.
+- Recorded the production release boundary: stop old app instances before `0003`/`0004`; a future multi-instance rollout requires two-phase compatibility or the same maintenance window.
 
 ## Earlier Audit Corrections (2026-07-13)
 

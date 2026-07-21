@@ -473,6 +473,7 @@ We split storage into durable and realtime layers, but the durable authority is 
   <li>用户消息和 AI <code>status: 'streaming'</code> placeholder 先写 PostgreSQL，各自在原事务里产生 durable room event。</li>
   <li>默认 worker 模式把 <code>assistant_run</code> 与 <code>outbox_event</code> 原子写入；Worker claim/lease/retry 后调用 Provider。</li>
   <li>Provider 输出中的 <code>ai_chunk</code> 通过 Socket.IO 直接推送，它是低延迟 UX fast path，不进入 room-event log。</li>
+  <li>如果 chunk/A2UI/end 抢在 durable placeholder event 前到达，客户端按 <code>messageId</code> 有界暂存并在 placeholder 出现后按到达顺序 drain；上限为 60 秒 TTL、64 个 message、512 events、512 KiB，超限时最终 durable event 仍保证收敛。</li>
   <li>完成或失败状态再次写 PostgreSQL，产生最终 durable room event；<code>ai_stream_end</code> 让在线客户端立即收尾，漏掉它的客户端仍可 replay 恢复。</li>
   <li>服务重启时，Worker 从 outbox/run 状态继续处理；遗留的 streaming message 还有 <code>aiStreamRecovery</code> 兜底，避免僵尸流。</li>
 </ul>
@@ -480,6 +481,7 @@ We split storage into durable and realtime layers, but the durable authority is 
   <li>The user message and AI <code>status: 'streaming'</code> placeholder are persisted first; each transaction appends a durable room event.</li>
   <li>In the default worker mode, the <code>assistant_run</code> and <code>outbox_event</code> are written atomically; a worker claims, leases, and retries the Provider call.</li>
   <li>Provider output is pushed as direct Socket.IO <code>ai_chunk</code> events. This is a low-latency UX fast path and is not stored in the room-event log.</li>
+  <li>If a chunk/A2UI/end event beats the durable placeholder event, the client buffers it by <code>messageId</code> and drains it in arrival order when the placeholder appears. The buffer is capped at a 60-second TTL, 64 message IDs, 512 events, and 512 KiB; the final durable event still guarantees convergence after eviction.</li>
   <li>Completion or failure is persisted again and appends the final durable room event. <code>ai_stream_end</code> finishes online clients immediately; clients that miss it still recover by replay.</li>
   <li>After a restart, the worker continues from outbox/run state, while <code>aiStreamRecovery</code> remains a final guard against orphaned streaming messages.</li>
 </ul>
@@ -1243,23 +1245,25 @@ We used a shared store contract to control behavioral drift during migration, bu
 <p data-lang="zh"><strong>解决方案</strong>：</p>
 <p data-lang="en"><strong>Solution</strong>:</p>
 <ol data-lang="zh">
-  <li>PostgreSQL 在 room/message/agent-turn/member/media 原事务内收集变化，deferred writer 在 aggregate 完整后追加安全、不可变的 <code>schemaVersion: 1</code> after-image；rollback 时 state、event 与 seq 一起消失。</li>
+  <li>PostgreSQL 在 room/message/agent-turn/media 原事务内收集变化，deferred writer 在 aggregate 完整后追加安全、不可变的 <code>schemaVersion: 1</code> after-image；rollback 时 state、event 与 seq 一起消失。成员变更只写空的公共 <code>members.changed {}</code>，成员 ID/role 继续由特权接口保护。</li>
   <li><code>get_room_snapshot</code> 用 repeatable-read 返回 canonical window 与 <code>snapshotSeq</code>。</li>
   <li>PostgreSQL <code>NOTIFY</code> 只报告已提交的 <code>roomId/headSeq</code>；每个 app 从 PostgreSQL 读回精确的不可变 event，再用 <code>io.local</code> 发 <code>room_event_available { headSeq, events? }</code>，不经过 Redis adapter 全局放大。</li>
   <li>完整通知不超过 <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code>（默认 256 KiB）时携带 event；读取失败或超限退化为 head-only hint。</li>
   <li>客户端只直接应用从 <code>lastAppliedSeq + 1</code> 开始、并以 <code>headSeq</code> 结束的连续 payload；duplicate 忽略，gap 按 <code>afterSeq=lastAppliedSeq</code> 补拉。</li>
   <li>小 gap 默认按每页 100 events / 256 KiB replay；保留窗口内落后超过 500 events 时直接取新 snapshot，再排空 snapshot 后的 tail。</li>
   <li><code>CURSOR_EXPIRED</code> 处理 retention 落后，<code>CURSOR_AHEAD</code> 处理数据库恢复点落后于浏览器 cache；只有保留的终态 <code>room.deleted</code> 可以跨过已清理前缀，因为 deleted room 已无 snapshot；更早历史仍用 <code>beforeMessageId</code> prepend。</li>
+  <li>每种 V1 event 都严格验证 required field、类型和允许字段；坏 payload 返回 <code>EVENT_PAYLOAD_INVALID</code>，客户端不推进坏 seq，直接以 canonical snapshot 收敛。</li>
   <li>PG listener 成功 re-LISTEN 后发送本机 <code>room_sync_required</code>；客户端保留 UI，从现有 <code>lastAppliedSeq</code> 反熵。</li>
 </ol>
 <ol data-lang="en">
-  <li>PostgreSQL collects room/message/agent-turn/member/media changes in the domain transaction. After the aggregate is complete, a deferred writer appends safe immutable <code>schemaVersion: 1</code> after-images; rollback removes state, events, and sequence advancement.</li>
+  <li>PostgreSQL collects room/message/agent-turn/media changes in the domain transaction. After the aggregate is complete, a deferred writer appends safe immutable <code>schemaVersion: 1</code> after-images; rollback removes state, events, and sequence advancement. Membership changes append only an empty public <code>members.changed {}</code>; member IDs and roles remain behind the privileged API.</li>
   <li><code>get_room_snapshot</code> uses repeatable read to return a canonical window plus <code>snapshotSeq</code>.</li>
   <li>PostgreSQL <code>NOTIFY</code> reports only the committed <code>roomId/headSeq</code>. Every app reads the exact immutable event from PostgreSQL and sends <code>room_event_available { headSeq, events? }</code> with <code>io.local</code>, avoiding global Redis-adapter amplification.</li>
   <li>The event is included when the complete notification fits <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code> (256 KiB by default); read failures or oversized payloads fall back to a head-only hint.</li>
   <li>The client directly applies only a contiguous payload starting at <code>lastAppliedSeq + 1</code> and ending at <code>headSeq</code>. Duplicates are ignored; gaps replay with <code>afterSeq=lastAppliedSeq</code>.</li>
   <li>Small gaps replay in pages of 100 events / 256 KiB. A retained gap over 500 events loads a new snapshot and then drains only the post-snapshot tail.</li>
   <li><code>CURSOR_EXPIRED</code> handles retention lag and <code>CURSOR_AHEAD</code> handles a database restored behind browser cache. Only a retained terminal <code>room.deleted</code> may jump a pruned prefix because a deleted room has no snapshot; older history still prepends through <code>beforeMessageId</code>.</li>
+  <li>Every V1 event strictly validates required fields, types, and allowed keys. A bad payload returns <code>EVENT_PAYLOAD_INVALID</code>; the client does not advance past it and converges from a canonical snapshot.</li>
   <li>After the PG listener successfully re-LISTENs, the instance sends local <code>room_sync_required</code>; clients retain the UI and perform anti-entropy from the existing <code>lastAppliedSeq</code>.</li>
 </ol>
 
@@ -1926,11 +1930,20 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>一条 AI message 从发送到完成经历什么？</summary>
-  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；完成或失败时把最终 AI message 写 PostgreSQL，追加最终 after-image event，并发 <code>ai_stream_end</code>。在线客户端看到低延迟流，离线或漏包客户端通过 room-event replay 得到最终状态。</div>
+  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；若它早于 placeholder 通知到达，客户端先按 <code>messageId</code> 有界暂存。Placeholder event 到达后按序 drain；如果同一 replay page 已含 final after-image，则 final 是事实源，旧 chunk 不再追加，避免内容重复。完成或失败时把最终 AI message 写 PostgreSQL，追加最终 after-image event，并发 <code>ai_stream_end</code>。在线客户端看到低延迟流，离线、漏包或缓冲淘汰的客户端通过 room-event replay 得到最终状态。</div>
 </details>
 <details data-lang="en">
   <summary>What happens during one AI-message lifecycle?</summary>
-  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. On completion or failure, the final AI message is persisted, its final after-image event is appended, and <code>ai_stream_end</code> is emitted. Online clients see a low-latency stream, while offline or packet-losing clients recover the final state through room-event replay.</div>
+  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. If it beats the placeholder notification, the client first buffers it by <code>messageId</code>. The placeholder event drains buffered data in order; if the same replay page already contains the final after-image, that durable final state wins and older chunks are discarded to avoid duplicated content. On completion or failure, the final AI message is persisted, its final after-image event is appended, and <code>ai_stream_end</code> is emitted. Online clients see a low-latency stream, while offline, packet-losing, or buffer-evicted clients recover the final state through room-event replay.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>为什么不在收到早到的 <code>ai_chunk</code> 时直接创建一条假 placeholder？</summary>
+  <div class="answer">因为 transient push 不是事实源：它可能重复、乱序，也可能对应最终回滚或失败的写入。客户端自己造 message 会引入一个没有数据库 seq、权限上下文和完整 metadata 的对象，之后还要解决“假对象”和 canonical after-image 合并。按 <code>messageId</code> 暂存只保留低延迟数据，不提前发明 durable state；真正 placeholder 到达才让它进入 UI，最终 after-image 负责兜底收敛。</div>
+</details>
+<details data-lang="en">
+  <summary>Why not create a synthetic placeholder as soon as an early <code>ai_chunk</code> arrives?</summary>
+  <div class="answer">A transient push is not authoritative: it may be duplicated, reordered, or refer to a write that ultimately fails. Inventing a client message would create an object without a database sequence, permission context, or complete metadata, followed by another merge problem when the canonical after-image arrives. Buffering by <code>messageId</code> preserves the low-latency data without inventing durable state; the real placeholder admits it into the UI, and the final after-image guarantees convergence.</div>
 </details>
 
 <details data-lang="zh">

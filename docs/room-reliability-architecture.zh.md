@@ -63,7 +63,7 @@ Reducer 只接受连续前缀：
 
 ## 事件语义
 
-这里是有界、不可变的 after-image changelog，不是审计日志，也不是完整 Event Sourcing。Canonical 表仍是事实源，但每个保留事件自身可以确定性重放：`readRoomEvents()` 直接解码已保存的 `schemaVersion: 1` payload，绝不会再用当前 `room_messages`、`room_agent_turns` 或 `rooms` 行替换旧事件内容。Message after-image 保存稳定 media asset ID 与必要元数据，但排除内部 object key、uploader ID、stream owner、password hash 和会过期的签名 URL。
+这里是有界、不可变的 after-image changelog，不是审计日志，也不是完整 Event Sourcing。Canonical 表仍是事实源，但每个保留事件自身可以确定性重放：`readRoomEvents()` 严格解码已保存的 `schemaVersion: 1` discriminated payload，绝不会再用当前 `room_messages`、`room_agent_turns` 或 `rooms` 行替换旧事件内容。字段缺失、类型错误或意外字段会触发 `EVENT_PAYLOAD_INVALID`；客户端不跨过该 cursor，而是从 canonical snapshot 替换状态。Message after-image 保存稳定 media asset ID 与必要元数据，但排除内部 object key、uploader ID、stream owner、password hash 和会过期的签名 URL。
 
 | 事件 | 客户端动作 |
 | --- | --- |
@@ -71,13 +71,13 @@ Reducer 只接受连续前缀：
 | `messages.deleted` | 删除 ID，并清理对应媒体 cache |
 | `agent_turns.upserted` | upsert 已保存的 RoomAgentTurn after-image |
 | `agent_turns.deleted` | 删除 turn ID |
-| `members.upserted` / `members.deleted` | 应用持久 membership/role after-image 或 tombstone |
+| `members.changed` | 不暴露任何成员数据；有权限的管理界面通过 `room.manageMembers` 鉴权重新读取 |
 | `room.updated` | 把已保存的完整 SafeRoom after-image 交给正常 room commit guard |
 | `room.deleted` | 清理本地房间/消息 cache |
 
 clear、truncate、retry、edit-and-ask 会表现为一个或多个有序批量 upsert/delete 事件。因此“一次业务操作恰好一个事件”不是约束；真正约束是：每个已提交的可见行变化与事件同事务，事务回滚时两者都不存在。
 
-AI chunk 和增量 UI 更新仍是临时 Socket fast path；持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
+AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 placeholder 的独立 PostgreSQL 通知前到达，因此浏览器按 `messageId` 缓存未匹配的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end`，placeholder 出现后按到达顺序 drain。缓存上限是 64 个 message ID、512 个事件、512 KiB 和 60 秒 TTL。持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
 
 Typing、presence、voice level 和 WebRTC signalling 同样属于 transient，不消耗 durable room sequence。未来如果 reaction 成为持久产品模型，它的 `reactions.upserted` / `reactions.deleted` after-image 应进入这条 sequence，而不是引入第二套 version counter。
 
@@ -99,6 +99,8 @@ PostgreSQL 负责跨实例 fan-out；每个 listener 只通知连接到本实例
 
 Migration `0003_room_events_immutable_after_images` 持表锁安装 deferred after-image writer，并移除旧 ID-only triggers。Migration runner 用 PostgreSQL transaction advisory lock 串行化多个 app 同时启动。在同一 migration 事务中，旧的非确定性事件被清除，但 stream head 不重置。Active stream 把 `minAvailableSeq` 推到 `headSeq + 1`，旧 cursor 得到 `CURSOR_EXPIRED` 后 snapshot。Deleted stream 会得到一条新的 V1 `room.deleted` tombstone，并保留 `deleted_reader_ids`。即使 cursor 早于已清理前缀，服务端也直接返回这个终态事件；客户端只对这个 terminal event 允许一次 seq 跳跃，因此原成员不会进入无法完成的“删除房间 snapshot”循环。
 
+Migration `0004_public_member_change_events` 会把 pre-production member after-image 全部改为无内容的 `members.changed`，并替换 member writer，从而消除成员隐私泄漏。公共事件流永远不包含离线成员 ID、角色或 joined time。直接的 `0003` / `0004` 边界要求维护窗口内停止所有旧 App instance；未来 AWS 若要滚动发布，必须先设计明确的两阶段兼容协议。
+
 这是明确的直接切换，不长期维护双 decoder。它也不需要 realtime outbox：outbox 解决 competing worker 的副作用与重试，而 room replay 是已经与 canonical mutation 同事务持久化的 fan-out state transfer。`messageVersion` 同样只会重复 room seq，又不能表达漏掉了哪些提交。
 
 ## 验证证据
@@ -106,8 +108,8 @@ Migration `0003_room_events_immutable_after_images` 持表锁安装 deferred aft
 当前实现由以下层次保护：
 
 - store、socket unit/contract tests；
-- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、删除、turn、room metadata 与 AI 临时事件 broadcaster/reducer tests；
-- 真实 PostgreSQL 的不可变 message/room/turn/member/media after-image、secret 排除、migration 切换、快照、幂等、回滚、并发、room metadata 单调性、retention 与删除授权测试；
+- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、坏 payload snapshot、删除、turn、room metadata 与提前到达 AI transient buffer tests；
+- 真实 PostgreSQL 的不可变 message/room/turn/media after-image、空公共成员 signal、旧成员事件隐私修复、严格 payload 拒绝、secret 排除、migration 切换、快照、幂等、回滚、并发、room metadata 单调性、retention 与删除授权测试；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；
 - Compose health、重启持久化与 backup/restore。
 

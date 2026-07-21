@@ -4,7 +4,7 @@ import { MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { createPostgresPool } from './postgresPool';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { PostgresPool, PostgresStore } from './postgresStore';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError } from './store';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from './store';
 
 const logger = {
   debug() {},
@@ -119,7 +119,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const page = await store.readRoomEvents(roomId, { afterSeq: 0, limit: 100 });
     assert.deepEqual(page.events.map(event => [event.seq, event.type]), [
       [1, 'room.updated'],
-      [2, 'members.upserted'],
+      [2, 'members.changed'],
       [3, 'messages.upserted'],
     ]);
     assert.equal(page.events[2].payload.messages?.[0]?.content, 'message-1');
@@ -172,6 +172,24 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(deletePage.events.length, 1);
     assert.equal(deletePage.events[0].type, 'messages.deleted');
     assert.deepEqual(deletePage.events[0].payload.messageIds, ['message-1']);
+  });
+
+  it('accepts an empty-content streaming AI placeholder as a valid strict payload', async () => {
+    const roomId = 'event-ai-placeholder-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const baselineHead = await store.readRoomEventHead(roomId);
+    assert.ok(await store.appendMessage(message(roomId, 'ai-placeholder', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    })));
+
+    const page = await store.readRoomEvents(roomId, { afterSeq: baselineHead, limit: 10 });
+    assert.equal(page.events.length, 1);
+    assert.equal(page.events[0].payload.messages?.[0]?.content, '');
+    assert.equal(page.events[0].payload.messages?.[0]?.status, 'streaming');
   });
 
   it('keeps committed message after-images immutable after later edits and deletion', async () => {
@@ -277,7 +295,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(page.events.filter(event => event.type === 'room.updated').at(-1)?.payload.room?.hasPassword, true);
   });
 
-  it('sequences durable membership and role after-images with deletion tombstones', async () => {
+  it('sequences public membership change signals without exposing member IDs or roles', async () => {
     const roomId = 'event-membership-room';
     assert.ok(await store.saveRoom(room(roomId)));
     const baselineHead = await store.readRoomEventHead(roomId);
@@ -298,15 +316,51 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
 
     const page = await store.readRoomEvents(roomId, { afterSeq: baselineHead, limit: 10 });
     assert.deepEqual(page.events.map(event => event.type), [
-      'members.upserted',
-      'members.upserted',
-      'members.deleted',
+      'members.changed',
+      'members.changed',
+      'members.changed',
     ]);
-    assert.deepEqual(
-      page.events.slice(0, 2).map(event => event.payload.members?.[0]?.role),
-      ['member', 'admin'],
+    assert.ok(page.events.every(event => Object.keys(event.payload).length === 0));
+
+    const raw = await pool.query<{ payload: unknown }>(
+      `SELECT payload FROM room_events
+      WHERE room_id = $1 AND event_type = 'members.changed' AND seq > $2
+      ORDER BY seq`,
+      [roomId, baselineHead],
     );
-    assert.deepEqual(page.events[2].payload.memberClientIds, ['member-2']);
+    assert.equal(raw.rows.length, 3);
+    assert.doesNotMatch(JSON.stringify(raw.rows), /member-2|admin|joined_at|client_id/i);
+  });
+
+  it('rejects malformed stored payloads instead of acknowledging an empty event', async () => {
+    const roomId = 'event-invalid-payload-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const inserted = await pool.query<{ head_seq: number | string }>(
+      `UPDATE room_event_streams
+      SET head_seq = head_seq + 1
+      WHERE room_id = $1
+      RETURNING head_seq`,
+      [roomId],
+    );
+    const invalidSeq = Number(inserted.rows[0].head_seq);
+    await pool.query(
+      `INSERT INTO room_events (room_id, seq, event_type, schema_version, payload)
+      VALUES ($1, $2, 'messages.upserted', 1, $3::jsonb)`,
+      [roomId, invalidSeq, JSON.stringify({ messageRows: [], mediaAssets: [] })],
+    );
+
+    await assert.rejects(
+      store.readRoomEvents(roomId, { afterSeq: invalidSeq - 1, limit: 10 }),
+      (error: unknown) => (
+        error instanceof RoomEventPayloadInvalidError
+        && error.roomId === roomId
+        && error.seq === invalidSeq
+      ),
+    );
+    await assert.rejects(
+      store.readRoomEvent(roomId, invalidSeq),
+      (error: unknown) => error instanceof RoomEventPayloadInvalidError,
+    );
   });
 
   it('rolls event writes back with domain writes and serializes concurrent room writers', async () => {
@@ -493,6 +547,11 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         [POSTGRES_MIGRATIONS[2].id],
       );
       assert.equal(Number(applied.rows[0].count), 1);
+      const privacyRepairApplied = await migrationPool.query<{ count: string }>(
+        'SELECT COUNT(*) AS count FROM schema_migrations WHERE id = $1',
+        [POSTGRES_MIGRATIONS[3].id],
+      );
+      assert.equal(Number(privacyRepairApplied.rows[0].count), 1);
 
       const activeStream = await migrationPool.query<{ head_seq: string; min_available_seq: string }>(
         "SELECT head_seq, min_available_seq FROM room_event_streams WHERE room_id = 'legacy-active'",
@@ -514,6 +573,71 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       assert.equal(await migrationStore.canReadRoomEvents('legacy-deleted', 'unrelated'), false);
     } finally {
       await concurrentMigrationPool.end?.();
+      await migrationPool.end?.();
+      await pool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+    }
+  });
+
+  it('repairs member details written by the pre-production V1 writer before serving events', async () => {
+    const schemaName = `room_event_member_repair_${Date.now()}`;
+    await pool.query(`CREATE SCHEMA ${schemaName}`);
+    const scopedUrl = new URL(databaseUrl!);
+    scopedUrl.searchParams.set('options', `-csearch_path=${schemaName}`);
+    const migrationPool = createPostgresPool(scopedUrl.toString(), logger as any);
+    try {
+      for (const sql of POSTGRES_SCHEMA_SQL) await migrationPool.query(sql);
+      await migrationPool.query(POSTGRES_MIGRATIONS[2].sql);
+      await migrationPool.query(`CREATE TABLE schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await migrationPool.query(
+        'INSERT INTO schema_migrations (id) VALUES ($1), ($2), ($3)',
+        [POSTGRES_MIGRATIONS[0].id, POSTGRES_MIGRATIONS[1].id, POSTGRES_MIGRATIONS[2].id],
+      );
+      await migrationPool.query(
+        `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id)
+        VALUES ('member-repair-room', 'Member repair', '', NOW(), NOW(), 'owner-1')`,
+      );
+      await migrationPool.query('ALTER TABLE room_events DROP CONSTRAINT room_events_event_type_check');
+      await migrationPool.query(`ALTER TABLE room_events ADD CONSTRAINT room_events_event_type_check
+        CHECK (event_type IN (
+          'messages.upserted', 'messages.deleted', 'agent_turns.upserted', 'agent_turns.deleted',
+          'members.changed', 'members.upserted', 'members.deleted', 'room.updated', 'room.deleted'
+        ))`);
+      const legacySeq = await migrationPool.query<{ head_seq: number | string }>(
+        `UPDATE room_event_streams
+        SET head_seq = head_seq + 1
+        WHERE room_id = 'member-repair-room'
+        RETURNING head_seq`,
+      );
+      await migrationPool.query(
+        `INSERT INTO room_events (room_id, seq, event_type, schema_version, payload)
+        VALUES (
+          'member-repair-room', $1, 'members.upserted', 1,
+          '{"memberRows":[{"room_id":"member-repair-room","client_id":"private-member","role":"admin","joined_at":"2026-07-20T00:00:00.000Z"}]}'::jsonb
+        )`,
+        [Number(legacySeq.rows[0].head_seq)],
+      );
+
+      const migrationStore = new PostgresStore(migrationPool, logger as any);
+      await migrationStore.initializeSchema();
+      await migrationPool.query(
+        `INSERT INTO room_members (room_id, client_id, role, joined_at)
+        VALUES ('member-repair-room', 'new-private-member', 'member', NOW())`,
+      );
+
+      const raw = await migrationPool.query<{ event_type: string; payload: unknown }>(
+        `SELECT event_type, payload FROM room_events
+        WHERE room_id = 'member-repair-room' AND event_type = 'members.changed'
+        ORDER BY seq`,
+      );
+      assert.equal(raw.rows.length, 2);
+      assert.ok(raw.rows.every(row => JSON.stringify(row.payload) === '{}'));
+      assert.doesNotMatch(JSON.stringify(raw.rows), /private-member|admin|client_id|role/i);
+      const page = await migrationStore.readRoomEvents('member-repair-room', { afterSeq: 0, limit: 10 });
+      assert.equal(page.events.filter(event => event.type === 'members.changed').length, 2);
+    } finally {
       await migrationPool.end?.();
       await pool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
     }

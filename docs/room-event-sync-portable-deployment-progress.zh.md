@@ -29,6 +29,7 @@
 | 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke 与显式凭据 | 完成 | `a554554c`、`56871060` |
 | 7 | 已提交事件 Socket fast path、有界 payload fallback 与大差距 snapshot 恢复 | 完成 | 当前发布；聚焦证据见下文 |
 | 8 | 不可变 after-image event、listener local-only fan-out、重连反熵与一次性旧事件边界 | 源码完成，未部署 | 当前工作发布；验证见下文 |
+| 9 | 公共成员隐私、严格 payload 拒绝与 placeholder 前 AI 有界缓冲 | 源码完成，未部署 | 当前工作发布；验证见下文 |
 
 定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。runtime 同时接受 `ai-chat.wenlin.dev`，该域名可在原有 DNS zone 中单独切换。
 
@@ -36,17 +37,19 @@
 
 - PostgreSQL 是唯一 durable serving authority；Redis 只保存可重建的 realtime/cache state。
 - Canonical 表仍是事实源；`room_events` 是有界、不可变的 `schemaVersion: 1` after-image changelog，不是完整 Event Sourcing。
-- PostgreSQL row trigger 收集 room/message/agent-turn/member/media mutation，deferred writer 在原事务内追加完整安全 after-image；delta read 直接解码保存 payload，不 hydrate 当前 canonical 行。
+- PostgreSQL row trigger 收集 room/message/agent-turn/media mutation，deferred writer 在原事务内追加完整安全 after-image。成员 mutation 只追加空的公共 `members.changed` signal；ID 与角色仍由 `get_room_role_members` 保护。Delta read 直接解码保存 payload，不 hydrate 当前 canonical 行。
 - 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`。PostgreSQL `NOTIFY` 只是 commit 后 hint；每个 app 读取精确 sequence，再用 `io.local` 通知本机 sockets。
 - 客户端只有在 Socket payload 与 `lastAppliedSeq` 严格连续时才直接应用。Payload 缺失、超限、重复或有 gap 仍然安全，因为 `headSeq` 会驱动 durable replay。
 - PG listener 成功 re-LISTEN 后，本实例发送 local `room_sync_required`；客户端保留 UI，从当前 cursor replay。
 - 差距不超过 500 events 时按每页 100 / 256 KiB replay；更大的保留窗口内差距直接切 repeatable-read snapshot，再只排空 snapshot 后的 tail。
-- `CURSOR_EXPIRED`、无法收敛的序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。
+- `CURSOR_EXPIRED`、无法收敛的序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。严格 V1 decoder 会把字段缺失、类型错误或意外字段拒绝为 `EVENT_PAYLOAD_INVALID`；客户端不确认该 seq，改用 canonical snapshot 替换状态。
 - 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
 - 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
 - AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
+- 抢在 durable placeholder 前到达的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end` 按 `messageId` 暂存；上限为 60 秒、64 个 message、512 events、512 KiB。Durable final after-image 优先于更早的缓冲数据。
 - 旧 `new_message`、`message_edited`、`message_deleted`、`messages_cleared` durable broadcast 已移除；user-scoped `room_updated` 继续服务 room list 与 permission invalidation。
-- Migration `0003_room_events_immutable_after_images` 串行化并发启动、安装新 writer、保留 stream head、让 active 旧历史过期，并为 deleted stream 追加带授权的 V1 tombstone。它只在 disposable PostgreSQL database 验证；本轮没有对生产执行 migration，也没有部署应用。
+- Migration `0003_room_events_immutable_after_images` 串行化并发启动、安装新 writer、保留 stream head、让 active 旧历史过期，并为 deleted stream 追加带授权的 V1 tombstone。Migration `0004_public_member_change_events` 清洗可能存在的预生产成员 after-image，并安装空公共 signal。两者都已在 disposable PostgreSQL 运行通过；本轮没有对生产执行 migration，也没有部署应用。
+- 生产必须使用维护窗口：停止所有旧 app、做成对 database/media backup，再只启动新镜像，避免 `0003`/`0004` 与旧 decoder/writer 重叠。未来 AWS 多实例发布需要两阶段兼容迁移，或同样的 stop-the-world cutover；只 push source 不会迁移数据库。
 - 本地生产 Compose 在现有 S3 adapter 后运行 SeaweedFS 4.29，并继续使用带过期时间的 SigV4 URL；Tigris 与未来 AWS S3 共用相同 object key 和 SDK 边界，`/api/status` 会报告媒体是否就绪。
 - Compose 命令强制带 `--env-file .env.compose`，确保 app 与 PostgreSQL 使用同一份配置凭据，而不是各自落到无关默认值。
 
@@ -60,7 +63,8 @@
 - [x] PostgreSQL `LISTEN/NOTIFY` 跨 app instance 唤醒。
 - [x] 每实例 `LISTEN` + `io.local`，避免 Redis adapter 把同一 durable hint 放大 N 份。
 - [x] Listener re-LISTEN 后发送 local `room_sync_required` 反熵。
-- [x] 不可变 Message/Room/RoomAgentTurn/Member/media after-image 与 `schemaVersion: 1` decoder。
+- [x] 不可变 Message/Room/RoomAgentTurn/media after-image、空公共 `members.changed` signal 与严格 `schemaVersion: 1` decoder。
+- [x] 非法 payload 返回 `EVENT_PAYLOAD_INVALID`，不会作为空事件确认。
 - [x] 并发安全 legacy-event migration boundary，active cursor expiry 与 deleted-room V1 tombstone。
 - [x] 删除服务端运行协议与 cache 对 message/room version 的依赖。
 - [x] Redis recent-message cache 改用 durable event head 守卫。
@@ -77,6 +81,7 @@
 - [x] 删除 `messageVersionRef`、`mutationRevision` 与 version reconciliation retry。
 - [x] 完整 room ack/broadcast 以 canonical `updatedAt` 防止旧对象回踩。
 - [x] `updatedAt` 由数据库 trigger 严格单调盖章，只是完整对象的 last-write guard，不是第二套同步 version。
+- [x] placeholder 前 AI chunk/A2UI/end 有界暂存并按序 drain；durable final 始终优先。
 - [x] 旧 IndexedDB cache 通过数据库名升级不再读取。
 
 ## 常见用例自动化矩阵
@@ -91,23 +96,24 @@
 - [x] client-message 幂等重试不产生重复 canonical message/event。
 - [x] 写入失败与事务 rollback 不留下 event，也不广播 ghost state。
 - [x] edit、单条 delete、clear、truncate before/after、retry、edit-and-ask 收敛。
-- [x] AI streaming 临时 chunk 不入日志；final/error 与 agent turn 可恢复。
+- [x] AI streaming 临时 chunk 不入日志；placeholder 前事件不会丢，final/error 与 agent turn 可恢复。
 - [x] media completion、图片刷新、Code Agent tool/final 路径使用有界 canonical event。
 - [x] 生产 local media 的签名/过期/method 约束、浏览器上传刷新、app restart 后字节持久化，以及 database/media 成对恢复。
 - [x] 无权限用户不能读 snapshot/delta；删除前有权限用户可重放 `room.deleted` tombstone。
 - [x] 房间删除 cascade 后 tombstone 仍可读，retention 后连同授权 stream 清理。
 - [x] 两个 Store 同时初始化同一 schema 时，immutable-event migration 只应用一次；显式 DTO allowlist 不会泄漏后来新增的内部列。
+- [x] 公共成员 event 不含 member ID/role；`0004` 会清洗旧 payload；坏 event 不推进 cursor，合法空内容 AI placeholder 可严格解码。
 
 ## 最终验证证据
 
 | 验证 | 结果 |
 | --- | --- |
-| Server full suite | 756/756 |
-| Client full suite | 992/992 |
-| Event hook focused | 22/22 |
+| Server full suite | 757/757 |
+| Client full suite | 999/999 |
+| Event hook + pending-AI-buffer focused | 29/29 |
 | Broadcaster + listener focused | 7/7 |
-| Message socket focused | 29/29 |
-| 真实 PostgreSQL event integration | 全新 disposable database 12/12 |
+| Message socket focused | 30/30 |
+| 真实 PostgreSQL event integration | 全新 disposable database 15/15 |
 | PostgreSQL Playwright | 4/4 |
 | Server/client production build | 通过 |
 | 根 Dockerfile 独立构建 | 通过，不依赖 Compose build 输入 |

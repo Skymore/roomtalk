@@ -63,7 +63,7 @@ Older chat history still uses `beforeMessageId`. Prepending an old page never mo
 
 ## Event semantics
 
-The log is a bounded immutable after-image changelog, not an audit log and not full Event Sourcing. Canonical tables remain the source of truth, but each retained event is deterministic by itself: `readRoomEvents()` decodes its stored `schemaVersion: 1` payload and never replaces old content with current `room_messages`, `room_agent_turns`, or `rooms` rows. Stable media asset IDs and metadata are stored with message after-images; internal object keys, uploader IDs, stream owners, password hashes, and expiring signed URLs are excluded.
+The log is a bounded immutable after-image changelog, not an audit log and not full Event Sourcing. Canonical tables remain the source of truth, but each retained event is deterministic by itself: `readRoomEvents()` strictly decodes its stored `schemaVersion: 1` discriminated payload and never replaces old content with current `room_messages`, `room_agent_turns`, or `rooms` rows. Missing, mistyped, or unexpected fields raise `EVENT_PAYLOAD_INVALID`; the client does not advance that cursor and replaces state from a canonical snapshot. Stable media asset IDs and metadata are stored with message after-images; internal object keys, uploader IDs, stream owners, password hashes, and expiring signed URLs are excluded.
 
 | Event | Client action |
 | --- | --- |
@@ -71,13 +71,13 @@ The log is a bounded immutable after-image changelog, not an audit log and not f
 | `messages.deleted` | Remove the listed IDs; clear associated media cache entries |
 | `agent_turns.upserted` | Upsert stored durable RoomAgentTurn after-images |
 | `agent_turns.deleted` | Remove turn IDs |
-| `members.upserted` / `members.deleted` | Apply durable membership/role after-images or tombstones |
+| `members.changed` | No member data is exposed; privileged member views reload through `room.manageMembers` authorization |
 | `room.updated` | Apply the stored complete SafeRoom after-image through the normal room commit guard |
 | `room.deleted` | Clear the local room/message caches |
 
 Clear, truncate, retry, and edit-and-ask operations are represented by one or more ordered batched upsert/delete events. A business operation is therefore not required to map to exactly one event. What is required is that every committed visible row change and its events share the same transaction, while a rollback leaves neither.
 
-AI chunks and incremental UI updates remain transient Socket fast paths. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
+AI chunks and incremental UI updates remain transient Socket fast paths. They can arrive before the placeholder's independent PostgreSQL notification, so the browser buffers unmatched `ai_chunk`, `a2ui_update`, and `ai_stream_end` events by `messageId`, then drains them in arrival order when the placeholder appears. The buffer is bounded to 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
 
 Typing, presence, voice levels, and WebRTC signalling are also transient and do not consume a durable room sequence. If reactions become a durable product model, their `reactions.upserted` / `reactions.deleted` after-images must join this sequence rather than introducing a second version counter.
 
@@ -99,6 +99,8 @@ PostgreSQL performs the cross-instance fan-out; each listener informs only socke
 
 Migration `0003_room_events_immutable_after_images` installs the deferred after-image writer and removes the old ID-only triggers while holding table locks. The migration runner serializes concurrent app startup with a PostgreSQL transaction advisory lock. In that same migration transaction it discards nondeterministic legacy events without resetting stream heads. Active streams advance `minAvailableSeq` to `headSeq + 1`, so old cursors receive `CURSOR_EXPIRED` and snapshot. Deleted streams receive a new V1 `room.deleted` tombstone and retain `deleted_reader_ids`. The server returns that terminal event even to a cursor older than the discarded prefix, and the client permits this one terminal sequence jump, so former members converge without an impossible deleted-room snapshot loop.
 
+Migration `0004_public_member_change_events` removes the pre-production member privacy leak by rewriting retained member after-images to empty `members.changed` signals and replacing the member writer. The public event stream never contains offline-member IDs, roles, or join times. The direct `0003` / `0004` boundary requires a maintenance-window stop of every old app instance; a future rolling AWS release needs an explicit two-phase compatibility protocol.
+
 This direct boundary intentionally has no long-lived dual decoder. It also needs no realtime outbox: an outbox solves competing-worker side effects and retries, while room replay is fan-out state transfer already persisted with the canonical mutation. Likewise, `messageVersion` would duplicate the room sequence without identifying missing committed changes.
 
 ## Required evidence
@@ -106,8 +108,8 @@ This direct boundary intentionally has no long-lived dual decoder. It also needs
 The implementation is guarded by:
 
 - store and socket unit/contract tests;
-- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, deletes, turns, metadata, and transient AI events;
-- real PostgreSQL tests for immutable message/room/turn/member/media after-images, secret exclusion, migration cutover, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
+- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, invalid-payload snapshots, deletes, turns, metadata, and early transient AI event buffering;
+- real PostgreSQL tests for immutable message/room/turn/media after-images, empty public membership signals, member-event privacy repair, strict payload rejection, secret exclusion, migration cutover, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
 - Playwright PostgreSQL tests for reload/fresh-context persistence, media/AI/share flows, two clients, and offline replay;
 - Compose health, restart persistence, and backup/restore checks.
 

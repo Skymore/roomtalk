@@ -47,6 +47,19 @@ export class RoomEventCursorAheadError extends Error {
   }
 }
 
+export class RoomEventPayloadInvalidError extends Error {
+  readonly code = 'EVENT_PAYLOAD_INVALID';
+
+  constructor(
+    readonly roomId: string,
+    readonly seq: number,
+    readonly reason: string,
+  ) {
+    super(`Invalid room event payload for ${roomId}:${seq}: ${reason}`);
+    this.name = 'RoomEventPayloadInvalidError';
+  }
+}
+
 export interface MessageUpdateResult {
   room: Room;
   found: boolean;

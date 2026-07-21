@@ -49,16 +49,18 @@ Deferred writer 构造有界、安全的 `schemaVersion: 1` after-image，再由
 - 幂等重试没有第二次实际写入，也没有第二个事件；
 - clear/truncate/edit-and-ask 可能生成多个有序批量事件，这是正常语义。
 
-`readRoomEvents()` 直接解码已保存 payload，绝不会用当前 canonical 行 hydrate 旧事件，所以后来编辑为 B 不会把早先记录的 A 改写掉。Message after-image 包含稳定 media ID 与元数据，但不包含内部 object key、uploader/stream owner 或会过期的签名 URL；`room.updated` 保存 SafeRoom，绝不保存 `password_hash`。
+`readRoomEvents()` 直接解码已保存 payload，绝不会用当前 canonical 行 hydrate 旧事件，所以后来编辑为 B 不会把早先记录的 A 改写掉。每种 V1 event type 都有严格 discriminated payload schema；字段缺失、类型错误或出现意外字段时返回 `EVENT_PAYLOAD_INVALID`，绝不会把坏数据变成空事件并确认。客户端不会跨过该事件推进 cursor，而是从 canonical snapshot 替换状态，再从 `snapshotSeq` 继续。Message after-image 包含稳定 media ID 与元数据，但不包含内部 object key、uploader/stream owner 或会过期的签名 URL；`room.updated` 保存 SafeRoom，绝不保存 `password_hash`。
 
 实际事件类型为：
 
 - `messages.upserted`、`messages.deleted`；
 - `agent_turns.upserted`、`agent_turns.deleted`；
-- `members.upserted`、`members.deleted`；
+- `members.changed`，payload 永远为空；
 - `room.updated`、`room.deleted`。
 
-Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 transient。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
+公共事件流绝不包含 member ID、离线成员列表、joined timestamp 或 owner/admin role。`members.changed` 只表示“成员关系发生变化”；完整成员投影继续通过现有 `room.manageMembers` 鉴权和 `get_room_role_members` 请求读取。
+
+Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 transient。AI chunk、A2UI update 或 stream end 可能抢在 durable placeholder 通知前到达，因此浏览器按 `messageId` 临时缓存未匹配事件，placeholder 出现后按到达顺序 drain。上限为 64 个 message ID、512 个事件、512 KiB 与 60 秒 TTL。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
 
 ## 快照与增量
 
@@ -70,6 +72,7 @@ Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 
 - 客户端只在 fast path 恰好是下一个连续前缀并以 `headSeq` 结束时直接应用；成功后推进 `lastAppliedSeq`，无需再调用 `get_room_events`。
 - cursor 落后于 retention：`CURSOR_EXPIRED -> snapshot`；
 - 数据库恢复点落后于浏览器 cache：`CURSOR_AHEAD -> snapshot`；
+- 严格 decoder 失败：返回 `EVENT_PAYLOAD_INVALID`，客户端不跨过坏事件推进 cursor，直接以 canonical snapshot 恢复；
 - page 不连续：整页不应用，重新快照；
 - 先做一次有界 probe 识别可能的终态删除 tombstone；若保留窗口内仍落后超过 500 events，则不应用/重放最多 100 个默认 page，而是直接 snapshot，再只排空 `snapshotSeq` 之后的 tail；
 - IndexedDB v4 保存消息窗口和 `lastAppliedSeq`；
@@ -82,6 +85,8 @@ Fast path 只改变延迟，不改变正确性边界。PostgreSQL 把 hint fan-o
 ## 一次性不可变事件边界
 
 Migration `0003_room_events_immutable_after_images` 持有表锁，保证替换 writer 与清理旧 ID-only events 之间不会夹入业务写。多个 app 同时启动由 transaction-scoped advisory lock 和 migration record 二次检查串行化。Migration 保留每条 stream 的 `head_seq`，清除不可确定历史，并把 active stream 的 `min_available_seq` 设为 `head_seq + 1`；旧 cursor 只需 snapshot 一次，不重置 sequence。
+
+Migration `0004_public_member_change_events` 修复已经运行过 pre-production V1 member after-image writer 的数据库：所有保留的 `members.upserted` / `members.deleted` 原地改为 `members.changed {}`，随后收紧公共 type constraint；之后的成员变化也只写空 signal。这是在事件流向客户端开放前执行的一次性隐私修复。
 
 Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新的 V1 `room.deleted` tombstone，保留 `deleted_reader_ids`，并把 retention floor 指向 tombstone。即使 cursor 早于已清理前缀，服务端仍返回这个终态事件，客户端只对 deletion 允许这一次 seq 跳跃，从而避免 `CURSOR_EXPIRED → 无法取得 snapshot` 死循环。系统不长期维护双格式 decoder。
 
@@ -132,6 +137,12 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后恢复服务。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
 长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、outbox 与 turn 记录仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。
+
+## 尚未执行的不可变事件生产 migration
+
+`0003` / `0004` 是直接协议边界，不能让旧、新 App 混合滚动运行。当前单实例 Compose 的正确步骤是：先生成并验证备份，停止全部旧 App process，只启动新 image 并等待 migration 完成，再 smoke snapshot、delta、AI streaming、member authorization 与 deletion replay。仅推送源码不会执行这个 migration。
+
+未来 AWS 多实例要么采用同样的维护窗口 stop-the-world，要么先设计真正的两阶段兼容协议再滚动发布。新 payload writer 生效后绝不能再运行旧 image；回滚必须恢复匹配的数据库备份，不能只把旧 binary 启回来。
 
 ## 已执行的生产切换
 

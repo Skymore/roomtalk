@@ -23,6 +23,7 @@ import {
 } from '../utils/messageHistoryCache';
 import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCache';
 import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
+import { PendingAIEventBuffer, type PendingAITransientEvent } from '../utils/pendingAIEventBuffer';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 const ROOM_EVENT_PAGE_LIMIT = 100;
@@ -120,11 +121,10 @@ const reduceRoomEvents = (
       case 'room.updated':
         if (event.payload.room) updatedRoom = event.payload.room;
         break;
-      case 'members.upserted':
-      case 'members.deleted':
-        // Membership is durable in the room sequence, but the active message
-        // window does not own permission/member state. Existing user-scoped
-        // permission events continue to refresh that separate projection.
+      case 'members.changed':
+        // The public room stream deliberately contains no member IDs or roles.
+        // Privileged member projections are loaded through their separately
+        // authorized API instead of being reconstructed here.
         break;
     }
   });
@@ -188,6 +188,7 @@ export const useRoomMessageEvents = ({
     let oldestMessageId: string | undefined;
     let canonicalMessages: Message[] = [];
     let canonicalTurns: RoomAgentTurn[] = [];
+    const pendingAIEvents = new PendingAIEventBuffer();
 
     setSessionCostUsd(null);
     setAgentTurns([]);
@@ -234,6 +235,65 @@ export const useRoomMessageEvents = ({
       });
     };
 
+    const queuePendingAIEvent = (event: PendingAITransientEvent) => {
+      if (pendingAIEvents.enqueue(event)) return;
+      logRoomMessageDiagnostic('pending-ai-event-dropped', {
+        roomId,
+        messageId: event.data.messageId,
+        eventType: event.type,
+      });
+    };
+
+    const drainPendingAIEvents = (messages: Message[]) => {
+      let nextMessages = messages;
+      let receivedChunk = false;
+      let settledCount = 0;
+      messages.forEach(message => {
+        const pending = pendingAIEvents.take(message.id);
+        // A replay page can contain both the placeholder and the final durable
+        // after-image. In that case the final row is authoritative: applying
+        // an older buffered chunk after it would duplicate content.
+        if (message.status === 'complete' || message.status === 'error') {
+          pending.forEach(event => {
+            if (event.type !== 'ai_stream_end') return;
+            if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
+            settledCount++;
+          });
+          return;
+        }
+        pending.forEach(event => {
+          switch (event.type) {
+            case 'ai_chunk':
+              nextMessages = appendAIChunk(nextMessages, event.data.messageId, event.data.chunk);
+              receivedChunk = true;
+              break;
+            case 'a2ui_update':
+              nextMessages = appendA2UIPayload(nextMessages, event.data.messageId, event.data.uiPayload);
+              break;
+            case 'ai_stream_end':
+              nextMessages = completeAIMessage(nextMessages, event.data.messageId, {
+                content: event.data.content,
+                uiPayload: event.data.uiPayload,
+                aiModel: event.data.aiModel,
+                usage: event.data.usage,
+                cost: event.data.cost,
+              });
+              if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
+              settledCount++;
+              break;
+          }
+        });
+      });
+      if (receivedChunk) {
+        const container = containerRef.current;
+        if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) {
+          scheduleScroll('smooth', 50);
+        }
+      }
+      for (let index = 0; index < settledCount; index++) onAIStreamSettled?.();
+      return nextMessages;
+    };
+
     const applySnapshot = (snapshot: RoomSnapshotPayload) => {
       onRoomUpdated?.(snapshot.room);
       if (snapshot.mode === 'prepend') {
@@ -241,10 +301,10 @@ export const useRoomMessageEvents = ({
         filterTurns(snapshot.turns || []).forEach(turn => byId.set(turn.id, turn));
         canonicalTurns = Array.from(byId.values());
         const existingIds = new Set(canonicalMessages.map(message => message.id));
-        canonicalMessages = [
+        canonicalMessages = drainPendingAIEvents([
           ...filterMessages(snapshot.messages).filter(message => !existingIds.has(message.id)),
           ...canonicalMessages,
-        ];
+        ]);
         setAgentTurns(canonicalTurns);
         updateMessages(canonicalMessages);
         setHasMore(snapshot.hasMore);
@@ -254,10 +314,10 @@ export const useRoomMessageEvents = ({
         return;
       }
 
-      const nextMessages = mergeSnapshotWithOptimisticMessages(
+      const nextMessages = drainPendingAIEvents(mergeSnapshotWithOptimisticMessages(
         filterMessages(snapshot.messages),
         filterMessages(getCurrentMessages()),
-      );
+      ));
       const nextTurns = filterTurns(snapshot.turns || []);
       canonicalMessages = nextMessages;
       canonicalTurns = nextTurns;
@@ -338,20 +398,21 @@ export const useRoomMessageEvents = ({
         });
       const reduced = reduceRoomEvents(accepted, eventBase, canonicalTurns);
       const nextSeq = accepted[accepted.length - 1].seq;
-      canonicalMessages = reduced.messages;
+      canonicalMessages = drainPendingAIEvents(reduced.messages);
       canonicalTurns = reduced.turns;
       reduced.deletedMediaAssetIds.forEach(assetId => void clearCachedMediaAsset(assetId));
       if (reduced.roomDeleted) {
+        pendingAIEvents.clear();
         void clearCachedRoomMessageWindow(roomId);
         void clearCachedMediaForRoom(roomId);
       }
       if (reduced.updatedRoom) onRoomUpdated?.(reduced.updatedRoom);
-      updateMessages(reduced.messages);
+      updateMessages(canonicalMessages);
       setAgentTurns(reduced.turns);
       setCursor(nextSeq);
-      setOldest(reduced.messages[0]?.id);
-      if (reduced.messages.length === 0) setHasMore(false);
-      cacheWindow(reduced.messages, reduced.turns, nextSeq);
+      setOldest(canonicalMessages[0]?.id);
+      if (canonicalMessages.length === 0) setHasMore(false);
+      cacheWindow(canonicalMessages, reduced.turns, nextSeq);
 
       const deletedIds = new Set(accepted.flatMap(event => event.payload.messageIds || []));
       if (messageToDeleteIdRef.current && deletedIds.has(messageToDeleteIdRef.current)) closeDeleteModal();
@@ -411,9 +472,15 @@ export const useRoomMessageEvents = ({
             } catch (error) {
               if (
                 error instanceof SocketRequestError
-                && (error.code === 'CURSOR_EXPIRED' || error.code === 'CURSOR_AHEAD')
+                && (
+                  error.code === 'CURSOR_EXPIRED'
+                  || error.code === 'CURSOR_AHEAD'
+                  || error.code === 'EVENT_PAYLOAD_INVALID'
+                )
               ) {
-                const loaded = await loadSnapshot({ reason: 'cursor-expired' });
+                const loaded = await loadSnapshot({
+                  reason: error.code === 'EVENT_PAYLOAD_INVALID' ? 'event-payload-invalid' : 'cursor-reset',
+                });
                 if (!loaded) return;
                 keepReading = true;
                 continue;
@@ -467,13 +534,13 @@ export const useRoomMessageEvents = ({
           if (cancelled || !cachedWindow || hasBaseline) return;
           const messages = filterMessages(cachedWindow.messages);
           const turns = filterTurns(cachedWindow.turns || []);
-          canonicalMessages = messages;
+          canonicalMessages = drainPendingAIEvents(messages);
           canonicalTurns = turns;
           hasBaseline = true;
           lastAppliedSeq = cachedWindow.lastAppliedSeq;
           hasMoreMessages = cachedWindow.hasMore;
           oldestMessageId = cachedWindow.oldestMessageId;
-          updateMessages(messages);
+          updateMessages(canonicalMessages);
           setAgentTurns(turns);
           setLastAppliedSeq(lastAppliedSeq);
           setHasMoreMessages(hasMoreMessages);
@@ -525,10 +592,12 @@ export const useRoomMessageEvents = ({
 
     const handleAIChunk = (data: AIChunkEvent) => {
       if (data.roomId !== roomId) return;
-      updateMessages(previous => {
-        canonicalMessages = appendAIChunk(previous, data.messageId, data.chunk);
-        return canonicalMessages;
-      });
+      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+        queuePendingAIEvent({ type: 'ai_chunk', data });
+        return;
+      }
+      canonicalMessages = appendAIChunk(canonicalMessages, data.messageId, data.chunk);
+      updateMessages(canonicalMessages);
       const container = containerRef.current;
       if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) {
         scheduleScroll('smooth', 50);
@@ -536,25 +605,28 @@ export const useRoomMessageEvents = ({
     };
     const handleA2UIUpdate = (data: A2UIUpdateEvent) => {
       if (data.roomId !== roomId) return;
-      updateMessages(previous => {
-        canonicalMessages = appendA2UIPayload(previous, data.messageId, data.uiPayload);
-        return canonicalMessages;
-      });
+      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+        queuePendingAIEvent({ type: 'a2ui_update', data });
+        return;
+      }
+      canonicalMessages = appendA2UIPayload(canonicalMessages, data.messageId, data.uiPayload);
+      updateMessages(canonicalMessages);
     };
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
-      updateMessages(previous => {
-        const next = completeAIMessage(previous, data.messageId, {
-          content: data.content,
-          uiPayload: data.uiPayload,
-          aiModel: data.aiModel,
-          usage: data.usage,
-          cost: data.cost,
-        });
-        canonicalMessages = next;
-        cacheWindow(next);
-        return next;
+      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+        queuePendingAIEvent({ type: 'ai_stream_end', data });
+        return;
+      }
+      canonicalMessages = completeAIMessage(canonicalMessages, data.messageId, {
+        content: data.content,
+        uiPayload: data.uiPayload,
+        aiModel: data.aiModel,
+        usage: data.usage,
+        cost: data.cost,
       });
+      updateMessages(canonicalMessages);
+      cacheWindow(canonicalMessages);
       if (data.sessionCost) setSessionCostUsd(data.sessionCost.totalUsd);
       onAIStreamSettled?.();
     };
@@ -601,6 +673,7 @@ export const useRoomMessageEvents = ({
       cancelled = true;
       clearTimeout(loadingTimeout);
       if (scrollTimer) clearTimeout(scrollTimer);
+      pendingAIEvents.clear();
       if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
       socket.off('room_event_available', handleRoomEventAvailable);
       socket.off('room_sync_required', handleRoomSyncRequired);

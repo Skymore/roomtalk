@@ -73,6 +73,10 @@
 - 把多实例边界记录为 PostgreSQL fan-out + 每个 listener 的 `io.local`，并记录 listener 成功重连后的 local `room_sync_required` 反熵。
 - 记录一次性 legacy-event migration：advisory lock 串行并发启动、保留 stream head、active cursor expiry 与带授权的 V1 deleted-room tombstone。源码已验证，但本次明确不部署。
 - 记录为什么 room replay 不需要 realtime delivery outbox 或 `messageVersion`，并让 transient typing/presence/AI chunk/voice/WebRTC 流量保持在 durable sequence 之外。
+- 收紧公共事件合约：成员变化不再暴露 ID 或角色，特权成员数据继续由 `get_room_role_members` 保护；migration `0004` 会清理预生产阶段可能存在的成员 payload。
+- 记录严格 V1 payload 解码：损坏事件返回 `EVENT_PAYLOAD_INVALID`，不推进 cursor，并通过 canonical snapshot 收敛。
+- 记录 AI chunk/A2UI/end 抢在 durable placeholder 前到达时的有界客户端缓冲、durable final 优先级，以及 60 秒 / 64 IDs / 512 events / 512 KiB 上限。
+- 明确生产发布边界：执行 `0003`/`0004` 前先停止旧 app；未来多实例发布必须使用两阶段兼容迁移或同样的维护窗口。
 
 ## 早期审计修正（2026-07-13）
 

@@ -115,9 +115,9 @@ flowchart LR
   Redis <-.->|"仅 transient/global"| B
 ```
 
-`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的 canonical 行” hydrate。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。
+`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的 canonical 行” hydrate。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取 canonical snapshot。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
 
-这是一份有界状态传输 changelog，不是 Event Sourcing；canonical 表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。
+这是一份有界状态传输 changelog，不是 Event Sourcing；canonical 表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI chunk 抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序 drain；durable final after-image 始终优先。
 
 ### 关键难点是怎么工作的
 

@@ -1457,6 +1457,28 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('refreshes the code workspace snapshot when a code-agent turn settles', async () => {
+    await writeCachedRoomMessageWindow({
+      roomId: 'room-1',
+      messages: [
+        message({
+          id: 'ai-message-1',
+          clientId: 'ai_assistant',
+          messageType: 'ai',
+          content: '',
+          status: 'streaming',
+        }),
+        message({
+          id: 'ai-message-2',
+          clientId: 'ai_assistant',
+          messageType: 'ai',
+          content: '',
+          status: 'streaming',
+        }),
+      ],
+      lastAppliedSeq: 2,
+      hasMore: false,
+      cachedAt: Date.now(),
+    });
     render(
       <MessageList
         roomId="room-1"

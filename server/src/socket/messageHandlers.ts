@@ -8,7 +8,7 @@ import {
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
 import { A2UIActionEvent, Message, RoomEventPage, RoomSnapshot } from '../types';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError } from '../repositories/store';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from '../repositories/store';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
@@ -231,6 +231,21 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
           success: false,
           code: error.code,
           error: 'The room event cursor is ahead of the current stream and must be reset',
+        });
+        return;
+      }
+      if (error instanceof RoomEventPayloadInvalidError) {
+        socketLogger.error('Rejected invalid stored room event payload', {
+          socketId: socket.id,
+          userId,
+          roomId: error.roomId,
+          seq: error.seq,
+          reason: error.reason,
+        });
+        callback?.({
+          success: false,
+          code: error.code,
+          error: 'A stored room event is invalid; reload from a canonical snapshot',
         });
         return;
       }

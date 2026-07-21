@@ -214,6 +214,7 @@ export const POSTGRES_SCHEMA_SQL = [
       'messages.deleted',
       'agent_turns.upserted',
       'agent_turns.deleted',
+      'members.changed',
       'members.upserted',
       'members.deleted',
       'room.updated',
@@ -606,6 +607,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         'messages.deleted',
         'agent_turns.upserted',
         'agent_turns.deleted',
+        'members.changed',
         'members.upserted',
         'members.deleted',
         'room.updated',
@@ -772,8 +774,6 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         deleted_message_ids JSONB;
         turn_rows JSONB;
         deleted_turn_ids JSONB;
-        member_rows JSONB;
-        deleted_member_ids JSONB;
       BEGIN
         IF NOT EXISTS (
           SELECT 1 FROM room_event_pending_changes
@@ -849,47 +849,16 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
             );
           END IF;
 
-          SELECT COALESCE(
-            jsonb_agg(jsonb_build_object(
-              'room_id', member_row.room_id,
-              'client_id', member_row.client_id,
-              'role', member_row.role,
-              'joined_at', member_row.joined_at
-            ) ORDER BY member_row.client_id),
-            '[]'::jsonb
-          )
-          INTO member_rows
-          FROM room_members AS member_row
-          JOIN room_event_pending_changes AS pending
-            ON pending.transaction_id = current_transaction_id
-            AND pending.room_id = member_row.room_id
-            AND pending.entity_type = 'member'
-            AND pending.entity_id = member_row.client_id
-          WHERE member_row.room_id = changed_room.room_id;
-
-          SELECT COALESCE(jsonb_agg(pending.entity_id ORDER BY pending.entity_id), '[]'::jsonb)
-          INTO deleted_member_ids
-          FROM room_event_pending_changes AS pending
-          LEFT JOIN room_members AS member_row
-            ON member_row.room_id = pending.room_id
-            AND member_row.client_id = pending.entity_id
-          WHERE pending.transaction_id = current_transaction_id
-            AND pending.room_id = changed_room.room_id
-            AND pending.entity_type = 'member'
-            AND member_row.client_id IS NULL;
-
-          IF jsonb_array_length(member_rows) > 0 THEN
+          IF EXISTS (
+            SELECT 1 FROM room_event_pending_changes
+            WHERE transaction_id = current_transaction_id
+              AND room_id = changed_room.room_id
+              AND entity_type = 'member'
+          ) THEN
             PERFORM append_room_event(
               changed_room.room_id,
-              'members.upserted',
-              jsonb_build_object('memberRows', member_rows)
-            );
-          END IF;
-          IF jsonb_array_length(deleted_member_ids) > 0 THEN
-            PERFORM append_room_event(
-              changed_room.room_id,
-              'members.deleted',
-              jsonb_build_object('memberClientIds', deleted_member_ids, 'deletedAt', NOW())
+              'members.changed',
+              '{}'::jsonb
             );
           END IF;
 
@@ -1126,6 +1095,73 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         END LOOP;
       END;
       $$;
+    `,
+  },
+  {
+    // Pre-production privacy repair for databases that already applied the
+    // original V1 member after-image writer. Public room events intentionally
+    // reveal only that membership changed; privileged member/role projections
+    // remain behind get_room_role_members authorization.
+    id: '0004_public_member_change_events',
+    sql: `
+      LOCK TABLE room_members, room_event_pending_changes, room_event_streams, room_events
+        IN ACCESS EXCLUSIVE MODE;
+
+      ALTER TABLE room_events DROP CONSTRAINT IF EXISTS room_events_event_type_check;
+      UPDATE room_events
+      SET event_type = 'members.changed',
+        payload = '{}'::jsonb
+      WHERE event_type IN ('members.upserted', 'members.deleted');
+      ALTER TABLE room_events ADD CONSTRAINT room_events_event_type_check CHECK (event_type IN (
+        'messages.upserted',
+        'messages.deleted',
+        'agent_turns.upserted',
+        'agent_turns.deleted',
+        'members.changed',
+        'room.updated',
+        'room.deleted'
+      ));
+
+      DROP TRIGGER IF EXISTS room_members_queue_event_change ON room_members;
+      DELETE FROM room_event_pending_changes WHERE entity_type = 'member';
+      ALTER TABLE room_event_pending_changes
+        DROP CONSTRAINT IF EXISTS room_event_pending_changes_entity_type_check;
+      ALTER TABLE room_event_pending_changes
+        ADD CONSTRAINT room_event_pending_changes_entity_type_check
+        CHECK (entity_type IN ('room', 'message', 'agent_turn', 'member_signal'));
+
+      CREATE OR REPLACE FUNCTION queue_public_member_change()
+      RETURNS TRIGGER AS $$
+      DECLARE
+        target_room_id TEXT;
+      BEGIN
+        target_room_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.room_id ELSE NEW.room_id END;
+        PERFORM enqueue_room_event_change(target_room_id, 'member_signal', '__members__');
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION flush_public_member_change()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.entity_type = 'member_signal'
+          AND EXISTS (SELECT 1 FROM rooms WHERE id = NEW.room_id)
+        THEN
+          PERFORM append_room_event(NEW.room_id, 'members.changed', '{}'::jsonb);
+        END IF;
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER room_members_queue_event_change
+        AFTER INSERT OR UPDATE OR DELETE ON room_members
+        FOR EACH ROW EXECUTE FUNCTION queue_public_member_change();
+      DROP TRIGGER IF EXISTS a_room_event_member_signal_flush ON room_event_pending_changes;
+      CREATE CONSTRAINT TRIGGER a_room_event_member_signal_flush
+        AFTER INSERT ON room_event_pending_changes
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION flush_public_member_change();
     `,
   },
 ];

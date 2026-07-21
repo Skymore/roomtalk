@@ -49,16 +49,18 @@ The deferred writer constructs bounded, safe `schemaVersion: 1` after-images, th
 - an idempotent request that performs no second write performs no second event;
 - clear/truncate/edit-and-ask may produce multiple ordered batched events, which is expected.
 
-`readRoomEvents()` directly decodes stored payloads. It never hydrates an old event from current canonical rows, so editing B cannot rewrite the earlier event that recorded A. Message after-images include stable media IDs and metadata but no internal object key, uploader/stream owner, or expiring signed URL. `room.updated` stores a SafeRoom and never stores `password_hash`.
+`readRoomEvents()` directly decodes stored payloads. It never hydrates an old event from current canonical rows, so editing B cannot rewrite the earlier event that recorded A. Every V1 event type has a strict discriminated payload schema: missing, mistyped, or unexpected fields raise `EVENT_PAYLOAD_INVALID` instead of becoming an empty acknowledged event. The client then replaces state from a canonical snapshot and resumes after `snapshotSeq`. Message after-images include stable media IDs and metadata but no internal object key, uploader/stream owner, or expiring signed URL. `room.updated` stores a SafeRoom and never stores `password_hash`.
 
 Implemented event types are:
 
 - `messages.upserted`, `messages.deleted`;
 - `agent_turns.upserted`, `agent_turns.deleted`;
-- `members.upserted`, `members.deleted`;
+- `members.changed`, with an empty payload only;
 - `room.updated`, `room.deleted`.
 
-Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
+The public stream never contains member IDs, offline-member lists, join timestamps, or owner/admin roles. `members.changed` only invalidates the fact of membership; privileged member projections remain behind the existing `room.manageMembers` authorization and `get_room_role_members` request.
+
+Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 
@@ -70,6 +72,7 @@ Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transie
 - A client applies the fast path only when it forms the next contiguous prefix and ends at `headSeq`; a successful fast path advances `lastAppliedSeq` without `get_room_events`.
 - A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
 - A browser cursor ahead of a restored database receives `CURSOR_AHEAD` and resnapshots.
+- A strict decoder failure returns `EVENT_PAYLOAD_INVALID`; the client does not advance across that event and resnapshots from canonical state.
 - A non-contiguous page is never partially applied.
 - After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of applying/replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
 - IndexedDB v4 stores the message window and `lastAppliedSeq`.
@@ -82,6 +85,8 @@ Because `NOTIFY` is ephemeral, a successful listener re-LISTEN is followed by lo
 ## One-time immutable-event boundary
 
 Migration `0003_room_events_immutable_after_images` takes table locks so no business write can land between replacing the writer and deleting legacy ID-only events. Concurrent app startup is serialized by a transaction-scoped advisory lock and a second migration-record check. The migration preserves every stream `head_seq`, clears nondeterministic history, and sets active `min_available_seq = head_seq + 1`; an old cursor therefore snapshots once and resumes without a sequence reset.
+
+Migration `0004_public_member_change_events` repairs databases that ran the pre-production V1 member after-image writer: any retained `members.upserted` / `members.deleted` row is rewritten in place to `members.changed {}`, the public type constraint is tightened, and future member mutations emit only the empty signal. This is a one-time privacy repair before the stream is opened to clients.
 
 Deleted rooms cannot be snapshotted. For those streams, the migration appends a new V1 `room.deleted` tombstone and preserves `deleted_reader_ids`, with the retention floor pointing at that tombstone. Even a cursor older than the discarded prefix receives this terminal event, and the client allows this single deletion-only sequence jump. This avoids a `CURSOR_EXPIRED` → impossible snapshot loop. There is no permanent dual-format decoder.
 
@@ -132,6 +137,12 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
 Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
+
+## Pending immutable-event production migration
+
+The `0003` / `0004` event migration is a direct protocol boundary and must not be installed by a rolling old/new application mix. For the current single-instance Compose deployment: take a verified backup, stop every old app process, start only the new image so migrations complete before traffic, then smoke-test snapshot, delta, AI streaming, member authorization, and deletion replay. A source push alone does not perform this migration.
+
+Future AWS multi-instance deployment must either use the same maintenance-window stop-the-world boundary or introduce a deliberate two-phase compatible protocol before attempting a rolling release. An old image must never run after the new payload writer is active, and rollback means restoring the matching database backup rather than merely restarting the old binary.
 
 ## Executed production cutover
 
