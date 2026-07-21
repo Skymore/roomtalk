@@ -1971,6 +1971,25 @@ describe('MessageItem replies', () => {
       const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
       expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-1.webp');
     });
+
+    const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+    fireEvent.doubleClick(stage, { clientX: 150, clientY: 220 });
+    await waitFor(() => {
+      expect((activeImage as HTMLElement).style.transform).toContain('scale(2)');
+    });
+
+    fireEvent.mouseDown(stage, { clientX: 250, clientY: 220 });
+    fireEvent.mouseMove(stage, { clientX: 150, clientY: 221 });
+    await waitFor(() => {
+      expect(track.getAttribute('style')).toContain('translate3d(-300px, 0, 0)');
+    });
+    fireEvent.mouseMove(stage, { clientX: 80, clientY: 222 });
+    fireEvent.mouseMove(stage, { clientX: -100, clientY: 224 });
+    fireEvent.mouseUp(stage, { clientX: -100, clientY: 224 });
+    await waitFor(() => {
+      const nextImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+      expect(nextImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-3.webp');
+    });
   });
 
   it('reopens a media viewer on the clicked image after swiping away', async () => {

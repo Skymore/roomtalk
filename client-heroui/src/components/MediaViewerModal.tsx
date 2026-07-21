@@ -902,14 +902,34 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
 
     if (state.mode === "pan") {
-      const nextPan = clampImagePan({
+      const desiredPan = {
         x: state.startPan.x + deltaX,
         y: state.startPan.y + deltaY,
-      }, state.startZoom, state.metrics);
+      };
+      const nextPan = clampImagePan(desiredPan, state.startZoom, state.metrics);
       state.currentPan = nextPan;
       applyActiveImageTransform(state.startZoom, nextPan, false);
+
+      const horizontalOverflow = desiredPan.x - nextPan.x;
+      const canHandOff = (horizontalOverflow < 0 && canGoNext)
+        || (horizontalOverflow > 0 && canGoPrevious);
+      if (
+        canHandOff
+        && Math.abs(horizontalOverflow) > TAP_THRESHOLD
+        && absX > absY * 1.1
+      ) {
+        state.mode = "horizontal";
+        state.startX = clientX - horizontalOverflow;
+        state.startY = clientY;
+        state.startTime = now();
+        applyTrackOffset(
+          getBoundaryResistedOffset(horizontalOverflow, state.metrics),
+          false,
+          state.metrics,
+        );
+      }
     }
-  }, [activeStageMedia.kind, applyActiveImageTransform, applyTrackOffset, applyVerticalOffset, clampImagePan, clearTapTimer, getBoundaryResistedOffset]);
+  }, [activeStageMedia.kind, applyActiveImageTransform, applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, clampImagePan, clearTapTimer, getBoundaryResistedOffset]);
 
   const finishSinglePointGesture = React.useCallback((clientX: number, clientY: number) => {
     const state = gestureRef.current;
@@ -930,6 +950,14 @@ const MediaStage: React.FC<MediaStageProps> = ({
     mouseGestureActiveRef.current = false;
 
     if (finalState.mode === "horizontal") {
+      if (finalState.startZoom > MIN_IMAGE_ZOOM) {
+        commitImageTransform(
+          finalState.startZoom,
+          finalState.currentPan,
+          false,
+          finalState.metrics,
+        );
+      }
       const pageTarget = getHorizontalPageTarget({
         deltaX,
         deltaY,
@@ -1105,7 +1133,11 @@ const MediaStage: React.FC<MediaStageProps> = ({
       event.currentTarget.releasePointerCapture?.(event.pointerId);
       capturedPointerIdsRef.current.delete(event.pointerId);
     }
-    if (cancelledState?.mode === "pinch" || cancelledState?.mode === "pan") {
+    if (
+      cancelledState?.mode === "pinch"
+      || cancelledState?.mode === "pan"
+      || (cancelledState?.mode === "horizontal" && cancelledState.startZoom > MIN_IMAGE_ZOOM)
+    ) {
       commitImageTransform(imageTransformRef.current.zoom, imageTransformRef.current.pan, true, cancelledState.metrics);
     }
     gestureRef.current = null;

@@ -51,12 +51,12 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 - At zoom greater than 1x, one-finger movement pans the image unless the initial movement locks as a downward return.
 - Pan is clamped so the image cannot drift indefinitely away from the viewport.
+- Horizontal movement is consumed by image pan first. Once the image reaches its left or right pan boundary, continued outward movement can hand the same gesture to carousel navigation when an adjacent item exists.
 - Pan is committed visually during move, but no navigation or return is committed until pointer up.
 
 ### Horizontal navigation
 
-- Horizontal swiping is active only at 1x for images, and remains active on video surfaces.
-- A zoomed image does not hand movement off to carousel navigation at its pan boundary. The user must return to 1x before paging horizontally.
+- Horizontal swiping starts directly at 1x for images and remains active on video surfaces. A zoomed image can enter horizontal paging only after its pan reaches the outward boundary.
 - Movement locks to horizontal once horizontal displacement exceeds the gesture threshold and dominates vertical movement.
 - While dragging, the carousel follows the finger using direct DOM transforms instead of React state updates, with transform writes batched through `requestAnimationFrame`.
 - React state should update only after pointer up selects a new item or resets the current one.
@@ -81,7 +81,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 2. Two active pointers: pinch.
 3. Single pointer on image:
    - If zoomed and downward movement dominates, vertical return.
-   - If zoomed and not downward return, image pan.
+   - If zoomed and not downward return, image pan; continued outward movement at a horizontal boundary hands off to navigation.
    - If 1x and horizontal movement dominates, horizontal navigation.
    - If 1x and downward movement dominates, vertical return.
 4. Tap candidate:
@@ -100,6 +100,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 - Pointer move must not call React state setters for every frame of horizontal drag or vertical dismiss preview.
 - Pointer move should avoid repeated expensive layout work; dimensions used for commit thresholds should be captured at gesture start.
 - Gesture transforms should be applied outside React render during active movement and flushed once per animation frame, with CSS transitions disabled while following the finger.
+- The RAF-batched transform path is the implemented 60fps optimization. The original device profile dropped below 30fps with scattered writes; the optimized path was observed at 60fps on the target device. These are manual profile observations, not an automated benchmark.
 - React state is updated after gesture completion for active media index, zoom, and pan.
 - CSS transitions are disabled during direct finger tracking and enabled only for snap-back or commit animations.
 
@@ -118,7 +119,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 - Single tapping an image closes the main viewer or returns from history preview, including when zoomed.
 - Down swiping previews the return during movement and commits only after release.
 - Horizontal swiping feels smooth and follows the finger at 1x.
-- Horizontal swiping does not trigger while an image is zoomed.
+- A zoomed image pans before paging; at its horizontal boundary, continued outward movement can switch to the adjacent media.
 - Closing after swiping to another item and reopening the original chat media starts from the clicked media, not the previous internal carousel position.
 - Video slides do not autoplay and require explicit user play.
 - Existing history preview action buttons remain available.
@@ -127,18 +128,17 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 Current implementation lives in `client-heroui/src/components/MediaViewerModal.tsx`.
 It covers direct DOM transforms, double-tap image zoom, pinch, pan, downward
-return at 1x or while zoomed, horizontal paging only at 1x for images, video
-controls with no autoplay, inactive-video pause, keyboard navigation, and
-Escape handling.
+return at 1x or while zoomed, direct horizontal paging at 1x, zoomed-image pan
+boundary handoff, video controls with no autoplay, inactive-video pause,
+keyboard navigation, and Escape handling.
 
 Automated coverage currently includes double-click zoom, tap close, downward
-dismiss, horizontal image/video swipes, reopen behavior, and video no-autoplay
-through `MessageItem.test.tsx`.
+dismiss, horizontal image/video swipes, zoomed-image boundary handoff, reopen
+behavior, and video no-autoplay through `MessageItem.test.tsx`.
 
 Known test gaps:
 
 - Direct multi-pointer pinch simulation.
-- Suppression of horizontal navigation while a zoomed image is panned.
 - Edge resistance at the first/last media item.
 - Velocity-only commits independent of distance.
 - Keyboard arrow and Escape behavior.
