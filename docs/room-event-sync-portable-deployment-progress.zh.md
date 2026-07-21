@@ -34,6 +34,7 @@
 | 9 | 公共成员隐私、严格 payload validator、提前到达 AI 临时事件 buffer | `609c5e3c` |
 | 10 | 保留 optimistic send、不依赖数据库的 payload 单测 | `a8afcf49` |
 | 11 | `CURSOR_AHEAD` 旧水位清理、持久 AI 错误的确定性 fast path | `fbfd908b` |
+| 12 | Per-room 同步状态机、权限屏障、广播合并、message room 不可变、强制 PostgreSQL CI | `b607ad7a` |
 
 定时 Fly workflow 继续禁用，Fly machine 保持为零。Supabase、Tigris 和 Upstash 是回滚源，不是 live writer。`ai-chat.wenlin.dev` 仍在允许 origin 中，其 DNS 单独管理。
 
@@ -69,21 +70,31 @@ register -> create -> join -> send
 
 Smoke 强制使用 WebSocket transport，达到 `snapshotSeq=3`，重放三条 event，并删除临时房间。
 
-## 最后一轮代码的聚焦验证
+### 并发状态收敛，2026-07-21
+
+Commit `b607ad7a` 没有继续增加彼此独立的恢复 flag，而是直接缩小并发状态空间。浏览器现在由一个 per-room `idle/replay/replace/prepend` controller 统一协调 event replay、replacement recovery 与历史 prepend。未持久化的 AI 终止错误不会再让 placeholder 永远停在 streaming；当前窗口被删除清空时，也不会再被误判为没有更早历史；`CURSOR_AHEAD` 会同时清除过期高水位与旧的大差距 snapshot target。
+
+服务端会把同一房间的 PostgreSQL 通知合并为 seq range。完整 after-image payload 发出前，每个实例都会重新检查 PostgreSQL membership，并先让已失去权限的本机 socket 离开房间。Listener 使用 generation 关闭并忽略旧 client。Migration `0005_message_room_immutability_and_event_clock` 禁止把已有 message ID 移进另一个房间，并把保留事件时间改为真实墙上时间 `clock_timestamp()`。
+
+生产从 `b607ad7a` 重新构建并启动。启动日志确认 `0005`、`LISTEN room_event_committed`、Redis adapter、outbox worker 全部就绪，broadcaster 初始无积压。PostgreSQL、Redis、SeaweedFS 与 app 均健康，Cloudflare Tunnel 正常运行。本机回环、`room.ruit.me` 和 `roomtalk.ruit.me` 都返回 `online`，并报告 PostgreSQL persistence、Redis connected、media configured、Socket adapter ready 与 98 个 room。
+
+## 并发状态收敛版本的验证
 
 | 检查 | 结果 |
 | --- | --- |
-| Client room-event hook | 31 passed |
-| Server AI socket handlers | 40 passed |
-| CodeAgentSessionService | 53 passed |
+| 完整 Client suite | 96 个文件、1,012 项通过 |
+| 完整 Server suite | 101 个 suite、766 项通过 |
+| 真实 PostgreSQL 17 room-event integration | 17 项通过 |
+| 状态机与 room-event 竞态回归 | 通过 |
 | Server TypeScript build | 通过 |
 | Client production build 与 i18n check | 通过 |
 | Production Docker image build | 通过 |
 | Compose health | 五个服务 healthy/running |
-| 公网 `/api/status` | Online |
-| 公网 WSS event smoke | 通过并已清理 |
+| 本机回环 `/api/status` | Online |
+| `room.ruit.me` 与 `roomtalk.ruit.me` `/api/status` | Online |
+| 强制 PostgreSQL 17 service 的 GitHub CI | 已加入；room-event integration 不能再静默 skip |
 
-客户端回归测试现在覆盖：旧 `desiredHeadSeq` 大于恢复后的数据库 head，以及 reset snapshot 进行期间又收到新通知。AI 错误覆盖 Socket 先到、room event 先到和 error-before-placeholder 三种时序。服务端测试会验证 Socket error payload 携带的 Message 与刚保存的 Message 完全一致。
+回归测试覆盖 recovery 与 prepend pagination 竞争、当前窗口被删除清空但仍有旧历史、只有 deletion event 才关闭消息弹窗、未持久化 AI 错误早于或晚于 placeholder、1,000 条通知突发合并、旧 PostgreSQL listener generation、跨房间 message 拒绝，以及真实墙上 event 时间。真实 PostgreSQL suite 使用 PostgreSQL 17 而不是 mock；新的 GitHub workflow 会在每次 `master` push 和 pull request 中提供同样的数据库 service。
 
 更早的完整 Server、Client、PostgreSQL integration、PostgreSQL Playwright、persistence、Compose restart 与成对恢复结果仍保留在产生它们的 Git commit 中。这里不复制每个测试用例，因为当前架构文档已经说明协议层覆盖。
 

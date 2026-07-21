@@ -34,6 +34,7 @@ Implementation started from local `master` at `d94d2cd0`.
 | 9 | Public member privacy, strict payload validation, early AI transient buffer | `609c5e3c` |
 | 10 | Optimistic-send preservation and database-independent payload tests | `a8afcf49` |
 | 11 | `CURSOR_AHEAD` stale-watermark reset and deterministic persisted AI error fast path | `fbfd908b` |
+| 12 | Per-room sync state machine, authorization barrier, coalesced broadcaster, immutable message room, mandatory PostgreSQL CI | `b607ad7a` |
 
 The scheduled Fly workflow remains disabled and Fly machines remain at zero. Supabase, Tigris, and Upstash are rollback sources, not live writers. `ai-chat.wenlin.dev` is still an allowed origin whose DNS is managed separately.
 
@@ -69,21 +70,31 @@ register -> create -> join -> send
 
 The smoke used WebSocket transport, reached `snapshotSeq=3`, replayed three events, and removed the temporary room.
 
-## Focused verification for the final code change
+### Convergence hardening, 2026-07-21
+
+Commit `b607ad7a` reduced the remaining concurrency state space instead of adding independent recovery flags. The browser now coordinates replay, replacement recovery, and historical prepend through one per-room `idle/replay/replace/prepend` controller. An unpersisted AI terminal error can no longer leave a placeholder streaming; deleting the current window no longer proves that older history is absent; and `CURSOR_AHEAD` clears both obsolete high-water state and the previous large-gap target.
+
+On the server, same-room PostgreSQL notifications coalesce into sequence ranges. Before a complete after-image payload is emitted, each instance rechecks PostgreSQL membership and removes unauthorized local sockets. Listener generations close and ignore stale clients. Migration `0005_message_room_immutability_and_event_clock` rejects moving an existing message ID into another room and changes retained-event time to wall-clock `clock_timestamp()`.
+
+Production rebuilt and restarted from `b607ad7a`. Startup logs recorded migration `0005`, `LISTEN room_event_committed`, Redis adapter initialization, outbox worker startup, and zero pending broadcaster work. PostgreSQL, Redis, SeaweedFS, and the app were healthy; Cloudflare Tunnel was running. Loopback and both `room.ruit.me` and `roomtalk.ruit.me` reported `online`, PostgreSQL persistence, connected Redis, configured media storage, a ready Socket adapter, and 98 rooms.
+
+## Verification for the convergence hardening release
 
 | Check | Result |
 | --- | --- |
-| Client room-event hook | 31 passed |
-| Server AI socket handlers | 40 passed |
-| CodeAgentSessionService | 53 passed |
+| Full Client suite | 1,012 passed in 96 files |
+| Full Server suite | 766 passed in 101 suites |
+| Real PostgreSQL 17 room-event integration | 17 passed |
+| State-machine and room-event race regressions | Passed |
 | Server TypeScript build | Passed |
 | Client production build and i18n check | Passed |
 | Production Docker image build | Passed |
 | Compose health | Five services healthy/running |
-| Public `/api/status` | Online |
-| Public WSS event smoke | Passed and cleaned up |
+| Loopback `/api/status` | Online |
+| `room.ruit.me` and `roomtalk.ruit.me` `/api/status` | Online |
+| GitHub CI with mandatory PostgreSQL 17 service | Added; room-event integration can no longer silently skip |
 
-The client regression suite now covers a stale `desiredHeadSeq` larger than a restored database head, plus a new notification received while the reset snapshot is in flight. It also covers Socket-first, room-event-first, and error-before-placeholder delivery for a persisted AI error Message. The server tests verify that the Socket error payload carries the same Message that was saved.
+The regression suite covers recovery competing with prepend pagination, an emptied current window with older history, modal cleanup only for deletion events, unpersisted AI errors before and after their placeholder, a 1,000-notification broadcaster burst, stale PostgreSQL listener generations, cross-room message rejection, and wall-clock event creation. The real PostgreSQL suite ran against PostgreSQL 17 rather than a mock; the new GitHub workflow provisions the same database service for every `master` push and pull request.
 
 Earlier full Server, Client, PostgreSQL integration, PostgreSQL Playwright, persistence, Compose restart, and paired restore results remain in Git history with the commits that produced them. This ledger avoids copying every test case because the current architecture document already explains the protocol-level coverage.
 
