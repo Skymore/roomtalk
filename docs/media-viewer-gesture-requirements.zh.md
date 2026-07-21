@@ -3,96 +3,112 @@
 [English](media-viewer-gesture-requirements.md)
 
 状态：当前需求与实现记录
-更新：2026-07-12
+更新：2026-07-21
 
 ## 目标
 
-图片/视频查看器应接近原生 photo viewer：手势决策可预期，手指未离开时可逆，只在手势结束时 commit navigation/dismiss。
+图片和视频查看器应接近原生照片查看器。手势方向需要可预期，手指尚未离开时可以撤回，切换媒体或返回等动作只在手势结束时提交。
 
 ## 范围
 
-- 图片：single tap、double tap、pinch zoom、zoomed pan、水平切换、下拉返回。
-- 视频：保留播放控件，不让 viewer gesture 抢占内建 media control。
-- Mouse/keyboard：desktop close/navigation/zoom 可访问。
+- 从聊天消息打开的全屏媒体查看器。
+- 从图片或视频历史网格打开的单项预览。
+- 图片支持单击返回、双击缩放、双指缩放、放大后平移、水平切换和下拉返回。
+- 视频不自动播放，只在用户明确操作后开始播放。
 
 ## 交互规则
 
-### Commit 时机
+### 提交时机
 
-- `pointermove` 只更新视觉 transform/opacity，不切换 media 或 close。
-- `pointerup`/`pointercancel` 根据 distance、velocity、direction lock 和 boundary 决定 commit/snap-back。
-- 手势未 commit 时必须平滑回到稳定状态。
+- 按下或移动指针时不能直接切换媒体、关闭查看器或返回历史网格。
+- `pointermove` 只更新视觉预览，例如水平位移、下拉位移、图片缩放和平移。
+- `pointerup` 或 `pointercancel` 才根据距离、速度和方向锁定决定提交或回弹。
+- 手势没有达到提交阈值时，查看器恢复到操作前的稳定状态。
 
-### Tap 与 double tap
+### 单击与双击
 
-- Single tap 不应在 double-tap window 内立即触发与 double tap 冲突的 action。
-- Double tap 在 1x 和预设 zoom 之间切换，以 tap point 为缩放中心，并 clamp pan bounds。
-- 明显 drag/pinch 后不触发 tap。
+- 移动不超过 8 px 的指针序列才视为单击。
+- 主查看器中的单击关闭查看器；历史单项预览中的单击返回网格。放大的图片同样可以单击返回。
+- 单击需要短暂延迟，以便第二次点击把它转换为双击。
+- 双击图片时，1x 放大到 2x，已放大的图片回到 1x。第二次点击的位置是缩放中心。
+- 视频不使用图片的单击和双击语义。视频点击留给原生控件，拖动视频表面仍可切换或下拉返回。
 
 ### Pinch zoom
 
-- 用两 pointer 间距与 midpoint 计算 scale/pan。
-- 保持内容在手指下稳定，限制 minimum/maximum scale。
-- 第二个 pointer 加入后，当前 single-pointer navigation/dismiss candidate 失效。
-- 回到 1x 时将 pan 吸附回中心。
+- 图片上出现两个有效指针时进入双指缩放。
+- 缩放比例根据两指距离连续计算，并以两指中点为中心，尽量让手指下的内容保持稳定。
+- 双指缩放期间不允许水平切换或下拉返回，直到只剩一个指针。
+- 缩放范围限制在 1x 到 6x；结束时接近 1x 会吸附回正好 1x 并重新居中。
 
 ### 图片 pan
 
-- 只在 zoom > 1 时允许自由 pan。
-- 水平 pan 先消耗图片内容边界；只在已到边界且继续向外拖动时，才能进入 carousel navigation candidate。
-- 越界使用 resistance，不允许无限拖离 viewport。
+- 图片缩放超过 1x 后，单指移动默认平移图片；如果初始移动明确向下并锁定为返回手势，则优先下拉返回。
+- 平移范围受视窗边界约束，图片不能无限拖离可见区域。
+- 放大图片到达平移边界后也不会把当前手势交给轮播。用户需要先回到 1x，才能水平切换媒体。
 
 ### 水平切换
 
-- 只在主方向锁定为 horizontal 后为 candidate。
-- 正向拖动预览相邻 media，但只在 release threshold/velocity 通过后切换 index。
-- 第一个/最后一个 media 的无效方向使用 resistance 并 snap back。
-- Zoomed image 只在内容边界向外拖时允许 navigation。
+- 图片只有在 1x 时允许水平切换；视频表面仍允许水平拖动。
+- 水平位移超过阈值且明显大于纵向位移后，手势锁定为水平切换。
+- 拖动时轮播跟随手指，DOM transform 由 `requestAnimationFrame` 合并写入；React state 只在松手后切换媒体或恢复当前位置时更新。
+- 距离或速度达到阈值才切换，否则回弹。第一项和最后一项的无效方向使用弹性阻力。
+- 松手动画根据剩余距离与速度计算，并限制在 500ms 到 800ms 的范围内。
 
 ### 下拉返回
 
-- 只在主方向锁定为 downward 且 scale 接近 1x 时启动。
-- 拖动过程更新 media translate/scale 和 backdrop opacity。
-- Release threshold/velocity 通过才 close，否则 snap back。
-- Upward drag 不触发 dismiss。
+- 下拉返回在 1x 和放大状态都可用。
+- 向下位移超过阈值且明显大于水平位移后，手势锁定为下拉返回。
+- 拖动期间，当前媒体跟随手指向下移动并缩小，背景与控制栏逐渐淡出。
+- 只在松手时按距离或速度阈值提交返回，否则回弹。向上拖动不会触发返回。
 
 ### 优先级
 
-1. 活跃 video/native control interaction。
-2. Multi-pointer pinch。
-3. Zoomed image pan（包括边界 handoff）。
-4. 1x 下方向锁定的 horizontal navigation 或 downward dismiss。
-5. Tap/double tap。
+1. 按钮、链接和视频控件保留原生交互。
+2. 两个有效指针优先进入双指缩放。
+3. 单指操作图片时，放大状态下的明确向下移动进入下拉返回，其余移动用于平移；1x 状态按主方向进入水平切换或下拉返回。
+4. 尚未形成拖动的操作保留为单击候选；第二次点击可以把它转换为双击缩放。
 
-一旦某手势模式锁定，当前 pointer sequence 内不在模式之间抖动。
+一旦手势模式锁定，本次指针序列中不再来回切换模式。
 
 ## 视频
 
-- 视频 control 点击/拖动不会触发 viewer navigation/dismiss。
-- 视频切换/close 时 pause 并清理不需要的 playback state。
-- 不将图片 pinch/pan 语义强行应用到视频。
+- 视频进入全屏或滑入当前项时都不会自动播放。
+- 当前视频显示原生控件；对控件的操作不触发查看器手势。
+- 拖动视频内容表面仍可水平切换或下拉返回。
+- 离开视频项时不尝试让它继续播放。
 
 ## 性能
 
-- Pointer move 不应在每个事件做大量 React render；transform/opacity 用 `requestAnimationFrame` 合并。
-- 主动 pointer 使用 capture，cancel/unmount 必须释放。
-- 转换只使用 transform/opacity，避免 layout thrash。
-- 移动端设置合适 `touch-action` 以避免 browser gesture 与 viewer 冲突。
+- 水平拖动和下拉预览的每个 `pointermove` 都不能触发 React state 更新。
+- 提交阈值所需的尺寸在手势开始时读取，移动过程中避免重复布局计算。
+- 活跃手势期间，transform 和 opacity 在 React render 之外更新，并由 `requestAnimationFrame` 每帧最多合并刷新一次。
+- 跟手阶段禁用 CSS transition；只有回弹或提交动画启用 transition。
 
 ## 可访问性
 
-- Escape close；左右键 navigation；可访问 close/previous/next control。
-- Focus 在 modal 中可预期，close 后返回触发点。
-- 尊重 reduced-motion，不用 animation 作为唯一状态表达。
+- 关闭、下载、历史、分享、上一项和下一项按钮保留可访问标签。
+- 左右方向键继续切换媒体；Escape 按当前模式关闭查看器或返回网格。
+- 图片保留替代文本，动画只表达短暂的功能反馈。
 
-## Acceptance
+## 验收标准
 
-- Drag 未过 threshold 不切换/close。
-- Horizontal/downward 不互相误触。
-- Pinch 不触发 tap/navigation。
-- Zoomed pan 在到边界前不切换。
-- Edge resistance、velocity-only commit、single-tap delay、keyboard 和 video control 符合上述规则。
+- 双击围绕点击位置缩放，再次双击回到 1x。
+- 双指缩放连续变化并限制在 1x 到 6x。
+- 单击可以关闭主查看器或从历史单项预览返回，放大图片也适用。
+- 下拉过程中显示返回预览，只在松手且达到阈值时提交。
+- 1x 图片的水平滑动跟手流畅；图片放大后不会触发水平切换。
+- 切换到另一项后关闭，再从聊天消息重新打开时，从本次点击的媒体开始。
+- 视频不自动播放，必须由用户明确播放；历史预览操作按钮保持可用。
 
 ## 实现状态
 
-当前已实现锁定 gesture state machine、rAF transform batching、pinch/pan/navigation/dismiss 和 media cache 结合。已知需要继续强化的 automated coverage 包括 pinch、zoomed swipe suppression、edge resistance、velocity-only commit、keyboard 和 single-tap delay。
+当前实现位于 `client-heroui/src/components/MediaViewerModal.tsx`，覆盖手势模式锁定、DOM transform 合并、双击缩放、双指缩放、平移、下拉返回、1x 水平切换、视频不自动播放、键盘切换和 Escape 处理。
+
+现有自动化测试覆盖双击缩放、单击关闭、下拉返回、图片和视频水平切换、重新打开定位，以及视频不自动播放。仍需补强的测试包括：
+
+- 直接模拟多指缩放。
+- 验证放大图片平移时不会水平切换。
+- 第一项和最后一项的弹性阻力。
+- 只靠速度而非距离提交的手势。
+- 左右键与 Escape。
+- 双击判定期间的单击延迟。

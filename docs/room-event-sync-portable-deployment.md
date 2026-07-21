@@ -76,7 +76,7 @@ Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transie
 - A browser cursor ahead of a restored database receives `CURSOR_AHEAD`. It clears the stale target head before requesting the snapshot, while notifications arriving during that request establish a new target. This avoids an infinite empty-page loop against the restored head.
 - A strict decoder failure returns `EVENT_PAYLOAD_INVALID`; the client does not advance across that event and resnapshots from canonical state.
 - A non-contiguous page is never partially applied.
-- After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of applying/replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
+- After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of paging through the backlog in batches of up to 100 events; the client then drains only the post-`snapshotSeq` tail.
 - IndexedDB v4 stores the message window and `lastAppliedSeq`.
 - `beforeMessageId` pagination prepends old history without moving the live cursor.
 
@@ -88,7 +88,7 @@ Because `NOTIFY` is ephemeral, a successful listener re-LISTEN is followed by lo
 
 Migration `0003_room_events_immutable_after_images` takes table locks so no business write can land between replacing the writer and deleting legacy ID-only events. Concurrent app startup is serialized by a transaction-scoped advisory lock and a second migration-record check. The migration preserves every stream `head_seq`, clears nondeterministic history, and sets active `min_available_seq = head_seq + 1`; an old cursor therefore snapshots once and resumes without a sequence reset.
 
-Migration `0004_public_member_change_events` repairs databases that ran the pre-production V1 member after-image writer: any retained `members.upserted` / `members.deleted` row is rewritten in place to `members.changed {}`, the public type constraint is tightened, and future member mutations emit only the empty signal. This is a one-time privacy repair before the stream is opened to clients.
+Migration `0004_public_member_change_events` repaired databases that had run the pre-production V1 member after-image writer: retained `members.upserted` / `members.deleted` rows were rewritten in place to `members.changed {}`, the public type constraint was tightened, and later member mutations emit only the empty signal. Production applied this one-time privacy repair during the 2026-07-21 maintenance window.
 
 Deleted rooms cannot be snapshotted. For those streams, the migration appends a new V1 `room.deleted` tombstone and preserves `deleted_reader_ids`, with the retention floor pointing at that tombstone. Even a cursor older than the discarded prefix receives this terminal event, and the client allows this single deletion-only sequence jump. This avoids a `CURSOR_EXPIRED` → impossible snapshot loop. There is no permanent dual-format decoder.
 

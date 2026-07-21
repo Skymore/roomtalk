@@ -102,7 +102,7 @@ Upload: client requests a presigned URL → uploads to the configured S3-compati
 
 ### AI Streaming
 
-Client sends `ask_ai` socket event with role/model/context. Server selects the configured provider client (DeepSeek, Anthropic, OpenAI, or OpenRouter), streams chunks as `ai_chunk`, and ends with `ai_stream_end`. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
+Client sends `ask_ai` with role, model, and context. The server selects the configured provider client (DeepSeek, Anthropic, OpenAI, or OpenRouter) and streams transient `ai_chunk` events after the durable placeholder exists. A successful run persists the final Message before `ai_stream_end`. A failed run persists the complete error Message before `ai_stream_error`, which carries the same Message as a fast path. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
 
 ### Code-Agent Runtime
 

@@ -3,7 +3,7 @@
 [中文](media-viewer-gesture-requirements.zh.md)
 
 Status: Current requirements and implementation record
-Updated: 2026-07-12
+Updated: 2026-07-21
 
 ## Goal
 
@@ -49,13 +49,14 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 ### Image pan
 
-- At zoom greater than 1x, one-finger movement pans the image unless the gesture direction locks as a downward return.
+- At zoom greater than 1x, one-finger movement pans the image unless the initial movement locks as a downward return.
 - Pan is clamped so the image cannot drift indefinitely away from the viewport.
 - Pan is committed visually during move, but no navigation or return is committed until pointer up.
 
 ### Horizontal navigation
 
 - Horizontal swiping is active only at 1x for images, and remains active on video surfaces.
+- A zoomed image does not hand movement off to carousel navigation at its pan boundary. The user must return to 1x before paging horizontally.
 - Movement locks to horizontal once horizontal displacement exceeds the gesture threshold and dominates vertical movement.
 - While dragging, the carousel follows the finger using direct DOM transforms instead of React state updates, with transform writes batched through `requestAnimationFrame`.
 - React state should update only after pointer up selects a new item or resets the current one.
@@ -125,9 +126,10 @@ The image and video viewer should feel closer to a native photo viewer than a we
 ## Implementation Status
 
 Current implementation lives in `client-heroui/src/components/MediaViewerModal.tsx`.
-It covers direct DOM transforms, double-tap image zoom, pinch/pan/down-dismiss,
-horizontal paging, video controls with no autoplay, inactive-video pause,
-keyboard navigation, and Escape handling.
+It covers direct DOM transforms, double-tap image zoom, pinch, pan, downward
+return at 1x or while zoomed, horizontal paging only at 1x for images, video
+controls with no autoplay, inactive-video pause, keyboard navigation, and
+Escape handling.
 
 Automated coverage currently includes double-click zoom, tap close, downward
 dismiss, horizontal image/video swipes, reopen behavior, and video no-autoplay

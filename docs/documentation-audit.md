@@ -60,11 +60,18 @@ Subsystem references, retrospectives, completed plans, and review reports stay i
 - The CJK heuristic counts roughly one token per CJK character and one per four non-CJK characters.
 - Public HTTPS/WSS terminates TLS at the edge. PostgreSQL and Redis currently communicate on the private Compose network without TLS.
 - Object storage still has throughput, request-rate, latency, lifecycle, and cost limits. Test-database name guards reduce accidental production access; they do not make it impossible.
+- The current sticker catalog contains 2,149 entries. The picker renders the active page and one page on either side, and caps each nearby-image preload set at 48.
+- The media viewer supports downward return at both 1x and zoomed states. A zoomed image remains in pan mode and does not hand off to horizontal paging at its boundary.
+- RAF batching proves that gesture DOM writes are coalesced to at most one scheduled flush per frame. The repository does not contain a device benchmark that supports a 30fps-before or 60fps-after claim.
+- AI role drafting currently allows 5 requests per source IP per 10 minutes on each app instance. A multi-instance global limit would require shared rate-limit state.
+- SSE remains a valid one-way AI streaming transport. RoomTalk reuses Socket.IO because room acknowledgments, identity context, and reconnect recovery already live there, not because AI data must use one channel.
+- The project-metrics card says `180+` test/spec files; the 2026-07-21 repository snapshot contains 184 files named `*.test.*` or `*.spec.*`.
 
 ## Remaining product follow-ups
 
 - Replace room Socket string and regex error handling with stable error codes, especially `ROOM_NOT_FOUND`.
 - Complete automated media-viewer coverage for pinch, zoomed-image swipe suppression, edge resistance, velocity-only commits, keyboard controls, and single-tap delay.
+- Move the in-memory AI role-draft limiter to shared state before horizontal app scaling if the limit must be global.
 
 These are implementation follow-ups, not unresolved documentation ambiguity.
 

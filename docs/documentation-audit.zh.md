@@ -60,11 +60,18 @@
 - CJK 估算约为每个字符一个 token，非 CJK 文本约每四个字符一个 token。
 - 公网 HTTPS/WSS 在 edge 终止 TLS；PostgreSQL 与 Redis 当前在私有 Compose 网络内使用非 TLS 连接。
 - 对象存储仍受吞吐、请求速率、延迟、生命周期与成本限制。测试数据库名称 guard 可以降低误连生产的风险，但不能把风险说成不可能。
+- 当前贴纸目录有 2,149 个条目。Picker 只渲染当前页与前后各一页，每批相邻图片预加载最多 48 张。
+- 媒体查看器在 1x 和放大状态都支持下拉返回。放大图片保持在 pan 模式，到达边界后不会把手势交给水平翻页。
+- RAF batching 能证明手势 DOM 写入每帧最多安排一次合并 flush，但仓库没有设备 benchmark 支撑优化前 30fps 或优化后 60fps 的结论。
+- AI 角色草稿当前由每个 App 实例按来源 IP 限制为 10 分钟 5 次。多实例下若需要全局上限，必须共享限流状态。
+- SSE 仍是有效的单向 AI streaming 传输。RoomTalk 复用 Socket.IO，是因为房间 ack、身份上下文与重连恢复已经在这条连接上，而不是因为 AI 数据必须共用一个通道。
+- 项目指标卡写作 `180+` 个 test/spec 文件；2026-07-21 仓库快照中，文件名为 `*.test.*` 或 `*.spec.*` 的文件共有 184 个。
 
 ## 剩余产品 Follow-up
 
 - 用稳定错误码替换 room Socket 的字符串和 regex 错误判断，尤其是 `ROOM_NOT_FOUND`。
 - 补齐 media viewer 的 pinch、zoomed-image swipe suppression、edge resistance、velocity-only commit、keyboard control 与 single-tap delay 自动化覆盖。
+- 如果水平扩展后仍要求全局 AI 角色草稿上限，把当前内存 limiter 迁移到共享状态。
 
 这些是实现层 follow-up，不是尚未厘清的文档问题。
 
