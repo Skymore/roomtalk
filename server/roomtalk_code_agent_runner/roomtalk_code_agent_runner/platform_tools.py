@@ -12,6 +12,7 @@ from urllib import request as urllib_request
 from pathlib import Path
 from typing import Any, Sequence
 
+from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 from .runner import (
     RunnerError,
     _collect_static_publish_files,
@@ -223,7 +224,7 @@ def _get_room_context(url: str, token: str) -> dict[str, Any]:
     request = urllib_request.Request(url, method="GET", headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
-        "User-Agent": "roomtalk-code-agent-runner/1",
+        "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
     })
     try:
         with urllib_request.urlopen(request, timeout=30) as response:
@@ -318,7 +319,7 @@ def _put_static_publish_file(url: str, source_path: Path, mime_type: str, byte_s
             connection.putrequest("PUT", request_path)
             connection.putheader("Content-Type", mime_type)
             connection.putheader("Content-Length", str(byte_size))
-            connection.putheader("User-Agent", "roomtalk-code-agent-runner/1")
+            connection.putheader("User-Agent", ROOMTALK_CODE_AGENT_USER_AGENT)
             connection.endheaders()
             while chunk := source.read(1024 * 1024):
                 connection.send(chunk)
@@ -420,6 +421,7 @@ def _delete_static_publish_payload(url: str, token: str, payload: dict[str, Any]
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
         },
         method="DELETE",
     )

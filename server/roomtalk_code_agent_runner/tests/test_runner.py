@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from roomtalk_code_agent_runner import runner as runner_module
 from roomtalk_code_agent_runner.runner import (
     EventEmitter,
     RunnerError,
@@ -424,6 +425,49 @@ def test_static_publish_file_collection_rejects_secret_like_files(tmp_path: Path
 
     with pytest.raises(RunnerError, match="secret-like"):
         _collect_static_publish_files(workspace, {"root": "site"})
+
+
+def test_static_publish_post_uses_runner_user_agent(monkeypatch):
+    requested: dict[str, Any] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"token":"fresh-turn-token"}'
+
+    def fake_urlopen(request, timeout):
+        requested.update({
+            "method": request.method,
+            "url": request.full_url,
+            "authorization": request.headers["Authorization"],
+            "userAgent": request.headers["User-agent"],
+            "payload": json.loads(request.data.decode("utf-8")),
+            "timeout": timeout,
+        })
+        return FakeResponse()
+
+    monkeypatch.setattr(runner_module.urllib_request, "urlopen", fake_urlopen)
+
+    result = runner_module._post_static_publish_payload(
+        "https://room.example/api/code-agent/publish-static-site/token",
+        "refresh-token",
+        {},
+    )
+
+    assert result == {"token": "fresh-turn-token"}
+    assert requested == {
+        "method": "POST",
+        "url": "https://room.example/api/code-agent/publish-static-site/token",
+        "authorization": "Bearer refresh-token",
+        "userAgent": "roomtalk-code-agent-runner/1",
+        "payload": {},
+        "timeout": 30,
+    }
 
 
 def test_replay_tool_events_preserves_pairing_and_result_metadata():

@@ -12,6 +12,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
+from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 from .codex_cli import (
     CodexCliRunConfig,
     _codex_exec_permissions,
@@ -930,7 +931,7 @@ def _request_roomtalk_auth_refresh(config: CodexCliRunConfig, params: dict[str, 
             "Authorization": f"Bearer {config.auth_refresh_token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "roomtalk-code-agent-runner/1",
+            "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
         },
     )
     try:

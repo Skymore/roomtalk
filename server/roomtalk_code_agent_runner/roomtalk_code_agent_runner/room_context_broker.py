@@ -11,6 +11,8 @@ from typing import Any, MutableMapping
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
+
 ROOM_CONTEXT_SOCKET_ENV = "ROOMTALK_ROOM_CONTEXT_SOCKET"
 MAX_BROKER_REQUEST_BYTES = 16 * 1024
 MAX_BROKER_RESPONSE_BYTES = 25 * 1024 * 1024
@@ -27,7 +29,7 @@ def _fetch_room_context(url: str, token: str) -> dict[str, Any]:
     request = urllib_request.Request(url, method="GET", headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
-        "User-Agent": "roomtalk-code-agent-runner/1",
+        "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
     })
     try:
         with urllib_request.urlopen(request, timeout=30) as response:

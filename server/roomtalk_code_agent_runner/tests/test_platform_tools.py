@@ -19,6 +19,7 @@ def test_direct_publish_upload_streams_file_body(tmp_path: Path):
             byte_size = int(self.headers["Content-Length"])
             received["body"] = self.rfile.read(byte_size)
             received["contentType"] = self.headers["Content-Type"]
+            received["userAgent"] = self.headers["User-Agent"]
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -45,6 +46,7 @@ def test_direct_publish_upload_streams_file_body(tmp_path: Path):
     assert received == {
         "body": b"x" * 131_071,
         "contentType": "application/octet-stream",
+        "userAgent": "roomtalk-code-agent-runner/1",
     }
 
 
@@ -213,6 +215,7 @@ def test_unpublish_request_uses_delete_with_bearer_token(monkeypatch):
             "method": request.method,
             "url": request.full_url,
             "authorization": request.headers["Authorization"],
+            "userAgent": request.headers["User-agent"],
             "payload": json.loads(request.data.decode("utf-8")),
             "timeout": timeout,
         })
@@ -231,6 +234,7 @@ def test_unpublish_request_uses_delete_with_bearer_token(monkeypatch):
         "method": "DELETE",
         "url": "https://room.example/api/code-agent/publish-static-site",
         "authorization": "Bearer turn-token",
+        "userAgent": "roomtalk-code-agent-runner/1",
         "payload": {"slug": "coffee"},
         "timeout": 30,
     }

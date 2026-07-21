@@ -19,6 +19,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import urlparse
 
+from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 from .room_context_broker import start_room_context_broker
 
 SCHEMA_VERSION = 1
@@ -642,6 +643,7 @@ def _post_static_publish_payload(url: str, token: str, payload: dict[str, Any]) 
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
         },
         method="POST",
     )
