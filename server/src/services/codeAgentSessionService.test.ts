@@ -2580,7 +2580,9 @@ describe('CodeAgentSessionService', () => {
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
     const streamError = emitter.roomEmits.find(event => event.event === 'ai_stream_error');
     assert.ok(streamError);
+    assert.equal((streamError.args[0] as any).persisted, true);
     assert.deepEqual((streamError.args[0] as any).message, messages[1]);
+    assert.equal(Object.prototype.hasOwnProperty.call((streamError.args[0] as any).message, 'aiStreamOwnerId'), false);
   });
 
   it('closes pending tool calls with failed results when the runner errors', async () => {

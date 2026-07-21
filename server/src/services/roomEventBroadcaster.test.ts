@@ -118,6 +118,72 @@ describe('RoomEventBroadcaster', () => {
     assert.deepEqual(emitted, [42, 43]);
   });
 
+  it('coalesces a burst into a bounded number of range reads and exposes queue metrics', async () => {
+    const emitted: RoomEventBroadcast[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstRead = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    const reads: Array<{ afterSeq: number; limit: number }> = [];
+    const store = {
+      readRoomEvents: async (_roomId: string, options: { afterSeq: number; limit: number }) => {
+        reads.push({ afterSeq: options.afterSeq, limit: options.limit });
+        if (options.afterSeq === 41) await firstRead;
+        return {
+          roomId: 'room-1',
+          events: Array.from({ length: options.limit }, (_, index) => roomEvent(options.afterSeq + index + 1)),
+          headSeq: options.afterSeq + options.limit,
+          minAvailableSeq: 1,
+          hasMore: false,
+        };
+      },
+    } as unknown as RoomStore;
+    const broadcaster = new RoomEventBroadcaster({
+      store,
+      logger: new Logger('RoomEventBroadcasterTest'),
+      maxPayloadBytes: 10 * 1024 * 1024,
+      emit: event => emitted.push(event),
+    });
+
+    const requests = [broadcaster.handle({ roomId: 'room-1', headSeq: 42 })];
+    await new Promise(resolve => setImmediate(resolve));
+    for (let seq = 43; seq <= 1042; seq++) {
+      requests.push(broadcaster.handle({ roomId: 'room-1', headSeq: seq }));
+    }
+    releaseFirst?.();
+    await Promise.all(requests);
+
+    assert.deepEqual(reads, [
+      { afterSeq: 41, limit: 1 },
+      { afterSeq: 42, limit: 1000 },
+    ]);
+    assert.deepEqual(emitted.map(event => event.headSeq), [42, 1042]);
+    assert.equal(emitted[1].events?.length, 1000);
+    assert.equal(broadcaster.getMetrics().coalescedNotifications, 999);
+    assert.equal(broadcaster.getMetrics().maxPendingSequenceSpan, 1000);
+  });
+
+  it('runs the local authorization barrier before emitting a durable payload', async () => {
+    const order: string[] = [];
+    const store = {
+      readRoomEvent: async () => {
+        order.push('read');
+        return roomEvent(42);
+      },
+    } as unknown as RoomStore;
+    const broadcaster = new RoomEventBroadcaster({
+      store,
+      logger: new Logger('RoomEventBroadcasterTest'),
+      maxPayloadBytes: 256 * 1024,
+      authorizeLocalRoom: async () => { order.push('authorize'); },
+      emit: () => { order.push('emit'); },
+    });
+
+    await broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+
+    assert.deepEqual(order, ['read', 'authorize', 'emit']);
+  });
+
   it('uses local-only fan-out so three LISTEN instances deliver once to each local client', () => {
     const deliveries: Array<{ instance: number; roomId?: string; event: string }> = [];
     const servers = Array.from({ length: 3 }, (_, instance) => ({

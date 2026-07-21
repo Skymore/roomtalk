@@ -725,6 +725,7 @@ export const executeQueuedAssistantRun = async (
         messageId: aiMessageId,
         error: errorNotice,
         roomId,
+        persisted: errorSaved,
         ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({ status: 'error', completedAt: new Date().toISOString(), error: 'Cannot generate a response without context' });
@@ -814,6 +815,7 @@ export const executeQueuedAssistantRun = async (
         messageId: aiMessageId,
         error: errorNotice,
         roomId,
+        persisted: errorSaved,
         ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({ status: 'error', completedAt: new Date().toISOString(), error: 'Failed to save final AI response' });
@@ -927,6 +929,7 @@ export const executeQueuedAssistantRun = async (
       error: errorNotice,
       roomId,
       partial: hasPartialContent,
+      persisted: errorSaved,
       ...(errorSaved ? { message: errorAiMessage } : {}),
     });
     await updateAssistantRun({
@@ -1118,6 +1121,7 @@ export function registerAIHandlers({
             messageId: aiMessageId,
             error: 'Sorry, unable to update message history before generating a response.',
             roomId,
+            persisted: false,
           });
           callback?.({ success: false, error: 'Unable to update message history before generating a response' });
           return;
@@ -1143,6 +1147,7 @@ export function registerAIHandlers({
             messageId: aiMessageId,
             error: 'Sorry, unable to update message history before generating a response.',
             roomId,
+            persisted: false,
           });
           callback?.({ success: false, error: 'Unable to update message history before generating a response' });
           return;
@@ -1253,6 +1258,7 @@ export function registerAIHandlers({
         messageId: aiMessageId,
         error: 'Sorry, unable to start a durable AI response.',
         roomId,
+        persisted: false,
       });
       callback?.({ success: false, error: 'Unable to start a durable AI response' });
       return;
@@ -1288,6 +1294,7 @@ export function registerAIHandlers({
         messageId: aiMessageId,
         error: errorNotice,
         roomId,
+        persisted: errorSaved,
         ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       callback?.({ success: false, error: 'Unable to queue AI response' });
@@ -1590,6 +1597,7 @@ export function registerAIHandlers({
           messageId: aiMessageId,
           error: errorNotice,
           roomId,
+          persisted: errorSaved,
           ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
@@ -1638,6 +1646,7 @@ export function registerAIHandlers({
           messageId: aiMessageId,
           error: errorNotice,
           roomId,
+          persisted: errorSaved,
           ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Cannot generate a response without context' });
@@ -1727,6 +1736,7 @@ export function registerAIHandlers({
           messageId: aiMessageId,
           error: errorNotice,
           roomId,
+          persisted: errorSaved,
           ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
@@ -1809,6 +1819,7 @@ export function registerAIHandlers({
             error: errorNotice,
             roomId,
             partial: true,
+            persisted: errorSaved,
             ...(errorSaved ? { message: errorAiMessage } : {}),
           });
           await updateAssistantRun({ status: 'error', error: 'Failed to save premature-close AI response' });
@@ -1865,6 +1876,7 @@ export function registerAIHandlers({
         error: errorNotice,
         roomId,
         partial: hasPartialContent,
+        persisted: errorSaved,
         ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({

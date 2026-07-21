@@ -66,6 +66,43 @@ describe('RoomEventNotifier', () => {
 
     assert.equal(clients.length, 2);
     assert.deepEqual(order, ['listen-1', 'listen-2', 'sync-required']);
+    assert.equal(clients[0].calls.filter(call => call === 'end').length, 1);
+    await notifier.stop();
+  });
+
+  it('ignores notifications from a stale listener generation', async () => {
+    const clients: FakeNotificationClient[] = [];
+    const notifications: unknown[] = [];
+    const pgModule = {
+      Client: class extends FakeNotificationClient {
+        constructor() {
+          super();
+          clients.push(this);
+        }
+      },
+    } as unknown as PgModule;
+    const notifier = new RoomEventNotifier(
+      'postgresql://test',
+      new Logger('RoomEventNotifierTest'),
+      event => notifications.push(event),
+      undefined,
+      pgModule,
+      1,
+    );
+
+    await notifier.start();
+    clients[0].emit('error', new Error('listener dropped'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    clients[0].emit('notification', {
+      channel: 'room_event_committed',
+      payload: JSON.stringify({ roomId: 'room-1', headSeq: 42 }),
+    });
+    clients[1].emit('notification', {
+      channel: 'room_event_committed',
+      payload: JSON.stringify({ roomId: 'room-1', headSeq: 43 }),
+    });
+
+    assert.deepEqual(notifications, [{ roomId: 'room-1', headSeq: 43 }]);
     await notifier.stop();
   });
 });

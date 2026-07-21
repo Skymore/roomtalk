@@ -115,9 +115,9 @@ flowchart LR
   Redis <-.->|"仅 transient/global"| B
 ```
 
-`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的规范行”回填。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。数据库恢复到更旧位置并返回 `CURSOR_AHEAD` 时，浏览器会先清除旧目标水位再替换 snapshot；请求期间到达的新通知仍可建立新的目标。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取规范快照。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
+`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的规范行”回填。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 合并同房间水位、读取已提交的连续 range，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。完整 payload 发出前会重新用 PostgreSQL 校验本机成员身份并移除无权 socket。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。Per-room 的 `idle/replay/replace/prepend` 状态机保证历史分页不会取消恢复，并会在删除清空当前窗口但仍有旧历史时重新 snapshot。数据库恢复返回 `CURSOR_AHEAD` 时会同时清除旧目标水位与 gap target，同时保留 snapshot 期间的新通知。PG listener 以显式 generation 替换旧连接，成功后发送 local `room_sync_required` 做反熵。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取规范快照。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
 
-这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 走持久路径：服务端先保存完整错误 Message，Socket 再把同一个 Message 作为 fast path 发送，因此两种到达顺序会收敛到同一 after-image。
+这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 会声明终态是否已经持久化：`{ persisted: true, message }` 携带同一条安全错误 after-image；`{ persisted: false }` 会立刻终止本地 placeholder 并触发恢复。PostgreSQL 同时禁止同一 message ID 更换房间，避免跨房间 ghost projection。
 
 ### 关键难点是怎么工作的
 
@@ -259,6 +259,7 @@ npm run test:e2e:postgres
 
 - Node test runner 覆盖 service、protocol、store、socket handler、E2B adapter、lifecycle、model gateway 和 static publishing。
 - Vitest + Testing Library 覆盖客户端状态、消息、workspace 文件/diff/review、terminal、browser preview、queue control 和响应式 view。
+- GitHub CI 会启动 PostgreSQL 17 并提供 `ROOM_EVENT_TEST_DATABASE_URL`，因此 trigger、事务、retention clock 与跨房间 message invariant 测试不会静默 skip。
 - Playwright 覆盖桌面/移动端房间流程、恢复、多客户端实时行为、媒体、AI 和 PostgreSQL parity。
 - 真实 E2B smoke 覆盖固定 artifact metadata、daemon health、Coco/Codex 执行、权限、context access、发布和 workspace 行为。
 

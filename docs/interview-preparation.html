@@ -477,7 +477,7 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   <li>默认 worker 模式把 <code>assistant_run</code> 与 <code>outbox_event</code> 原子写入；Worker claim/lease/retry 后调用 Provider。</li>
   <li>Provider 输出中的 <code>ai_chunk</code> 通过 Socket.IO 直接推送，它是低延迟 UX fast path，不进入 room-event log。</li>
   <li>如果 chunk/A2UI/end 抢在 durable placeholder event 前到达，客户端按 <code>messageId</code> 有界暂存并在 placeholder 出现后按到达顺序 drain；上限为 60 秒 TTL、64 个 message、512 events、512 KiB，超限时最终 durable event 仍保证收敛。</li>
-  <li>完成时先持久化最终 Message，再发 <code>ai_stream_end</code>；失败时也先持久化完整错误 Message，再用 <code>ai_stream_error</code> 携带同一条 Message 作为 fast path。两种情况都会产生最终 durable room event，因此到达顺序不会改变最终 UI。</li>
+  <li>完成时先持久化最终 Message，再发 <code>ai_stream_end</code>。<code>ai_stream_error</code> 显式声明 <code>persisted</code>：正常失败先保存完整错误 Message，再发送 <code>{ persisted: true, message }</code>；如果终态保存本身失败，则发送 <code>{ persisted: false }</code>，客户端立刻把 placeholder 终止为 error、保留本地 overlay 并触发恢复，不能继续显示“正在生成”。</li>
   <li>服务重启时，Worker 从 outbox/run 状态继续处理；遗留的 streaming message 还有 <code>aiStreamRecovery</code> 兜底，避免僵尸流。</li>
 </ul>
 <ul data-lang="en">
@@ -485,7 +485,7 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   <li>In the default worker mode, the <code>assistant_run</code> and <code>outbox_event</code> are written atomically; a worker claims, leases, and retries the Provider call.</li>
   <li>Provider output is pushed as direct Socket.IO <code>ai_chunk</code> events. This is a low-latency UX fast path and is not stored in the room-event log.</li>
   <li>If a chunk/A2UI/end event beats the durable placeholder event, the client buffers it by <code>messageId</code> and drains it in arrival order when the placeholder appears. The buffer is capped at a 60-second TTL, 64 message IDs, 512 events, and 512 KiB; the final durable event still guarantees convergence after eviction.</li>
-  <li>On success, the final Message is persisted before <code>ai_stream_end</code>. On failure, a complete error Message is also persisted first, then <code>ai_stream_error</code> may carry that exact Message as a fast path. Both append a final durable room event, so delivery order cannot change the final UI.</li>
+  <li>On success, the final Message is persisted before <code>ai_stream_end</code>. <code>ai_stream_error</code> explicitly declares <code>persisted</code>: a normal failure saves the complete error Message and sends <code>{ persisted: true, message }</code>. If terminal persistence itself fails, <code>{ persisted: false }</code> immediately terminalizes the placeholder, preserves a local error overlay, and triggers recovery instead of leaving the UI at “streaming.”</li>
   <li>After a restart, the worker continues from outbox/run state, while <code>aiStreamRecovery</code> remains a final guard against orphaned streaming messages.</li>
 </ul>
 
@@ -1288,9 +1288,11 @@ During migration, one Store contract kept both implementations behaviorally alig
   <li>完整通知不超过 <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code>（默认 256 KiB）时携带 event；读取失败或超限退化为 head-only hint。</li>
   <li>客户端只直接应用从 <code>lastAppliedSeq + 1</code> 开始、并以 <code>headSeq</code> 结束的连续 payload；duplicate 忽略，gap 按 <code>afterSeq=lastAppliedSeq</code> 补拉。</li>
   <li>小 gap 默认按每页 100 events / 256 KiB replay；保留窗口内落后超过 500 events 时直接取新 snapshot，再排空 snapshot 后的 tail。</li>
-  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后。遇到 <code>CURSOR_AHEAD</code> 时先把数据库恢复前的旧 <code>desiredHeadSeq</code> 清零，再请求 snapshot；snapshot 进行中收到的新通知会重新抬高水位，随后只追这段新 tail。只有保留的终态 <code>room.deleted</code> 可以跨过已清理前缀，因为 deleted room 已无 snapshot；更早历史仍用 <code>beforeMessageId</code> prepend。</li>
+  <li>客户端由 per-room <code>idle / replay / replace / prepend</code> 状态机统一调度。Replay 和 replace recovery 的优先级高于历史分页，因此 prepend 不会取消 recovery；删除清空当前窗口但仍有旧历史时会重新 replace snapshot。</li>
+  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后。遇到 <code>CURSOR_AHEAD</code> 时同时清除数据库恢复前的旧 <code>desiredHeadSeq</code> 与 gap target，再请求 snapshot；snapshot 进行中收到的新通知会重新抬高水位，随后只追这段新 tail。只有保留的终态 <code>room.deleted</code> 可以跨过已清理前缀，因为 deleted room 已无 snapshot；更早历史仍用 <code>beforeMessageId</code> prepend。</li>
   <li>每种 V1 event 都严格验证 required field、类型和允许字段；坏 payload 返回 <code>EVENT_PAYLOAD_INVALID</code>，客户端不推进坏 seq，直接以 canonical snapshot 收敛。</li>
   <li>PG listener 成功 re-LISTEN 后发送本机 <code>room_sync_required</code>；客户端保留 UI，从现有 <code>lastAppliedSeq</code> 反熵。</li>
+  <li>同房间的突发 NOTIFY 会合并为 pending seq range。完整 payload 发出前，每个实例重新用 PostgreSQL 校验本机 room sockets，并先移除已撤权成员；不完整或过大的 range 只发最高 <code>headSeq</code>。</li>
 </ol>
 <ol data-lang="en">
   <li>PostgreSQL collects room/message/agent-turn/media changes in the domain transaction. After the aggregate is complete, a deferred writer appends safe immutable <code>schemaVersion: 1</code> after-images; rollback removes state, events, and sequence advancement. Membership changes append only an empty public <code>members.changed {}</code>; member IDs and roles remain behind the privileged API.</li>
@@ -1299,9 +1301,11 @@ During migration, one Store contract kept both implementations behaviorally alig
   <li>The event is included when the complete notification fits <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code> (256 KiB by default); read failures or oversized payloads fall back to a head-only hint.</li>
   <li>The client directly applies only a contiguous payload starting at <code>lastAppliedSeq + 1</code> and ending at <code>headSeq</code>. Duplicates are ignored; gaps replay with <code>afterSeq=lastAppliedSeq</code>.</li>
   <li>Small gaps replay in pages of 100 events / 256 KiB. A retained gap over 500 events loads a new snapshot and then drains only the post-snapshot tail.</li>
-  <li><code>CURSOR_EXPIRED</code> handles retention lag. On <code>CURSOR_AHEAD</code>, the client first clears the pre-restore <code>desiredHeadSeq</code>, then requests a snapshot. A notification received while that snapshot is in flight raises a fresh target, so the client follows only that new tail. Only a retained terminal <code>room.deleted</code> may jump a pruned prefix because a deleted room has no snapshot; older history still prepends through <code>beforeMessageId</code>.</li>
+  <li>A per-room <code>idle / replay / replace / prepend</code> state machine owns scheduling. Replay and replacement recovery outrank history pagination, so prepend cannot cancel recovery; if deletion empties a window that still has older history, the controller replaces the snapshot.</li>
+  <li><code>CURSOR_EXPIRED</code> handles retention lag. On <code>CURSOR_AHEAD</code>, the client clears both the pre-restore <code>desiredHeadSeq</code> and gap target, then requests a snapshot. A notification received while that snapshot is in flight raises a fresh target, so the client follows only that new tail. Only a retained terminal <code>room.deleted</code> may jump a pruned prefix because a deleted room has no snapshot; older history still prepends through <code>beforeMessageId</code>.</li>
   <li>Every V1 event strictly validates required fields, types, and allowed keys. A bad payload returns <code>EVENT_PAYLOAD_INVALID</code>; the client does not advance past it and recovers from a canonical snapshot.</li>
   <li>After the PG listener successfully re-LISTENs, the instance sends local <code>room_sync_required</code>; clients retain the UI and perform anti-entropy from the existing <code>lastAppliedSeq</code>.</li>
+  <li>Burst NOTIFY traffic is coalesced into a pending sequence range. Before a complete payload leaves an instance, it rechecks local room sockets against PostgreSQL and removes revoked members; an incomplete or oversized range carries only the highest <code>headSeq</code>.</li>
 </ol>
 
 <div class="diagram" data-lang="zh">客户端(lastAppliedSeq=1041)      App / PostgreSQL
@@ -1347,6 +1351,15 @@ During migration, one Store contract kept both implementations behaviorally alig
 <div class="card warn" data-lang="en">
   <h4>Why clear the old watermark after a database restore?</h4>
   <p>Suppose the browser cached <code>lastAppliedSeq=10</code> and an old notification still targets 20, while the restored database ends at 8. If a snapshot moves the cursor to 8 but retains target 20, the client repeatedly asks for <code>afterSeq=8</code> and receives the same empty page with <code>headSeq=8</code>. On <code>CURSOR_AHEAD</code>, it therefore clears the obsolete target first. If the database commits 9 while the snapshot request is running, the new Socket notification raises the target to 9; snapshot application retains that new maximum, then fetches 9. Recovery discards a target that no longer exists, not events committed after recovery.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>为什么这里必须是状态机，而不是继续加几个 boolean？</h4>
+  <p><code>replay</code>、<code>replace</code> 和 <code>prepend</code> 都会异步返回消息数组，但语义不同：replay 推进 durable cursor，replace 重建规范窗口，prepend 只给 UI 补更早历史。过去它们共享一个 sequence counter，用户滚动触发 prepend 时可能把正在恢复的 replace response 判成过期。现在 controller 明确规定优先级：replace 可以使旧 prepend 失效，prepend 却不能进入正在 replay/replace 的房间；被拒绝的分页只是稍后重试，不会取消正确性恢复。状态机还统一拥有 <code>desiredHeadSeq</code>、gap target 和 history-invalidated 标记，所以数据库恢复、删空窗口与新通知交错时都有唯一转移规则。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Why does this need a state machine instead of a few more booleans?</h4>
+  <p><code>replay</code>, <code>replace</code>, and <code>prepend</code> all return message arrays asynchronously, but they mean different things: replay advances the durable cursor, replace rebuilds the canonical window, and prepend adds older UI history only. They previously shared one sequence counter, so scrolling could make an in-flight recovery response look stale. The controller now makes priority explicit: replace may invalidate an older prepend, while prepend cannot enter a room already replaying or replacing. Deferred pagination can retry later without cancelling correctness recovery. The same controller owns <code>desiredHeadSeq</code>, the gap target, and history invalidation, giving database restore, emptied-window deletion, and new notification interleavings one transition model.</p>
 </div>
 
 <blockquote data-lang="zh">
@@ -1978,11 +1991,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>一条 AI message 从发送到完成经历什么？</summary>
-  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；若它早于 placeholder 通知到达，客户端先按 <code>messageId</code> 有界暂存。Placeholder event 到达后按序 drain；如果同一 replay page 已含 final after-image，则 final 是事实源，旧 chunk 不再追加。Placeholder 已存在时，transient reducer 分别更新 canonical 与当前 React state，因此用户刚发出的 optimistic message 不会被整组替换掉。成功时先持久化最终 Message，再发 <code>ai_stream_end</code>；失败时先持久化完整错误 Message，再发携带同一条 Message 的 <code>ai_stream_error</code>。Socket-first、durable-first 或 error-before-placeholder 最终都会收敛到同一 after-image。</div>
+  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；若它早于 placeholder 通知到达，客户端先按 <code>messageId</code> 有界暂存。Placeholder event 到达后按序 drain；如果同一 replay page 已含 final after-image，则 final 是事实源，旧 chunk 不再追加。Placeholder 已存在时，transient reducer 分别更新 canonical 与当前 React state，因此用户刚发出的 optimistic message 不会被整组替换掉。成功时先持久化最终 Message，再发 <code>ai_stream_end</code>。失败事件带明确的 <code>persisted</code>：正常失败发送同一条持久错误 Message；如果终态保存失败，客户端会立刻把当前消息 terminalize、保留 error overlay 并启动恢复，不会永远显示 streaming。Durable terminal after-image 到达后仍是最终事实源。</div>
 </details>
 <details data-lang="en">
   <summary>What happens during one AI-message lifecycle?</summary>
-  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. If it beats the placeholder notification, the client buffers it by <code>messageId</code>. The placeholder drains buffered data in order; if the same replay page already contains the final after-image, that durable final state wins and old chunks are discarded. Transient reducers update canonical and current React arrays separately, so a new optimistic message is not replaced. On success, the server persists the final Message before emitting <code>ai_stream_end</code>. On failure, it persists the complete error Message before emitting <code>ai_stream_error</code> with that same Message. Socket-first, durable-first, and error-before-placeholder ordering all converge on the same after-image.</div>
+  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. If it beats the placeholder notification, the client buffers it by <code>messageId</code>. The placeholder drains buffered data in order; if the same replay page already contains the final after-image, that durable final state wins and old chunks are discarded. Transient reducers update canonical and current React arrays separately, so a new optimistic message is not replaced. On success, the server persists the final Message before emitting <code>ai_stream_end</code>. Failure events declare <code>persisted</code>: the normal path carries the same persisted error Message, while a failed terminal write immediately terminalizes the local message, preserves an error overlay, and starts recovery. A later durable terminal after-image remains authoritative.</div>
 </details>
 
 <details data-lang="zh">

@@ -174,6 +174,53 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.deepEqual(deletePage.events[0].payload.messageIds, ['message-1']);
   });
 
+  it('rejects moving an existing message ID to another room without emitting ghost events', async () => {
+    const sourceRoomId = 'event-message-source-room';
+    const targetRoomId = 'event-message-target-room';
+    assert.ok(await store.saveRoom(room(sourceRoomId)));
+    assert.ok(await store.saveRoom(room(targetRoomId)));
+    assert.ok(await store.appendMessage(message(sourceRoomId, 'fixed-room-message')));
+    const sourceHead = await store.readRoomEventHead(sourceRoomId);
+    const targetHead = await store.readRoomEventHead(targetRoomId);
+
+    const moved = await store.upsertMessage(message(targetRoomId, 'fixed-room-message', {
+      content: 'must not move',
+    }));
+
+    assert.equal(moved, null);
+    assert.deepEqual((await store.readMessagesByRoom(sourceRoomId)).map(item => item.id), ['fixed-room-message']);
+    assert.deepEqual(await store.readMessagesByRoom(targetRoomId), []);
+    assert.equal(await store.readRoomEventHead(sourceRoomId), sourceHead);
+    assert.equal(await store.readRoomEventHead(targetRoomId), targetHead);
+  });
+
+  it('timestamps retained events at materialization time instead of transaction start', async () => {
+    const roomId = 'event-wall-clock-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const baselineHead = await store.readRoomEventHead(roomId);
+    const client = await pool.connect();
+    let transactionStartedAt = 0;
+    try {
+      await client.query('BEGIN');
+      const started = await client.query<{ started_at: string | Date }>(
+        'SELECT transaction_timestamp() AS started_at',
+      );
+      transactionStartedAt = new Date(started.rows[0].started_at).getTime();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      await client.query('UPDATE rooms SET name = $2 WHERE id = $1', [roomId, 'wall-clock update']);
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+
+    const rows = await pool.query<{ created_at: string | Date }>(
+      'SELECT created_at FROM room_events WHERE room_id = $1 AND seq > $2 ORDER BY seq',
+      [roomId, baselineHead],
+    );
+    assert.equal(rows.rows.length, 1);
+    assert.ok(new Date(rows.rows[0].created_at).getTime() - transactionStartedAt >= 20);
+  });
+
   it('accepts an empty-content streaming AI placeholder as a valid strict payload', async () => {
     const roomId = 'event-ai-placeholder-room';
     assert.ok(await store.saveRoom(room(roomId)));

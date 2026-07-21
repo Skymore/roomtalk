@@ -222,7 +222,7 @@ export const POSTGRES_SCHEMA_SQL = [
     )),
     schema_version SMALLINT NOT NULL DEFAULT 1 CHECK (schema_version = 1),
     payload JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (room_id, seq)
   )`,
   `ALTER TABLE room_events ADD COLUMN IF NOT EXISTS schema_version SMALLINT NOT NULL DEFAULT 1`,
@@ -1162,6 +1162,62 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         AFTER INSERT ON room_event_pending_changes
         DEFERRABLE INITIALLY DEFERRED
         FOR EACH ROW EXECUTE FUNCTION flush_public_member_change();
+    `,
+  },
+  {
+    // A message ID names one immutable room aggregate. Rejecting room moves
+    // prevents an upsert from leaving a stale projection in the old room.
+    // Event retention uses wall-clock insertion time rather than the start of
+    // a potentially long-running business transaction.
+    id: '0005_message_room_immutability_and_event_clock',
+    sql: `
+      CREATE OR REPLACE FUNCTION reject_room_message_room_change()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.room_id IS DISTINCT FROM OLD.room_id THEN
+          RAISE EXCEPTION 'room_messages.room_id is immutable for message %', OLD.id
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS room_messages_reject_room_change ON room_messages;
+      CREATE TRIGGER room_messages_reject_room_change
+        BEFORE UPDATE OF room_id ON room_messages
+        FOR EACH ROW EXECUTE FUNCTION reject_room_message_room_change();
+
+      ALTER TABLE room_events
+        ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+
+      CREATE OR REPLACE FUNCTION append_room_event(
+        target_room_id TEXT,
+        target_event_type TEXT,
+        target_payload JSONB
+      ) RETURNS BIGINT AS $$
+      DECLARE
+        next_seq BIGINT;
+      BEGIN
+        INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, updated_at)
+        VALUES (target_room_id, 0, 1, clock_timestamp())
+        ON CONFLICT (room_id) DO NOTHING;
+
+        UPDATE room_event_streams
+        SET head_seq = head_seq + 1,
+          updated_at = clock_timestamp()
+        WHERE room_id = target_room_id
+        RETURNING head_seq INTO next_seq;
+
+        INSERT INTO room_events (room_id, seq, event_type, schema_version, payload, created_at)
+        VALUES (target_room_id, next_seq, target_event_type, 1, target_payload, clock_timestamp());
+
+        PERFORM pg_notify(
+          'room_event_committed',
+          json_build_object('roomId', target_room_id, 'headSeq', next_seq)::text
+        );
+        RETURN next_seq;
+      END;
+      $$ LANGUAGE plpgsql;
     `,
   },
 ];

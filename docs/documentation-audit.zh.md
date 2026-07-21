@@ -37,12 +37,14 @@
 ### 房间同步与 AI 投递
 
 - PostgreSQL canonical tables 与每房间有界的 `room_events` 是唯一 durable 同步边界。每个事件在业务事务内写入严格、不可变的 V1 after-image；回放旧 seq 时不会再读取当前行补全。
-- PostgreSQL `NOTIFY` 是提交后的唤醒 hint。每个监听中的 App 读取精确事件行，只用 `io.local` 通知自己的客户端。Redis adapter 只负责真正由单一来源产生的临时或全局事件。
+- PostgreSQL `NOTIFY` 是提交后的唤醒 hint。每个监听中的 App 会合并同房间水位、读取已提交 range，并在完整 payload 前重新鉴权本机 socket，再用 `io.local` 通知自己的客户端。Redis adapter 只负责真正由单一来源产生的临时或全局事件。
 - 连续的 Socket payload 是低延迟 fast path。缺失或超大 payload 从 PostgreSQL replay；差距超过 500 events 或 cursor 过期时读取 repeatable-read snapshot。已删除房间的 tombstone 是例外，因为房间删除后没有 snapshot。
-- 处理 `CURSOR_AHEAD` 时，客户端先清除数据库恢复前的旧目标水位，再请求 snapshot。snapshot 进行中收到的通知会形成新的目标，因此既不会丢掉新提交，也不会对恢复后的旧 head 无限空拉。
+- Per-room 的 `idle/replay/replace/prepend` 状态机让恢复优先于分页。处理 `CURSOR_AHEAD` 时会同时清除旧 head 与 gap target；snapshot 进行中收到的通知会形成新目标。
 - 公共成员事件只暴露 `members.changed`。成员 ID 与角色继续由 `get_room_role_members` 保护。严格 payload 校验会在存储事件损坏时停止推进 cursor。
 - `ai_chunk` 与 A2UI update 是有界的临时 fast path。抢在 placeholder 前到达的事件按 `messageId` 等待；reducer 分别更新 canonical state 与当前 React state，因此不会覆盖 optimistic message。
-- 用户可见的 AI 失败先作为完整 Message 持久化。`ai_stream_error` 可以携带同一条 Message 作为 fast path，但不再创造只存在于 Socket 的 canonical 文案，因此到达顺序不会改变最终 UI。
+- `ai_stream_error` 会声明 `persisted`。正常路径携带同一条已持久化 safe Message；终态保存失败时使用 `persisted: false`，客户端立刻终止本地 placeholder 并安排恢复，不会停在 streaming。
+- PostgreSQL 禁止 message ID 更换房间，event retention 使用 wall-clock materialization timestamp；删除消息时即使 asset 不在当前窗口，也会清理 room media cache。
+- GitHub CI 会启动 PostgreSQL 17，并强制运行真实 room-event trigger/transaction suite，不允许静默 skip。
 
 ### 部署与可迁移性
 

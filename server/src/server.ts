@@ -298,6 +298,22 @@ const roomEventBroadcaster = new RoomEventBroadcaster({
   store,
   logger: postgresLogger,
   maxPayloadBytes: parsePositiveIntegerEnv('ROOM_EVENT_FAST_PATH_MAX_BYTES', 256 * 1024),
+  authorizeLocalRoom: async roomId => {
+    const localSocketIds = await io.local.in(roomId).allSockets();
+    await Promise.all(Array.from(localSocketIds, async socketId => {
+      const localSocket = io.sockets.sockets.get(socketId);
+      if (!localSocket) return;
+      const clientId = await store.getClientId(socketId);
+      if (clientId && await store.isRoomMember(roomId, clientId)) return;
+
+      // PostgreSQL membership is authoritative. Remove the local subscription
+      // before any committed after-image is emitted, even if Redis presence
+      // cleanup from the original member-removal request is still running.
+      localSocket.emit('room_removed', roomId);
+      localSocket.emit('room_permissions_invalidated', roomId);
+      await localSocket.leave(roomId);
+    }));
+  },
   emit: event => emitRoomEventLocally(io, event),
 });
 const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, event => {
@@ -469,6 +485,7 @@ const infrastructureReady = (async () => {
       if (prunedCount > 0) {
         serverLogger.info('Pruned retained room events', { prunedCount, roomEventRetentionDays, maxEventsPerRoom });
       }
+      serverLogger.info('Room event delivery metrics', roomEventBroadcaster.getMetrics());
     };
     await pruneRoomEvents();
     roomEventPruneTimer = setInterval(() => {

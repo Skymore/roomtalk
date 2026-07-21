@@ -31,7 +31,7 @@ import {
   DEFAULT_CODE_AGENT_RUNNER_COMMAND,
 } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
-import { withAIStreamRecoveryMetadata } from './aiStreamRecovery';
+import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
 import type { MediaObjectStorage } from './mediaObjectStorage';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
@@ -2235,7 +2235,8 @@ export class CodeAgentSessionService {
       messageId: aiMessage.id,
       error: content,
       roomId,
-      ...(updatedRoom ? { message: errorMessage } : {}),
+      persisted: Boolean(updatedRoom),
+      ...(updatedRoom ? { message: stripAIStreamRecoveryMetadata(errorMessage) } : {}),
     });
   }
 

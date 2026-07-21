@@ -49,6 +49,8 @@ The deferred writer constructs bounded, safe `schemaVersion: 1` after-images, th
 - an idempotent request that performs no second write performs no second event;
 - clear/truncate/edit-and-ask may produce multiple ordered batched events, which is expected.
 
+A message ID is permanently bound to its original `room_id`. A PostgreSQL trigger rejects cross-room conflict updates, preventing the source room from retaining a ghost message when only the target room would otherwise receive an upsert event. `room_events.created_at` is stamped with `clock_timestamp()` when the deferred writer materializes the event, so retention is not skewed by a long transaction's start time.
+
 `readRoomEvents()` directly decodes stored payloads. It never hydrates an old event from current canonical rows, so editing B cannot rewrite the earlier event that recorded A. Every V1 event type has a strict discriminated payload schema: missing, mistyped, or unexpected fields raise `EVENT_PAYLOAD_INVALID` instead of becoming an empty acknowledged event. The client then replaces state from a canonical snapshot and resumes after `snapshotSeq`. Message after-images include stable media IDs and metadata but no internal object key, uploader/stream owner, or expiring signed URL. `room.updated` stores a SafeRoom and never stores `password_hash`.
 
 Implemented event types are:
@@ -62,7 +64,7 @@ The public stream never contains member IDs, offline-member lists, join timestam
 
 Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. When the placeholder already exists, the transient reducer updates the canonical projection and the current React state separately, preserving UI-only pending or failed optimistic sends.
 
-`ai_stream_error` is not allowed to invent canonical text. The server persists the complete error Message, then includes that exact Message in the Socket fast path. An early error waits in the same bounded buffer; either Socket-first or room-event-first delivery converges to the stored after-image. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
+`ai_stream_error` is not allowed to invent canonical text. It carries an explicit `persisted` flag. A normal error includes the exact persisted safe Message; if terminal persistence fails, `{ persisted: false }` immediately terminalizes the browser placeholder and schedules recovery. The local terminal overlay remains until a durable final after-image supersedes it. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 
@@ -70,19 +72,21 @@ Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transie
 
 `get_room_events` accepts `afterSeq`, count limit, and byte limit. It returns ordered events, `headSeq`, `minAvailableSeq`, and `hasMore`.
 
-- After `NOTIFY`, each app reads the exact immutable committed sequence from PostgreSQL. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only `headSeq`.
+- After `NOTIFY`, each app coalesces same-room watermarks and reads a committed contiguous range. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only the highest `headSeq`.
 - A client applies the fast path only when it forms the next contiguous prefix and ends at `headSeq`; a successful fast path advances `lastAppliedSeq` without `get_room_events`.
 - A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
-- A browser cursor ahead of a restored database receives `CURSOR_AHEAD`. It clears the stale target head before requesting the snapshot, while notifications arriving during that request establish a new target. This avoids an infinite empty-page loop against the restored head.
+- A browser cursor ahead of a restored database receives `CURSOR_AHEAD`. It clears the stale target head and gap-snapshot target before requesting the snapshot, while notifications arriving during that request establish a new target. This avoids an infinite empty-page loop against the restored head.
 - A strict decoder failure returns `EVENT_PAYLOAD_INVALID`; the client does not advance across that event and resnapshots from canonical state.
 - A non-contiguous page is never partially applied.
 - After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of paging through the backlog in batches of up to 100 events; the client then drains only the post-`snapshotSeq` tail.
 - IndexedDB v4 stores the message window and `lastAppliedSeq`.
 - `beforeMessageId` pagination prepends old history without moving the live cursor.
 
-The fast path changes latency, not the correctness boundary. PostgreSQL fans the hint out to every app listener, and every listener emits only to its own sockets with `io.local`; the Redis adapter does not multiply this durable notification. Clients still ignore already-applied sequences and replay any gap. Exact-event read failure and oversized events automatically fall back to the same durable head-only path.
+One per-room state machine owns `idle`, `replay`, `replace`, and `prepend`. Replay/replacement recovery outranks optional pagination, so a prepend cannot invalidate a recovery response. If deletion empties a loaded window that still had older history, or the server sends `message_history_invalidated` after truncation, the controller replaces the window rather than setting `hasMore=false` from the empty projection.
 
-Because `NOTIFY` is ephemeral, a successful listener re-LISTEN is followed by local `room_sync_required {reason: "postgres_listener_reconnected"}`. Clients keep their rendered window and replay from `lastAppliedSeq`; simultaneous fast-path events remain safe through the same sequence idempotency.
+The fast path changes latency, not the correctness boundary. PostgreSQL fans the hint out to every app listener, and every listener emits only to its own sockets with `io.local`; the Redis adapter does not multiply this durable notification. Before a complete payload is emitted, the instance reauthorizes its local room sockets against PostgreSQL and removes revoked members. Clients still ignore already-applied sequences and replay any gap. Incomplete range reads and oversized events automatically fall back to the same durable head-only path.
+
+Because `NOTIFY` is ephemeral, a failed listener generation is closed and ignored. A successful replacement re-LISTEN is followed by local `room_sync_required {reason: "postgres_listener_reconnected"}`. Clients keep their rendered window and replay from `lastAppliedSeq`; simultaneous fast-path events remain safe through the same sequence idempotency.
 
 ## One-time immutable-event boundary
 
@@ -90,13 +94,15 @@ Migration `0003_room_events_immutable_after_images` takes table locks so no busi
 
 Migration `0004_public_member_change_events` repaired databases that had run the pre-production V1 member after-image writer: retained `members.upserted` / `members.deleted` rows were rewritten in place to `members.changed {}`, the public type constraint was tightened, and later member mutations emit only the empty signal. Production applied this one-time privacy repair during the 2026-07-21 maintenance window.
 
+Migration `0005_message_room_immutability_and_event_clock` enforces the message-room invariant and wall-clock event timestamps without changing the V1 payload format.
+
 Deleted rooms cannot be snapshotted. For those streams, the migration appends a new V1 `room.deleted` tombstone and preserves `deleted_reader_ids`, with the retention floor pointing at that tombstone. Even a cursor older than the discarded prefix receives this terminal event, and the client allows this single deletion-only sequence jump. This avoids a `CURSOR_EXPIRED` → impossible snapshot loop. There is no permanent dual-format decoder.
 
 ## Retention, not periodic merge
 
 There is no merge/compaction back into messages: the normalized state was already changed in the original transaction. The hourly job removes only an old contiguous event prefix and advances `minAvailableSeq`.
 
-Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; `ROOM_EVENT_FAST_PATH_MAX_BYTES` independently controls the Socket fast-path ceiling. The Compose examples expose all four. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
+Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; `ROOM_EVENT_FAST_PATH_MAX_BYTES` independently controls the Socket fast-path ceiling. The Compose examples expose all four. Once a deleted room's events age out, its independent stream/auth tombstone is also removed. The hourly maintenance log reports broadcaster pending/active rooms, coalesced notifications, batch count, fast-path event bytes, head-only fallbacks, and maximum pending sequence span. Before AWS scale-out, alert on sustained queue span or head-only growth and add PostgreSQL table/index size, dead tuples, event bytes per room, and prune duration to the platform dashboard.
 
 ## Event log versus AI outbox
 
@@ -139,6 +145,8 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
 Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
+
+GitHub CI starts PostgreSQL 17 and always sets `ROOM_EVENT_TEST_DATABASE_URL` for the server suite. Trigger, transaction, retention-clock, and cross-room message-invariant tests therefore fail the job instead of silently skipping when no database is available.
 
 ## Immutable-event production migration
 

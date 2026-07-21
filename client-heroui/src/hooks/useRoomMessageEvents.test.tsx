@@ -550,6 +550,38 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(closeEditModal).toHaveBeenCalled();
   });
 
+  it('does not close edit or delete UI for an upsert that merely names the message', async () => {
+    const closeDeleteModal = vi.fn();
+    const closeEditModal = vi.fn();
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({ id: 'edit-me', content: 'old' })],
+      lastAppliedSeq: 1,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 2,
+      events: [event(2, {
+        type: 'messages.upserted',
+        payload: { messageIds: ['edit-me'], messages: [message({ id: 'edit-me', content: 'new' })] },
+      })],
+    }));
+
+    render(<Harness
+      messageToDeleteId="edit-me"
+      messageToEditId="edit-me"
+      closeDeleteModal={closeDeleteModal}
+      closeEditModal={closeEditModal}
+    />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.contents).toBe('new'));
+    // Mount initialization closes stale modals once; an upsert must not close
+    // them a second time as if the message had been deleted.
+    expect(closeDeleteModal).toHaveBeenCalledTimes(1);
+    expect(closeEditModal).toHaveBeenCalledTimes(1);
+  });
+
   it('replays agent-turn updates through the same cursor', async () => {
     cacheMock.memory = {
       roomId: 'room-1', messages: [], turns: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
@@ -610,6 +642,64 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
     expect(screen.getByTestId('state').dataset.messages).toBe('older,newest');
     expect(screen.getByTestId('state').dataset.seq).toBe('8');
+  });
+
+  it('does not let prepend pagination cancel replacement recovery', async () => {
+    const requestHistoryRef: { current: RoomMessageHistoryRequest | null } = { current: null };
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'stale' })], lastAppliedSeq: 8, hasMore: true, oldestMessageId: 'stale', cachedAt: Date.now(),
+    };
+    let resolveRecovery!: (value: RoomSnapshotPayload) => void;
+    socketMock.requestEvents.mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_EXPIRED', 'expired'));
+    socketMock.requestSnapshot.mockImplementationOnce(async () => new Promise(resolve => {
+      resolveRecovery = resolve;
+    }));
+
+    render(<Harness requestHistoryRef={requestHistoryRef} />);
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await requestHistoryRef.current?.({ beforeMessageId: 'stale', reason: 'scroll' });
+    });
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+
+    act(() => resolveRecovery(snapshot({
+      messages: [message({ id: 'recovered' })],
+      snapshotSeq: 12,
+    })));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('recovered'));
+    expect(screen.getByTestId('state').dataset.seq).toBe('12');
+  });
+
+  it('replaces an emptied live window when older history still exists', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({ id: 'visible' })],
+      lastAppliedSeq: 1,
+      hasMore: true,
+      oldestMessageId: 'visible',
+      cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 2,
+      events: [event(2, {
+        type: 'messages.deleted',
+        payload: { messageIds: ['visible'], deletedAt: '2026-07-20T00:00:01.000Z' },
+      })],
+    }));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'older' })],
+      snapshotSeq: 2,
+      hasMore: false,
+      oldestMessageId: 'older',
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('older'));
+    expect(screen.getByTestId('state').dataset.seq).toBe('2');
+    expect(mediaCacheMock.clearCachedMediaForRoom).toHaveBeenCalledWith('room-1');
   });
 
   it('checks for missed events after reconnect and page resume', async () => {
@@ -880,7 +970,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       messageType: 'ai',
     });
     act(() => socketMock.trigger('ai_stream_error', {
-      roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, message: errorMessage,
+      roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, persisted: true, message: errorMessage,
     }));
     expect(screen.getByTestId('state').dataset.messages).toBe('');
 
@@ -912,7 +1002,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
       const errorMessage = { ...placeholder, content: 'The provider failed.', status: 'error' as const };
       const emitFastPath = () => socketMock.trigger('ai_stream_error', {
-        roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, message: errorMessage,
+        roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, persisted: true, message: errorMessage,
       });
       const emitDurable = () => socketMock.trigger('room_event_available', {
         roomId: 'room-1',
@@ -937,6 +1027,35 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       expect(screen.getByTestId('state').dataset.statuses).toBe('error');
     },
   );
+
+  it('terminalizes an unpersisted AI failure and keeps it terminal through recovery', async () => {
+    const placeholder = message({
+      id: 'ai-unsaved', clientId: 'ai_assistant', content: 'partial', status: 'streaming', messageType: 'ai',
+    });
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [placeholder], lastAppliedSeq: 5, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [placeholder],
+      snapshotSeq: 5,
+    }));
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.statuses).toBe('streaming'));
+
+    act(() => socketMock.trigger('ai_stream_error', {
+      roomId: 'room-1',
+      messageId: placeholder.id,
+      error: 'Unable to persist the final response.',
+      persisted: false,
+    }));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.statuses).toBe('error'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('partial');
+
+    act(() => socketMock.trigger('message_history_invalidated', { roomId: 'room-1' }));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('state').dataset.statuses).toBe('error');
+  });
 
   it('keeps a final durable after-image authoritative over an earlier buffered chunk', async () => {
     cacheMock.memory = {

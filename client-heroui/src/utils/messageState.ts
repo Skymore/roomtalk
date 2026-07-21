@@ -234,3 +234,17 @@ export const completeAIMessage = (
       : message
   );
 };
+
+export const failAIMessage = (
+  messages: Message[],
+  messageId: string,
+  error: string,
+) => messages.map(message => (
+  message.id === messageId
+    ? {
+        ...message,
+        content: message.content.trim().length > 0 ? message.content : error,
+        status: "error" as const,
+      }
+    : message
+));

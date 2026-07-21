@@ -75,6 +75,7 @@ export class RoomEventNotifier {
     this.client = client;
 
     client.on('notification', message => {
+      if (this.stopped || generation !== this.connectionGeneration || this.client !== client) return;
       if (message.channel !== 'room_event_committed' || !message.payload) return;
       try {
         const parsed = JSON.parse(message.payload) as Partial<RoomEventAvailable>;
@@ -91,16 +92,22 @@ export class RoomEventNotifier {
       }
     });
     client.on('error', error => {
+      if (this.stopped || generation !== this.connectionGeneration || this.client !== client) return;
       this.logger.warn('PostgreSQL room event listener error', { error });
       this.scheduleReconnect(generation);
     });
     client.on('end', () => {
+      if (this.stopped || generation !== this.connectionGeneration || this.client !== client) return;
       this.scheduleReconnect(generation);
     });
 
     try {
       await client.connect();
       await client.query('LISTEN room_event_committed');
+      if (this.stopped || generation !== this.connectionGeneration || this.client !== client) {
+        await client.end().catch(() => undefined);
+        return;
+      }
       const reconnected = this.hasListened;
       this.hasListened = true;
       this.logger.info('Listening for committed room events');
@@ -116,7 +123,14 @@ export class RoomEventNotifier {
 
   private scheduleReconnect(generation: number): void {
     if (this.stopped || generation !== this.connectionGeneration || this.reconnectTimer) return;
+    const staleClient = this.client;
+    this.connectionGeneration += 1;
     this.client = null;
+    if (staleClient) {
+      void staleClient.end().catch(error => {
+        this.logger.warn('Failed to close stale PostgreSQL room event listener', { error });
+      });
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.stopped) return;

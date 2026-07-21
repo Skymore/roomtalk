@@ -360,6 +360,7 @@ export interface AIStreamErrorEvent {
   messageId: string;
   error: string;
   roomId: string;
+  persisted: boolean;
   message?: Message;
   partial?: boolean;
 }

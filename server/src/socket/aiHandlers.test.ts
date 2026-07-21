@@ -1071,6 +1071,7 @@ describe('AI socket handlers', () => {
         messageId: store.upsertedMessages[0].id,
         error: 'Sorry, unable to start a durable AI response.',
         roomId: 'room-1',
+        persisted: false,
       }],
     }]);
     assert.deepEqual(response, { success: false, error: 'Unable to start a durable AI response' });
@@ -1091,6 +1092,7 @@ describe('AI socket handlers', () => {
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
     const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
     assert.ok(streamError);
+    assert.equal((streamError.args[0] as any).persisted, true);
     assert.deepEqual((streamError.args[0] as any).message, store.messages[1]);
   });
 
@@ -1106,7 +1108,8 @@ describe('AI socket handlers', () => {
     assert.equal(store.messages[1].status, 'streaming');
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_persistence_error'), true);
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), true);
+    const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
+    assert.equal((streamError?.args[0] as any).persisted, false);
   });
 
   it('truncates retry history before upserting the replacement AI message', async () => {

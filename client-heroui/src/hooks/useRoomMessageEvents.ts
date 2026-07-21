@@ -14,7 +14,7 @@ import {
   RoomEventAvailable,
   RoomSnapshotPayload,
 } from '../utils/types';
-import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
+import { appendA2UIPayload, appendAIChunk, completeAIMessage, failAIMessage, upsertMessage } from '../utils/messageState';
 import {
   clearCachedRoomMessageWindow,
   readCachedRoomMessageWindow,
@@ -24,6 +24,7 @@ import {
 import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCache';
 import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
 import { PendingAIEventBuffer, type PendingAITransientEvent } from '../utils/pendingAIEventBuffer';
+import { RoomMessageSyncStateMachine } from '../utils/roomMessageSyncStateMachine';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 const ROOM_EVENT_PAGE_LIMIT = 100;
@@ -81,6 +82,7 @@ const reduceRoomEvents = (
   const deletedMediaAssetIds: string[] = [];
   let roomDeleted = false;
   let updatedRoom: Room | undefined;
+  let roomMediaCacheInvalidated = false;
 
   events.forEach(event => {
     switch (event.type) {
@@ -90,6 +92,7 @@ const reduceRoomEvents = (
         });
         break;
       case 'messages.deleted': {
+        roomMediaCacheInvalidated = true;
         const deletedIds = new Set(event.payload.messageIds || []);
         nextMessages.forEach(message => {
           if (deletedIds.has(message.id) && message.mediaAsset?.id) {
@@ -128,7 +131,14 @@ const reduceRoomEvents = (
     }
   });
 
-  return { messages: nextMessages, turns: nextTurns, deletedMediaAssetIds, roomDeleted, updatedRoom };
+  return {
+    messages: nextMessages,
+    turns: nextTurns,
+    deletedMediaAssetIds,
+    roomDeleted,
+    updatedRoom,
+    roomMediaCacheInvalidated,
+  };
 };
 
 export const useRoomMessageEvents = ({
@@ -175,18 +185,14 @@ export const useRoomMessageEvents = ({
     let cancelled = false;
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     let requestSequence = 0;
-    let snapshotSequence = 0;
     let hasBaseline = false;
-    let syncRunning = false;
-    let syncAgain = false;
-    let desiredHeadSeq = 0;
-    let lastAppliedSeq = 0;
-    let lastGapSnapshotTarget = 0;
     let hasMoreMessages = false;
     let oldestMessageId: string | undefined;
     let canonicalMessages: Message[] = [];
     let canonicalTurns: RoomAgentTurn[] = [];
     const pendingAIEvents = new PendingAIEventBuffer();
+    const unpersistedAIErrorByMessageId = new Map<string, string>();
+    const syncState = new RoomMessageSyncStateMachine();
 
     setSessionCostUsd(null);
     setAgentTurns([]);
@@ -197,7 +203,7 @@ export const useRoomMessageEvents = ({
     const filterMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
     const filterTurns = (turns: RoomAgentTurn[]) => turns.filter(turn => turn.roomId === roomId);
     const setCursor = (seq: number) => {
-      lastAppliedSeq = seq;
+      syncState.applyCursor(seq);
       setLastAppliedSeq(seq);
     };
     const setHasMore = (value: boolean) => {
@@ -218,7 +224,7 @@ export const useRoomMessageEvents = ({
     const cacheWindow = (
       messages: Message[],
       turns = getCurrentAgentTurns(),
-      seq = lastAppliedSeq,
+      seq = syncState.lastAppliedSeq,
       more = hasMoreMessages,
       oldest = oldestMessageId,
     ) => {
@@ -242,6 +248,22 @@ export const useRoomMessageEvents = ({
       });
     };
 
+    const applyUnpersistedAIErrorOverlays = (messages: Message[]) => {
+      let nextMessages = messages;
+      unpersistedAIErrorByMessageId.forEach((error, messageId) => {
+        nextMessages = failAIMessage(nextMessages, messageId, error);
+      });
+      return nextMessages;
+    };
+
+    const clearResolvedUnpersistedAIErrors = (messages: Message[]) => {
+      messages.forEach(message => {
+        if (message.status === 'complete' || message.status === 'error') {
+          unpersistedAIErrorByMessageId.delete(message.id);
+        }
+      });
+    };
+
     const drainPendingAIEvents = (messages: Message[]) => {
       let nextMessages = messages;
       let receivedChunk = false;
@@ -257,7 +279,7 @@ export const useRoomMessageEvents = ({
               if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
               settledCount++;
             } else if (event.type === 'ai_stream_error') {
-              settledCount++;
+              if (event.data.persisted) settledCount++;
             }
           });
           return;
@@ -283,10 +305,13 @@ export const useRoomMessageEvents = ({
               settledCount++;
               break;
             case 'ai_stream_error':
-              if (event.data.message) {
+              if (event.data.persisted && event.data.message) {
                 nextMessages = upsertMessage(nextMessages, event.data.message);
+              } else if (!event.data.persisted) {
+                unpersistedAIErrorByMessageId.set(event.data.messageId, event.data.error);
+                nextMessages = failAIMessage(nextMessages, event.data.messageId, event.data.error);
               }
-              settledCount++;
+              if (event.data.persisted) settledCount++;
               break;
           }
         });
@@ -303,34 +328,35 @@ export const useRoomMessageEvents = ({
 
     const applySnapshot = (snapshot: RoomSnapshotPayload) => {
       onRoomUpdated?.(snapshot.room);
+      clearResolvedUnpersistedAIErrors(snapshot.messages);
       if (snapshot.mode === 'prepend') {
         const byId = new Map(canonicalTurns.map(turn => [turn.id, turn]));
         filterTurns(snapshot.turns || []).forEach(turn => byId.set(turn.id, turn));
         canonicalTurns = Array.from(byId.values());
         const existingIds = new Set(canonicalMessages.map(message => message.id));
-        canonicalMessages = drainPendingAIEvents([
+        canonicalMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents([
           ...filterMessages(snapshot.messages).filter(message => !existingIds.has(message.id)),
           ...canonicalMessages,
-        ]);
+        ]));
         setAgentTurns(canonicalTurns);
         updateMessages(canonicalMessages);
         setHasMore(snapshot.hasMore);
         setOldest(snapshot.oldestMessageId);
-        cacheWindow(canonicalMessages, canonicalTurns, lastAppliedSeq, snapshot.hasMore, snapshot.oldestMessageId);
+        cacheWindow(canonicalMessages, canonicalTurns, syncState.lastAppliedSeq, snapshot.hasMore, snapshot.oldestMessageId);
         setIsLoadingMore(false);
         return;
       }
 
-      const nextMessages = drainPendingAIEvents(mergeSnapshotWithOptimisticMessages(
+      const nextMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents(mergeSnapshotWithOptimisticMessages(
         filterMessages(snapshot.messages),
         filterMessages(getCurrentMessages()),
-      ));
+      )));
       const nextTurns = filterTurns(snapshot.turns || []);
       canonicalMessages = nextMessages;
       canonicalTurns = nextTurns;
       hasBaseline = true;
-      desiredHeadSeq = Math.max(desiredHeadSeq, snapshot.snapshotSeq);
-      setCursor(snapshot.snapshotSeq);
+      syncState.applyReplacementSnapshot(snapshot.snapshotSeq);
+      setLastAppliedSeq(snapshot.snapshotSeq);
       setHasMore(snapshot.hasMore);
       setOldest(snapshot.oldestMessageId);
       updateMessages(nextMessages);
@@ -343,9 +369,14 @@ export const useRoomMessageEvents = ({
 
     const loadSnapshot = async (options: { beforeMessageId?: string; limit?: number; reason?: string } = {}) => {
       const mode = options.beforeMessageId ? 'prepend' : 'replace';
-      const localSnapshotSequence = ++snapshotSequence;
-      if (mode === 'prepend') setIsLoadingMore(true);
-      else setIsLoading(true);
+      const snapshotToken = syncState.beginSnapshot(mode);
+      if (!snapshotToken) return false;
+      if (mode === 'prepend') {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingMore(false);
+        setIsLoading(true);
+      }
       const requestId = `${Date.now()}-${++requestSequence}`;
       logRoomMessageDiagnostic('snapshot-request', {
         requestId,
@@ -353,7 +384,7 @@ export const useRoomMessageEvents = ({
         mode,
         reason: options.reason || 'room-sync',
         beforeMessageId: options.beforeMessageId ?? null,
-        lastAppliedSeq,
+        lastAppliedSeq: syncState.lastAppliedSeq,
         messageSyncRequestId: syncRequestIdRef.current,
       });
       try {
@@ -363,7 +394,7 @@ export const useRoomMessageEvents = ({
           beforeMessageId: options.beforeMessageId,
           limit: options.limit ?? ROOM_MESSAGE_PAGE_LIMIT,
         });
-        if (cancelled || localSnapshotSequence !== snapshotSequence) return false;
+        if (cancelled || !syncState.isSnapshotCurrent(snapshotToken)) return false;
         applySnapshot(snapshot);
         return true;
       } catch (error) {
@@ -378,14 +409,17 @@ export const useRoomMessageEvents = ({
           });
         }
         return false;
+      } finally {
+        syncState.finishSnapshot(snapshotToken);
+        if (mode === 'prepend') setIsLoadingMore(false);
       }
     };
 
     const applyEventPage = (events: RoomEvent[]) => {
       const accepted: RoomEvent[] = [];
-      let expectedSeq = lastAppliedSeq + 1;
+      let expectedSeq = syncState.lastAppliedSeq + 1;
       for (const event of events) {
-        if (event.roomId !== roomId || event.seq <= lastAppliedSeq) continue;
+        if (event.roomId !== roomId || event.seq <= syncState.lastAppliedSeq) continue;
         if (event.seq !== expectedSeq) {
           // A retained room.deleted tombstone is terminal and can safely jump a
           // pruned prefix: the deleted room has no snapshot to load instead.
@@ -397,6 +431,16 @@ export const useRoomMessageEvents = ({
       }
       if (accepted.length === 0) return true;
 
+      accepted.forEach(event => {
+        if (event.type === 'messages.upserted') {
+          clearResolvedUnpersistedAIErrors(event.payload.messages || []);
+        } else if (event.type === 'messages.deleted') {
+          (event.payload.messageIds || []).forEach(messageId => {
+            unpersistedAIErrorByMessageId.delete(messageId);
+          });
+        }
+      });
+
       let eventBase = canonicalMessages;
       filterMessages(getCurrentMessages())
         .filter(message => message.deliveryStatus === 'pending' || message.deliveryStatus === 'failed')
@@ -405,11 +449,13 @@ export const useRoomMessageEvents = ({
         });
       const reduced = reduceRoomEvents(accepted, eventBase, canonicalTurns);
       const nextSeq = accepted[accepted.length - 1].seq;
-      canonicalMessages = drainPendingAIEvents(reduced.messages);
+      canonicalMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents(reduced.messages));
       canonicalTurns = reduced.turns;
       reduced.deletedMediaAssetIds.forEach(assetId => void clearCachedMediaAsset(assetId));
+      if (reduced.roomMediaCacheInvalidated) void clearCachedMediaForRoom(roomId);
       if (reduced.roomDeleted) {
         pendingAIEvents.clear();
+        unpersistedAIErrorByMessageId.clear();
         void clearCachedRoomMessageWindow(roomId);
         void clearCachedMediaForRoom(roomId);
       }
@@ -418,25 +464,38 @@ export const useRoomMessageEvents = ({
       setAgentTurns(reduced.turns);
       setCursor(nextSeq);
       setOldest(canonicalMessages[0]?.id);
-      if (canonicalMessages.length === 0) setHasMore(false);
+      const hasMessageDeletion = accepted.some(event => event.type === 'messages.deleted');
+      if (canonicalMessages.length === 0) {
+        if (hasMoreMessages && hasMessageDeletion && !reduced.roomDeleted) {
+          syncState.markHistoryInvalidated();
+        } else {
+          setHasMore(false);
+        }
+      }
       cacheWindow(canonicalMessages, reduced.turns, nextSeq);
 
-      const deletedIds = new Set(accepted.flatMap(event => event.payload.messageIds || []));
+      const deletedIds = new Set(accepted
+        .filter(event => event.type === 'messages.deleted')
+        .flatMap(event => event.payload.messageIds || []));
       if (messageToDeleteIdRef.current && deletedIds.has(messageToDeleteIdRef.current)) closeDeleteModal();
       if (messageToEditIdRef.current && deletedIds.has(messageToEditIdRef.current)) closeEditModal();
       return true;
     };
 
     const syncFromCursor = async () => {
-      syncAgain = true;
-      if (syncRunning || cancelled || !sessionReadyRef.current) return;
-      syncRunning = true;
+      if (cancelled || !sessionReadyRef.current || !syncState.requestReplay()) return;
       try {
-        while (syncAgain && !cancelled && sessionReadyRef.current) {
-          syncAgain = false;
+        while (syncState.consumeReplayRequest() && !cancelled && sessionReadyRef.current) {
           if (!hasBaseline) {
             const loaded = await loadSnapshot({ reason: 'initial-snapshot' });
             if (!loaded) break;
+          }
+          if (syncState.needsHistorySnapshot) {
+            const loaded = await loadSnapshot({ reason: 'message-history-invalidated' });
+            if (!loaded) {
+              syncState.markHistoryInvalidated();
+              break;
+            }
           }
 
           let keepReading = true;
@@ -446,26 +505,25 @@ export const useRoomMessageEvents = ({
               const page = await requestRoomEvents({
                 requestId,
                 roomId,
-                afterSeq: lastAppliedSeq,
+                afterSeq: syncState.lastAppliedSeq,
                 limit: ROOM_EVENT_PAGE_LIMIT,
                 maxBytes: ROOM_EVENT_PAGE_MAX_BYTES,
               });
-              desiredHeadSeq = Math.max(desiredHeadSeq, page.headSeq);
+              syncState.notifyHead(page.headSeq);
               const hasTerminalDeletion = page.events.some(event => (
                 event.type === 'room.deleted' && event.seq === page.headSeq
               ));
               if (
-                page.headSeq - lastAppliedSeq > ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD
-                && page.headSeq > lastGapSnapshotTarget
+                syncState.shouldReplaceLargeGap(page.headSeq, ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD)
                 && !hasTerminalDeletion
               ) {
                 const gapSnapshotTarget = page.headSeq;
                 const loaded = await loadSnapshot({ reason: 'event-gap-threshold' });
                 if (!loaded) return;
-                lastGapSnapshotTarget = gapSnapshotTarget;
+                syncState.markGapSnapshot(gapSnapshotTarget);
                 continue;
               }
-              if (page.events.length === 0 && lastAppliedSeq < page.headSeq) {
+              if (page.events.length === 0 && syncState.lastAppliedSeq < page.headSeq) {
                 const loaded = await loadSnapshot({ reason: 'event-gap-empty-page' });
                 if (!loaded) return;
                 continue;
@@ -475,14 +533,19 @@ export const useRoomMessageEvents = ({
                 if (!loaded) return;
                 continue;
               }
-              keepReading = page.hasMore || lastAppliedSeq < desiredHeadSeq;
+              if (syncState.needsHistorySnapshot) {
+                const loaded = await loadSnapshot({ reason: 'message-window-emptied' });
+                if (!loaded) return;
+                continue;
+              }
+              keepReading = page.hasMore || syncState.needsReplay;
             } catch (error) {
               if (error instanceof SocketRequestError && error.code === 'CURSOR_AHEAD') {
                 // The database may have been restored to an older sequence. Drop
                 // the stale target before requesting the replacement snapshot.
                 // Notifications received while that request is in flight raise
                 // desiredHeadSeq again and applySnapshot preserves that new head.
-                desiredHeadSeq = 0;
+                syncState.resetForCursorAhead();
                 const loaded = await loadSnapshot({ reason: 'cursor-ahead' });
                 if (!loaded) return;
                 keepReading = true;
@@ -505,7 +568,7 @@ export const useRoomMessageEvents = ({
               logRoomMessageDiagnostic('event-request-failed', {
                 requestId,
                 roomId,
-                afterSeq: lastAppliedSeq,
+                afterSeq: syncState.lastAppliedSeq,
                 error: error instanceof Error ? error.message : String(error),
               });
               keepReading = false;
@@ -513,10 +576,10 @@ export const useRoomMessageEvents = ({
           }
         }
       } finally {
-        syncRunning = false;
+        const replayRequested = syncState.finishReplay();
         setIsLoading(false);
         setIsLoadingMore(false);
-        if (syncAgain && !cancelled) void syncFromCursor();
+        if (replayRequested && !cancelled) void syncFromCursor();
       }
     };
 
@@ -528,12 +591,12 @@ export const useRoomMessageEvents = ({
       canonicalMessages = messages;
       canonicalTurns = turns;
       hasBaseline = true;
-      lastAppliedSeq = memoryWindow.lastAppliedSeq;
+      syncState.applyCursor(memoryWindow.lastAppliedSeq);
       hasMoreMessages = memoryWindow.hasMore;
       oldestMessageId = memoryWindow.oldestMessageId;
       updateMessages(messages);
       setAgentTurns(turns);
-      setLastAppliedSeq(lastAppliedSeq);
+      setLastAppliedSeq(syncState.lastAppliedSeq);
       setHasMoreMessages(hasMoreMessages);
       setOldestMessageId(oldestMessageId);
       setIsLoading(false);
@@ -554,12 +617,12 @@ export const useRoomMessageEvents = ({
           canonicalMessages = drainPendingAIEvents(messages);
           canonicalTurns = turns;
           hasBaseline = true;
-          lastAppliedSeq = cachedWindow.lastAppliedSeq;
+          syncState.applyCursor(cachedWindow.lastAppliedSeq);
           hasMoreMessages = cachedWindow.hasMore;
           oldestMessageId = cachedWindow.oldestMessageId;
           updateMessages(canonicalMessages);
           setAgentTurns(turns);
-          setLastAppliedSeq(lastAppliedSeq);
+          setLastAppliedSeq(syncState.lastAppliedSeq);
           setHasMoreMessages(hasMoreMessages);
           setOldestMessageId(oldestMessageId);
           setIsLoading(false);
@@ -580,29 +643,33 @@ export const useRoomMessageEvents = ({
         await loadSnapshot(options);
         return;
       }
-      syncAgain = true;
       await syncFromCursor();
     };
     requestHistoryRef.current = issueHistoryRequest;
 
     const handleRoomEventAvailable = (event: RoomEventAvailable) => {
       if (event.roomId !== roomId || !Number.isSafeInteger(event.headSeq)) return;
-      desiredHeadSeq = Math.max(desiredHeadSeq, event.headSeq);
+      syncState.notifyHead(event.headSeq);
       const fastPathEvents = Array.isArray(event.events) ? event.events : [];
       const fastPathEndsAtHead = fastPathEvents.length > 0
         && fastPathEvents[fastPathEvents.length - 1].seq === event.headSeq;
       if (hasBaseline && fastPathEndsAtHead && !applyEventPage(fastPathEvents)) {
         logRoomMessageDiagnostic('event-fast-path-gap', {
           roomId,
-          lastAppliedSeq,
+          lastAppliedSeq: syncState.lastAppliedSeq,
           headSeq: event.headSeq,
           eventSeqs: fastPathEvents.map(candidate => candidate.seq),
         });
       }
-      if (!hasBaseline || lastAppliedSeq < desiredHeadSeq) void syncFromCursor();
+      if (!hasBaseline || syncState.needsReplay) void syncFromCursor();
     };
     const handleReconnect = () => void syncFromCursor();
     const handleRoomSyncRequired = () => void syncFromCursor();
+    const handleMessageHistoryInvalidated = (event: { roomId?: string }) => {
+      if (event.roomId !== roomId) return;
+      syncState.markHistoryInvalidated();
+      void syncFromCursor();
+    };
     const handlePageResume = () => {
       if (document.visibilityState === 'visible') void syncFromCursor();
     };
@@ -631,6 +698,7 @@ export const useRoomMessageEvents = ({
     };
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
+      unpersistedAIErrorByMessageId.delete(data.messageId);
       if (!canonicalMessages.some(message => message.id === data.messageId)) {
         queuePendingAIEvent({ type: 'ai_stream_end', data });
         return;
@@ -669,10 +737,13 @@ export const useRoomMessageEvents = ({
       if (data.roomId !== roomId) return;
       const errorMessage = data.message;
       if (
-        errorMessage
+        data.persisted
+        && errorMessage
+        && errorMessage.status === 'error'
         && errorMessage.id === data.messageId
         && errorMessage.roomId === roomId
       ) {
+        unpersistedAIErrorByMessageId.delete(data.messageId);
         if (!canonicalMessages.some(message => message.id === data.messageId)) {
           queuePendingAIEvent({ type: 'ai_stream_error', data });
           return;
@@ -680,12 +751,34 @@ export const useRoomMessageEvents = ({
         canonicalMessages = upsertMessage(canonicalMessages, errorMessage);
         updateMessages(previous => upsertMessage(previous, errorMessage));
         cacheWindow(canonicalMessages);
+      } else {
+        if (data.persisted) {
+          logRoomMessageDiagnostic('persisted-ai-error-payload-invalid', {
+            roomId,
+            messageId: data.messageId,
+          });
+        }
+        const recoveryEvent: AIStreamErrorEvent = {
+          ...data,
+          persisted: false,
+          message: undefined,
+        };
+        unpersistedAIErrorByMessageId.set(data.messageId, data.error);
+        if (!canonicalMessages.some(message => message.id === data.messageId)) {
+          queuePendingAIEvent({ type: 'ai_stream_error', data: recoveryEvent });
+        } else {
+          canonicalMessages = failAIMessage(canonicalMessages, data.messageId, data.error);
+          updateMessages(previous => failAIMessage(previous, data.messageId, data.error));
+          cacheWindow(canonicalMessages);
+        }
+        void syncFromCursor();
       }
       onAIStreamSettled?.();
     };
 
     socket.on('room_event_available', handleRoomEventAvailable);
     socket.on('room_sync_required', handleRoomSyncRequired);
+    socket.on('message_history_invalidated', handleMessageHistoryInvalidated);
     socket.on('connect', handleReconnect);
     socket.on('ai_chunk', handleAIChunk);
     socket.on('a2ui_update', handleA2UIUpdate);
@@ -706,6 +799,7 @@ export const useRoomMessageEvents = ({
       if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
       socket.off('room_event_available', handleRoomEventAvailable);
       socket.off('room_sync_required', handleRoomSyncRequired);
+      socket.off('message_history_invalidated', handleMessageHistoryInvalidated);
       socket.off('connect', handleReconnect);
       socket.off('ai_chunk', handleAIChunk);
       socket.off('a2ui_update', handleA2UIUpdate);

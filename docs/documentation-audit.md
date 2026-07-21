@@ -37,12 +37,14 @@ Subsystem references, retrospectives, completed plans, and review reports stay i
 ### Room synchronization and AI delivery
 
 - PostgreSQL canonical tables and the bounded per-room `room_events` log are the only durable synchronization boundary. Each event stores a strict immutable V1 after-image in the same business transaction; replay never hydrates an old sequence from a current row.
-- PostgreSQL `NOTIFY` is a committed wake-up hint. Every listening app reads the exact event row and uses `io.local` for its attached clients. Redis adapter fan-out remains for genuinely single-origin transient or global events.
+- PostgreSQL `NOTIFY` is a committed wake-up hint. Every listening app coalesces same-room watermarks, reads a committed range, reauthorizes local sockets before complete payloads, and uses `io.local` for its attached clients. Redis adapter fan-out remains for genuinely single-origin transient or global events.
 - A contiguous Socket payload is a latency fast path. Missing or oversized payloads replay from PostgreSQL; gaps over 500 events or an expired cursor use a repeatable-read snapshot. A deleted-room tombstone is the exception because a deleted room has no snapshot.
-- `CURSOR_AHEAD` clears the stale pre-restore target before loading a snapshot. Notifications that arrive while the snapshot is in flight establish a fresh target, so recovery neither discards new work nor polls the restored head forever.
+- The per-room `idle/replay/replace/prepend` state machine gives recovery priority over pagination. `CURSOR_AHEAD` clears stale pre-restore head and gap targets before loading a snapshot; notifications received in flight establish a fresh target.
 - Public membership events reveal only `members.changed`. IDs and roles remain behind `get_room_role_members`. Strict payload validation stops cursor advancement on malformed stored data.
 - `ai_chunk` and A2UI updates are bounded transient fast paths. Early events wait by `messageId` for the durable placeholder, and their reducers update canonical and visible React state separately so optimistic messages survive.
-- A user-visible AI failure is persisted as a complete Message first. `ai_stream_error` may carry that exact Message as a fast path; it does not invent Socket-only canonical text. Arrival order therefore cannot change the final UI.
+- `ai_stream_error` declares `persisted`. The normal path carries the exact persisted safe Message; a failed terminal write uses `persisted: false`, terminalizes the local placeholder, and schedules recovery without leaving it streaming.
+- PostgreSQL rejects a message ID changing rooms, event retention uses wall-clock materialization timestamps, and deletion clears room media cache even for assets outside the loaded window.
+- GitHub CI provisions PostgreSQL 17 and forces the real room-event trigger/transaction suite to run instead of silently skipping.
 
 ### Deployment and portability
 

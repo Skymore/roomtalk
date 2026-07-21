@@ -52,12 +52,13 @@ The `CompositeRoomStore` delegates every method to the right sub-store and handl
 Room synchronization follows these invariants:
 
 - Commit each safe, schema-versioned room-event after-image in the same PostgreSQL transaction as its canonical mutation.
-- Treat `LISTEN/NOTIFY` as a hint. Each app reads the exact event and emits it with `io.local`; payloads above `ROOM_EVENT_FAST_PATH_MAX_BYTES` use a head-only notification.
-- Apply only contiguous client prefixes. Replay small gaps, snapshot retained gaps above 500 events, and clear a stale target head before handling `CURSOR_AHEAD` so a restored database cannot cause an empty-page loop.
+- Treat `LISTEN/NOTIFY` as a hint. Each app coalesces same-room watermarks, reads a committed event range, reauthorizes local room sockets before complete payloads, and emits with `io.local`; incomplete or oversized payloads use one head-only notification.
+- Apply only contiguous client prefixes. A per-room `idle/replay/replace/prepend` controller gives recovery priority over pagination. Replay small gaps, snapshot retained gaps above 500 events, and clear stale target/gap watermarks before handling `CURSOR_AHEAD` so a restored database cannot cause an empty-page loop.
 - Stop on `EVENT_PAYLOAD_INVALID`; do not advance past a malformed event. Public membership events remain empty `members.changed` signals.
 - Do not hydrate old events from current rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`.
 - Keep typing, presence, AI chunks, voice, and WebRTC outside the durable sequence. Buffer early AI transient events by `messageId` within the 60-second, 64-ID, 512-event, 512-KiB limits.
-- Persist a complete AI error Message before emitting `ai_stream_error`, and include that same Message in the Socket fast path. The client must not construct a second error body whose result depends on arrival order.
+- Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if terminal persistence fails, use `persisted: false` so the client terminalizes the local placeholder and schedules recovery.
+- Keep a message ID bound to its original room. PostgreSQL rejects cross-room upserts; a future move operation must be an explicit source delete plus target upsert.
 - Update the canonical message array and React `previous` state separately so transient handlers preserve pending and failed optimistic sends.
 
 Production crossed the immutable `0003`/`0004` boundary on 2026-07-21 with every old app process stopped. Future incompatible event migrations require the same maintenance window or an explicit two-phase protocol.
