@@ -424,8 +424,8 @@ RoomTalk is a realtime AI collaboration platform where people and AI share rooms
 
 <h3 id="arch-composite"><span data-lang="zh">1. CompositeRoomStore: Durable / Realtime 分层</span><span data-lang="en">1. CompositeRoomStore: Durable / Realtime Layering</span></h3>
 
-<p data-lang="zh"><code>CompositeRoomStore</code> 明确了后端的状态归属边界，并组合三个职责不同的子存储：</p>
-<p data-lang="en"><code>CompositeRoomStore</code> defines the backend's state-ownership boundary by composing three stores with different responsibilities:</p>
+<p data-lang="zh">这是整个后端最核心的抽象之一。<code>CompositeRoomStore</code> 回答的不是“该选 PostgreSQL 还是 Redis”，而是“哪类状态必须持久、哪类状态可以重建、客户端最终向谁收敛”。它组合了三个职责不同的子存储：</p>
+<p data-lang="en">This is one of the most important abstractions in the backend. <code>CompositeRoomStore</code> does not merely answer “PostgreSQL or Redis?” It answers which state must survive, which state can be rebuilt, and which authority clients converge on. It composes three stores with different responsibilities:</p>
 <ul data-lang="zh">
   <li><code>DurableRoomStore</code>：PostgreSQL 是唯一 runtime 实现，保存房间、消息、room events、成员、媒体 metadata、认证与 AI/outbox record。旧 <code>RedisStore</code> 只为 import/migration 与 contract coverage 保留。</li>
   <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员、临时状态。服务重启后自动重建。</li>
@@ -438,10 +438,10 @@ RoomTalk is a realtime AI collaboration platform where people and AI share rooms
 </ul>
 
 <blockquote data-lang="zh">
-我们把存储拆成“持久”和“实时”两层，但 durable authority 不再可切换：PostgreSQL 是唯一事实源，Redis 只负责 session、presence、Socket.IO adapter 与短 TTL cache。客户端一致性也不依赖 cache 或 Socket.IO；它按 PostgreSQL 每房间 event sequence 重放，cache 只是带 <code>lastAppliedSeq</code> 的可丢窗口。
+面试里我会先讲这个边界，而不是从数据库品牌讲起：房间、消息和 event sequence 丢了就无法重建，所以归 PostgreSQL；session、presence 和短 TTL cache 丢了只会让用户重连或多查一次数据库，所以归 Redis。Durable authority 不再可切换，PostgreSQL 是唯一事实源。客户端一致性也不依赖 cache 或 Socket.IO；它按每房间 event sequence 重放，cache 只是带 <code>lastAppliedSeq</code> 的可丢窗口。
 </blockquote>
 <blockquote data-lang="en">
-We split storage into durable and realtime layers, but the durable authority is no longer switchable: PostgreSQL is the sole source of truth, while Redis owns sessions, presence, the Socket.IO adapter, and a short-TTL cache. Client consistency does not depend on either cache or Socket.IO; clients replay the PostgreSQL-owned per-room event sequence, and cached windows are disposable state tagged with <code>lastAppliedSeq</code>.
+In an interview, I start with this ownership boundary rather than database brands. Rooms, messages, and event sequences cannot be reconstructed if lost, so PostgreSQL owns them. Sessions, presence, and short-TTL cache can disappear with only a reconnect or an extra database read, so Redis owns them. The durable authority is no longer switchable: PostgreSQL is the sole source of truth. Client consistency depends on neither cache nor Socket.IO; clients replay the per-room event sequence, and cached windows are disposable state tagged with <code>lastAppliedSeq</code>.
 </blockquote>
 
 <h3 id="arch-socketio"><span data-lang="zh">2. Socket.IO 多实例扩展</span><span data-lang="en">2. Socket.IO Multi-Instance Scaling</span></h3>
@@ -513,10 +513,10 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   │◀── message with asset ─│                         │</div>
 
 <blockquote data-lang="zh">
-大文件字节流不经过 RoomTalk App。客户端先向服务端请求一个有效期 15 分钟的 presigned URL，再直接向当前 SeaweedFS S3-compatible endpoint 上传。签名请求、权限校验、对象 key 与 metadata 确认仍经过 App；下载同样先取得受限读取 URL。Control plane 因此继续负责授权和记录，但它的网络流量不再随文件 body 大小增长。
+大文件字节流不经过 RoomTalk App。客户端先向服务端请求一个有效期 15 分钟的 presigned URL，再直接向当前 SeaweedFS S3-compatible endpoint 上传。签名请求、权限校验、对象 key 与 metadata 确认仍经过 App；下载同样先取得受限读取 URL。这样 control plane 仍掌握“谁能上传、对象属于哪个房间、什么时候写入消息”这些业务事实，却不代理大文件 body，显著降低自身带宽与 CPU 压力，也避免以后迁移 AWS S3 时重写业务协议。
 </blockquote>
 <blockquote data-lang="en">
-Large file bodies do not pass through the RoomTalk app. The client first requests a 15-minute presigned URL, then uploads directly to the current SeaweedFS S3-compatible endpoint. Signing, authorization, object-key selection, and metadata confirmation still pass through the app; downloads likewise begin with a restricted read URL. The control plane therefore retains authorization and records, but its network traffic no longer grows with the object body size.
+Large file bodies do not pass through the RoomTalk app. The client first requests a 15-minute presigned URL, then uploads directly to the current SeaweedFS S3-compatible endpoint. Signing, authorization, object-key selection, and metadata confirmation still pass through the app; downloads likewise begin with a restricted read URL. The control plane still owns the business facts—who may upload, which room owns the object, and when it becomes a message—without proxying the large body. That materially reduces bandwidth and CPU pressure and preserves the same application protocol for a future move to AWS S3.
 </blockquote>
 
 <div class="card" data-lang="zh">
@@ -731,11 +731,14 @@ roomtalk site list --json</code></pre>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="zh">主线 B：浏览器连续性与高交互界面</h3>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="en">Narrative B: Browser Continuity and Rich Interaction</h3>
 
+<p data-lang="zh">这一条主线不要背成“五个前端组件”。更好的讲法是：移动浏览器的主线程、视窗和网络都不稳定，但用户仍然期待手势跟手、键盘不顶乱布局、媒体秒开、消息发出即显示。下面每个机制都在解决同一个问题——如何把短暂、嘈杂的浏览器事件收敛成连续而可预测的体验。</p>
+<p data-lang="en">Do not present this narrative as a list of five frontend components. The stronger story is that a mobile browser has an unstable main thread, viewport, and network, while users still expect responsive gestures, a keyboard-safe layout, instant media, and immediate sends. Each mechanism below solves the same problem: turning noisy, transient browser events into a continuous and predictable experience.</p>
+
 <!-- ===== 难点1：手势引擎 ===== -->
 <h3 id="ch-gesture"><span data-lang="zh">媒体查看器手势引擎</span><span data-lang="en">Media Viewer Gesture Engine</span></h3>
 
-<p data-lang="zh"><strong>问题</strong>：需要在一个组件里同时支持 6 种手势，单击关闭、双击缩放、双指缩放、拖拽平移、水平滑动翻页、下滑关闭，它们在触控层面高度重叠，一根手指的移动可能是任何一种操作。</p>
-<p data-lang="en"><strong>Problem</strong>: A single component needs to support six overlapping gestures: tap to close, double-tap zoom, pinch-to-zoom, drag to pan, horizontal paging, and downward return. A single finger movement could begin several of them.</p>
+<p data-lang="zh"><strong>问题</strong>：需要在一个组件里同时支持 6 种手势——单击关闭、双击缩放、双指缩放、拖拽平移、水平滑动翻页、下滑关闭——它们在触控层面高度重叠。一根手指刚落下时，系统根本不知道用户最终想点击、平移、翻页还是关闭。</p>
+<p data-lang="en"><strong>Problem</strong>: A single component needs to support six overlapping gestures—tap to close, double-tap zoom, pinch-to-zoom, drag to pan, horizontal paging, and downward dismiss. When the first pointer lands, the system cannot yet know whether the user intends to tap, pan, page, or dismiss.</p>
 
 <p data-lang="zh"><strong>核心设计是手势模式状态机</strong>：所有触控事件先进入 <code>tap</code> 模式，移动超过阈值后根据方向锁定到具体模式，一旦锁定不再切换：</p>
 <p data-lang="en"><strong>The core is a gesture-mode state machine.</strong> All touch events start in <code>tap</code> mode. Once movement exceeds a threshold, the mode locks based on direction and does not switch again:</p>
@@ -902,10 +905,10 @@ const getHorizontalTrackTransitionMs = (remainingDistance, velocity, width) => {
 };</code></pre>
 
 <blockquote data-lang="zh">
-媒体查看器的难点不在代码行数，而在多个手势共享同一组 pointer event。所有操作先作为 tap 候选，移动超过阈值后再按方向和缩放状态锁定为水平翻页、下拉返回或图片平移；双指加入时切换到 pinch。放大图片会先消费横向位移完成 pan，到达边界后再把继续向外的 overflow 交给轮播。缩放使用中心点保持的几何变换，边缘翻页使用非线性阻力，返回动作同时考虑速度和距离。视觉更新写入三个 pending 通道，再由一个 RAF 回调合并刷新。这个改造已在目标设备上把人工 profile 从 30fps 以下提升到稳定 60fps。
+媒体查看器是我写过最复杂的前端组件之一，当前已经超过 2,000 行。但真正值得讲的不是行数，而是多个手势共享同一组 pointer event 时如何消除歧义。所有操作先作为 tap 候选，移动超过阈值后，再按方向和缩放状态锁定为水平翻页、下拉返回或图片平移；双指加入时切换到 pinch。放大图片先消费横向位移完成 pan，到达边界后才把继续向外的 overflow 交给轮播，所以既支持“图片到边界后横向切页”，也不会在还没看完图片时误翻页。缩放使用中心点保持的几何变换，边缘翻页使用非线性阻力，返回动作同时考虑速度和距离。性能问题也是真实踩过的坑：早期每个高频事件直接写 DOM，目标设备的人工 profile 会掉到 30fps 以下；后来把水平位移、下滑反馈和图片变换写进三个 pending 通道，由一个 RAF 回调批量刷新，稳定到 60fps。这个故事体现的是状态机、几何、交互优先级和渲染调度如何一起工作，而不只是“做了一个图片弹窗”。
 </blockquote>
 <blockquote data-lang="en">
-The media viewer is difficult because several gestures share the same pointer events, not because of its line count. Every operation begins as a tap candidate. Once movement crosses a threshold, direction and zoom state lock it into horizontal paging, downward return, or image pan; a second pointer switches to pinch. A zoomed image consumes horizontal movement as pan first, then hands continued outward overflow to the carousel at its boundary. Zoom uses center-preserving geometry, edge paging uses nonlinear resistance, and return considers both velocity and distance. Three pending transform channels are flushed by one RAF callback. On the target device, manual profiling improved from below 30fps to a stable 60fps after this change.
+The media viewer is one of the most complex frontend components I have built and is now over 2,000 lines. The interview-worthy part is not the line count, but how it resolves ambiguity when several gestures share the same pointer events. Every operation begins as a tap candidate. Once movement crosses a threshold, direction and zoom state lock it into horizontal paging, downward dismiss, or image pan; a second pointer switches to pinch. A zoomed image consumes horizontal movement as pan first and only hands continued outward overflow to the carousel at its boundary. That supports paging directly from an image edge without changing pages while the user is still inspecting the image. Zoom uses center-preserving geometry, edge paging uses nonlinear resistance, and dismiss considers both velocity and distance. We also hit a real performance problem: the early version wrote to the DOM from every high-frequency event and dropped below 30fps in target-device profiling. Moving horizontal offset, dismiss feedback, and image transforms into three pending channels flushed by one RAF callback brought the same manual profile to a stable 60fps. The story is about a state machine, geometry, interaction priority, and render scheduling working together—not merely an image modal.
 </blockquote>
 
 <!-- ===== 难点2：三层缓存 ===== -->
@@ -1042,8 +1045,8 @@ Mobile keyboard detection can't use <code>window.innerHeight</code> because iOS 
 <!-- ===== 难点4：贴纸系统 ===== -->
 <h3 id="ch-sticker"><span data-lang="zh">贴纸系统：虚拟分页、预加载与长按预览</span><span data-lang="en">Sticker Virtualization, Preloading, and Long-Press Preview</span></h3>
 
-<p data-lang="zh"><strong>问题</strong>：当前目录有 2,149 张贴纸。一次渲染全部图片会创建大量 DOM 节点和网络请求，拖慢首次打开。</p>
-<p data-lang="en"><strong>Problem</strong>: The current catalog contains 2,149 stickers. Rendering every image at once would create a large DOM and request burst, slowing the first open.</p>
+<p data-lang="zh"><strong>问题</strong>：当前目录有 2,149 张贴纸，每张都可能触发图片请求。一次全部渲染不仅会堆出两千多个图片节点，还会同时制造布局、解码和网络压力，贴纸面板第一次打开就会卡住。</p>
+<p data-lang="en"><strong>Problem</strong>: The current catalog contains 2,149 stickers, each of which may trigger an image request. Rendering them all would create more than two thousand image nodes and concentrate layout, decoding, and network work into the first open.</p>
 
 <p data-lang="zh"><strong>虚拟分页: 只渲染 ±1 页</strong>：</p>
 <p data-lang="en"><strong>Virtual Pagination: Render Only ±1 Page</strong>:</p>
@@ -1098,10 +1101,10 @@ const handleClick = () => {
 };</code></pre>
 
 <blockquote data-lang="zh">
-2,149 张贴纸不会同时进入 DOM。虚拟分页只渲染当前页及前后各一页，其余页面保留空容器；相邻图片通过 <code>new Image()</code> 在后续 task 中预加载，每批最多 48 张，并用 <code>decoding='async'</code> 提示浏览器异步解码。交互上，按住 350ms 打开大图预览，松开关闭，短按才发送贴纸。
+贴纸系统最初看起来只是一个 grid，真正放进 2,149 张图片后才暴露出 DOM、请求和解码同时放大的问题。现在虚拟分页只让当前页及前后各一页进入 DOM，其余页面只保留空容器；这样滑动结构还在，但浏览器不用维护整个目录。为了避免切页后才白屏加载，相邻图片会通过 <code>new Image()</code> 在后续 task 中预热，不过每批最多 48 张，防止“预加载优化”反过来制造请求洪峰。<code>decoding='async'</code> 只是解码提示，不把它夸成绝对不阻塞。交互上再用一个小状态机区分 350ms 长按预览与短按发送，长按结束会抑制随后产生的 click。
 </blockquote>
 <blockquote data-lang="en">
-The picker does not put all 2,149 stickers into the DOM. Virtual pagination renders the current page and one page on either side while keeping the remaining page containers empty. It preloads nearby images with <code>new Image()</code> in a later task, caps each batch at 48, and uses <code>decoding='async'</code> to request asynchronous decoding. Holding for 350ms opens the large preview, release closes it, and a short tap sends the sticker.
+The sticker picker looked like a simple grid until 2,149 images multiplied DOM, request, and decoding costs together. Virtual pagination now puts only the current page and one page on either side into the DOM; the remaining pages keep empty containers, preserving the swipe structure without making the browser maintain the whole catalog. To avoid waiting on a blank next page, nearby images are warmed with <code>new Image()</code> in a later task, capped at 48 per batch so the optimization does not become a request burst. <code>decoding='async'</code> is a decoding hint, not a promise of zero main-thread work. A small interaction state machine then separates a 350ms long-press preview from a short-tap send and suppresses the click generated after a completed long press.
 </blockquote>
 
 <!-- ===== 难点5：消息列表 ===== -->
@@ -1187,6 +1190,9 @@ Message sending uses optimistic updates: insert into the local list with a clien
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="zh">主线 C：持久事实、增量恢复与成本边界</h3>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="en">Narrative C: Durable Truth, Incremental Recovery, and Cost Boundaries</h3>
 
+<p data-lang="zh">这一条主线可以从一次真实的离线恢复讲起：Socket 通知可能漏，旧 tab 可能拿着过期 cursor，数据库也可能从备份恢复到更早的 head。RoomTalk 不要求通知绝不丢，而是把通知当成“有新变化”的提示，再用 PostgreSQL 中可重放的 room event 和必要时的 snapshot 恢复事实。接下来再讲 Redis 迁移、AI outbox 和成本控制，就会是一条连贯的可靠性故事。</p>
+<p data-lang="en">This narrative can begin with one concrete recovery path: a Socket hint may be missed, an old tab may hold a stale cursor, and a restored database may have an earlier head. RoomTalk does not require notifications to be lossless. It treats them as “something changed” hints, then recovers truth from replayable PostgreSQL room events or, when necessary, a snapshot. Redis migration, the AI outbox, and cost boundaries then become one coherent reliability story rather than unrelated backend features.</p>
+
 <!-- ===== 难点6：断连恢复 ===== -->
 <h3 id="ch-mobile"><span data-lang="zh">移动浏览器 WebSocket 断连恢复</span><span data-lang="en">Mobile WebSocket Reconnection Recovery</span></h3>
 
@@ -1221,10 +1227,10 @@ Message sending uses optimistic updates: insert into the local list with a clien
 </ol>
 
 <blockquote data-lang="zh">
-移动端 WebSocket 恢复的关键是不能把浏览器报告的连接状态当成房间 session 仍然有效。页面回到前台后会检查并按需执行幂等 rejoin；in-flight 去重避免重复恢复请求，400ms 延迟指示器则避免快速恢复时闪一下 loading 状态。
+移动端 WebSocket 恢复是这个项目踩坑最多的地方之一。最麻烦的不是明确收到 <code>disconnect</code>，而是浏览器看起来仍然 connected，服务端的房间 session 却已经失效，形成“僵尸连接”。所以核心原则是“不信任表面连接状态”：页面回到前台就检查房间 membership，并按需执行幂等 <code>ensureRoomJoined</code>，但不无脑新建连接。in-flight 去重复用同一次恢复，防止快速前后台切换时重复 join；400ms 延迟指示器只在恢复真的变慢时出现，正常恢复不会闪 loading。这样既修复消息停收和成员数翻倍，也把断连过程尽量藏在用户感知之外。
 </blockquote>
 <blockquote data-lang="en">
-Mobile WebSocket recovery cannot assume that the browser's connection state means the room session is still valid. When the page returns to the foreground, it checks and performs an idempotent rejoin only when needed. In-flight deduplication avoids duplicate recovery requests, while a 400ms indicator delay prevents a loading flash during quick recovery.
+Mobile WebSocket recovery produced some of the hardest bugs in the project. The difficult case was not an explicit <code>disconnect</code>; it was a browser that still appeared connected after the server-side room session had expired—a zombie connection. The core rule became “do not trust the surface connection state.” When the page returns to the foreground, it verifies room membership and runs the idempotent <code>ensureRoomJoined</code> only when needed instead of blindly opening another connection. In-flight deduplication reuses one recovery during rapid visibility changes, preventing duplicate joins, while the 400ms delayed indicator appears only when recovery is genuinely slow. That fixes stalled messages and doubled member counts while keeping normal recovery mostly invisible to the user.
 </blockquote>
 
 <!-- ===== 难点7：PG 迁移 ===== -->
@@ -1381,10 +1387,10 @@ aiHandlers.ts: streaming logic: provider-agnostic chunk forwarding</code></pre>
 </ul>
 
 <blockquote data-lang="zh">
-我们用 model registry 保存模型能力、价格与 provider 映射，再由 client factory 创建 SDK 客户端。流式 handler 面对的是统一事件，而不是各家 SDK 的原始 chunk。接入新 provider 仍需要补 registry、factory、chunk normalization、错误处理、usage/cost 统计与测试，并不是只加一个 case。客户端不解析 provider SDK 协议，但会看到规范化后的模型、usage 和 cost metadata。
+面试里我会先用一句话概括：这是一个 model registry + client factory 模式。Registry 保存模型能力、价格和 provider 映射，factory 创建对应 SDK client，流式 handler 只面对统一事件，而不是各家 SDK 的原始 chunk。这样浏览器不用理解 DeepSeek、Anthropic、OpenAI 或 OpenRouter 的协议差异，普通聊天和 Code Agent 也能复用同一套模型选择与 usage/cost 展示。然后我会补充真实边界：接入新 provider 并不只是“在 factory 加一个 case”，还要补 chunk normalization、错误语义、usage/cost 统计与测试；客户端虽然不知道 SDK 协议，仍会看到服务端规范化后的 model、usage 和 cost metadata。
 </blockquote>
 <blockquote data-lang="en">
-The model registry stores capabilities, pricing, and provider mappings, while the client factory creates SDK clients. Streaming handlers consume normalized events rather than raw provider chunks. Adding a provider still requires registry and factory work, chunk normalization, error handling, usage and cost accounting, and tests; it is not just one new case. The browser does not parse provider SDK protocols, but it does receive normalized model, usage, and cost metadata.
+In an interview, I start with one sentence: this is a model registry plus client factory pattern. The registry stores model capabilities, pricing, and provider mappings; the factory creates the SDK client; streaming handlers consume normalized events instead of raw provider chunks. The browser therefore does not need to understand the protocol differences among DeepSeek, Anthropic, OpenAI, and OpenRouter, and regular chat and Code Agent paths can reuse model selection and usage/cost presentation. Then I clarify the real boundary: adding a provider is not merely one factory case. It also requires chunk normalization, error semantics, usage and cost accounting, and tests. The client is insulated from SDK protocols but still receives server-normalized model, usage, and cost metadata.
 </blockquote>
 
 <!-- ===== 难点10：Lua 原子操作 ===== -->
@@ -1447,10 +1453,10 @@ room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['crea
 room['roomVersion'] = storedVersion + 1</code></pre>
 
 <blockquote data-lang="zh">
-Redis 的当前职责是可重建 realtime state，其中最典型的是成员计数：一个用户可能有多个 socket，Lua 用两层集合做引用计数，只有全部 socket 断开才移除成员。旧 durable Lua 帮助我们安全完成 Redis → PostgreSQL 迁移，但当前 canonical write 与 event ordering 使用 PostgreSQL transaction/trigger，不再维护 Redis room/message version。
+这里最值得讲的不是“我写过 Lua”，而是一次很具体的成员数翻倍 bug：一个用户可能同时有多个 tab，也可能在断线恢复期间短暂拥有多个 socket。如果直接按 socket 加减人数，同一个人就会被重复计算。我们用 client 集合和 per-client socket 集合做两层引用计数，只有最后一个 socket 离开才移除成员，并把整个更新放进 Lua 保证原子性。Redis 当前只负责这类可重建 realtime state；旧 durable Lua 是安全完成 Redis → PostgreSQL 迁移的历史工程证据。现在 canonical write 与 event ordering 已归 PostgreSQL transaction/trigger，不再维护 Redis room/message version。
 </blockquote>
 <blockquote data-lang="en">
-Redis now owns rebuildable realtime state. Member counting illustrates why some operations remain atomic: one user can have multiple sockets, so Lua uses two-layer sets as reference counts and removes the member only after every socket disconnects. Legacy durable Lua supported the migration from Redis to PostgreSQL, but canonical writes and event ordering now use PostgreSQL transactions and triggers rather than Redis room or message versions.
+The interview story is not merely “I wrote Lua”; it starts with a concrete member-count doubling bug. One user may have several tabs and can briefly own multiple sockets during recovery. Counting sockets directly therefore counts one person more than once. We use a client set plus per-client socket sets as two-level reference counts, remove a member only after the final socket leaves, and keep the whole update atomic in Lua. Redis now owns only this kind of rebuildable realtime state. Legacy durable Lua is evidence of how we migrated safely from Redis to PostgreSQL; canonical writes and event ordering now belong to PostgreSQL transactions and triggers rather than Redis room or message versions.
 </blockquote>
 
 <!-- ===== 难点11：双实现测试 ===== -->
@@ -1918,11 +1924,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么不用微服务架构？</summary>
-  <div class="answer">当前规模不需要。单体的开发、部署、调试效率远高于微服务。如果将来 AI 处理成为瓶颈，可以把 AI worker 拆出来用队列解耦，但现在拆了是过度设计。</div>
+  <div class="answer">我不会因为系统里有 PostgreSQL、Redis、对象存储和 E2B 就把它包装成“微服务架构”。当前 RoomTalk control plane 仍适合模块化单体：一次房间写入经常同时涉及权限、消息、room event 和 outbox，放在同一进程与数据库事务里更容易保证一致性，开发、部署和调试成本也更低。真正已经隔离的是具有独立安全边界的 E2B execution plane，以及可 claim/retry 的 AI worker。如果以后 AI 任务吞吐、扩缩容或故障域出现独立指标，再把 worker 部署成独立服务；在边界没有被数据证明前拆分，只会提前承担网络调用、分布式追踪和跨服务一致性的成本。</div>
 </details>
 <details data-lang="en">
   <summary>Why not a microservices architecture?</summary>
-  <div class="answer">The current scale does not justify it. A monolith keeps development, deployment, and debugging straightforward. If AI processing becomes an independent bottleneck, we can extract a worker and connect it through a queue. Splitting it before that boundary appears would add operational cost without solving a measured problem.</div>
+  <div class="answer">I would not label the system “microservices” merely because it uses PostgreSQL, Redis, object storage, and E2B. The RoomTalk control plane is still best treated as a modular monolith: one room mutation often spans authorization, a message, a room event, and an outbox record, and keeping those in one process and database transaction makes consistency, deployment, and debugging simpler. The parts already separated are the E2B execution plane, which has a real security boundary, and claimable/retryable AI worker work. If AI throughput, scaling, or failure-domain metrics later become independent, the worker can become its own deployed service. Splitting before the data proves that boundary would add network calls, distributed tracing, and cross-service consistency costs without solving a measured problem.</div>
 </details>
 
 <details data-lang="zh">
