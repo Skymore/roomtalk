@@ -385,10 +385,10 @@
 <h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
 
 <blockquote data-lang="zh">
-RoomTalk 是一个实时 AI 协作平台：多人和 AI 可以在共享房间中对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器里可以查看和编辑文件、审阅 Git diff、写行级 review comment、使用 PTY terminal、打开 dev-server preview，并把静态产物发布成不依赖 sandbox 生命周期的稳定 URL。RoomTalk control plane 当前通过 Docker Compose 与 Cloudflare Tunnel 运行在 MacBook：PostgreSQL 保存 canonical state、room event 与 outbox，Redis 只负责可重建实时/cache 状态，SeaweedFS 提供 S3-compatible 对象边界；每个 Code Agent 房间绑定一个 E2B execution plane，通过可复用 JSONL daemon 运行 Coco 或 Codex app-server。
+RoomTalk 是一个实时 AI 协作平台。多人和 AI 可以在共享房间里对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器提供文件编辑、Git diff 审阅、行级 review comment、PTY terminal 和 dev-server preview，还能把静态产物发布到不受 sandbox 生命周期影响的稳定 URL。RoomTalk control plane 目前通过 Docker Compose 和 Cloudflare Tunnel 运行在 MacBook 上。PostgreSQL 保存 canonical state、room event 和 outbox，Redis 保存可重建的实时/cache 状态，SeaweedFS 提供 S3-compatible 对象存储。每个 Code Agent 房间都有独立的 E2B execution plane，并通过可复用的 JSONL daemon 运行 Coco 或 Codex app-server。
 </blockquote>
 <blockquote data-lang="en">
-RoomTalk is a realtime AI collaboration platform where people and AI share rooms, and Coco or Codex can modify code, run tests, and start applications inside a sandboxed workspace bound to the room. In the browser, users can edit files, review Git diffs, attach line-level comments, use a PTY terminal, open dev-server previews, and publish static artifacts to stable URLs independent of sandbox lifetime. The RoomTalk control plane currently runs on a MacBook through Docker Compose and Cloudflare Tunnel: PostgreSQL owns canonical state, room events, and outbox records; Redis holds only rebuildable realtime/cache state; SeaweedFS provides the S3-compatible object boundary. Each code-agent room binds to an E2B execution plane whose reusable JSONL daemon runs Coco or Codex app-server.
+RoomTalk is a realtime AI collaboration platform. People and AI share rooms, while Coco or Codex can edit code, run tests, and start applications in a sandboxed workspace bound to each room. The browser includes file editing, Git diff review, line-level comments, a PTY terminal, and dev-server previews. It can also publish static artifacts to stable URLs that outlive the sandbox. The RoomTalk control plane currently runs on a MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL stores canonical state, room events, and outbox records; Redis stores rebuildable realtime/cache state; SeaweedFS provides S3-compatible object storage. Each code-agent room has its own E2B execution plane, where a reusable JSONL daemon runs Coco or Codex app-server.
 </blockquote>
 
 <p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
@@ -424,8 +424,8 @@ RoomTalk is a realtime AI collaboration platform where people and AI share rooms
 
 <h3 id="arch-composite"><span data-lang="zh">1. CompositeRoomStore: Durable / Realtime 分层</span><span data-lang="en">1. CompositeRoomStore: Durable / Realtime Layering</span></h3>
 
-<p data-lang="zh">这是整个后端最核心的抽象之一。<code>CompositeRoomStore</code> 回答的不是“该选 PostgreSQL 还是 Redis”，而是“哪类状态必须持久、哪类状态可以重建、客户端最终向谁收敛”。它组合了三个职责不同的子存储：</p>
-<p data-lang="en">This is one of the most important abstractions in the backend. <code>CompositeRoomStore</code> does not merely answer “PostgreSQL or Redis?” It answers which state must survive, which state can be rebuilt, and which authority clients converge on. It composes three stores with different responsibilities:</p>
+<p data-lang="zh"><code>CompositeRoomStore</code> 定义了后端的状态归属：哪些数据必须持久，哪些状态可以重建，以及客户端最终以哪一层为准。它组合了三个职责不同的子存储：</p>
+<p data-lang="en"><code>CompositeRoomStore</code> defines state ownership in the backend: which data must persist, which state can be rebuilt, and which authority clients eventually follow. It composes three stores with different responsibilities:</p>
 <ul data-lang="zh">
   <li><code>DurableRoomStore</code>：PostgreSQL 是唯一 runtime 实现，保存房间、消息、room events、成员、媒体 metadata、认证与 AI/outbox record。旧 <code>RedisStore</code> 只为 import/migration 与 contract coverage 保留。</li>
   <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员、临时状态。服务重启后自动重建。</li>
@@ -438,10 +438,10 @@ RoomTalk is a realtime AI collaboration platform where people and AI share rooms
 </ul>
 
 <blockquote data-lang="zh">
-面试里我会先讲这个边界，而不是从数据库品牌讲起：房间、消息和 event sequence 丢了就无法重建，所以归 PostgreSQL；session、presence 和短 TTL cache 丢了只会让用户重连或多查一次数据库，所以归 Redis。Durable authority 不再可切换，PostgreSQL 是唯一事实源。客户端一致性也不依赖 cache 或 Socket.IO；它按每房间 event sequence 重放，cache 只是带 <code>lastAppliedSeq</code> 的可丢窗口。
+面试时，我会先说明状态归属。房间、消息和 event sequence 丢失后无法重建，所以由 PostgreSQL 保存；session、presence 和短 TTL cache 即使丢失，也只会触发重连或增加一次数据库读取，所以放在 Redis。PostgreSQL 是唯一的 durable authority。客户端按每个房间的 event sequence 重放，cache 只是带 <code>lastAppliedSeq</code> 的临时窗口，Socket.IO 也不承担最终一致性。
 </blockquote>
 <blockquote data-lang="en">
-In an interview, I start with this ownership boundary rather than database brands. Rooms, messages, and event sequences cannot be reconstructed if lost, so PostgreSQL owns them. Sessions, presence, and short-TTL cache can disappear with only a reconnect or an extra database read, so Redis owns them. The durable authority is no longer switchable: PostgreSQL is the sole source of truth. Client consistency depends on neither cache nor Socket.IO; clients replay the per-room event sequence, and cached windows are disposable state tagged with <code>lastAppliedSeq</code>.
+In an interview, I start with state ownership. Rooms, messages, and event sequences cannot be reconstructed after loss, so PostgreSQL stores them. Losing sessions, presence, or a short-TTL cache only causes a reconnect or an extra database read, so Redis stores those. PostgreSQL is the sole durable authority. Clients replay each room's event sequence; cache is a temporary window tagged with <code>lastAppliedSeq</code>, and Socket.IO does not carry the final consistency guarantee.
 </blockquote>
 
 <h3 id="arch-socketio"><span data-lang="zh">2. Socket.IO 多实例扩展</span><span data-lang="en">2. Socket.IO Multi-Instance Scaling</span></h3>
@@ -451,7 +451,7 @@ single-origin transient event: App A → Redis adapter → App B/C → 对应客
 <div class="diagram" data-lang="en">durable room event: PostgreSQL NOTIFY → every app → io.local → attached clients
 single-origin transient event: App A → Redis adapter → App B/C → target clients</div>
 
-<p data-lang="zh">多实例投递有两条路径。Durable room event 已由 PostgreSQL <code>NOTIFY</code> fan-out 给每个监听实例，因此各实例读取精确事件行后只做 <code>io.local</code> 广播，否则 Redis adapter 会把同一事件放大多份。真正由单一实例产生的 transient/global event 才经过 <code>@socket.io/redis-adapter</code>。客户端不需要知道自己连接的是哪个实例，但服务端必须按事件来源选择正确路径。</p>
+<p data-lang="zh">多实例投递有两条路径。PostgreSQL <code>NOTIFY</code> 已经把 durable room event 发送给每个监听实例，因此每个实例读取精确事件行后只做 <code>io.local</code> 广播。若再经过 Redis adapter，同一事件会被重复放大。由单个实例产生的 transient/global event 才使用 <code>@socket.io/redis-adapter</code>。客户端无须关心连接落在哪个实例上，服务端则要根据事件来源选择投递路径。</p>
 <p data-lang="en">Multi-instance delivery has two paths. PostgreSQL <code>NOTIFY</code> already fans a durable room event out to every listening app, so each app reads the exact event row and broadcasts with <code>io.local</code>; sending it through the Redis adapter would multiply the same event. The <code>@socket.io/redis-adapter</code> is for genuinely single-origin transient or global events. Clients do not need to know which instance owns their connection, but the server must choose the path that matches the event's origin.</p>
 
 <div class="card warn" data-lang="zh">
@@ -491,7 +491,7 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
 
 <div class="card" data-lang="zh">
   <h4>追问：为什么不用 SSE？</h4>
-  <p>SSE 完全可以承载单向的 AI token 流，并不是技术上做不到。RoomTalk 已经用 Socket.IO 处理房间事件、ack、重连与身份上下文，因此复用同一条双向连接可以少维护一套鉴权、断线恢复和流生命周期。这里是现有系统边界下的工程取舍，不代表 SSE 不适合 AI streaming；如果服务只需要 HTTP 请求加单向响应流，SSE 反而会更简单。</p>
+  <p>SSE 可以承载单向的 AI token 流。RoomTalk 已经用 Socket.IO 处理房间事件、ack、重连和身份上下文，复用这条双向连接可以少维护一套鉴权、断线恢复和流生命周期。这个选择来自现有系统边界。如果服务只需要 HTTP 请求和单向响应流，SSE 会更简单。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>Follow-up: Why not use SSE?</h4>
@@ -513,10 +513,10 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   │◀── message with asset ─│                         │</div>
 
 <blockquote data-lang="zh">
-大文件字节流不经过 RoomTalk App。客户端先向服务端请求一个有效期 15 分钟的 presigned URL，再直接向当前 SeaweedFS S3-compatible endpoint 上传。签名请求、权限校验、对象 key 与 metadata 确认仍经过 App；下载同样先取得受限读取 URL。这样 control plane 仍掌握“谁能上传、对象属于哪个房间、什么时候写入消息”这些业务事实，却不代理大文件 body，显著降低自身带宽与 CPU 压力，也避免以后迁移 AWS S3 时重写业务协议。
+大文件字节流不经过 RoomTalk App。客户端先向服务端请求一个有效期 15 分钟的 presigned URL，再直接向当前 SeaweedFS S3-compatible endpoint 上传。签名请求、权限校验、对象 key 与 metadata 确认仍经过 App；下载同样先取得受限读取 URL。Control plane 继续决定谁能上传、对象属于哪个房间，以及什么时候写入消息，但不代理大文件 body。这样可以减少 App 的带宽和 CPU 压力，以后迁移 AWS S3 时也无须改写业务协议。
 </blockquote>
 <blockquote data-lang="en">
-Large file bodies do not pass through the RoomTalk app. The client first requests a 15-minute presigned URL, then uploads directly to the current SeaweedFS S3-compatible endpoint. Signing, authorization, object-key selection, and metadata confirmation still pass through the app; downloads likewise begin with a restricted read URL. The control plane still owns the business facts—who may upload, which room owns the object, and when it becomes a message—without proxying the large body. That materially reduces bandwidth and CPU pressure and preserves the same application protocol for a future move to AWS S3.
+Large file bodies do not pass through the RoomTalk app. The client first requests a 15-minute presigned URL, then uploads directly to the current SeaweedFS S3-compatible endpoint. Signing, authorization, object-key selection, and metadata confirmation still pass through the app; downloads likewise begin with a restricted read URL. The control plane still decides who may upload, which room owns the object, and when it becomes a message. It does so without proxying the large body, which reduces bandwidth and CPU pressure and keeps the same application protocol available for a future move to AWS S3.
 </blockquote>
 
 <div class="card" data-lang="zh">
@@ -530,8 +530,8 @@ Large file bodies do not pass through the RoomTalk app. The client first request
 
 <h3 id="arch-agent"><span data-lang="zh">5. Code Agent: 两个 Security Plane / 三层 Runtime</span><span data-lang="en">5. Code Agent: Two Security Planes / Three Runtime Layers</span></h3>
 
-<p data-lang="zh">Code Agent 房间不是“后端替模型执行几个 Shell 命令”。安全边界分成两个 plane：可信的 RoomTalk control plane 与隔离的 E2B execution plane；实际请求链路再分成三层 runtime：<strong>RoomTalk 编排 → sandbox-local JSONL daemon/runner → Coco 或 Codex app-server backend。</strong>完整边界如下：</p>
-<p data-lang="en">A code-agent room is not “the backend running a few shell commands for the model.” The security boundary has two planes: the trusted RoomTalk control plane and the isolated E2B execution plane. The request path has three runtime layers: <strong>RoomTalk orchestration → sandbox-local JSONL daemon/runner → Coco or Codex app-server backend.</strong> The full boundary is:</p>
+<p data-lang="zh">Code Agent 房间不是"后端替模型执行几个 Shell 命令"。安全边界分成两个 plane：可信的 RoomTalk control plane 与隔离的 E2B execution plane；实际请求链路再分成三层 runtime：<strong>RoomTalk 编排 → sandbox-local JSONL daemon/runner → Coco 或 Codex app-server backend。</strong>完整边界如下：</p>
+<p data-lang="en">A code-agent room is not "the backend running a few shell commands for the model." The security boundary has two planes: the trusted RoomTalk control plane and the isolated E2B execution plane. The request path has three runtime layers: <strong>RoomTalk orchestration → sandbox-local JSONL daemon/runner → Coco or Codex app-server backend.</strong> The full boundary is:</p>
 
 <table data-lang="zh">
   <thead><tr><th>组件</th><th>负责</th><th>不负责</th></tr></thead>
@@ -619,8 +619,8 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 <hr>
 <h2 id="challenges"><span data-lang="zh">三、三条工程主线</span><span data-lang="en">3. Three Engineering Narratives</span></h2>
 
-<p data-lang="zh">下面不把项目拆成十八个互不相干的“难点”。它们其实属于三条连续主线：第一条回答不可信代码在哪里执行、谁拥有权限；第二条回答浏览器在复杂交互和临时状态下如何保持连续；第三条回答系统如何把实时体验收敛回可恢复的持久事实。面试时先讲一条完整因果链，再根据追问进入具体机制。</p>
-<p data-lang="en">The project is easier to explain as three connected narratives than as eighteen isolated “challenges.” The first asks where untrusted code runs and who owns authority. The second follows browser continuity through complex interaction and transient state. The third shows how a realtime experience converges on recoverable durable truth. In an interview, tell one causal story first, then enter the mechanism the interviewer asks about.</p>
+<p data-lang="zh">这些工程问题可以串成三条主线。第一条讲不可信代码在哪里执行、权限由谁掌握；第二条讲浏览器如何应对复杂交互和临时状态；第三条讲实时体验如何回到可恢复的持久事实。面试时先讲完整的因果链，遇到追问再展开具体机制。</p>
+<p data-lang="en">These engineering problems form three narratives. The first covers where untrusted code runs and who holds authority. The second follows browser behavior through complex interaction and transient state. The third explains how realtime behavior converges on recoverable, durable facts. Start with the causal chain in an interview, then expand the mechanism when asked.</p>
 
 <h3 id="ch-agent-control" style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px"><span data-lang="zh">主线 A：执行、信任与可审阅性</span><span data-lang="en">Narrative A: Execution, Trust, and Reviewability</span></h3>
 
@@ -638,13 +638,13 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 4. Daemon ──route──▶ Coco (self-built CLI) | Codex app-server
 5. /workspace tools ──ordered text/tool events──▶ persist + broadcast</div>
 
-<blockquote data-lang="zh">E2B 本身不是设计结论，ownership 才是：RoomTalk 不执行不可信命令，E2B 不决定房间权限，Agent 拿不到数据库或 provider secret。</blockquote>
-<blockquote data-lang="en">The design is defined by ownership: RoomTalk does not execute untrusted commands, E2B does not decide room permissions, and the agent receives neither database nor provider secrets.</blockquote>
+<blockquote data-lang="zh">这里按 ownership 划分职责：RoomTalk 不执行不可信命令，E2B 不决定房间权限，Agent 也拿不到数据库或 provider secret。E2B 提供隔离执行环境，权限和业务状态仍由 RoomTalk 管理。</blockquote>
+<blockquote data-lang="en">Ownership defines the boundary. RoomTalk does not execute untrusted commands, E2B does not decide room permissions, and the agent receives neither database nor provider secrets. E2B provides isolated execution, while RoomTalk keeps authority over permissions and application state.</blockquote>
 
 <h3 id="ch-agent-order"><span data-lang="zh">持久化 AI 文本与工具事件的真实顺序</span><span data-lang="en">Persisting the True Order of AI Text and Tool Events</span></h3>
 
-<p data-lang="zh"><strong>问题</strong>：早期 runner 实时发送 text delta，却在整轮结束后从 transcript replay 工具事件。结果数据库先保存整段 AI 文本，再保存 tool call/result；刷新后“当前目录为空”会出现在真正执行 Glob 之前。</p>
-<p data-lang="en"><strong>Problem</strong>: The early runner streamed text deltas but replayed tool events only after the entire run. The database therefore stored a full assistant message before tool call/result records, so after refresh “the directory is empty” appeared before the Glob command that established it.</p>
+<p data-lang="zh"><strong>问题</strong>：早期 runner 实时发送 text delta，却在整轮结束后从 transcript replay 工具事件。结果数据库先保存整段 AI 文本，再保存 tool call/result；刷新后"当前目录为空"会出现在真正执行 Glob 之前。</p>
+<p data-lang="en"><strong>Problem</strong>: The early runner streamed text deltas but replayed tool events only after the entire run. The database therefore stored a full assistant message before tool call/result records, so after refresh "the directory is empty" appeared before the Glob command that established it.</p>
 
 <p data-lang="zh"><strong>方案</strong>：Engine 在工具执行前后发 ordered <code>tool_call</code>/<code>tool_result</code> callback；runner 原样转成 JSONL；Node 收到工具边界就结束当前 AI segment，工具之后的文本创建新 segment。数据库 <code>position</code> 成为唯一顺序事实，前端只负责展示。</p>
 <p data-lang="en"><strong>Solution</strong>: The engine emits ordered <code>tool_call</code>/<code>tool_result</code> callbacks around execution. The runner forwards them as JSONL. Node closes the current assistant segment at a tool boundary and starts a new segment for later text. Database <code>position</code> is the ordering authority; the client only renders it.</p>
@@ -654,8 +654,8 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
    ▼              ▼                    ▼              ▼
 AI segment A   message N+1         message N+2    AI segment B</div>
 
-<div class="card warn" data-lang="zh"><h4>追问：为什么不能前端按 timestamp 重排？</h4><p>真实顺序可能是“AI A：我先检查目录” → Glob → result 为空 → “AI B：目录是空的”。旧 runner 已经把 A 和 B 合并成一条 AI 消息，前端只能把整条消息放到工具前或工具后，无法把 Glob 插回 A/B 中间，因为文本边界已经丢失。修复必须发生在最先知道真实执行顺序的 Engine/runner 层，并由服务端 <code>position</code> 持久化。</p></div>
-<div class="card warn" data-lang="en"><h4>Follow-up: Why not sort by timestamp in the client?</h4><p>The real order may be “AI A: I will inspect the directory” → Glob → empty result → “AI B: the directory is empty.” The old runner had already merged A and B into one assistant message. The client could move that whole message before or after the tool, but it could not insert Glob back between A and B because the text boundary was gone. The fix must start in the engine or runner, where execution order is known, and server <code>position</code> must preserve it.</p></div>
+<div class="card warn" data-lang="zh"><h4>追问：为什么不能前端按 timestamp 重排？</h4><p>真实顺序可能是"AI A：我先检查目录" → Glob → result 为空 → "AI B：目录是空的"。旧 runner 已经把 A 和 B 合并成一条 AI 消息，前端只能把整条消息放到工具前或工具后，无法把 Glob 插回 A/B 中间，因为文本边界已经丢失。修复必须发生在最先知道真实执行顺序的 Engine/runner 层，并由服务端 <code>position</code> 持久化。</p></div>
+<div class="card warn" data-lang="en"><h4>Follow-up: Why not sort by timestamp in the client?</h4><p>The real order may be "AI A: I will inspect the directory" → Glob → empty result → "AI B: the directory is empty." The old runner had already merged A and B into one assistant message. The client could move that whole message before or after the tool, but it could not insert Glob back between A and B because the text boundary was gone. The fix must start in the engine or runner, where execution order is known, and server <code>position</code> must preserve it.</p></div>
 
 <h3 id="ch-agent-context"><span data-lang="zh">让共享上下文与最小权限同时成立</span><span data-lang="en">Combining Shared Context with Least Privilege</span></h3>
 
@@ -677,8 +677,8 @@ RoomTalk ── recheck room/client/turn ── filter safe fields ──▶ bou
 roomtalk room search "deployment failure" --json
 roomtalk site list --json</code></pre>
 
-<p data-lang="zh">Plan Shell 使用 bubblewrap 只读 mount namespace，并关闭直接 IP 网络，只放行本轮 broker socket。这样任意 <code>python</code>、重定向或恶意 shell 组合都无法写 workspace，而不是依赖维护不完整的“安全命令列表”。</p>
-<p data-lang="en">Plan shell uses a bubblewrap read-only mount namespace, blocks direct IP networking, and permits only the turn broker socket. Arbitrary Python, redirection, or shell composition cannot write the workspace; security does not depend on maintaining an incomplete “safe command” list.</p>
+<p data-lang="zh">Plan Shell 使用 bubblewrap 只读 mount namespace，并关闭直接 IP 网络，只放行本轮 broker socket。这样任意 <code>python</code>、重定向或恶意 shell 组合都无法写 workspace，而不是依赖维护不完整的"安全命令列表"。</p>
+<p data-lang="en">Plan shell uses a bubblewrap read-only mount namespace, blocks direct IP networking, and permits only the turn broker socket. Arbitrary Python, redirection, or shell composition cannot write the workspace; security does not depend on maintaining an incomplete "safe command" list.</p>
 
 <h3 id="ch-agent-workspace"><span data-lang="zh">让 Workspace 可检查、可审阅，而不绕过 Agent</span><span data-lang="en">Making the Workspace Inspectable Without Bypassing the Agent</span></h3>
 
@@ -731,17 +731,17 @@ roomtalk site list --json</code></pre>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="zh">主线 B：浏览器连续性与高交互界面</h3>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:36px" data-lang="en">Narrative B: Browser Continuity and Rich Interaction</h3>
 
-<p data-lang="zh">这一条主线不要背成“五个前端组件”。更好的讲法是：移动浏览器的主线程、视窗和网络都不稳定，但用户仍然期待手势跟手、键盘不顶乱布局、媒体秒开、消息发出即显示。下面每个机制都在解决同一个问题——如何把短暂、嘈杂的浏览器事件收敛成连续而可预测的体验。</p>
-<p data-lang="en">Do not present this narrative as a list of five frontend components. The stronger story is that a mobile browser has an unstable main thread, viewport, and network, while users still expect responsive gestures, a keyboard-safe layout, instant media, and immediate sends. Each mechanism below solves the same problem: turning noisy, transient browser events into a continuous and predictable experience.</p>
+<p data-lang="zh">移动浏览器的主线程会忙，视窗会随键盘变化，网络也可能中断。用户仍希望手势跟手、布局稳定、媒体快速打开，消息发出后立刻显示。这里的几个机制负责整理零散的浏览器事件，让交互保持连续、可预测。</p>
+<p data-lang="en">A mobile browser has a busy main thread, a viewport that changes with the keyboard, and a network that can drop. Users still expect responsive gestures, a stable layout, quick media, and messages that appear immediately after send. The mechanisms in this section organize those scattered events into a continuous, predictable interaction.</p>
 
 <!-- ===== 难点1：手势引擎 ===== -->
 <h3 id="ch-gesture"><span data-lang="zh">媒体查看器手势引擎</span><span data-lang="en">Media Viewer Gesture Engine</span></h3>
 
-<p data-lang="zh"><strong>问题</strong>：需要在一个组件里同时支持 6 种手势——单击关闭、双击缩放、双指缩放、拖拽平移、水平滑动翻页、下滑关闭——它们在触控层面高度重叠。一根手指刚落下时，系统根本不知道用户最终想点击、平移、翻页还是关闭。</p>
-<p data-lang="en"><strong>Problem</strong>: A single component needs to support six overlapping gestures—tap to close, double-tap zoom, pinch-to-zoom, drag to pan, horizontal paging, and downward dismiss. When the first pointer lands, the system cannot yet know whether the user intends to tap, pan, page, or dismiss.</p>
+<p data-lang="zh"><strong>问题</strong>：一个组件要同时支持 6 种手势：单击关闭、双击缩放、双指缩放、拖拽平移、水平滑动翻页和下滑关闭。这些操作共用同一组触控事件。手指刚落下时，还无法判断用户接下来要点击、平移、翻页还是关闭。</p>
+<p data-lang="en"><strong>Problem</strong>: One component supports six gestures: tap to close, double-tap zoom, pinch-to-zoom, drag to pan, horizontal paging, and downward dismiss. They share the same pointer events. When the first pointer lands, the user's intent is still unknown.</p>
 
-<p data-lang="zh"><strong>核心设计是手势模式状态机</strong>：所有触控事件先进入 <code>tap</code> 模式，移动超过阈值后根据方向锁定到具体模式，一旦锁定不再切换：</p>
-<p data-lang="en"><strong>The core is a gesture-mode state machine.</strong> All touch events start in <code>tap</code> mode. Once movement exceeds a threshold, the mode locks based on direction and does not switch again:</p>
+<p data-lang="zh"><strong>手势模式状态机</strong>：所有触控事件先进入 <code>tap</code> 模式。移动超过阈值后，状态机根据方向锁定具体模式，直到本次手势结束都不再切换：</p>
+<p data-lang="en"><strong>Gesture-mode state machine</strong>: Every touch starts in <code>tap</code> mode. Once movement crosses a threshold, direction locks the gesture into one mode for the rest of that interaction:</p>
 
 <pre><code class="language-typescript">// MediaViewerModal.tsx: 手势模式转换
 if (state.mode === "tap" &amp;&amp; (absX > TAP_THRESHOLD || absY > TAP_THRESHOLD)) {
@@ -905,10 +905,10 @@ const getHorizontalTrackTransitionMs = (remainingDistance, velocity, width) => {
 };</code></pre>
 
 <blockquote data-lang="zh">
-媒体查看器是我写过最复杂的前端组件之一，当前已经超过 2,000 行。但真正值得讲的不是行数，而是多个手势共享同一组 pointer event 时如何消除歧义。所有操作先作为 tap 候选，移动超过阈值后，再按方向和缩放状态锁定为水平翻页、下拉返回或图片平移；双指加入时切换到 pinch。放大图片先消费横向位移完成 pan，到达边界后才把继续向外的 overflow 交给轮播，所以既支持“图片到边界后横向切页”，也不会在还没看完图片时误翻页。缩放使用中心点保持的几何变换，边缘翻页使用非线性阻力，返回动作同时考虑速度和距离。性能问题也是真实踩过的坑：早期每个高频事件直接写 DOM，目标设备的人工 profile 会掉到 30fps 以下；后来把水平位移、下滑反馈和图片变换写进三个 pending 通道，由一个 RAF 回调批量刷新，稳定到 60fps。这个故事体现的是状态机、几何、交互优先级和渲染调度如何一起工作，而不只是“做了一个图片弹窗”。
+媒体查看器是我写过最复杂的前端组件之一，目前已经超过 2,000 行。复杂度主要来自手势冲突。所有操作一开始都是 tap 候选；移动超过阈值后，再根据方向和缩放状态锁定为水平翻页、下滑关闭或图片平移，第二根手指加入时则切换到 pinch。放大后的图片会先消费横向位移来完成 pan，只有到达边界后，继续向外拖动的 overflow 才交给轮播。这样既能从图片边缘直接切页，也不会在图片尚未到边界时误翻。缩放使用保持中心点的几何变换，边缘翻页带有非线性阻力，关闭动作同时检查速度和距离。早期实现还遇到过明显的性能问题：每个高频事件都直接写 DOM，目标设备的人工 profile 会掉到 30fps 以下。后来我把水平位移、下滑反馈和图片变换写入三个 pending 通道，再由一个 RAF 回调批量刷新，同一设备可以稳定在 60fps。这个组件把状态机、几何计算、手势优先级和渲染调度放在了同一条交互链路里。
 </blockquote>
 <blockquote data-lang="en">
-The media viewer is one of the most complex frontend components I have built and is now over 2,000 lines. The interview-worthy part is not the line count, but how it resolves ambiguity when several gestures share the same pointer events. Every operation begins as a tap candidate. Once movement crosses a threshold, direction and zoom state lock it into horizontal paging, downward dismiss, or image pan; a second pointer switches to pinch. A zoomed image consumes horizontal movement as pan first and only hands continued outward overflow to the carousel at its boundary. That supports paging directly from an image edge without changing pages while the user is still inspecting the image. Zoom uses center-preserving geometry, edge paging uses nonlinear resistance, and dismiss considers both velocity and distance. We also hit a real performance problem: the early version wrote to the DOM from every high-frequency event and dropped below 30fps in target-device profiling. Moving horizontal offset, dismiss feedback, and image transforms into three pending channels flushed by one RAF callback brought the same manual profile to a stable 60fps. The story is about a state machine, geometry, interaction priority, and render scheduling working together—not merely an image modal.
+The media viewer is one of the most complex frontend components I have built and is now over 2,000 lines. Most of that complexity comes from gesture conflicts. Every interaction begins as a tap candidate. Once movement crosses a threshold, direction and zoom state lock it into horizontal paging, downward dismiss, or image pan. A second pointer switches the mode to pinch. A zoomed image consumes horizontal movement as pan first; only after it reaches the boundary does continued outward overflow pass to the carousel. Users can page directly from the image edge without changing pages while they are still inspecting the image. Zoom preserves the gesture center, edge paging uses nonlinear resistance, and dismiss checks both velocity and distance. The early version also had a visible performance problem: every high-frequency event wrote directly to the DOM, and the target-device profile dropped below 30fps. I moved horizontal offset, dismiss feedback, and image transforms into three pending channels and flushed them through one RAF callback. The same device then held a stable 60fps. The component brings state transitions, geometry, gesture priority, and render scheduling into one interaction path.
 </blockquote>
 
 <!-- ===== 难点2：三层缓存 ===== -->
@@ -1101,7 +1101,7 @@ const handleClick = () => {
 };</code></pre>
 
 <blockquote data-lang="zh">
-贴纸系统最初看起来只是一个 grid，真正放进 2,149 张图片后才暴露出 DOM、请求和解码同时放大的问题。现在虚拟分页只让当前页及前后各一页进入 DOM，其余页面只保留空容器；这样滑动结构还在，但浏览器不用维护整个目录。为了避免切页后才白屏加载，相邻图片会通过 <code>new Image()</code> 在后续 task 中预热，不过每批最多 48 张，防止“预加载优化”反过来制造请求洪峰。<code>decoding='async'</code> 只是解码提示，不把它夸成绝对不阻塞。交互上再用一个小状态机区分 350ms 长按预览与短按发送，长按结束会抑制随后产生的 click。
+贴纸系统一开始只是一个 grid，放入 2,149 张图片后，DOM、网络请求和解码成本一起升高。现在虚拟分页只把当前页和相邻两页放进 DOM，其余页面保留空容器。滑动结构仍然完整，浏览器却不用维护整个目录。相邻图片通过 <code>new Image()</code> 在后续 task 中预热，每批最多 48 张，避免预加载本身形成请求洪峰。<code>decoding='async'</code> 只是给浏览器的解码提示，不能保证主线程完全没有工作。交互层用一个小状态机区分 350ms 长按预览和短按发送，并在长按结束后抑制随之产生的 click。
 </blockquote>
 <blockquote data-lang="en">
 The sticker picker looked like a simple grid until 2,149 images multiplied DOM, request, and decoding costs together. Virtual pagination now puts only the current page and one page on either side into the DOM; the remaining pages keep empty containers, preserving the swipe structure without making the browser maintain the whole catalog. To avoid waiting on a blank next page, nearby images are warmed with <code>new Image()</code> in a later task, capped at 48 per batch so the optimization does not become a request burst. <code>decoding='async'</code> is a decoding hint, not a promise of zero main-thread work. A small interaction state machine then separates a 350ms long-press preview from a short-tap send and suppresses the click generated after a completed long press.
@@ -1190,8 +1190,8 @@ Message sending uses optimistic updates: insert into the local list with a clien
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="zh">主线 C：持久事实、增量恢复与成本边界</h3>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="en">Narrative C: Durable Truth, Incremental Recovery, and Cost Boundaries</h3>
 
-<p data-lang="zh">这一条主线可以从一次真实的离线恢复讲起：Socket 通知可能漏，旧 tab 可能拿着过期 cursor，数据库也可能从备份恢复到更早的 head。RoomTalk 不要求通知绝不丢，而是把通知当成“有新变化”的提示，再用 PostgreSQL 中可重放的 room event 和必要时的 snapshot 恢复事实。接下来再讲 Redis 迁移、AI outbox 和成本控制，就会是一条连贯的可靠性故事。</p>
-<p data-lang="en">This narrative can begin with one concrete recovery path: a Socket hint may be missed, an old tab may hold a stale cursor, and a restored database may have an earlier head. RoomTalk does not require notifications to be lossless. It treats them as “something changed” hints, then recovers truth from replayable PostgreSQL room events or, when necessary, a snapshot. Redis migration, the AI outbox, and cost boundaries then become one coherent reliability story rather than unrelated backend features.</p>
+<p data-lang="zh">一次离线恢复可以串起这条主线。Socket 通知可能漏，旧 tab 可能拿着过期 cursor，数据库也可能从备份恢复到更早的 head。RoomTalk 把通知当作"有新变化"的提示，再用 PostgreSQL 中可重放的 room event 恢复状态，差距过大时则读取 snapshot。沿着这条恢复路径，就能自然讲到 Redis 迁移、AI outbox 和成本控制。</p>
+<p data-lang="en">One offline recovery path ties this narrative together. A Socket hint may be missed, an old tab may hold a stale cursor, and a restored database may have an earlier head. RoomTalk treats the notification as a "something changed" hint, then rebuilds state from replayable PostgreSQL room events or loads a snapshot when the gap is too large. The same recovery path leads naturally into Redis migration, the AI outbox, and cost control.</p>
 
 <!-- ===== 难点6：断连恢复 ===== -->
 <h3 id="ch-mobile"><span data-lang="zh">移动浏览器 WebSocket 断连恢复</span><span data-lang="en">Mobile WebSocket Reconnection Recovery</span></h3>
@@ -1227,10 +1227,10 @@ Message sending uses optimistic updates: insert into the local list with a clien
 </ol>
 
 <blockquote data-lang="zh">
-移动端 WebSocket 恢复是这个项目踩坑最多的地方之一。最麻烦的不是明确收到 <code>disconnect</code>，而是浏览器看起来仍然 connected，服务端的房间 session 却已经失效，形成“僵尸连接”。所以核心原则是“不信任表面连接状态”：页面回到前台就检查房间 membership，并按需执行幂等 <code>ensureRoomJoined</code>，但不无脑新建连接。in-flight 去重复用同一次恢复，防止快速前后台切换时重复 join；400ms 延迟指示器只在恢复真的变慢时出现，正常恢复不会闪 loading。这样既修复消息停收和成员数翻倍，也把断连过程尽量藏在用户感知之外。
+移动端 WebSocket 恢复是这个项目踩坑最多的地方之一。最麻烦的情况是浏览器仍显示 connected，服务端的房间 session 却已经失效，也就是"僵尸连接"。页面回到前台后，客户端会重新检查房间 membership，并按需执行幂等的 <code>ensureRoomJoined</code>，不会直接新建连接。in-flight 去重让快速前后台切换复用同一次恢复，避免重复 join；400ms 延迟指示器只在恢复确实变慢时出现，正常恢复不会闪出 loading。这个方案同时解决了消息停收和成员数翻倍，用户通常感觉不到恢复过程。
 </blockquote>
 <blockquote data-lang="en">
-Mobile WebSocket recovery produced some of the hardest bugs in the project. The difficult case was not an explicit <code>disconnect</code>; it was a browser that still appeared connected after the server-side room session had expired—a zombie connection. The core rule became “do not trust the surface connection state.” When the page returns to the foreground, it verifies room membership and runs the idempotent <code>ensureRoomJoined</code> only when needed instead of blindly opening another connection. In-flight deduplication reuses one recovery during rapid visibility changes, preventing duplicate joins, while the 400ms delayed indicator appears only when recovery is genuinely slow. That fixes stalled messages and doubled member counts while keeping normal recovery mostly invisible to the user.
+Mobile WebSocket recovery produced some of the hardest bugs in the project. The worst case was a browser that still appeared connected after the server-side room session had expired, leaving a zombie connection. When the page returns to the foreground, the client verifies room membership and runs the idempotent <code>ensureRoomJoined</code> only when needed. It does not open another connection by default. In-flight deduplication reuses one recovery during rapid visibility changes and prevents duplicate joins. The 400ms delayed indicator appears only when recovery is genuinely slow, so a normal recovery does not flash a loading state. This fixes stalled messages and doubled member counts while keeping the recovery mostly invisible to the user.
 </blockquote>
 
 <!-- ===== 难点7：PG 迁移 ===== -->
@@ -1267,17 +1267,17 @@ Mobile WebSocket recovery produced some of the hardest bugs in the project. The 
 </ol>
 
 <blockquote data-lang="zh">
-迁移期间我们用 Store contract 控制行为差异，但没有把“双 durable 实现”永久留在 serving path。当前只有 PostgreSQL 保存 durable facts 与 room events；Redis 可以清空重建。这个故事的重点是“兼容层帮助迁移，迁移完成后收敛复杂度”，而不是永远保留开关。
+迁移期间，我们用同一套 Store contract 约束两个实现的行为。切换完成后，serving path 只保留 PostgreSQL 这一套 durable 实现；Redis 可以随时清空重建。兼容层负责降低迁移风险，任务完成后就退出主路径，避免长期维护模式开关和两个事实源。
 </blockquote>
 <blockquote data-lang="en">
-We used a shared store contract to control behavioral drift during migration, but did not leave two durable implementations in the serving path forever. PostgreSQL now owns all durable facts and room events; Redis can be flushed and rebuilt. The lesson is that compatibility enables migration, then the runtime should converge and remove permanent mode complexity.
+During migration, one Store contract kept both implementations behaviorally aligned. After cutover, the serving path kept PostgreSQL as its only durable implementation; Redis can be flushed and rebuilt. The compatibility layer reduced migration risk, then left the main path so the runtime would not carry a permanent mode switch or two sources of truth.
 </blockquote>
 
 <!-- ===== 难点8：房间同步 ===== -->
 <h3 id="ch-sync"><span data-lang="zh">基于 Room Event Cursor 的增量同步</span><span data-lang="en">Incremental Sync with a Room Event Cursor</span></h3>
 
-<p data-lang="zh"><strong>问题</strong>：Socket.IO 在手机切后台、进程重启或网络抖动时可能漏通知。旧 <code>messageVersion</code> 只能告诉客户端“你的窗口旧了”，却不能告诉它具体缺了哪段，修复往往退化成整页 snapshot 对比。</p>
-<p data-lang="en"><strong>Problem</strong>: Socket.IO notifications can be missed across mobile backgrounding, process restarts, or network changes. The retired <code>messageVersion</code> could only say “your window is stale”; it could not identify the missing range, so repair often fell back to another full snapshot comparison.</p>
+<p data-lang="zh"><strong>问题</strong>：Socket.IO 在手机切后台、进程重启或网络抖动时可能漏通知。旧 <code>messageVersion</code> 只能告诉客户端"你的窗口旧了"，却不能告诉它具体缺了哪段，修复往往退化成整页 snapshot 对比。</p>
+<p data-lang="en"><strong>Problem</strong>: Socket.IO notifications can be missed across mobile backgrounding, process restarts, or network changes. The retired <code>messageVersion</code> could only say "your window is stale"; it could not identify the missing range, so repair often fell back to another full snapshot comparison.</p>
 
 <p data-lang="zh"><strong>解决方案</strong>：</p>
 <p data-lang="en"><strong>Solution</strong>:</p>
@@ -1300,7 +1300,7 @@ We used a shared store contract to control behavioral drift during migration, bu
   <li>The client directly applies only a contiguous payload starting at <code>lastAppliedSeq + 1</code> and ending at <code>headSeq</code>. Duplicates are ignored; gaps replay with <code>afterSeq=lastAppliedSeq</code>.</li>
   <li>Small gaps replay in pages of 100 events / 256 KiB. A retained gap over 500 events loads a new snapshot and then drains only the post-snapshot tail.</li>
   <li><code>CURSOR_EXPIRED</code> handles retention lag. On <code>CURSOR_AHEAD</code>, the client first clears the pre-restore <code>desiredHeadSeq</code>, then requests a snapshot. A notification received while that snapshot is in flight raises a fresh target, so the client follows only that new tail. Only a retained terminal <code>room.deleted</code> may jump a pruned prefix because a deleted room has no snapshot; older history still prepends through <code>beforeMessageId</code>.</li>
-  <li>Every V1 event strictly validates required fields, types, and allowed keys. A bad payload returns <code>EVENT_PAYLOAD_INVALID</code>; the client does not advance past it and converges from a canonical snapshot.</li>
+  <li>Every V1 event strictly validates required fields, types, and allowed keys. A bad payload returns <code>EVENT_PAYLOAD_INVALID</code>; the client does not advance past it and recovers from a canonical snapshot.</li>
   <li>After the PG listener successfully re-LISTENs, the instance sends local <code>room_sync_required</code>; clients retain the UI and perform anti-entropy from the existing <code>lastAppliedSeq</code>.</li>
 </ol>
 
@@ -1350,15 +1350,15 @@ We used a shared store contract to control behavioral drift during migration, bu
 </div>
 
 <blockquote data-lang="zh">
-这不是完整 Event Sourcing。Canonical tables 仍是事实源，<code>room_events</code> 是可裁剪、但保留期内不可变且可确定重放的 after-image changelog。读取旧 event 不再 hydrate 当前行，所以 A 后来改成 B，旧 seq 仍然是 A。它和 MySQL binlog 相似在“单调 cursor + 补缺失区间”，但浏览器读取稳定的应用语义，不依赖 WAL/binlog 格式。AI outbox 也必须分开：room event 给所有客户端重复读取，outbox 由一个 Worker claim/retry。
+Canonical tables 仍是事实源，<code>room_events</code> 则是 after-image changelog。它可以裁剪，但在保留期内不可变，也能确定性重放。读取旧 event 时不会再 hydrate 当前行，所以 A 后来改成 B，旧 seq 仍然保存 A。这个设计只采用了 Event Sourcing 的部分思路。它与 MySQL binlog 都使用单调 cursor 补齐缺失区间，但浏览器读取的是稳定的应用语义，不依赖 WAL/binlog 格式。AI outbox 也有不同职责：room event 供所有客户端重复读取，outbox job 只由一个 Worker claim/retry。
 </blockquote>
 <blockquote data-lang="en">
-This is not full Event Sourcing. Canonical tables remain the source of truth; <code>room_events</code> is prunable but immutable and deterministic during retention. Old events are no longer hydrated from current rows, so if A later becomes B, the old sequence remains A. It resembles a MySQL binlog in using a monotonic cursor to consume a missing range, but browsers read stable application semantics rather than WAL/binlog formats. The AI outbox stays separate: every client can replay room events, while one worker claims and retries outbox jobs.
+Canonical tables remain the source of truth, while <code>room_events</code> is an after-image changelog. It can be pruned, but it stays immutable and deterministic during retention. Old events are no longer hydrated from current rows, so if A later becomes B, the old sequence still contains A. This borrows part of the Event Sourcing model. Like a MySQL binlog, it uses a monotonic cursor to consume a missing range, but browsers read stable application semantics instead of WAL or binlog formats. The AI outbox has a different job: every client may replay room events, while one worker claims and retries each outbox job.
 </blockquote>
 
 <div class="card" data-lang="zh">
   <h4>追问：为什么不用 CRDT？</h4>
-  <p>房间设置是低频完整对象更新，last-write-wins 足够；数据库 trigger 保证 <code>updatedAt</code> 对串行化写严格单调，它只做完整对象 ack/broadcast guard。<code>room.updated</code> 同时进入 durable event cursor，漏广播也能恢复。CRDT 更适合高频字段级协同编辑，这里复杂度不值得。</p>
+  <p>房间设置是低频的完整对象更新，last-write-wins 已经够用。数据库 trigger 保证 <code>updatedAt</code> 在串行化写入中严格单调，用作完整对象的 ack/broadcast guard；<code>room.updated</code> 同时进入 durable event cursor，漏掉广播也能恢复。CRDT 更适合高频的字段级协同编辑，在这里会增加协议和调试成本，却没有对应收益。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>Follow-up: Why not use CRDTs?</h4>
@@ -1387,10 +1387,10 @@ aiHandlers.ts: streaming logic: provider-agnostic chunk forwarding</code></pre>
 </ul>
 
 <blockquote data-lang="zh">
-面试里我会先用一句话概括：这是一个 model registry + client factory 模式。Registry 保存模型能力、价格和 provider 映射，factory 创建对应 SDK client，流式 handler 只面对统一事件，而不是各家 SDK 的原始 chunk。这样浏览器不用理解 DeepSeek、Anthropic、OpenAI 或 OpenRouter 的协议差异，普通聊天和 Code Agent 也能复用同一套模型选择与 usage/cost 展示。然后我会补充真实边界：接入新 provider 并不只是“在 factory 加一个 case”，还要补 chunk normalization、错误语义、usage/cost 统计与测试；客户端虽然不知道 SDK 协议，仍会看到服务端规范化后的 model、usage 和 cost metadata。
+这套抽象可以概括为 model registry + client factory。Registry 保存模型能力、价格和 provider 映射，factory 创建对应的 SDK client，流式 handler 只处理统一事件。浏览器无须理解 DeepSeek、Anthropic、OpenAI 或 OpenRouter 的协议差异，普通聊天和 Code Agent 也能复用同一套模型选择与 usage/cost 展示。接入新的 provider 时，除了更新 registry 和 factory，还要补齐 chunk normalization、错误语义、usage/cost 统计和测试。客户端看不到各家 SDK 协议，但会收到服务端规范化后的 model、usage 和 cost metadata。
 </blockquote>
 <blockquote data-lang="en">
-In an interview, I start with one sentence: this is a model registry plus client factory pattern. The registry stores model capabilities, pricing, and provider mappings; the factory creates the SDK client; streaming handlers consume normalized events instead of raw provider chunks. The browser therefore does not need to understand the protocol differences among DeepSeek, Anthropic, OpenAI, and OpenRouter, and regular chat and Code Agent paths can reuse model selection and usage/cost presentation. Then I clarify the real boundary: adding a provider is not merely one factory case. It also requires chunk normalization, error semantics, usage and cost accounting, and tests. The client is insulated from SDK protocols but still receives server-normalized model, usage, and cost metadata.
+The abstraction can be summarized as a model registry plus a client factory. The registry stores model capabilities, pricing, and provider mappings. The factory creates the matching SDK client, and streaming handlers consume normalized events. The browser does not need to understand the protocol differences among DeepSeek, Anthropic, OpenAI, and OpenRouter, while regular chat and Code Agent paths can reuse model selection and usage/cost presentation. Adding a provider requires more than registry and factory changes; it also needs chunk normalization, error semantics, usage and cost accounting, and tests. The client never handles provider SDK protocols, but it still receives server-normalized model, usage, and cost metadata.
 </blockquote>
 
 <!-- ===== 难点10：Lua 原子操作 ===== -->
@@ -1453,10 +1453,10 @@ room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['crea
 room['roomVersion'] = storedVersion + 1</code></pre>
 
 <blockquote data-lang="zh">
-这里最值得讲的不是“我写过 Lua”，而是一次很具体的成员数翻倍 bug：一个用户可能同时有多个 tab，也可能在断线恢复期间短暂拥有多个 socket。如果直接按 socket 加减人数，同一个人就会被重复计算。我们用 client 集合和 per-client socket 集合做两层引用计数，只有最后一个 socket 离开才移除成员，并把整个更新放进 Lua 保证原子性。Redis 当前只负责这类可重建 realtime state；旧 durable Lua 是安全完成 Redis → PostgreSQL 迁移的历史工程证据。现在 canonical write 与 event ordering 已归 PostgreSQL transaction/trigger，不再维护 Redis room/message version。
+这个设计来自一次成员数翻倍 bug。一个用户可能同时打开多个 tab，也可能在断线恢复期间短暂拥有多个 socket。如果按 socket 直接加减人数，同一个人就会被重复计算。我们用 client 集合和 per-client socket 集合做两层引用计数，只有最后一个 socket 离开时才移除成员，并用 Lua 保证整个更新的原子性。Redis 当前只负责这类可重建的 realtime state。旧 durable Lua 保留下来，用于说明 Redis 到 PostgreSQL 的迁移过程；现在 canonical write 和 event ordering 已归 PostgreSQL transaction/trigger，不再维护 Redis room/message version。
 </blockquote>
 <blockquote data-lang="en">
-The interview story is not merely “I wrote Lua”; it starts with a concrete member-count doubling bug. One user may have several tabs and can briefly own multiple sockets during recovery. Counting sockets directly therefore counts one person more than once. We use a client set plus per-client socket sets as two-level reference counts, remove a member only after the final socket leaves, and keep the whole update atomic in Lua. Redis now owns only this kind of rebuildable realtime state. Legacy durable Lua is evidence of how we migrated safely from Redis to PostgreSQL; canonical writes and event ordering now belong to PostgreSQL transactions and triggers rather than Redis room or message versions.
+This design came from a member-count doubling bug. One user may have several tabs and can briefly own multiple sockets during recovery. Counting sockets directly therefore counts one person more than once. We use a client set plus per-client socket sets as two-level reference counts, remove a member only after the final socket leaves, and keep the update atomic in Lua. Redis now owns only this kind of rebuildable realtime state. The legacy durable Lua remains as a record of the Redis-to-PostgreSQL migration. Canonical writes and event ordering now belong to PostgreSQL transactions and triggers, so Redis room and message versions are retired.
 </blockquote>
 
 <!-- ===== 难点11：双实现测试 ===== -->
@@ -1477,8 +1477,8 @@ for (const [storeName, createFixture] of storeFactories) {
   });
 }</code></pre>
 
-<p data-lang="zh">两个 mock 的关键深度：</p>
-<p data-lang="en">The two mocks have significant depth:</p>
+<p data-lang="zh">这两个 mock 不只返回固定值，还会执行对应存储的关键行为：</p>
+<p data-lang="en">These mocks do more than return fixed values; they execute the important behavior of each store:</p>
 <ul data-lang="zh">
   <li><strong>MemoryRedis</strong>：完整实现了 Lua 脚本求值器，用 <code>script.includes()</code> 匹配到对应脚本后在内存里模拟 Redis 操作</li>
   <li><strong>StatefulPostgresPool</strong>：用正则匹配 SQL 语句，在内存数据结构上执行等效操作</li>
@@ -1498,7 +1498,7 @@ it('does not expose retired version fields across mixed writes', async () => {
 });</code></pre>
 
 <blockquote data-lang="zh">
-迁移阶段没有分别维护两套断言，而是让同一 contract suite 跑两个实现，验证接口行为而非内部结构。当前新增 runtime durable operation 以 PostgreSQL 为先；只有 import/migration 仍需要时才继续扩展 legacy Redis contract。这避免为了“形式对称”永久维护两个事实源。
+迁移阶段没有分别维护两套断言，而是让同一 contract suite 跑两个实现，验证接口行为而非内部结构。当前新增 runtime durable operation 以 PostgreSQL 为先；只有 import/migration 仍需要时才继续扩展 legacy Redis contract。这避免为了"形式对称"永久维护两个事实源。
 </blockquote>
 <blockquote data-lang="en">
 During migration we ran the same contract suite against both implementations, verifying behavior rather than internals. New runtime durable operations now target PostgreSQL first; the legacy Redis contract grows only when import/migration still needs it. This avoids permanently maintaining two sources of truth merely for symmetry.
@@ -1601,10 +1601,10 @@ export function selectAIHistory(fullHistory, options) {
 }</code></pre>
 
 <blockquote data-lang="zh">
-AI 上下文管理分三层筛选。第一层是语义截断，用户重试或编辑消息时，只取该消息之前的历史。第二层是条数限制。第三层是 token 预算，从最新消息往前贪心累加。token 估算对 CJK 和拉丁字符分别计算：中文 1 字约 1 token，英文约 4 字符 1 token。这个估算偏保守，宁可少发一条也不超限。
+AI 上下文会经过三次筛选。用户重试或编辑消息时，先按语义截断，只保留目标消息之前的历史；然后限制消息条数；最后从最新消息开始向前累加，直到用完 token 预算。估算时分开计算 CJK 和拉丁字符：中文约每个字 1 token，英文约每 4 个字符 1 token。这个估算偏保守，宁可少带一条消息，也不让请求超限。
 </blockquote>
 <blockquote data-lang="en">
-AI context management uses three-layer selection. Layer 1 is semantic truncation: when retrying or editing, only history before that message is included. Layer 2 is a message count limit. Layer 3 is token budget: greedy backward accumulation from the newest message. Token estimation calculates CJK and Latin characters separately: ~1 token per CJK character, ~4 Latin characters per token. The estimate is intentionally conservative: better to include one fewer message than to exceed the limit.
+AI context passes through three filters. A retry or edit first truncates history at the target message. The selector then applies the message-count limit and walks backward from the newest message until it reaches the token budget. CJK and Latin text are estimated separately: about one token per CJK character and one per four Latin characters. The estimate is deliberately conservative; leaving out one message is safer than exceeding the model limit.
 </blockquote>
 
 <!-- ==================== 四、扩展性 ==================== -->
@@ -1679,11 +1679,11 @@ AI context management uses three-layer selection. Layer 1 is semantic truncation
 
 <div class="card warn" data-lang="zh">
   <h4>策略提醒</h4>
-  <p>面试时<strong>不要主动讲到 Kafka 级别</strong>，除非面试官追问。先讲简单方案，被追才讲复杂方案，展示你知道什么时候该用什么。</p>
+  <p>面试时<strong>不要主动讲到 Kafka 级别</strong>，除非面试官追问。先说能承载当前规模的最小方案，再根据追问说明下一道扩展边界。</p>
 </div>
 <div class="card warn" data-lang="en">
   <h4>Strategy Note</h4>
-  <p><strong>Don't bring up Kafka-level solutions proactively</strong> unless the interviewer pushes. Start with simple approaches; only escalate when asked. This shows you know when to apply which tool.</p>
+  <p><strong>Don't bring up Kafka-level solutions proactively</strong> unless the interviewer pushes. Start with the smallest design that handles the current load, then explain the next boundary when asked.</p>
 </div>
 
 <!-- ==================== 五、安全 ==================== -->
@@ -1772,7 +1772,7 @@ AI context management uses three-layer selection. Layer 1 is semantic truncation
 </table>
 
 <blockquote data-lang="zh">
-测试按失败边界分层：Python 测 runner/daemon 协议，Node 测 control plane 与 E2B adapter，Vitest 测浏览器 workspace 状态，Playwright 测真实用户流程，E2B smoke 最后验证“源码 + pinned template + provider/runtime”组合。这样不会出现本地 mock 全绿、生产 artifact 仍然是旧 runner 的假成功。
+测试按失败边界分层：Python 测 runner/daemon 协议，Node 测 control plane 与 E2B adapter，Vitest 测浏览器 workspace 状态，Playwright 测真实用户流程，E2B smoke 最后验证"源码 + pinned template + provider/runtime"组合。这样不会出现本地 mock 全绿、生产 artifact 仍然是旧 runner 的假成功。
 </blockquote>
 <blockquote data-lang="en">
 Tests are layered by failure boundary: Python covers runner/daemon protocols, Node covers the control plane and E2B adapters, Vitest covers browser-workspace state, Playwright covers real user flows, and E2B smoke validates the final source + pinned template + provider/runtime combination. This prevents a false green where local mocks pass while production still runs an old runner artifact.
@@ -1924,11 +1924,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么不用微服务架构？</summary>
-  <div class="answer">我不会因为系统里有 PostgreSQL、Redis、对象存储和 E2B 就把它包装成“微服务架构”。当前 RoomTalk control plane 仍适合模块化单体：一次房间写入经常同时涉及权限、消息、room event 和 outbox，放在同一进程与数据库事务里更容易保证一致性，开发、部署和调试成本也更低。真正已经隔离的是具有独立安全边界的 E2B execution plane，以及可 claim/retry 的 AI worker。如果以后 AI 任务吞吐、扩缩容或故障域出现独立指标，再把 worker 部署成独立服务；在边界没有被数据证明前拆分，只会提前承担网络调用、分布式追踪和跨服务一致性的成本。</div>
+  <div class="answer">RoomTalk control plane 当前采用模块化单体。一次房间写入经常同时涉及权限、消息、room event 和 outbox，把它们留在同一进程和数据库事务里，更容易保证一致性，部署与调试也更直接。E2B execution plane 已经按安全边界隔离，AI worker 也有独立的 claim/retry 生命周期。如果以后 AI 任务在吞吐、扩缩容或故障域上出现独立指标，再把 worker 部署成单独服务。现在提前拆分，只会增加网络调用、分布式追踪和跨服务一致性的成本。</div>
 </details>
 <details data-lang="en">
   <summary>Why not a microservices architecture?</summary>
-  <div class="answer">I would not label the system “microservices” merely because it uses PostgreSQL, Redis, object storage, and E2B. The RoomTalk control plane is still best treated as a modular monolith: one room mutation often spans authorization, a message, a room event, and an outbox record, and keeping those in one process and database transaction makes consistency, deployment, and debugging simpler. The parts already separated are the E2B execution plane, which has a real security boundary, and claimable/retryable AI worker work. If AI throughput, scaling, or failure-domain metrics later become independent, the worker can become its own deployed service. Splitting before the data proves that boundary would add network calls, distributed tracing, and cross-service consistency costs without solving a measured problem.</div>
+  <div class="answer">The RoomTalk control plane currently uses a modular monolith. One room mutation often spans authorization, a message, a room event, and an outbox record. Keeping them in one process and database transaction simplifies consistency, deployment, and debugging. The E2B execution plane is already isolated along its security boundary, and AI workers have their own claim/retry lifecycle. If AI throughput, scaling, or failure behavior later develops independent metrics, the worker can become a separate deployed service. Splitting it now would add network calls, distributed tracing, and cross-service consistency work before those costs solve a measured problem.</div>
 </details>
 
 <details data-lang="zh">
@@ -1969,11 +1969,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>客户端落后很多页时如何快速追赶？</summary>
-  <div class="answer">当前阈值是 500 events。差距不超过 500 时，按每页最多 100 events、256 KiB 从 <code>lastAppliedSeq</code> 连续 replay；客户端先做一次有界 probe 以识别无法 snapshot 的 deleted-room 终态 tombstone，若普通房间差距超过 500，则不应用这页中间状态，直接取 repeatable-read snapshot，再只重放 snapshot 之后的短 tail。<code>desiredHeadSeq</code> 只保留通知里的最大水位，所以一秒内 1042、1043、1044、1045 会合并成“追到 1045”，不会启动四个请求。</div>
+  <div class="answer">当前阈值是 500 events。差距不超过 500 时，按每页最多 100 events、256 KiB 从 <code>lastAppliedSeq</code> 连续 replay；客户端先做一次有界 probe 以识别无法 snapshot 的 deleted-room 终态 tombstone，若普通房间差距超过 500，则不应用这页中间状态，直接取 repeatable-read snapshot，再只重放 snapshot 之后的短 tail。<code>desiredHeadSeq</code> 只保留通知里的最大水位，所以一秒内 1042、1043、1044、1045 会合并成"追到 1045"，不会启动四个请求。</div>
 </details>
 <details data-lang="en">
   <summary>How does a far-behind client catch up quickly?</summary>
-  <div class="answer">The current threshold is 500 events. A gap of at most 500 replays continuously from <code>lastAppliedSeq</code> in pages capped at 100 events and 256 KiB. The client first makes one bounded probe to recognize a terminal deleted-room tombstone, which cannot use a snapshot; for an ordinary larger gap it does not apply that intermediate page, loads a repeatable-read snapshot, and replays only the short tail. <code>desiredHeadSeq</code> keeps only the maximum notified watermark, so 1042, 1043, 1044, and 1045 arriving in one second become one goal, “catch up to 1045,” rather than four requests.</div>
+  <div class="answer">The current threshold is 500 events. For a gap of up to 500, the client replays continuously from <code>lastAppliedSeq</code> in pages capped at 100 events and 256 KiB. It first makes one bounded probe to detect a terminal deleted-room tombstone, which cannot use a snapshot. For an ordinary larger gap, the client discards that intermediate page, loads a repeatable-read snapshot, and replays only the short tail. <code>desiredHeadSeq</code> keeps the highest notified watermark, so 1042, 1043, 1044, and 1045 arriving within one second become a single goal, "catch up to 1045," instead of four requests.</div>
 </details>
 
 <details data-lang="zh">
@@ -1987,7 +1987,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么不在收到早到的 <code>ai_chunk</code> 时直接创建一条假 placeholder？</summary>
-  <div class="answer">因为 transient push 不是事实源：它可能重复、乱序，也可能对应最终回滚或失败的写入。客户端自己造 message 会引入一个没有数据库 seq、权限上下文和完整 metadata 的对象，之后还要解决“假对象”和 canonical after-image 合并。按 <code>messageId</code> 暂存只保留低延迟数据，不提前发明 durable state；真正 placeholder 到达才让它进入 UI，最终 after-image 负责兜底收敛。</div>
+  <div class="answer">因为 transient push 不是事实源：它可能重复、乱序，也可能对应最终回滚或失败的写入。客户端自己造 message 会引入一个没有数据库 seq、权限上下文和完整 metadata 的对象，之后还要解决"假对象"和 canonical after-image 合并。按 <code>messageId</code> 暂存只保留低延迟数据，不提前发明 durable state；真正 placeholder 到达才让它进入 UI，最终 after-image 负责兜底收敛。</div>
 </details>
 <details data-lang="en">
   <summary>Why not create a synthetic placeholder as soon as an early <code>ai_chunk</code> arrives?</summary>
@@ -2005,11 +2005,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么 Socket 通知不再加一个 realtime outbox，也不需要 <code>messageVersion</code>？</summary>
-  <div class="answer">Socket 通知失败不会丢事实：canonical mutation 与 immutable room event 已经同事务落库，客户端可按 room seq replay，所以再为通知做 claim/retry 只会维护第二套 delivery state。Outbox 适合“一个 Worker 必须执行的副作用”，不适合“所有客户端各自读取”的 fan-out。<code>messageVersion</code> 也只会重复 room seq；它只能说“变了”，room seq 则同时给出顺序和精确缺失范围。</div>
+  <div class="answer">Socket 通知失败不会丢事实：canonical mutation 与 immutable room event 已经同事务落库，客户端可按 room seq replay，所以再为通知做 claim/retry 只会维护第二套 delivery state。Outbox 适合"一个 Worker 必须执行的副作用"，不适合"所有客户端各自读取"的 fan-out。<code>messageVersion</code> 也只会重复 room seq；它只能说"变了"，room seq 则同时给出顺序和精确缺失范围。</div>
 </details>
 <details data-lang="en">
   <summary>Why is there no realtime Socket outbox or <code>messageVersion</code>?</summary>
-  <div class="answer">A failed Socket notification does not lose a fact: the canonical mutation and immutable room event already committed together, and clients can replay by room sequence. Adding claim/retry for the notification would create a second delivery state. An outbox fits a side effect that one worker must execute, not fan-out that every client reads independently. <code>messageVersion</code> would also duplicate the room sequence: it only says “changed,” while the sequence gives both order and the exact missing range.</div>
+  <div class="answer">A failed Socket notification does not lose a fact: the canonical mutation and immutable room event already committed together, and clients can replay by room sequence. Adding claim/retry for the notification would create a second delivery state. An outbox fits a side effect that one worker must execute, not fan-out that every client reads independently. <code>messageVersion</code> would also duplicate the room sequence: it only says "changed," while the sequence gives both order and the exact missing range.</div>
 </details>
 
 <details data-lang="zh">
@@ -2023,20 +2023,20 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>数据库死锁怎么处理？</summary>
-  <div class="answer">不能说“append-only 所以没有锁竞争”：每次可见写入还要更新该房间的 event-stream row 来分配下一个 seq，同房间并发写会在那里有意串行化。我们保持一致的 room/stream lock order，让业务 state 与 event 在同一事务提交；发生事务错误就整体回滚，只有带 idempotency key、可安全重放的调用才重试。真实 PostgreSQL 测试覆盖 concurrent writer、rollback 与连续序列。</div>
+  <div class="answer">不能说"append-only 所以没有锁竞争"：每次可见写入还要更新该房间的 event-stream row 来分配下一个 seq，同房间并发写会在那里有意串行化。我们保持一致的 room/stream lock order，让业务 state 与 event 在同一事务提交；发生事务错误就整体回滚，只有带 idempotency key、可安全重放的调用才重试。真实 PostgreSQL 测试覆盖 concurrent writer、rollback 与连续序列。</div>
 </details>
 <details data-lang="en">
   <summary>How do you handle database deadlocks?</summary>
-  <div class="answer">It would be wrong to say “append-only means no lock contention”: every visible write also updates the room's event-stream row to allocate the next sequence, deliberately serializing concurrent writers for that room. We keep a consistent room/stream lock order and commit business state plus event in one transaction; transaction errors roll back everything, and only idempotency-keyed operations that are safe to replay may retry. Real PostgreSQL tests cover concurrent writers, rollback, and contiguous sequences.</div>
+  <div class="answer">It would be wrong to say "append-only means no lock contention": every visible write also updates the room's event-stream row to allocate the next sequence, deliberately serializing concurrent writers for that room. We keep a consistent room/stream lock order and commit business state plus event in one transaction; transaction errors roll back everything, and only idempotency-keyed operations that are safe to replay may retry. Real PostgreSQL tests cover concurrent writers, rollback, and contiguous sequences.</div>
 </details>
 
 <details data-lang="zh">
   <summary>如何保证消息顺序？</summary>
-  <div class="answer">Canonical 消息历史按 server-assigned position 排序；客户端同步则按独立的 per-room event seq 只应用连续增量。Position 解决“消息怎么显示”，event seq 解决“客户端漏了哪次提交”，两者都不依赖设备时间。</div>
+  <div class="answer">Canonical 消息历史按 server-assigned position 排序；客户端同步则按独立的 per-room event seq 只应用连续增量。Position 解决"消息怎么显示"，event seq 解决"客户端漏了哪次提交"，两者都不依赖设备时间。</div>
 </details>
 <details data-lang="en">
   <summary>How do you guarantee message ordering?</summary>
-  <div class="answer">Canonical history is ordered by server-assigned message position, while client synchronization applies only a contiguous per-room event sequence. Position answers “how should messages display?” and event sequence answers “which committed changes did this client miss?” Neither depends on device clocks.</div>
+  <div class="answer">Canonical history is ordered by server-assigned message position, while client synchronization applies only a contiguous per-room event sequence. Position answers "how should messages display?" and event sequence answers "which committed changes did this client miss?" Neither depends on device clocks.</div>
 </details>
 
 <details data-lang="zh">
@@ -2232,7 +2232,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <div class="card" data-lang="zh">
   <h4>7. 明确承认边界</h4>
-  <p>当前 Git + archive migration 保证 live workspace 连续性，但还不是 immutable revision/rollback 产品层。面试时清楚区分“已实现”“恢复机制”和“下一步架构”，比把所有能力都说成完成更可信。</p>
+  <p>当前 Git + archive migration 保证 live workspace 连续性，但还不是 immutable revision/rollback 产品层。面试时要清楚区分已经实现的能力、恢复机制和下一步架构，比把所有能力都说成完成更可信。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>7. Explicit Boundaries</h4>
