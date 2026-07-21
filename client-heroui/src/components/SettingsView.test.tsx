@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsView } from './SettingsView';
@@ -23,6 +24,12 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: i18nMock.t,
   }),
+}));
+
+// Iconify resolves icons on a deferred timer. Keep this component test focused
+// on SettingsView and prevent a late icon update after jsdom is torn down.
+vi.mock('@iconify/react', () => ({
+  Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 
 vi.mock('../utils/socket', () => ({
