@@ -2,112 +2,78 @@
 
 [English](documentation-audit.md)
 
-状态：当前文档 inventory
+状态：当前文档合约
 审计日期：2026-07-21
 
-本审计对仓库文档分类并记录质量控制。它不替代 [文档索引](README.zh.md)、当前架构、runbook、源码或测试。
+这份文档说明每一类事实应该写在哪里，并记录本轮核对过的结论。它不是另一份架构说明，也不是部署 runbook。
 
-## 文档合约
+## 事实归属
 
-- 当前文档标注 `Updated` 或 `Verified` 日期并说明事实源。
-- 历史方案和复盘在仍有独特价值时保留原始语境和证据。已经被取代、又容易被误读为现行设计的系列，可在有效合约收敛进当前参考后从工作树删除；Git 历史继续作为归档。
-- 人类文档提供英文/中文 edition 和语言切换。双语 interview HTML 保持单文件。
-- `CLAUDE.md`/`AGENTS.md` 保持单一 machine-instruction 事实源；人类贡献规则位于双语 `CONTRIBUTING`。
-- 顶层 README 直接展示重要技术设计，只对更深证据或操作流程做链接。
-
-## 当前入口
-
-| 文档 | 职责 |
+| 来源 | 职责 |
 | --- | --- |
-| `README.md` / `README.zh.md` | 产品、技术亮点、架构、本地开发、持久化、发布模型、精选复盘和简洁导航。 |
-| `docs/README.md` / `docs/README.zh.md` | 完整分类双语文档索引。 |
-| `docs/room-reliability-architecture*.md` | 当前 room-session ownership、消息/媒体连续性、event-cursor 收敛、ack、posting boundary、诊断日志与后端 ordering contract。 |
-| `docs/code-agent-runtime-architecture*.md` | 当前 Code Agent control/execution plane、lifecycle、security、workspace、recovery、persistence 和 release 边界。 |
-| `DeploymentGuide.md` / `部署指南.md` | 当前 MacBook/Compose 生产发布、备份、验证、回滚与 AWS 交接 runbook。 |
-| `docs/configuration*.md` | Operator-facing 配置分组与事实源边界。 |
-| `CONTRIBUTING*.md` | 人类开发、验证、artifact、commit 和 release 合约。 |
-| `SECURITY*.md` | 身份、授权、scoped capability、credential、media 和 sandbox trust boundary。 |
-| `docs/code-agent-sandbox-artifact*.md` | 固定 E2B artifact build/acceptance/release 合约。 |
-| `docs/postgres-rollout-runbook*.md` | 完整 `R` 到 `R+P` cutover 流程和回滚边界。 |
+| 源码与测试 | runtime 行为和协议细节的最终事实源。 |
+| `README.md` / `README.zh.md` | 产品概览、当前拓扑、主要技术决策与导航。 |
+| `docs/room-reliability-architecture*.md` | 房间同步协议：不可变事件、fast path、replay、snapshot、AI 临时事件、顺序与恢复。 |
+| `docs/room-event-sync-portable-deployment*.md` | 部署拓扑、存储边界、生产切换、回滚与 AWS 映射。 |
+| `docs/room-event-sync-portable-deployment-progress*.md` | 已完成阶段、commit、测试、migration 与生产验证的精简证据账本。 |
+| `DeploymentGuide.md` / `部署指南.md` | 备份、维护窗口发布、验证与回滚的操作手册。 |
+| `docs/configuration*.md` | 环境变量分组与配置归属。 |
+| `docs/interview-preparation.html` | 用于讲解项目和回答追问的详细双语叙事。 |
+| `docs/README*.md` | 完整的分类文档索引。 |
 
-## 当前子系统参考
+子系统参考、工程复盘、已完成方案和 review 报告继续保留在索引中，因为它们保存了有用的推理或证据，但不能把旧配置写成当前 runtime。
 
-- room-context CLI 与受限 shell；
-- sandbox daemon runtime/protocol；
-- static publishing implementation；
-- Code Agent model access；
-- PostgreSQL application role；
-- legacy media migration；
-- media-viewer gesture requirements。
+## 写作合约
 
-它们通过 docs index 和 README/架构的上下文链接保持可发现，不在每个导航区重复。
+- 当前文档标注 `Updated`、`Verified` 或审计日期。
+- 中英文当前文档的日期、命令、限制、名称与架构事实一致。面试资料保持为一份双语 HTML。
+- README 让读者先看懂整个系统。深入文档补充机制、证据或操作流程，不重复同一段介绍。
+- 架构文档解释系统为什么成立，进度账本记录已经交付什么，runbook 告诉 operator 应该怎么做。
+- 历史数字、branch、machine size 与 commit ID 明确标注为当时快照。
+- `CLAUDE.md` 与 `AGENTS.md` 保存 Agent 指令；人类贡献规则位于 `CONTRIBUTING`。
 
-## 工程复盘
+## 本轮核对的事实
 
-以下文档是重要证据，不是可丢弃 stale docs：
+### 房间同步与 AI 投递
 
-- PostgreSQL 生产迁移；
-- Code Agent text/tool ordering；
-- A2UI streaming；
-- mobile viewport/keyboard；
-- CI/CD build optimization；
-- Codex app-server integration；
-- GitHub connector research。
+- PostgreSQL canonical tables 与每房间有界的 `room_events` 是唯一 durable 同步边界。每个事件在业务事务内写入严格、不可变的 V1 after-image；回放旧 seq 时不会再读取当前行补全。
+- PostgreSQL `NOTIFY` 是提交后的唤醒 hint。每个监听中的 App 读取精确事件行，只用 `io.local` 通知自己的客户端。Redis adapter 只负责真正由单一来源产生的临时或全局事件。
+- 连续的 Socket payload 是低延迟 fast path。缺失或超大 payload 从 PostgreSQL replay；差距超过 500 events 或 cursor 过期时读取 repeatable-read snapshot。已删除房间的 tombstone 是例外，因为房间删除后没有 snapshot。
+- 处理 `CURSOR_AHEAD` 时，客户端先清除数据库恢复前的旧目标水位，再请求 snapshot。snapshot 进行中收到的通知会形成新的目标，因此既不会丢掉新提交，也不会对恢复后的旧 head 无限空拉。
+- 公共成员事件只暴露 `members.changed`。成员 ID 与角色继续由 `get_room_role_members` 保护。严格 payload 校验会在存储事件损坏时停止推进 cursor。
+- `ai_chunk` 与 A2UI update 是有界的临时 fast path。抢在 placeholder 前到达的事件按 `messageId` 等待；reducer 分别更新 canonical state 与当前 React state，因此不会覆盖 optimistic message。
+- 用户可见的 AI 失败先作为完整 Message 持久化。`ai_stream_error` 可以携带同一条 Message 作为 fast path，但不再创造只存在于 Socket 的 canonical 文案，因此到达顺序不会改变最终 UI。
 
-历史 count、machine size、file line、branch 和 commit ID 会被标记为 snapshot。当前操作始终以 current runbook 和代码为准。
+### 部署与可迁移性
 
-## 已完成方案与报告
+- MacBook Compose、PostgreSQL、Redis、SeaweedFS 与 Cloudflare Tunnel 的基础设施和数据切换在 2026-07-20 完成。
+- 不可变事件协议在 2026-07-21 通过维护窗口进入生产。执行 migration `0003` 与 `0004` 前先停止旧 App，并先完成 PostgreSQL 与对象存储的成对备份。
+- 生产验证覆盖 container health、migration 记录、公开 status、强制 WebSocket transport、已提交 fast-path payload、snapshot、replay、已删除房间 tombstone 与测试数据清理。
+- AWS 迁移是受控映射，不是“一键迁移”：镜像映射到 ECS/Fargate 或 EKS，PostgreSQL 映射到 RDS/Aurora，Redis 映射到 ElastiCache，对象 key 原样复制到 S3。允许短暂停写时可用 dump/restore 加最终对象增量；零停机还需要 logical replication、CDC 或 DMS。
 
-原始 sandbox phase、backend spike、workspace UI plan、identity/permission plan、outbox migration、PostgreSQL design/test plan、E2E plan、code review、commit review、design reference 和 UI/UX audit 保留在 Historical Plans 或 Reports。其价值是推理和 review 记录，不是当前配置。
+### 面试资料修正
 
-## 本轮修正的漂移
+- durable room event 的多实例 fan-out 使用 PostgreSQL 加 `io.local`，并非所有 Socket.IO 事件都经过 Redis adapter。
+- presigned 对象传输把大文件字节流移出 App，但签名和 metadata 仍会经过 App。SeaweedFS 按当前私有 S3-compatible 边界描述，不套用 AWS 专属 bucket 控制。
+- 浏览器媒体缓存容量是浏览器报告 quota 的 20%，最大 1 GiB；无法读取 quota 时才回退到 300 MB。
+- `setTimeout(..., 0)` 安排的是后续 task，不是 microtask。历史加载示例使用当前的 `beforeMessageId` 请求路径。
+- CJK 估算约为每个字符一个 token，非 CJK 文本约每四个字符一个 token。
+- 公网 HTTPS/WSS 在 edge 终止 TLS；PostgreSQL 与 Redis 当前在私有 Compose 网络内使用非 TLS 连接。
+- 对象存储仍受吞吐、请求速率、延迟、生命周期与成本限制。测试数据库名称 guard 可以降低误连生产的风险，但不能把风险说成不可能。
 
-- 用当前 MacBook/Compose/Cloudflare Tunnel runbook 替换旧 Fly 生产指南，只把 Fly 保留为需要协调数据的回滚目标。
-- 在 runtime example、Compose 与配置参考中统一记录 `ROOM_EVENT_RETENTION_DAYS`、`ROOM_EVENT_MAX_PER_ROOM` 和 `ROOM_EVENT_PRUNE_INTERVAL_MS`。
-- 在 runtime example、Compose、配置、架构、部署和面试资料中统一记录 `ROOM_EVENT_FAST_PATH_MAX_BYTES`。
-- 用真实 commit ID 收尾 room-event 切换账本，并从 active work 移到已完成证据记录。
-- 把双语面试资料从退役的 `messageVersion`/Redis durable/Fly 假设更新为当前 event cursor、PostgreSQL authoritative、SeaweedFS 与可迁移 AWS 架构。
-- 把 room-event 投递从“只做唤醒”校正为混合协议：有界的已提交事件 Socket fast path、缺序时 durable replay，以及保留窗口内落后超过 500 events 时的 repeatable-read snapshot 恢复。
-- 补充 AI message 端到端生命周期：用户/placeholder/final 的 durable room event、事务性 AI outbox claim/retry、临时 `ai_chunk` UX 投递，以及最终 durable 收敛。
-- 用实际实现的有界、不可变 `schemaVersion: 1` after-image 合约替换旧 ID-only/current-row hydration 描述，并记录稳定 media projection 与 secret 排除。
-- 把多实例边界记录为 PostgreSQL fan-out + 每个 listener 的 `io.local`，并记录 listener 成功重连后的 local `room_sync_required` 反熵。
-- 记录一次性 legacy-event migration：advisory lock 串行并发启动、保留 stream head、active cursor expiry 与带授权的 V1 deleted-room tombstone。源码已验证，但本次明确不部署。
-- 记录为什么 room replay 不需要 realtime delivery outbox 或 `messageVersion`，并让 transient typing/presence/AI chunk/voice/WebRTC 流量保持在 durable sequence 之外。
-- 收紧公共事件合约：成员变化不再暴露 ID 或角色，特权成员数据继续由 `get_room_role_members` 保护；migration `0004` 会清理预生产阶段可能存在的成员 payload。
-- 记录严格 V1 payload 解码：损坏事件返回 `EVENT_PAYLOAD_INVALID`，不推进 cursor，并通过 canonical snapshot 收敛。
-- 记录 AI chunk/A2UI/end 抢在 durable placeholder 前到达时的有界客户端缓冲、durable final 优先级，以及 60 秒 / 64 IDs / 512 events / 512 KiB 上限。
-- 明确 AI transient reducer 分别更新 canonical 与当前 UI state，保留并发加入的 pending/failed optimistic send。
-- 为全部严格 V1 payload variant 与关键拒绝场景增加不依赖数据库的单测；即使 PostgreSQL integration 被跳过，普通 Server CI 也能保护协议。
-- 明确生产发布边界：执行 `0003`/`0004` 前先停止旧 app；未来多实例发布必须使用两阶段兼容迁移或同样的维护窗口。
+## 剩余产品 Follow-up
 
-## 早期审计修正（2026-07-13）
+- 用稳定错误码替换 room Socket 的字符串和 regex 错误判断，尤其是 `ROOM_NOT_FOUND`。
+- 补齐 media viewer 的 pinch、zoomed-image swipe suppression、edge resistance、velocity-only commit、keyboard control 与 single-tap delay 自动化覆盖。
 
-- 用当前定时/手动 dispatch GitHub Actions workflow 替换通用/手动 Fly 部署教程。
-- 将生产 VM 声明修正为 `fly.toml` 的 1024 MB。
-- 区分 canonical repository example 和 environment-specific browser-origin alias。
-- 明确 current/historical status，不再依赖笼统 disclaimer。
-- 在 README 保留关键复盘可见性。
-- 补齐双语 configuration、contribution、security、architecture、runbook、subsystem、retrospective、plan 和 report。
-- 为链接稳定保留 `sandbox-daemon-plan.md` 历史文件名，但标记为当前 runtime。
-- 将 Room Session Controller 与仍有效的房间一致性规则合并为一份双语 Room Reliability Architecture，并从当前工作树删除已被取代的 restore/review 系列。
+这些是实现层 follow-up，不是尚未厘清的文档问题。
 
-## 已知产品/协议 Follow-up
+## 验证标准
 
-- 用 stable error code 替换 room socket string/regex error，尤其是 `ROOM_NOT_FOUND`。
-- 补齐 media viewer 的 pinch、zoomed swipe suppression、edge resistance、velocity-only commit、keyboard 和 single-tap delay 自动化覆盖。
+文档改动满足以下条件才算完成：
 
-这些是产品/测试 follow-up，不是把文档标记为 incomplete 的理由。
-
-## 验证要求
-
-- 所有 index link 可解析。
-- 每个人类文档有预期 language counterpart，或明确标注 single-file bilingual。
-- 中英 current doc 的 status、date、command、env name 和 architecture fact 一致。
-- 文档引用的 package command、`fly.toml`、workflow trigger、artifact lock 和 source identifier 与仓库一致。
-- Markdown/HTML 可解析，`git diff --check` 成功。
-
-## 早期审计记录（2026-06-18）
-
-早期审计发现并解决了 CI secret validation、legacy media table 重复、Agent 指令未 tracked、media-migration package entrypoint 断裂和 local Claude settings 误入 scope。它还核对了 media env rename、i18n language、统一 `media` message type、provider 描述、PostgreSQL CA 和当时的 Redis/PostgreSQL smoke/E2E。
-
-这些结论作为 dated report 保留；当前验证记录在上文。
+- 索引链接可以解析；
+- 每份面向用户的 Markdown 都有对应语言版本，或明确说明本身是双语文件；
+- 命令、环境变量名、协议限制、migration 状态与部署结论符合仓库和当前 runtime；
+- Markdown 与 HTML 可以解析；
+- `git diff --check` 通过。

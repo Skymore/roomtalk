@@ -49,7 +49,18 @@ The server uses a `CompositeRoomStore` (`server/src/repositories/store.ts`) that
 
 The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding runtime durable operations, implement PostgreSQL first and proxy through `CompositeRoomStore`; keep the legacy Redis contract aligned only when the migration/import path still needs that operation.
 
-Committed room changes append a schema-versioned, immutable, safe after-image to `room_events` in the same PostgreSQL transaction. `LISTEN/NOTIFY` is only a post-commit hint: every app instance reads that exact event and emits it with `io.local` in `room_event_available` when the serialized payload is within `ROOM_EVENT_FAST_PATH_MAX_BYTES`; otherwise the notification carries only `headSeq`. A listener that successfully re-LISTENs emits local `room_sync_required` anti-entropy. Clients apply only a contiguous fast-path prefix, replay missing ranges, and replace expired cursors or gaps larger than 500 events with a repeatable-read room snapshot before draining the tail. V1 payload decoding is strict: `EVENT_PAYLOAD_INVALID` stops cursor advancement and triggers a canonical snapshot. The public stream emits only empty `members.changed` signals; member IDs and roles stay behind the privileged member API. Never hydrate historical events from current canonical rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`; transient typing/presence/AI chunks/voice/WebRTC events remain outside the durable room sequence. The client buffers an AI chunk/A2UI/end event that arrives before its placeholder by `messageId` (60-second TTL, 64 message IDs, 512 events, 512 KiB), drains it in arrival order, and never overwrites a durable final after-image with older buffered data. For an existing AI message, update the canonical array and the React `previous` array separately so transient reducers never replace UI-only pending/failed optimistic messages.
+Room synchronization follows these invariants:
+
+- Commit each safe, schema-versioned room-event after-image in the same PostgreSQL transaction as its canonical mutation.
+- Treat `LISTEN/NOTIFY` as a hint. Each app reads the exact event and emits it with `io.local`; payloads above `ROOM_EVENT_FAST_PATH_MAX_BYTES` use a head-only notification.
+- Apply only contiguous client prefixes. Replay small gaps, snapshot retained gaps above 500 events, and clear a stale target head before handling `CURSOR_AHEAD` so a restored database cannot cause an empty-page loop.
+- Stop on `EVENT_PAYLOAD_INVALID`; do not advance past a malformed event. Public membership events remain empty `members.changed` signals.
+- Do not hydrate old events from current rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`.
+- Keep typing, presence, AI chunks, voice, and WebRTC outside the durable sequence. Buffer early AI transient events by `messageId` within the 60-second, 64-ID, 512-event, 512-KiB limits.
+- Persist a complete AI error Message before emitting `ai_stream_error`, and include that same Message in the Socket fast path. The client must not construct a second error body whose result depends on arrival order.
+- Update the canonical message array and React `previous` state separately so transient handlers preserve pending and failed optimistic sends.
+
+Production crossed the immutable `0003`/`0004` boundary on 2026-07-21 with every old app process stopped. Future incompatible event migrations require the same maintenance window or an explicit two-phase protocol.
 
 ### Socket Event Handlers
 

@@ -115,9 +115,9 @@ flowchart LR
   Redis <-.->|"transient/global only"| B
 ```
 
-`room_events` stores schema-versioned, safe after-images rather than entity IDs that are hydrated from today's rows. PostgreSQL `NOTIFY` is only a post-commit wake-up hint: each app reads the exact immutable event and uses `io.local` so multiple listeners do not multiply the same Redis-adapter broadcast. A contiguous payload is applied immediately; a missing or oversized payload replays from `lastAppliedSeq`; an expired cursor or retained gap above 500 events takes a repeatable-read snapshot. After a PostgreSQL listener reconnects, that instance sends local `room_sync_required` anti-entropy before relying on new hints. V1 payloads are decoded strictly: invalid stored data returns `EVENT_PAYLOAD_INVALID` and forces a canonical snapshot without acknowledging the bad sequence. The public member event is only `members.changed {}`; IDs and roles remain behind the privileged member API.
+`room_events` stores schema-versioned, safe after-images rather than entity IDs that are hydrated from today's rows. PostgreSQL `NOTIFY` is only a post-commit wake-up hint: each app reads the exact immutable event and uses `io.local` so multiple listeners do not multiply the same Redis-adapter broadcast. A contiguous payload is applied immediately; a missing or oversized payload replays from `lastAppliedSeq`; an expired cursor or retained gap above 500 events takes a repeatable-read snapshot. If a restored database returns `CURSOR_AHEAD`, the browser clears the stale target head before replacing its snapshot, while notifications received during that request can establish a new target. After a PostgreSQL listener reconnects, that instance sends local `room_sync_required` anti-entropy before relying on new hints. V1 payloads are decoded strictly: invalid stored data returns `EVENT_PAYLOAD_INVALID` and forces a canonical snapshot without acknowledging the bad sequence. The public member event is only `members.changed {}`; IDs and roles remain behind the privileged member API.
 
-This is a bounded state-transfer changelog, not Event Sourcing. Canonical tables remain authoritative and old event prefixes are pruned. There is no realtime delivery outbox and no `messageVersion`: retryable AI side effects use the separate worker outbox, while typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient and outside the durable room sequence. If an AI chunk beats its durable placeholder, the client buffers it by `messageId` with TTL/count/byte limits and drains it when the placeholder arrives; a durable final after-image always wins.
+This is a bounded state-transfer changelog, not Event Sourcing. Canonical tables remain authoritative and old event prefixes are pruned. There is no realtime delivery outbox and no `messageVersion`: retryable AI side effects use the separate worker outbox, while typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient and outside the durable room sequence. If a transient AI event beats its durable placeholder, the client buffers it by `messageId` with TTL/count/byte limits and drains it when the placeholder arrives. `ai_stream_error` follows the durable path: the server persists the complete error Message, then Socket carries that same Message as a fast path, so either arrival order converges to one after-image.
 
 ### How the difficult paths work
 
@@ -266,9 +266,11 @@ Run focused tests next to changed code and expand to the affected production bui
 
 ## Deployment
 
-`master` remains the release branch. The complete event-sync, self-hosted runtime, domain cutover, and credential-hardening change set is committed and pushed to `origin/master`; the former scheduled Fly workflow is manually disabled so a source push does not restart Fly.
+`master` remains the release branch. The event-sync, self-hosted runtime, domain cutover, and credential-hardening change set is committed and pushed to `origin/master`; the former scheduled Fly workflow is manually disabled so a source push does not restart Fly.
 
 Production at `room.ruit.me` runs the root image on a MacBook through Docker Compose and Cloudflare Tunnel, with PostgreSQL 17, Redis 7, and SeaweedFS 4.29 S3-compatible storage. `roomtalk.ruit.me` remains a compatibility entry point, and E2B still provides per-room execution sandboxes. The former Fly app is suspended; Supabase, Tigris, and Upstash are retained only for the rollback window, not as live writers.
+
+The infrastructure cutover completed on 2026-07-20. The immutable room-event boundary followed on 2026-07-21 in a separate maintenance window: a paired PostgreSQL/SeaweedFS backup was taken, every old app process was stopped, and migrations `0003` and `0004` were applied before traffic reopened. Public WSS verification covered committed-event fast path, snapshot, replay, and deletion tombstones.
 
 ## Selected Engineering References
 

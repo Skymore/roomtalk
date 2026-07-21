@@ -1,96 +1,94 @@
-# Room Event Sync and Portable Deployment Progress
+# Room event and self-hosted cutover record
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: Immutable-event source implementation complete; production migration not executed
+Status: completed source, infrastructure, data, and immutable-event production cutovers
 
-Original infrastructure cutover: 2026-07-20. Immutable-event implementation verified: 2026-07-21.
+Verified: 2026-07-21
 
-Design authority: [target architecture](room-event-sync-portable-deployment.md)
+This is the evidence ledger for the RoomTalk migration from Fly/Supabase/Tigris to MacBook Compose and for the later room-event protocol replacement. It records what changed, when production crossed each boundary, and which checks passed. Runtime semantics belong in [Room Reliability Architecture](room-reliability-architecture.md); topology and future migration guidance belong in [Room Event Sync and Portable Deployment](room-event-sync-portable-deployment.md).
 
-## Cutover rules used
+## Two cutovers, not one
 
-- Keep the direct-cutover series local until production evidence is complete, then publish the verified series to `origin/master`.
-- Replace the old protocol directly; do not add a `messageVersion` compatibility layer.
-- Use one application image across local Compose, Fly, and a future AWS target.
-- Record real PostgreSQL, browser, container, restart, and restore evidence.
+The work reached production in two maintenance windows:
 
-## Baseline and evidence commits
+1. On 2026-07-20, the application, PostgreSQL data, Redis realtime state, and S3-compatible objects moved from Fly/Supabase/Upstash/Tigris to Docker Compose on the MacBook. Cloudflare Tunnel became the public edge for `room.ruit.me`, `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me`.
+2. On 2026-07-21, production replaced the retained ID-only room-event history with strict immutable after-images. Migration `0004` also removed member IDs and roles from the public stream. This second boundary required another backup and a complete stop of old app processes.
 
-Work started from clean local `master` at `d94d2cd0`. The old client recovered by comparing `baseMessageVersion`; writes advanced `message_version` and `room_version`; Redis cache generations used `messageVersion`; and the repository had no Compose runtime.
+Keeping these dates separate prevents an easy documentation mistake: the database host moved before the final event payload protocol was deployed.
 
-| Stage | Scope | Status | Evidence commit(s) |
-| --- | --- | --- | --- |
-| 1 | Architecture decision, progress ledger, initial Compose runtime | Complete | `ec0ac9af` |
-| 2 | PostgreSQL event stream, direct socket/client cutover, version retirement, integration/E2E coverage | Complete | `d2c051ab` |
-| 3 | Operational rehearsal, current-doc cleanup, final evidence | Complete | `63ef29bc` |
-| 4 | Completion audit: persistent local media, signed URLs, env interpolation, paired restore | Complete | `77a5826c` |
-| 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | `bdad6d2f`, `94d7feed`, `f878752d` |
-| 6 | Final write freeze, log archive, data restore, DNS route, public HTTP/WebSocket/S3 smoke, explicit credentials | Complete | `a554554c`, `56871060` |
-| 7 | Committed-event Socket fast path, bounded payload fallback, and large-gap snapshot recovery | Complete | Current release; focused evidence below |
-| 8 | Immutable after-image events, local-only listener fan-out, listener reconnect anti-entropy, and one-time legacy-event boundary | Source complete; not deployed | Current working release; verification below |
-| 9 | Public-member privacy, strict payload rejection, and bounded pre-placeholder AI buffering | Source complete; not deployed | Current working release; verification below |
+## Change ledger
 
-The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supabase and Tigris remain intact as rollback sources. `room.ruit.me`, the compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` now route to the Mac through a dedicated Cloudflare Tunnel. `ai-chat.wenlin.dev` is accepted by the runtime and can be routed separately through its existing DNS zone.
+Implementation started from local `master` at `d94d2cd0`.
 
-## Delivered architecture
+| Stage | Result | Evidence commit |
+| --- | --- | --- |
+| 1 | Architecture decision, evidence ledger, initial Compose runtime | `ec0ac9af` |
+| 2 | PostgreSQL event stream, snapshot/replay client, retired version fields, integration/E2E coverage | `d2c051ab` |
+| 3 | Operations rehearsal and first documentation consolidation | `63ef29bc` |
+| 4 | Persistent local media, signed URLs, Compose env checks, paired restore rehearsal | `77a5826c` |
+| 5 | Mac production runtime, SeaweedFS target, source-data rehearsal, tunnel, backup/restore | `bdad6d2f`, `94d7feed`, `f878752d` |
+| 6 | Final write freeze, log archive, data restore, DNS routes, public edge smoke, explicit credentials | `a554554c`, `56871060` |
+| 7 | Committed-event Socket fast path, byte-bounded fallback, large-gap snapshot | `1201ba88` |
+| 8 | Immutable after-images, `io.local` fan-out, listener anti-entropy, one-time legacy boundary | `c3650de8` |
+| 9 | Public member privacy, strict payload validation, early AI transient buffer | `609c5e3c` |
+| 10 | Optimistic-send preservation and database-independent payload tests | `a8afcf49` |
+| 11 | `CURSOR_AHEAD` stale-watermark reset and deterministic persisted AI error fast path | `fbfd908b` |
 
-- PostgreSQL is the only durable serving authority; Redis is rebuildable realtime/cache state.
-- Canonical tables remain the source of truth. `room_events` is a bounded immutable `schemaVersion: 1` after-image changelog, not full Event Sourcing.
-- PostgreSQL row triggers collect room/message/agent-turn/media mutations and a deferred writer appends complete safe after-images in the original transaction. Membership mutations append only an empty public `members.changed` signal; IDs and roles remain behind `get_room_role_members`. Delta reads decode stored payloads and do not hydrate current canonical rows.
-- Clients use `snapshotSeq`, `afterSeq`, and `lastAppliedSeq`. PostgreSQL `NOTIFY` is only a post-commit hint; every app reads the exact sequence and emits it to local sockets with `io.local`.
-- A client applies a Socket payload only when it is exactly contiguous with `lastAppliedSeq`. Missing, oversized, duplicate, or gapped payloads remain safe because `headSeq` drives durable replay.
-- After a PG listener successfully re-LISTENs, the instance sends local `room_sync_required`; clients replay from the current cursor without clearing UI.
-- Gaps of at most 500 events replay in pages of 100 / 256 KiB. A larger retained gap switches directly to a repeatable-read snapshot, then drains only the post-snapshot tail.
-- `CURSOR_EXPIRED`, irreconcilable gaps, and `CURSOR_AHEAD` all resnapshot safely. Strict V1 decoding rejects missing, mistyped, or unexpected payload fields with `EVENT_PAYLOAD_INVALID`; the client does not acknowledge that sequence and replaces state from a canonical snapshot.
-- The old history socket returns `UPGRADE_REQUIRED`; runtime `messageVersion`/`roomVersion` fields and database columns are gone.
-- Complete-room ack/broadcast ordering uses a database-stamped, strictly monotonic `updatedAt`; it is a last-write guard, not another synchronization version.
-- Hourly retention removes old contiguous prefixes. There is no periodic event-to-message merge because canonical state is already updated in the original transaction.
-- AI execution continues to use a separate claim/retry outbox; room replay events are not worker jobs.
-- Early `ai_chunk`, `a2ui_update`, and `ai_stream_end` traffic is buffered by `messageId` until the durable placeholder appears, with a 60-second TTL and 64-message / 512-event / 512-KiB caps. A final durable after-image is authoritative over older buffered data.
-- Legacy `new_message`, `message_edited`, `message_deleted`, and `messages_cleared` durable broadcasts are removed. User-scoped `room_updated` remains for room lists and permission invalidation.
-- Migration `0003_room_events_immutable_after_images` serializes concurrent startup, installs the writer, preserves stream heads, expires active legacy history, and appends an authorized V1 tombstone for deleted streams. Migration `0004_public_member_change_events` scrubs any pre-production member after-images and installs the empty public signal. Both run successfully in disposable PostgreSQL; this work did not run them against production or deploy the application.
-- Production must use a maintenance window: stop every old app instance, take paired database/media backups, then start only the new image so `0003`/`0004` cannot overlap old decoders or writers. Future AWS multi-instance deployment needs a two-phase compatibility migration or the same stop-the-world cutover; source push alone does not migrate the database.
-- Local production Compose runs SeaweedFS 4.29 behind the existing S3 adapter and expiring SigV4 URLs. Tigris and future AWS S3 use the same object keys and SDK boundary. `/api/status` reports media readiness.
-- Compose commands require `--env-file .env.compose`, so the app and PostgreSQL receive the same configured credentials instead of unrelated defaults.
+The scheduled Fly workflow remains disabled and Fly machines remain at zero. Supabase, Tigris, and Upstash are rollback sources, not live writers. `ai-chat.wenlin.dev` is still an allowed origin whose DNS is managed separately.
 
-## Verification evidence
+## Production evidence
 
-| Boundary | Result |
+### Infrastructure and data, 2026-07-20
+
+The final Supabase dump restored 98 rooms, 7,939 messages, 179 members, 404 media assets, 6,361 observability events, 28 outbox events, and 60 room-agent turns into PostgreSQL 17. The Tigris copy verified 2,857 objects and 1,302,853,579 bytes across private media, published sites, and stickers. A paired PostgreSQL archive and SeaweedFS snapshot were restored into isolated targets, and sampled object SHA-256 values matched.
+
+Public verification covered TLS, HTTP, Socket.IO polling and WebSocket upgrade, snapshot and delta reads, presigned PUT/GET byte equality, and deletion cleanup. A real PostgreSQL restart preserved the marker and event head; the pool handled the disconnect and re-established `LISTEN room_event_committed` without an uncaught exception.
+
+### Immutable event protocol, 2026-07-21
+
+The release created:
+
+- `backups/roomtalk-20260721T110310Z.dump`
+- `backups/roomtalk-object-storage-20260721T110310Z.tar.gz`
+
+It then stopped `cloudflared` and the old app, built commit `fbfd908b`, and started only the new image. Startup logs recorded `0003_room_events_immutable_after_images` and `0004_public_member_change_events` before the listener, Redis adapter, outbox worker, and HTTP server became ready.
+
+A read-only production query confirmed migrations `0001` through `0004`, zero non-V1 retained events, and only authorized `room.deleted` cutover tombstones from legacy streams. The public status endpoint reported PostgreSQL, Redis, media storage, and Socket adapter ready with 98 rooms.
+
+The public WSS smoke used a temporary room and proved this sequence:
+
+```text
+register -> create -> join -> send
+  -> committed messages.upserted Socket payload
+  -> repeatable-read snapshot contains the same message
+  -> replay from seq 0 contains the same after-image
+  -> delete -> authorized room.deleted replay
+  -> cleanup complete
+```
+
+The smoke used WebSocket transport, reached `snapshotSeq=3`, replayed three events, and removed the temporary room.
+
+## Focused verification for the final code change
+
+| Check | Result |
 | --- | --- |
-| Server full suite | 763/763 |
-| Client full suite | 1,000/1,000 |
-| Event hook + pending-AI-buffer focused suites | 30/30 |
-| Broadcaster and listener focused suites | 7/7 |
-| Socket message handlers | 30/30 |
-| Real PostgreSQL event integration | 15/15 in a fresh disposable database |
-| PostgreSQL Playwright | 4/4 |
-| Production builds and client lint | Passed |
-| Standalone root Dockerfile build | Passed without Compose-specific build inputs |
-| PostgreSQL persistence smoke | PostgreSQL API path passed; unavailable database failed closed before listen |
-| Compose | Fresh and standard stacks healthy; `/api/status` reported PostgreSQL, Redis, and configured media |
-| PostgreSQL restart | Marker and event head survived; pool and LISTEN reconnected without an uncaught exception |
-| Backup/restore | Matching PostgreSQL 17 custom archive (170 TOC entries) and media tarball both restored fresh |
-| Production PostgreSQL rehearsal | Supabase `public` dump restored into an isolated PostgreSQL 17 database; current migrations and event schema started successfully |
-| Production S3 rehearsal | 2,857 Tigris objects / 1,302,853,579 bytes copied and verified in SeaweedFS |
-| SeaweedFS maintenance restore | Matching database dump restored fresh; raw object snapshot started as an isolated S3 service with all 2,857 objects and bytes readable |
-| Public edge | TLS and page/status HTTP passed; Socket.IO polling and WebSocket upgrade returned a valid session / `101 Switching Protocols` |
-| End-to-end production smoke | Register/create/join, text snapshot, room-event delta, presigned public S3 PUT/GET byte match, delete tombstone, and cleanup passed |
+| Client room-event hook | 31 passed |
+| Server AI socket handlers | 40 passed |
+| CodeAgentSessionService | 53 passed |
+| Server TypeScript build | Passed |
+| Client production build and i18n check | Passed |
+| Production Docker image build | Passed |
+| Compose health | Five services healthy/running |
+| Public `/api/status` | Online |
+| Public WSS event smoke | Passed and cleaned up |
 
-The event-schema restore contained one room, member, message, stream, and two ordered events (`headSeq=2`). All nine event triggers plus the monotonic room timestamp trigger were present, and retired version-column count was zero. A later paired rehearsal restored `backups/roomtalk-20260720T123725Z.dump` into a fresh database and `backups/roomtalk-media-20260720T123725Z.tar.gz` into a fresh volume. The restored room/media/message relationship matched, and the restored object SHA-256 was byte-identical. Temporary databases, volumes, markers, and the isolated Compose project were removed.
+The client regression suite now covers a stale `desiredHeadSeq` larger than a restored database head, plus a new notification received while the reset snapshot is in flight. It also covers Socket-first, room-event-first, and error-before-placeholder delivery for a persisted AI error Message. The server tests verify that the Socket error payload carries the same Message that was saved.
 
-## Covered common cases
-
-Automation covers immutable A-then-B message history after later deletion, distinct room and agent-turn after-images, stable media metadata, empty public member-change signals and legacy member-payload scrubbing, strict rejection of malformed payloads, database-independent valid/invalid coverage for every V1 event contract, valid empty-content AI/media messages, bounded early transient buffering, durable-final precedence, preservation of dynamically added optimistic sends during chunk/A2UI/end updates, explicit DTO allowlisting against a future internal column, secret and expiring-URL exclusion, deletion tombstones after canonical rows disappear, rollback without sequence advancement, concurrent unique sequences, two stores concurrently applying the active/deleted legacy cutover exactly once, exact fast-path reads, oversized head-only fallback, three-instance local-only fan-out, listener re-LISTEN anti-entropy, simultaneous reconnect replay and duplicate fast path, cursor expiry, restored-database rollback, and the existing snapshot/replay flows. Media coverage also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
-
-The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `room.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
-
-The production-data rehearsal restored `backups/roomtalk-supabase-public-precutover-20260720T1958Z.dump`; the frozen cutover restored `backups/roomtalk-supabase-public-final-20260720T2019Z.dump`. Both matched 98 rooms, 7,939 messages, 179 members, 404 media assets, 6,361 observability events, 28 outbox events, and 60 room-agent turns. Startup removed the retired version columns, created 98 room streams, and installed all room-event triggers. Historical rows intentionally remain snapshot state; new writes create events after cutover.
-
-The full Tigris pre-copy matched 2,857 objects and 1,302,853,579 bytes across private room media, published sites, and stickers. `node scripts/backup-local-production.mjs` then stopped edge/app/object storage, produced one timestamp-paired PostgreSQL archive and SeaweedFS snapshot, and restarted the healthy stack. Both artifacts were restored into isolated targets; the restored S3 inventory matched exactly and the temporary targets were removed.
-
-During the restart rehearsal, node-postgres initially surfaced an idle-client disconnect through the global `uncaughtException` handler. A pool-level error handler was added and tested; a second real PostgreSQL restart produced only the expected handled warning and re-established `LISTEN room_event_committed` within one second.
+Earlier full Server, Client, PostgreSQL integration, PostgreSQL Playwright, persistence, Compose restart, and paired restore results remain in Git history with the commits that produced them. This ledger avoids copying every test case because the current architecture document already explains the protocol-level coverage.
 
 ## Rollback and ongoing operations
 
-Fly operational logs were archived before shutdown; database-backed observability/outbox/turn logs migrated with the final dump. Keep Fly, Supabase, and Tigris intact through the rollback window. A rollback after local writes begin requires reconciling those writes first; changing DNS alone is lossy. Run paired maintenance backups regularly, copy them off-host, and keep the Mac on AC power with Docker Desktop running.
+Rollback after either production boundary is a data operation. Do not re-enable Fly or change DNS by itself after the Mac has accepted writes. Stop or gate the current writer, reconcile PostgreSQL and object deltas, restore a matching database/object pair, verify the target, and only then switch traffic.
+
+Run paired maintenance backups regularly, copy encrypted copies off the Mac, and rehearse restores. The Mac must remain powered and Docker Desktop must remain running. Future AWS migration can reuse the image, PostgreSQL schema, Redis rebuildable boundary, S3 object keys, and E2B execution plane, but a rolling migration that changes event payload compatibility still needs a two-phase protocol.

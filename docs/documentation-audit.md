@@ -2,112 +2,78 @@
 
 [中文](documentation-audit.zh.md)
 
-Status: Current documentation inventory
-Audit date: 2026-07-21
+Status: Current documentation contract
+Audited: 2026-07-21
 
-This audit classifies repository documentation and records quality controls. It does not replace the [documentation index](README.md), current architecture, runbooks, source, or tests.
+This document explains where each kind of truth belongs and records the facts checked in the latest audit. It is not another architecture guide or deployment runbook.
 
-## Documentation Contract
+## Source ownership
 
-- Current documents carry an `Updated` or `Verified` date and identify their source of truth.
-- Historical plans and retrospectives preserve unique context and evidence when they remain useful. Obsolete current-looking design series may be removed after their valid contract is consolidated into a current reference; Git history remains the archive.
-- Human-facing documents have English and Chinese editions with language links. The bilingual interview HTML remains one file.
-- `CLAUDE.md`/`AGENTS.md` remain one machine-instruction source; human contribution rules live in bilingual `CONTRIBUTING` files.
-- The top-level README presents important technical design directly and links only to deeper evidence or procedures.
-
-## Current Entry Points
-
-| Document | Role |
+| Source | What it owns |
 | --- | --- |
-| `README.md` / `README.zh.md` | Product, technical highlights, architecture, local development, persistence, release model, selected retrospectives, and concise navigation. |
-| `docs/README.md` / `docs/README.zh.md` | Complete categorized bilingual documentation index. |
-| `docs/room-reliability-architecture*.md` | Current room-session ownership, message/media continuity, event-cursor convergence, acknowledgement, posting-boundary, diagnostics, and backend ordering contract. |
-| `docs/code-agent-runtime-architecture*.md` | Current code-agent control/execution plane, lifecycle, security, workspace, recovery, persistence, and release boundaries. |
-| `DeploymentGuide.md` / `部署指南.md` | Current MacBook/Compose production release, backup, verification, rollback, and AWS handoff runbook. |
-| `docs/configuration*.md` | Operator-facing configuration groups and source-of-truth boundaries. |
-| `CONTRIBUTING*.md` | Human development, validation, artifact, commit, and release contract. |
-| `SECURITY*.md` | Identity, authorization, scoped capabilities, credential, media, and sandbox trust boundaries. |
-| `docs/code-agent-sandbox-artifact*.md` | Pinned E2B artifact build/acceptance/release contract. |
-| `docs/postgres-rollout-runbook*.md` | Complete `R` to `R+P` cutover procedure and rollback boundary. |
+| Source code and tests | Final authority for runtime behavior and protocol details. |
+| `README.md` / `README.zh.md` | Product overview, current topology, the main technical decisions, and navigation. |
+| `docs/room-reliability-architecture*.md` | The room synchronization protocol: immutable events, fast path, replay, snapshot, AI transient delivery, ordering, and recovery. |
+| `docs/room-event-sync-portable-deployment*.md` | Deployment topology, storage boundaries, production cutover, rollback, and AWS mapping. |
+| `docs/room-event-sync-portable-deployment-progress*.md` | A compact evidence ledger of completed stages, commits, tests, migrations, and production checks. |
+| `DeploymentGuide.md` / `部署指南.md` | The operator runbook for backup, maintenance-window release, verification, and rollback. |
+| `docs/configuration*.md` | Environment-variable groups and configuration ownership. |
+| `docs/interview-preparation.html` | A detailed bilingual narrative for explaining the project and answering follow-up questions. |
+| `docs/README*.md` | The complete categorized documentation index. |
 
-## Current Subsystem References
+Subsystem references, retrospectives, completed plans, and review reports stay in the index because they preserve useful reasoning or evidence. They must not present old configuration as the current runtime.
 
-- room-context CLI and restricted shell;
-- sandbox daemon runtime/protocol;
-- static publishing implementation;
-- code-agent model access;
-- PostgreSQL application role;
-- legacy media migration;
-- media-viewer gesture requirements.
+## Writing contract
 
-These remain discoverable through the docs index and contextual README/architecture links without being duplicated in every navigation section.
+- Current documents carry an `Updated`, `Verified`, or audit date.
+- English and Chinese current documents agree on dates, commands, limits, names, and architecture facts. The interview guide is one bilingual HTML file.
+- The README gives the reader the whole system shape. Deeper documents add mechanism, evidence, or procedure instead of repeating the same introduction.
+- Architecture documents explain why the system works. The progress ledger records what shipped. The runbook tells an operator what to do.
+- Historical numbers, branch names, machine sizes, and commit IDs are labeled as snapshots.
+- `CLAUDE.md` and `AGENTS.md` contain agent instructions. Human contribution rules live in `CONTRIBUTING`.
 
-## Engineering Retrospectives
+## Facts verified in this pass
 
-The following are important evidence, not disposable stale docs:
+### Room synchronization and AI delivery
 
-- PostgreSQL production migration;
-- code-agent text/tool ordering;
-- A2UI streaming;
-- mobile viewport and keyboard behavior;
-- CI/CD build optimization;
-- Codex app-server integration;
-- GitHub connector research.
+- PostgreSQL canonical tables and the bounded per-room `room_events` log are the only durable synchronization boundary. Each event stores a strict immutable V1 after-image in the same business transaction; replay never hydrates an old sequence from a current row.
+- PostgreSQL `NOTIFY` is a committed wake-up hint. Every listening app reads the exact event row and uses `io.local` for its attached clients. Redis adapter fan-out remains for genuinely single-origin transient or global events.
+- A contiguous Socket payload is a latency fast path. Missing or oversized payloads replay from PostgreSQL; gaps over 500 events or an expired cursor use a repeatable-read snapshot. A deleted-room tombstone is the exception because a deleted room has no snapshot.
+- `CURSOR_AHEAD` clears the stale pre-restore target before loading a snapshot. Notifications that arrive while the snapshot is in flight establish a fresh target, so recovery neither discards new work nor polls the restored head forever.
+- Public membership events reveal only `members.changed`. IDs and roles remain behind `get_room_role_members`. Strict payload validation stops cursor advancement on malformed stored data.
+- `ai_chunk` and A2UI updates are bounded transient fast paths. Early events wait by `messageId` for the durable placeholder, and their reducers update canonical and visible React state separately so optimistic messages survive.
+- A user-visible AI failure is persisted as a complete Message first. `ai_stream_error` may carry that exact Message as a fast path; it does not invent Socket-only canonical text. Arrival order therefore cannot change the final UI.
 
-Historical counts, machine sizes, file lines, branch names, and commit IDs are labeled as snapshots. Current operations always defer to current runbooks and code.
+### Deployment and portability
 
-## Completed Plans and Reports
+- The infrastructure and data cutover to MacBook Compose, PostgreSQL, Redis, SeaweedFS, and Cloudflare Tunnel completed on 2026-07-20.
+- The immutable event protocol reached production on 2026-07-21 under a maintenance window. The old app was stopped before migrations `0003` and `0004`; paired PostgreSQL and object-store backups were taken first.
+- Production verification covered container health, migration records, public status, forced WebSocket transport, committed fast-path payloads, snapshot, replay, deleted-room tombstones, and cleanup.
+- AWS migration is a controlled mapping, not a one-click claim: the image maps to ECS/Fargate or EKS, PostgreSQL to RDS/Aurora, Redis to ElastiCache, and unchanged object keys to S3. A short write pause can use dump/restore plus a final object delta; zero downtime requires logical replication, CDC, or DMS.
 
-Original sandbox phases, backend spikes, workspace UI plans, identity/permission plans, outbox migration, PostgreSQL design/test plans, E2E plans, code reviews, commit reviews, design references, and UI/UX audits remain indexed under Historical Plans or Reports. Their value is the reasoning and review record, not current configuration.
+### Interview guide corrections
 
-## Corrected Drift in This Pass
+- Durable room-event fan-out uses PostgreSQL plus `io.local`; not every Socket.IO event crosses the Redis adapter.
+- Presigned object transfer removes large byte streams from the app, but signing and metadata still pass through it. SeaweedFS is described by the actual private S3-compatible boundary rather than AWS-specific bucket controls.
+- Browser media cache capacity is 20% of the reported storage quota, capped at 1 GiB, with a 300 MB fallback when quota information is unavailable.
+- `setTimeout(..., 0)` schedules a later task, not a microtask. History examples use the current `beforeMessageId` request path.
+- The CJK heuristic counts roughly one token per CJK character and one per four non-CJK characters.
+- Public HTTPS/WSS terminates TLS at the edge. PostgreSQL and Redis currently communicate on the private Compose network without TLS.
+- Object storage still has throughput, request-rate, latency, lifecycle, and cost limits. Test-database name guards reduce accidental production access; they do not make it impossible.
 
-- Replaced the former Fly production guide with the current MacBook/Compose/Cloudflare Tunnel runbook and kept Fly only as a coordinated rollback target.
-- Documented `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS` across runtime examples, Compose, and configuration references.
-- Documented `ROOM_EVENT_FAST_PATH_MAX_BYTES` across runtime examples, Compose, configuration, architecture, deployment, and interview references.
-- Finalized the room-event cutover ledger with real commit IDs and moved it from active work to a completed evidence record.
-- Updated the bilingual interview guide from retired `messageVersion`/Redis-durable/Fly assumptions to the current event-cursor, PostgreSQL-authoritative, SeaweedFS, and portable AWS architecture.
-- Corrected the room-event delivery description from wake-up-only to a hybrid protocol: bounded committed-event Socket fast path, durable replay for missing sequences, and repeatable-read snapshot recovery for retained gaps over 500 events.
-- Added the end-to-end AI message lifecycle: durable user/placeholder/final room events, transactional AI outbox claim/retry, transient `ai_chunk` UX delivery, and final durable convergence.
-- Replaced the old ID-only/current-row hydration description with the implemented bounded immutable `schemaVersion: 1` after-image contract, including stable media projection and secret exclusion.
-- Recorded the multi-instance boundary as PostgreSQL fan-out plus per-listener `io.local`, and documented local `room_sync_required` anti-entropy after a successful listener reconnect.
-- Documented the one-time legacy-event migration: advisory-locked concurrent startup, preserved stream heads, active cursor expiry, and authorized V1 deleted-room tombstones. The source is verified but intentionally not deployed by this change.
-- Recorded why room replay needs neither a realtime delivery outbox nor `messageVersion`, and kept transient typing/presence/AI chunk/voice/WebRTC traffic outside the durable sequence.
-- Hardened the public event contract so membership changes reveal no IDs or roles; privileged member data remains behind `get_room_role_members`, and migration `0004` scrubs any pre-production member payloads.
-- Documented strict V1 payload decoding: malformed stored events return `EVENT_PAYLOAD_INVALID`, do not advance the cursor, and converge through a canonical snapshot.
-- Documented the bounded client buffer for AI chunk/A2UI/end events that arrive before their durable placeholder, including durable-final precedence and the 60-second / 64-ID / 512-event / 512-KiB limits.
-- Clarified that AI transient reducers update canonical and current UI state separately, preserving concurrently added pending/failed optimistic sends.
-- Added database-independent unit coverage for every strict V1 payload variant and its critical rejection cases, so ordinary server CI protects the protocol even when PostgreSQL integration tests are skipped.
-- Recorded the production release boundary: stop old app instances before `0003`/`0004`; a future multi-instance rollout requires two-phase compatibility or the same maintenance window.
+## Remaining product follow-ups
 
-## Earlier Audit Corrections (2026-07-13)
-
-- Replaced the generic/manual Fly deployment tutorial with the current scheduled/manual-dispatch GitHub Actions workflow.
-- Corrected the production VM declaration to the 1024 MB value in `fly.toml`.
-- Separated canonical repository examples from environment-specific browser-origin aliases.
-- Made current vs historical status explicit instead of relying on a generic disclaimer.
-- Kept key retrospectives visible from the README.
-- Added bilingual configuration, contribution, security, architecture, runbook, subsystem, retrospective, plan, and report editions.
-- Retained the historical `sandbox-daemon-plan.md` filename for link stability while labeling it as current runtime documentation.
-- Consolidated the Room Session Controller and the still-valid room consistency rules into one bilingual Room Reliability Architecture, then removed the obsolete restore/review series from the current tree.
-
-## Known Product/Protocol Follow-Ups
-
-- Replace room socket string/regex error handling with stable error codes, especially `ROOM_NOT_FOUND`.
+- Replace room Socket string and regex error handling with stable error codes, especially `ROOM_NOT_FOUND`.
 - Complete automated media-viewer coverage for pinch, zoomed-image swipe suppression, edge resistance, velocity-only commits, keyboard controls, and single-tap delay.
 
-These are product/test follow-ups, not reasons to mark the documentation incomplete.
+These are implementation follow-ups, not unresolved documentation ambiguity.
 
-## Validation Requirements
+## Validation
 
-- Every index link resolves.
-- Every human document has the expected language counterpart or is explicitly single-file bilingual.
-- English/Chinese current documents agree on status, date, commands, environment names, and architecture facts.
-- Package commands, `fly.toml`, workflow triggers, artifact lock values, and source identifiers referenced by docs match repository state.
-- Markdown/HTML parses and `git diff --check` succeeds.
+A documentation change is complete when:
 
-## Earlier Audit Record (2026-06-18)
-
-The earlier pass found and resolved CI secret validation, legacy media-table duplication, missing tracked Agent instructions, a broken media-migration package entrypoint, and accidental local Claude settings scope. It also verified media environment renames, i18n language coverage, the unified `media` message type, provider descriptions, PostgreSQL CA handling, and Redis/PostgreSQL smoke/E2E coverage as they existed at that time.
-
-Those findings are retained as a dated report; current verification is recorded above.
+- index links resolve;
+- every human-facing Markdown document has its expected language counterpart, or is explicitly bilingual;
+- commands, environment names, protocol limits, migration state, and deployment claims match the repository and current runtime;
+- Markdown and HTML remain parseable; and
+- `git diff --check` passes.

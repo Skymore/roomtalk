@@ -3,7 +3,7 @@
 [中文](README.zh.md)
 
 Status: Current index
-Updated: 2026-07-20
+Updated: 2026-07-21
 
 This index separates current sources of truth from runbooks, subsystem references, engineering retrospectives, completed plans, and reports. Historical documents remain first-class engineering evidence; their original dates and decisions are preserved.
 
@@ -28,7 +28,7 @@ Source code and tests are always the final authority. Start with the current arc
 
 | Topic | English | 中文 |
 | --- | --- | --- |
-| Room reliability | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
+| Room reliability and synchronization protocol | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
 | Code-agent runtime | [Architecture](code-agent-runtime-architecture.md) | [架构](code-agent-runtime-architecture.zh.md) |
 | E2B sandbox artifact | [Artifact contract](code-agent-sandbox-artifact.md) | [Artifact 合约](code-agent-sandbox-artifact.zh.md) |
 | Sandbox daemon | [Runtime and protocol](sandbox-daemon-plan.md) | [运行时与协议](sandbox-daemon-plan.zh.md) |
@@ -36,13 +36,13 @@ Source code and tests are always the final authority. Start with the current arc
 | Static publishing | [Implementation](code-agent-static-publish-implementation.md) | [实现](code-agent-static-publish-implementation.zh.md) |
 | Model access | [Model access](code-agent-model-access.md) | [Model access](code-agent-model-access.zh.md) |
 | Configuration | [Configuration](configuration.md) | [配置](configuration.zh.md) |
-| Room event sync and portable deployment | [Architecture](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
+| Deployment topology, cutover, and AWS portability | [Architecture](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
 
 ## Completed Implementation Records
 
 | Engineering line | English | 中文 |
 | --- | --- | --- |
-| Room event sync and self-host cutover | [Evidence record](room-event-sync-portable-deployment-progress.md) | [证据记录](room-event-sync-portable-deployment-progress.zh.md) |
+| Room event and self-host cutovers | [Evidence ledger](room-event-sync-portable-deployment-progress.md) | [证据账本](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## Operations and Runbooks
 
@@ -97,4 +97,4 @@ Source code and tests are always the final authority. Start with the current arc
 
 ## Interview Guide
 
-[RoomTalk interview preparation](interview-preparation.html) is a single bilingual HTML document. It is intentionally not linked from the top-level README.
+[RoomTalk interview preparation](interview-preparation.html) is a detailed bilingual narrative organized around execution and trust, browser continuity, durable synchronization, scaling, security, and testing. It is intentionally not linked from the top-level README.

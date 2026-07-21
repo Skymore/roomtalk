@@ -2,7 +2,7 @@
 
 [English](room-event-sync-portable-deployment.md)
 
-状态：已完成 `room.ruit.me` 生产切换
+状态：`room.ruit.me` 基础设施与不可变事件生产切换均已完成
 
 更新：2026-07-21
 
@@ -60,7 +60,9 @@ Deferred writer 构造有界、安全的 `schemaVersion: 1` after-image，再由
 
 公共事件流绝不包含 member ID、离线成员列表、joined timestamp 或 owner/admin role。`members.changed` 只表示“成员关系发生变化”；完整成员投影继续通过现有 `room.manageMembers` 鉴权和 `get_room_role_members` 请求读取。
 
-Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 transient。AI chunk、A2UI update 或 stream end 可能抢在 durable placeholder 通知前到达，因此浏览器按 `messageId` 临时缓存未匹配事件，placeholder 出现后按到达顺序 drain。上限为 64 个 message ID、512 个事件、512 KiB 与 60 秒 TTL。Placeholder 已存在时，transient reducer 分别更新 canonical projection 与当前 React state，保留只存在于 UI 的 pending/failed optimistic message。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
+Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持临时。AI chunk、A2UI update 或 stream end 可能抢在 durable placeholder 通知前到达，因此浏览器按 `messageId` 临时缓存未匹配事件，placeholder 出现后按到达顺序排空。上限为 64 个 message ID、512 个事件、512 KiB 与 60 秒 TTL。Placeholder 已存在时，临时 reducer 分别更新规范投影与当前 React state，保留只存在于 UI 的 pending/failed optimistic message。
+
+`ai_stream_error` 不允许自行创造规范正文。服务端先持久化完整错误 Message，再把同一个 Message 放进 Socket fast path。提前到达的错误进入同一有界 buffer；无论 Socket 先到还是 room event 先到，最终都收敛到已保存 after-image。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
 
 ## 快照与增量
 
@@ -71,7 +73,7 @@ Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 
 - 收到 `NOTIFY` 后，每个 app 从 PostgreSQL 读取精确、不可变的已提交 sequence；完整通知不超过 `ROOM_EVENT_FAST_PATH_MAX_BYTES`（默认 256 KiB）时，Socket.IO 直接携带 `events`，否则只发 `headSeq`。
 - 客户端只在 fast path 恰好是下一个连续前缀并以 `headSeq` 结束时直接应用；成功后推进 `lastAppliedSeq`，无需再调用 `get_room_events`。
 - cursor 落后于 retention：`CURSOR_EXPIRED -> snapshot`；
-- 数据库恢复点落后于浏览器 cache：`CURSOR_AHEAD -> snapshot`；
+- 数据库恢复点落后于浏览器 cache：`CURSOR_AHEAD`。客户端先清除旧目标水位，再请求 snapshot；请求期间到达的新通知会建立新目标，避免对恢复后的 head 无限请求同一空页；
 - 严格 decoder 失败：返回 `EVENT_PAYLOAD_INVALID`，客户端不跨过坏事件推进 cursor，直接以 canonical snapshot 恢复；
 - page 不连续：整页不应用，重新快照；
 - 先做一次有界 probe 识别可能的终态删除 tombstone；若保留窗口内仍落后超过 500 events，则不应用/重放最多 100 个默认 page，而是直接 snapshot，再只排空 `snapshotSeq` 之后的 tail；
@@ -138,15 +140,17 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、outbox 与 turn 记录仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。
 
-## 尚未执行的不可变事件生产 migration
+## 不可变事件生产 migration
 
-`0003` / `0004` 是直接协议边界，不能让旧、新 App 混合滚动运行。当前单实例 Compose 的正确步骤是：先生成并验证备份，停止全部旧 App process，只启动新 image 并等待 migration 完成，再 smoke snapshot、delta、AI streaming、member authorization 与 deletion replay。仅推送源码不会执行这个 migration。
+生产在 2026-07-21 跨过 `0003` / `0004` 协议边界。发布先生成成对备份 `roomtalk-20260721T110310Z.dump` 与 `roomtalk-object-storage-20260721T110310Z.tar.gz`，再停止 `cloudflared` 和全部旧 app，只启动 commit `fbfd908b`。启动日志先记录两条 migration 成功，随后 PostgreSQL listener、Redis adapter、outbox worker 与公网 edge 才恢复 ready。
 
-未来 AWS 多实例要么采用同样的维护窗口 stop-the-world，要么先设计真正的两阶段兼容协议再滚动发布。新 payload writer 生效后绝不能再运行旧 image；回滚必须恢复匹配的数据库备份，不能只把旧 binary 启回来。
+只读数据库检查确认 migration `0001` 到 `0004` 全部存在，没有非 V1 保留事件，旧流只留下经过授权的 `room.deleted` cutover tombstone。公网 WebSocket smoke 随后创建临时房间，收到已提交的 `messages.upserted` Socket payload，通过 snapshot 和 replay 读取同一消息，再删除房间并重放终态 tombstone，最后清理临时房间。
+
+未来 AWS 多实例要么采用相同维护窗口边界，要么先设计明确的两阶段兼容协议，再做滚动发布。新不兼容 payload writer 生效后不能再运行旧镜像；跨边界回滚需要恢复匹配的数据库和对象存储备份，不能只重启旧 binary。
 
 ## 已执行的生产切换
 
-2026-07-20 已在一个维护窗口完成直接切换：
+2026-07-20 已完成基础设施与数据宿主的维护窗口切换：
 
 1. 把 Supabase `public` dump 恢复到隔离 PostgreSQL 17 并应用当前 migrations；
 2. 把 2,857 个 Tigris objects 全部复制校验到 SeaweedFS，并恢复同时间戳维护备份；
@@ -155,6 +159,8 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 5. 核对表 count、删除退役 version columns、初始化 98 个 event streams；
 6. 通过 Cloudflare Tunnel 路由 `room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me`；
 7. 验证 TLS、HTTP、Socket.IO/WebSocket、snapshot/delta event、公开 presigned PUT/GET 与删除 tombstone。
+
+不可变 after-image 协议在上文所述的 2026-07-21 独立维护窗口部署。两个日期需要分开记录：前一次把 PostgreSQL 和对象迁到 Mac，后一次改变保留 room-event 的 payload 合约。
 
 回滚窗口内继续保留 Fly、Supabase 与 Tigris。一旦本地开放写入，只改 DNS 回滚会丢本地新增数据；必须先把增量重新协调到云端目标。
 

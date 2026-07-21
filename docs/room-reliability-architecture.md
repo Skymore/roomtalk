@@ -2,7 +2,7 @@
 
 [中文](room-reliability-architecture.zh.md)
 
-Status: implemented runtime architecture
+Status: implemented and deployed at `room.ruit.me`
 
 Updated: 2026-07-21
 
@@ -57,7 +57,7 @@ The reducer accepts only a contiguous prefix:
 - a retained terminal `room.deleted` tombstone may jump a pruned prefix, because deletion supersedes intermediate state and the room has no snapshot to load;
 - a retained gap over 500 events: skip page-by-page replay and load a new bounded snapshot;
 - `CURSOR_EXPIRED`: retained history is gone, load a snapshot;
-- `CURSOR_AHEAD`: the database was restored behind the browser cache, load a snapshot.
+- `CURSOR_AHEAD`: the database was restored behind the browser cache. Clear the old `desiredHeadSeq`, load a snapshot, and retain only new notifications received while that request is in flight. This prevents an old high-water mark from causing repeated empty-page reads after the database head moves backward.
 
 Older chat history still uses `beforeMessageId`. Prepending an old page never moves the live event cursor.
 
@@ -77,7 +77,9 @@ The log is a bounded immutable after-image changelog, not an audit log and not f
 
 Clear, truncate, retry, and edit-and-ask operations are represented by one or more ordered batched upsert/delete events. A business operation is therefore not required to map to exactly one event. What is required is that every committed visible row change and its events share the same transaction, while a rollback leaves neither.
 
-AI chunks and incremental UI updates remain transient Socket fast paths. They can arrive before the placeholder's independent PostgreSQL notification, so the browser buffers unmatched `ai_chunk`, `a2ui_update`, and `ai_stream_end` events by `messageId`, then drains them in arrival order when the placeholder appears. The buffer is bounded to 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. Once the placeholder exists, each transient handler updates the canonical projection and applies the same reducer to the current React state instead of replacing it, so a concurrently added pending/failed optimistic send remains visible. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
+AI chunks and incremental UI updates remain transient Socket fast paths. They can arrive before the placeholder's independent PostgreSQL notification, so the browser buffers unmatched `ai_chunk`, `a2ui_update`, and `ai_stream_end` events by `messageId`, then drains them in arrival order when the placeholder appears. The buffer is bounded to 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. Once the placeholder exists, each transient handler updates the canonical projection and applies the same reducer to the current React state instead of replacing it, so a concurrently added pending/failed optimistic send remains visible.
+
+Errors use a deterministic variant of that fast path. The server first persists the complete user-visible `status: error` Message. It then emits `ai_stream_error` with that exact Message. If the error arrives before the placeholder, the browser buffers it by `messageId`; if a replay page already contains the final error after-image, the durable row wins and the buffered copy is discarded. The client never appends a Socket-only warning to canonical content. Therefore `ai_stream_error -> messages.upserted`, `messages.upserted -> ai_stream_error`, and error-before-placeholder all converge to the same state.
 
 Typing, presence, voice levels, and WebRTC signalling are also transient and do not consume a durable room sequence. If reactions become a durable product model, their `reactions.upserted` / `reactions.deleted` after-images must join this sequence rather than introducing a second version counter.
 
@@ -99,7 +101,7 @@ PostgreSQL performs the cross-instance fan-out; each listener informs only socke
 
 Migration `0003_room_events_immutable_after_images` installs the deferred after-image writer and removes the old ID-only triggers while holding table locks. The migration runner serializes concurrent app startup with a PostgreSQL transaction advisory lock. In that same migration transaction it discards nondeterministic legacy events without resetting stream heads. Active streams advance `minAvailableSeq` to `headSeq + 1`, so old cursors receive `CURSOR_EXPIRED` and snapshot. Deleted streams receive a new V1 `room.deleted` tombstone and retain `deleted_reader_ids`. The server returns that terminal event even to a cursor older than the discarded prefix, and the client permits this one terminal sequence jump, so former members converge without an impossible deleted-room snapshot loop.
 
-Migration `0004_public_member_change_events` removes the pre-production member privacy leak by rewriting retained member after-images to empty `members.changed` signals and replacing the member writer. The public event stream never contains offline-member IDs, roles, or join times. The direct `0003` / `0004` boundary requires a maintenance-window stop of every old app instance; a future rolling AWS release needs an explicit two-phase compatibility protocol.
+Migration `0004_public_member_change_events` removes the pre-production member privacy leak by rewriting retained member after-images to empty `members.changed` signals and replacing the member writer. The public event stream never contains offline-member IDs, roles, or join times. Production applied `0003` and `0004` on 2026-07-21 after a paired PostgreSQL/SeaweedFS backup and a full stop of old app processes. A future rolling AWS release still needs an explicit two-phase compatibility protocol.
 
 This direct boundary intentionally has no long-lived dual decoder. It also needs no realtime outbox: an outbox solves competing-worker side effects and retries, while room replay is fan-out state transfer already persisted with the canonical mutation. Likewise, `messageVersion` would duplicate the room sequence without identifying missing committed changes.
 
@@ -108,7 +110,7 @@ This direct boundary intentionally has no long-lived dual decoder. It also needs
 The implementation is guarded by:
 
 - store and socket unit/contract tests;
-- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, invalid-payload snapshots, deletes, turns, metadata, early transient AI event buffering, and optimistic-send preservation during transient AI updates;
+- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind target reset, notifications during a reset snapshot, invalid-payload snapshots, deletes, turns, metadata, early transient AI event buffering, deterministic AI error arrival order, and optimistic-send preservation during transient AI updates;
 - database-independent strict V1 payload unit tests for every event type, empty AI/media content, missing/extra fields, room binding, duplicate IDs, and retired ID-only payloads;
 - real PostgreSQL tests for immutable message/room/turn/media after-images, empty public membership signals, member-event privacy repair, strict payload rejection, secret exclusion, migration cutover, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
 - Playwright PostgreSQL tests for reload/fresh-context persistence, media/AI/share flows, two clients, and offline replay;

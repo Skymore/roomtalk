@@ -3,7 +3,7 @@
 [中文](configuration.zh.md)
 
 Status: Current
-Updated: 2026-07-20
+Updated: 2026-07-21
 Source of truth: `server/.env.example`, `.env.compose.example`, `compose.yaml`, runtime config loaders, and `scripts/local-production.mjs`
 
 This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
@@ -38,7 +38,9 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 
 The only supported serving model is PostgreSQL durable state plus Redis realtime/cache state. Redis remains operationally required but may be flushed and rebuilt; it is not a durable fallback. The legacy Redis store exists only for import and contract coverage.
 
-`room_event_streams` and `room_events` are the client synchronization boundary. A canonical mutation and its safe `schemaVersion: 1` after-image commit together. `NOTIFY` is only a hint: each app reads the exact immutable event and emits it with `io.local`, normally including it in `room_event_available`; a client applies it only when contiguous and otherwise replays from `lastAppliedSeq`. A listener re-LISTEN emits local `room_sync_required`. A valid retained gap above 500 events switches directly to a repeatable-read snapshot, while smaller gaps use pages of 100 events / 256 KiB by default. The log is bounded and not Event Sourcing or an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker; transient Socket events do not consume room sequence numbers.
+`room_event_streams` and `room_events` are the client synchronization boundary. A canonical mutation and its safe `schemaVersion: 1` after-image commit together. `NOTIFY` is only a hint: each app reads the exact immutable event and emits it with `io.local`, normally including it in `room_event_available`; a client applies it only when contiguous and otherwise replays from `lastAppliedSeq`. A listener re-LISTEN emits local `room_sync_required`. A valid retained gap above 500 events switches directly to a repeatable-read snapshot, while smaller gaps use pages of 100 events / 256 KiB by default. `CURSOR_AHEAD` clears an obsolete target head before the reset snapshot, without discarding notifications received during that request. The log is bounded and not Event Sourcing or an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker; transient Socket events do not consume room sequence numbers. A persisted AI error Message may ride `ai_stream_error` as a fast path, but its content must be identical to the durable after-image.
+
+Production applied immutable-event migrations `0003` and `0004` on 2026-07-21 in a maintenance window with all old app processes stopped.
 
 ## Media and Artifacts
 

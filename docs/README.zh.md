@@ -3,7 +3,7 @@
 [English](README.md)
 
 状态：当前索引
-更新：2026-07-20
+更新：2026-07-21
 
 本索引将当前事实源、runbook、子系统参考、工程复盘、已完成方案和报告分开。历史文档仍是一等工程证据；它们的原始日期和决策会被保留。
 
@@ -28,7 +28,7 @@
 
 | 主题 | English | 中文 |
 | --- | --- | --- |
-| 房间可靠性 | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
+| 房间可靠性与同步协议 | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
 | Code Agent runtime | [Architecture](code-agent-runtime-architecture.md) | [架构](code-agent-runtime-architecture.zh.md) |
 | E2B sandbox artifact | [Artifact contract](code-agent-sandbox-artifact.md) | [Artifact 合约](code-agent-sandbox-artifact.zh.md) |
 | Sandbox daemon | [Runtime and protocol](sandbox-daemon-plan.md) | [运行时与协议](sandbox-daemon-plan.zh.md) |
@@ -36,13 +36,13 @@
 | Static publishing | [Implementation](code-agent-static-publish-implementation.md) | [实现](code-agent-static-publish-implementation.zh.md) |
 | Model access | [Model access](code-agent-model-access.md) | [Model access](code-agent-model-access.zh.md) |
 | 配置 | [Configuration](configuration.md) | [配置](configuration.zh.md) |
-| 房间事件同步与可迁移部署 | [架构](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
+| 部署拓扑、切换与 AWS 可迁移性 | [架构](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
 
 ## 已完成实施记录
 
 | 工程主线 | English | 中文 |
 | --- | --- | --- |
-| 房间事件同步与自托管切换 | [证据记录](room-event-sync-portable-deployment-progress.md) | [证据记录](room-event-sync-portable-deployment-progress.zh.md) |
+| 房间事件与自托管切换 | [Evidence ledger](room-event-sync-portable-deployment-progress.md) | [证据账本](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## 操作与 Runbook
 
@@ -97,4 +97,4 @@
 
 ## 面试资料
 
-[RoomTalk 面试准备](interview-preparation.html) 是单文件双语 HTML。按仓库约定，它不从顶层 README 链接。
+[RoomTalk 面试准备](interview-preparation.html) 是详细的单文件双语叙事，按执行与信任、浏览器连续性、持久同步、扩展、安全和测试组织。按仓库约定，它不从顶层 README 链接。

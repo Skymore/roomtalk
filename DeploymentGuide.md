@@ -3,7 +3,7 @@
 [中文](部署指南.md)
 
 Status: Current production runbook
-Updated: 2026-07-20
+Updated: 2026-07-21
 Production: [https://room.ruit.me/](https://room.ruit.me/)
 
 ## Production Shape
@@ -56,6 +56,8 @@ The application image and the pinned E2B artifact are separate releases. A norma
 
 Documentation-only commits do not require a production rebuild.
 
+An incompatible room-event migration is not a routine rolling release. Take a paired backup, stop `cloudflared` and every old app process, then start only the new image. Production used this procedure for migrations `0003` and `0004` on 2026-07-21.
+
 ## First-Time Host Provisioning
 
 1. Install Docker Desktop and keep the Mac on AC power with automatic sleep disabled for the production session.
@@ -72,7 +74,9 @@ The full operator-facing variable inventory is in [docs/configuration.md](docs/c
 
 PostgreSQL owns canonical rooms, messages, members, turns, auth/account data, media metadata, `room_event_streams`, `room_events`, and `outbox_events`. Redis may be flushed and warmed again without losing business state.
 
-`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, the app hydrates the notified event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; oversized/failing hydration falls back to a head-only hint. Clients replay smaller gaps and switch gaps above 500 events to a repeatable-read snapshot. `outbox_events` remains a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, the app reads the exact immutable event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; an oversized event or read failure falls back to a head-only hint. Clients replay smaller gaps and switch gaps above 500 events to a repeatable-read snapshot. On `CURSOR_AHEAD`, the browser clears the stale target head before resnapshotting but keeps notifications that arrive during the request. `outbox_events` remains a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+
+AI text chunks remain transient. An AI error is persisted as a complete Message before `ai_stream_error` carries that same Message as a fast path. This keeps Socket-first, room-event-first, and error-before-placeholder delivery deterministic.
 
 The event log repairs client synchronization after missed Socket.IO notifications. It does not replace PostgreSQL backup, WAL/CDC, or database replication.
 
@@ -122,7 +126,7 @@ See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 - Open or join a room, send text, reload, and verify the message remains.
 - Verify a second client applies a contiguous `room_event_available.events` payload without a replay request, while a head-only or gapped notification still converges through `get_room_events`.
 - Verify a retained gap above 500 events replaces from `get_room_snapshot` and then drains only the post-snapshot tail.
-- When relevant, exercise offline replay, `CURSOR_EXPIRED`/resnapshot, edit/delete/clear, and deleted-room tombstones.
+- When relevant, exercise offline replay, `CURSOR_EXPIRED`, database-restore `CURSOR_AHEAD`, edit/delete/clear, and deleted-room tombstones.
 - Verify presigned media PUT/GET when storage or edge configuration changed.
 - Verify Google/GitHub/Codex connections and E2B turns when those boundaries changed.
 

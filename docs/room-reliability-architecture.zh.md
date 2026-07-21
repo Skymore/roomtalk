@@ -2,7 +2,7 @@
 
 [English](room-reliability-architecture.md)
 
-状态：已实现的运行时架构
+状态：已实现并部署到 `room.ruit.me`
 
 更新：2026-07-21
 
@@ -57,7 +57,7 @@ Reducer 只接受连续前缀：
 - 保留的终态 `room.deleted` tombstone 可以跨过已清理前缀，因为删除覆盖中间状态，而且该房间已无法 snapshot；
 - 保留窗口内落后超过 500 个事件：跳过逐页 replay，重新加载有界快照；
 - `CURSOR_EXPIRED`：旧前缀已清理，重新快照；
-- `CURSOR_AHEAD`：数据库恢复点落后于浏览器 cache，重新快照。
+- `CURSOR_AHEAD`：数据库恢复点落后于浏览器 cache。客户端先清除旧 `desiredHeadSeq`，再加载 snapshot；请求期间收到的新通知仍会保留。这样数据库 head 后退时，旧高水位不会让客户端反复请求同一空页。
 
 更早历史仍用 `beforeMessageId` 分页；prepend 旧页不能推进实时事件 cursor。
 
@@ -77,7 +77,9 @@ Reducer 只接受连续前缀：
 
 clear、truncate、retry、edit-and-ask 会表现为一个或多个有序批量 upsert/delete 事件。因此“一次业务操作恰好一个事件”不是约束；真正约束是：每个已提交的可见行变化与事件同事务，事务回滚时两者都不存在。
 
-AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 placeholder 的独立 PostgreSQL 通知前到达，因此浏览器按 `messageId` 缓存未匹配的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end`，placeholder 出现后按到达顺序 drain。缓存上限是 64 个 message ID、512 个事件、512 KiB 和 60 秒 TTL。Placeholder 已存在后，每个 transient handler 分别更新 canonical projection，并对当前 React state 应用相同 reducer，而不是整体替换，因此并发加入的 pending/failed optimistic send 不会消失。持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
+AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 placeholder 的独立 PostgreSQL 通知前到达，因此浏览器按 `messageId` 缓存未匹配的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end`，placeholder 出现后按到达顺序排空。缓存上限是 64 个 message ID、512 个事件、512 KiB 和 60 秒 TTL。Placeholder 已存在后，每个临时 handler 分别更新规范投影，并对当前 React state 应用相同 reducer，而不是整体替换，因此并发加入的 pending/failed optimistic send 不会消失。
+
+错误使用同一思想的确定性版本。服务端先持久化完整、用户可见且 `status: error` 的 Message，再通过 `ai_stream_error` 发送同一个 Message。错误若早于 placeholder 到达，浏览器按 `messageId` 暂存；replay page 若已包含最终错误 after-image，则持久行优先，缓冲副本被丢弃。客户端不会再把一段只存在于 Socket 的 warning 拼进规范正文。因此 `ai_stream_error -> messages.upserted`、`messages.upserted -> ai_stream_error` 和 error-before-placeholder 都会得到同一状态。
 
 Typing、presence、voice level 和 WebRTC signalling 同样属于 transient，不消耗 durable room sequence。未来如果 reaction 成为持久产品模型，它的 `reactions.upserted` / `reactions.deleted` after-image 应进入这条 sequence，而不是引入第二套 version counter。
 
@@ -99,7 +101,7 @@ PostgreSQL 负责跨实例 fan-out；每个 listener 只通知连接到本实例
 
 Migration `0003_room_events_immutable_after_images` 持表锁安装 deferred after-image writer，并移除旧 ID-only triggers。Migration runner 用 PostgreSQL transaction advisory lock 串行化多个 app 同时启动。在同一 migration 事务中，旧的非确定性事件被清除，但 stream head 不重置。Active stream 把 `minAvailableSeq` 推到 `headSeq + 1`，旧 cursor 得到 `CURSOR_EXPIRED` 后 snapshot。Deleted stream 会得到一条新的 V1 `room.deleted` tombstone，并保留 `deleted_reader_ids`。即使 cursor 早于已清理前缀，服务端也直接返回这个终态事件；客户端只对这个 terminal event 允许一次 seq 跳跃，因此原成员不会进入无法完成的“删除房间 snapshot”循环。
 
-Migration `0004_public_member_change_events` 会把 pre-production member after-image 全部改为无内容的 `members.changed`，并替换 member writer，从而消除成员隐私泄漏。公共事件流永远不包含离线成员 ID、角色或 joined time。直接的 `0003` / `0004` 边界要求维护窗口内停止所有旧 App instance；未来 AWS 若要滚动发布，必须先设计明确的两阶段兼容协议。
+Migration `0004_public_member_change_events` 会把 pre-production member after-image 全部改为无内容的 `members.changed`，并替换 member writer，从而消除成员隐私泄漏。公共事件流永远不包含离线成员 ID、角色或 joined time。生产在 2026-07-21 完成 PostgreSQL/SeaweedFS 成对备份并停止全部旧 app 后执行了 `0003` 和 `0004`。未来 AWS 若要滚动发布，仍需先设计明确的两阶段兼容协议。
 
 这是明确的直接切换，不长期维护双 decoder。它也不需要 realtime outbox：outbox 解决 competing worker 的副作用与重试，而 room replay 是已经与 canonical mutation 同事务持久化的 fan-out state transfer。`messageVersion` 同样只会重复 room seq，又不能表达漏掉了哪些提交。
 
@@ -108,7 +110,7 @@ Migration `0004_public_member_change_events` 会把 pre-production member after-
 当前实现由以下层次保护：
 
 - store、socket unit/contract tests；
-- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、坏 payload snapshot、删除、turn、room metadata、提前到达 AI transient buffer，以及 transient AI 更新期间保留 optimistic send 的 tests；
+- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退时清除旧目标水位、reset snapshot 期间保留新通知、坏 payload snapshot、删除、turn、room metadata、提前到达 AI 临时事件、AI 错误两种到达顺序，以及临时 AI 更新期间保留 optimistic send 的 tests；
 - 不依赖数据库的严格 V1 payload 单测覆盖全部 event type、空 AI/media content、缺失/额外字段、room 绑定、重复 ID 与退役 ID-only payload；
 - 真实 PostgreSQL 的不可变 message/room/turn/media after-image、空公共成员 signal、旧成员事件隐私修复、严格 payload 拒绝、secret 排除、migration 切换、快照、幂等、回滚、并发、room metadata 单调性、retention 与删除授权测试；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；

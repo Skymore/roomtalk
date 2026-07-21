@@ -115,9 +115,9 @@ flowchart LR
   Redis <-.->|"仅 transient/global"| B
 ```
 
-`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的 canonical 行” hydrate。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取 canonical snapshot。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
+`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的规范行”回填。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。数据库恢复到更旧位置并返回 `CURSOR_AHEAD` 时，浏览器会先清除旧目标水位再替换 snapshot；请求期间到达的新通知仍可建立新的目标。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取规范快照。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
 
-这是一份有界状态传输 changelog，不是 Event Sourcing；canonical 表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI chunk 抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序 drain；durable final after-image 始终优先。
+这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 走持久路径：服务端先保存完整错误 Message，Socket 再把同一个 Message 作为 fast path 发送，因此两种到达顺序会收敛到同一 after-image。
 
 ### 关键难点是怎么工作的
 
@@ -266,9 +266,11 @@ npm run test:e2e:postgres
 
 ## 部署
 
-`master` 仍是 release branch。Event sync、自托管 runtime、域名切换和凭据加固的完整 change set 已提交并推送到 `origin/master`；旧定时 Fly workflow 已手工禁用，因此 source push 不会重新启动 Fly。
+`master` 仍是 release branch。Event sync、自托管 runtime、域名切换和凭据加固的 change set 已提交并推送到 `origin/master`；旧定时 Fly workflow 已手工禁用，因此 source push 不会重新启动 Fly。
 
 `room.ruit.me` 生产现在通过 Docker Compose 与 Cloudflare Tunnel 在 MacBook 上运行根镜像，使用 PostgreSQL 17、Redis 7 和 SeaweedFS 4.29 S3-compatible 存储；`roomtalk.ruit.me` 继续作为兼容入口，每房间 execution sandbox 仍由 E2B 提供。旧 Fly app 已暂停；Supabase、Tigris 与 Upstash 仅在回滚窗口内保留，不再作为 live writer。
+
+基础设施切换于 2026-07-20 完成。不可变 room-event 边界在 2026-07-21 的独立维护窗口上线：先生成同一时间点的 PostgreSQL/SeaweedFS 成对备份，停止所有旧 app，再执行 migration `0003` 和 `0004`，最后才重新开放流量。公网 WSS 验证覆盖已提交事件 fast path、snapshot、replay 与删除 tombstone。
 
 ## 精选工程参考
 

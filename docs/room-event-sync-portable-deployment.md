@@ -2,7 +2,7 @@
 
 [中文](room-event-sync-portable-deployment.zh.md)
 
-Status: production cutover completed at `room.ruit.me`
+Status: infrastructure and immutable-event production cutovers completed at `room.ruit.me`
 
 Updated: 2026-07-21
 
@@ -60,7 +60,9 @@ Implemented event types are:
 
 The public stream never contains member IDs, offline-member lists, join timestamps, or owner/admin roles. `members.changed` only invalidates the fact of membership; privileged member projections remain behind the existing `room.manageMembers` authorization and `get_room_role_members` request.
 
-Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. When the placeholder already exists, the transient reducer updates the canonical projection and the current React state separately, preserving UI-only pending or failed optimistic sends. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
+Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. When the placeholder already exists, the transient reducer updates the canonical projection and the current React state separately, preserving UI-only pending or failed optimistic sends.
+
+`ai_stream_error` is not allowed to invent canonical text. The server persists the complete error Message, then includes that exact Message in the Socket fast path. An early error waits in the same bounded buffer; either Socket-first or room-event-first delivery converges to the stored after-image. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 
@@ -71,7 +73,7 @@ Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transie
 - After `NOTIFY`, each app reads the exact immutable committed sequence from PostgreSQL. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only `headSeq`.
 - A client applies the fast path only when it forms the next contiguous prefix and ends at `headSeq`; a successful fast path advances `lastAppliedSeq` without `get_room_events`.
 - A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
-- A browser cursor ahead of a restored database receives `CURSOR_AHEAD` and resnapshots.
+- A browser cursor ahead of a restored database receives `CURSOR_AHEAD`. It clears the stale target head before requesting the snapshot, while notifications arriving during that request establish a new target. This avoids an infinite empty-page loop against the restored head.
 - A strict decoder failure returns `EVENT_PAYLOAD_INVALID`; the client does not advance across that event and resnapshots from canonical state.
 - A non-contiguous page is never partially applied.
 - After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of applying/replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
@@ -138,15 +140,17 @@ Run `node scripts/backup-local-production.mjs` for a consistent maintenance back
 
 Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
 
-## Pending immutable-event production migration
+## Immutable-event production migration
 
-The `0003` / `0004` event migration is a direct protocol boundary and must not be installed by a rolling old/new application mix. For the current single-instance Compose deployment: take a verified backup, stop every old app process, start only the new image so migrations complete before traffic, then smoke-test snapshot, delta, AI streaming, member authorization, and deletion replay. A source push alone does not perform this migration.
+Production crossed the `0003` / `0004` protocol boundary on 2026-07-21. The release created the paired backup `roomtalk-20260721T110310Z.dump` and `roomtalk-object-storage-20260721T110310Z.tar.gz`, stopped `cloudflared` and every old app process, then started only commit `fbfd908b`. Startup logs recorded both migrations before the PostgreSQL listener, Redis adapter, outbox worker, and public edge became ready.
 
-Future AWS multi-instance deployment must either use the same maintenance-window stop-the-world boundary or introduce a deliberate two-phase compatible protocol before attempting a rolling release. An old image must never run after the new payload writer is active, and rollback means restoring the matching database backup rather than merely restarting the old binary.
+A read-only database check found migrations `0001` through `0004`, no non-V1 retained events, and only authorized `room.deleted` legacy cutover tombstones. A public WebSocket smoke then created a temporary room, observed a committed `messages.upserted` Socket payload, read the same message through snapshot and replay, deleted the room, replayed its terminal tombstone, and cleaned up the room.
+
+Future AWS multi-instance deployment must either use the same maintenance-window boundary or introduce a deliberate two-phase compatible protocol before attempting a rolling release. An old image must not run after a new incompatible payload writer is active, and rollback across that boundary means restoring the matching database and object-storage backup rather than merely restarting an old binary.
 
 ## Executed production cutover
 
-A single maintenance-window cutover was completed on 2026-07-20:
+The infrastructure and data-host cutover was completed on 2026-07-20:
 
 1. restored a Supabase `public` dump into an isolated PostgreSQL 17 database and applied current migrations;
 2. copied and verified all 2,857 Tigris objects into SeaweedFS, then restored a paired maintenance backup;
@@ -155,6 +159,8 @@ A single maintenance-window cutover was completed on 2026-07-20:
 5. compared table counts, removed the retired version columns, and initialized 98 event streams;
 6. routed `room.ruit.me`, compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` through Cloudflare Tunnel;
 7. verified TLS, HTTP, Socket.IO/WebSocket, snapshot/delta events, public presigned PUT/GET, and deletion tombstones.
+
+The immutable after-image protocol was deployed in the separate 2026-07-21 maintenance window described above. Keeping these dates separate matters: the first cutover moved PostgreSQL and objects onto the Mac; the second changed the retained room-event payload contract.
 
 Fly, Supabase, and Tigris remain intact through the rollback window. After local writes open, DNS-only rollback is unsafe: new local data must first be reconciled back to the cloud target.
 
