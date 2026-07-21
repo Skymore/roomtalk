@@ -157,6 +157,8 @@ describe('PostgresStore', () => {
     const clientResults: ScriptedResult[] = [];
     for (let i = 0; i < migrationCount; i++) {
       clientResults.push({ rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') });
+      clientResults.push({ rowCount: 0, assertCall: call => assert.match(call.sql, /pg_advisory_xact_lock/) });
+      clientResults.push({ rows: [], assertCall: call => assert.match(call.sql, /SELECT 1 FROM schema_migrations/) });
       clientResults.push({ rowCount: 0 }); // the migration SQL itself
       clientResults.push({ rowCount: 0, assertCall: call => assert.match(call.sql, /INSERT INTO schema_migrations/) });
       clientResults.push({ rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') });

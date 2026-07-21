@@ -41,9 +41,9 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | --- | --- |
 | Shared untrusted execution | Split the trusted RoomTalk control plane from a per-room E2B execution plane, connected by a versioned JSONL protocol and short-lived scoped capabilities. |
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
-| Multi-client consistency | Push a size-bounded committed RoomEvent fast path over Socket.IO, replay any missing PostgreSQL-owned sequence range, and switch gaps over 500 events to a repeatable-read snapshot. |
+| Multi-client consistency | Store a bounded immutable after-image changelog with the canonical PostgreSQL write, push the exact committed RoomEvent as a size-bounded Socket fast path, replay missing room sequences, and switch gaps over 500 events to a repeatable-read snapshot. |
 | Mobile reconnect recovery | One `RoomSessionController` owns connect/register/join/retry. Epochs change only with room or socket identity; lifecycle signals coalesce into message resync without duplicate joins, and transient recovery preserves rendered messages/media. |
-| Durable-store boundary | Require PostgreSQL for business state and event replay; keep Redis rebuildable for presence, the Socket.IO adapter, locks, and short-lived cache. |
+| Durable-store boundary | Require PostgreSQL for canonical business state and deterministic event replay; keep Redis rebuildable for presence, transient/global Socket.IO traffic, locks, and short-lived cache. |
 | Cache correctness | Guard recent-message cache entries with the durable room-event head, double-check before write-back, invalidate after successful mutations, and degrade to PostgreSQL on cache failure. |
 | Concurrent room writes | Serialize canonical writes in PostgreSQL and allocate contiguous room-event sequences in the same transaction; use Redis Lua only for ephemeral multi-socket presence coordination. |
 | Product-grade mobile UI | Resolve overlapping media gestures with a locked gesture-state machine, batch transforms through `requestAnimationFrame`, layer Object URL/Cache API/network media caching, and guard IME composition and visual viewport changes. |
@@ -97,6 +97,27 @@ flowchart LR
 The MacBook runs five long-lived Compose services: the app, PostgreSQL, Redis, SeaweedFS, and `cloudflared`. PostgreSQL uses a durable Docker volume, SeaweedFS persists under `runtime/object-storage`, and Redis is intentionally rebuildable. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
 
 `room.ruit.me` is the primary hostname and `roomtalk.ruit.me` is a compatibility hostname. The runtime also allowlists `ai-chat.wenlin.dev`, but that hostname has a separately managed DNS cutover. The former Fly app is suspended; Supabase, Tigris, and Upstash remain only as temporary rollback resources and receive no production writes.
+
+### Room-event fan-out topology
+
+```mermaid
+flowchart LR
+  Write["Canonical PostgreSQL mutation"] -->|"same transaction"| Log["room_events\nimmutable after-image + room seq"]
+  Log -->|"commit-time NOTIFY hint"| A["App instance A LISTEN"]
+  Log -->|"commit-time NOTIFY hint"| B["App instance B LISTEN"]
+  A -->|"io.local fast path"| CA["A's local sockets"]
+  B -->|"io.local fast path"| CB["B's local sockets"]
+  CA -->|"gap: get_room_events"| A
+  CB -->|"gap: get_room_events"| B
+  A -->|"exact read / replay"| Log
+  B -->|"exact read / replay"| Log
+  A <-.->|"transient/global only"| Redis["Redis Socket.IO adapter"]
+  Redis <-.->|"transient/global only"| B
+```
+
+`room_events` stores schema-versioned, safe after-images rather than entity IDs that are hydrated from today's rows. PostgreSQL `NOTIFY` is only a post-commit wake-up hint: each app reads the exact immutable event and uses `io.local` so multiple listeners do not multiply the same Redis-adapter broadcast. A contiguous payload is applied immediately; a missing or oversized payload replays from `lastAppliedSeq`; an expired cursor or retained gap above 500 events takes a repeatable-read snapshot. After a PostgreSQL listener reconnects, that instance sends local `room_sync_required` anti-entropy before relying on new hints.
+
+This is a bounded state-transfer changelog, not Event Sourcing. Canonical tables remain authoritative and old event prefixes are pruned. There is no realtime delivery outbox and no `messageVersion`: retryable AI side effects use the separate worker outbox, while typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient and outside the durable room sequence.
 
 ### How the difficult paths work
 

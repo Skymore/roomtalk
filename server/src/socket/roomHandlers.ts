@@ -899,7 +899,6 @@ export function registerRoomHandlers({
       }
 
       io.to(clientId).emit('room_updated', updatedRoom);
-      io.to(roomId).emit('room_updated', updatedRoom);
       socketLogger.info('Room renamed successfully', { socketId: socket.id, clientId, roomId });
       callback?.({ success: true, room: updatedRoom });
     } catch (error) {
@@ -1175,7 +1174,6 @@ export function registerRoomHandlers({
       }
 
       io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-      io.to(roomId).emit('room_updated', updatedRoom);
       io.to(roomId).emit('room_permissions_invalidated', roomId);
       callback?.({ success: true, room: updatedRoom });
     } catch (error) {
@@ -1340,7 +1338,6 @@ export function registerRoomHandlers({
 
     io.to(clientId).emit('room_updated', updatedRoom);
     io.to(target.clientId).emit('room_updated', updatedRoom);
-    io.to(roomId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('room_permissions_invalidated', roomId);
     io.to(roomId).emit('room_role_members_updated', roomId);
     callback?.({ success: true, room: updatedRoom });

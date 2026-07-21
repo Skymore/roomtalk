@@ -3,7 +3,7 @@
 [中文](documentation-audit.zh.md)
 
 Status: Current documentation inventory
-Audit date: 2026-07-20
+Audit date: 2026-07-21
 
 This audit classifies repository documentation and records quality controls. It does not replace the [documentation index](README.md), current architecture, runbooks, source, or tests.
 
@@ -69,6 +69,10 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 - Updated the bilingual interview guide from retired `messageVersion`/Redis-durable/Fly assumptions to the current event-cursor, PostgreSQL-authoritative, SeaweedFS, and portable AWS architecture.
 - Corrected the room-event delivery description from wake-up-only to a hybrid protocol: bounded committed-event Socket fast path, durable replay for missing sequences, and repeatable-read snapshot recovery for retained gaps over 500 events.
 - Added the end-to-end AI message lifecycle: durable user/placeholder/final room events, transactional AI outbox claim/retry, transient `ai_chunk` UX delivery, and final durable convergence.
+- Replaced the old ID-only/current-row hydration description with the implemented bounded immutable `schemaVersion: 1` after-image contract, including stable media projection and secret exclusion.
+- Recorded the multi-instance boundary as PostgreSQL fan-out plus per-listener `io.local`, and documented local `room_sync_required` anti-entropy after a successful listener reconnect.
+- Documented the one-time legacy-event migration: advisory-locked concurrent startup, preserved stream heads, active cursor expiry, and authorized V1 deleted-room tombstones. The source is verified but intentionally not deployed by this change.
+- Recorded why room replay needs neither a realtime delivery outbox nor `messageVersion`, and kept transient typing/presence/AI chunk/voice/WebRTC traffic outside the durable sequence.
 
 ## Earlier Audit Corrections (2026-07-13)
 

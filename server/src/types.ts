@@ -225,6 +225,8 @@ export type RoomEventType =
   | 'messages.deleted'
   | 'agent_turns.upserted'
   | 'agent_turns.deleted'
+  | 'members.upserted'
+  | 'members.deleted'
   | 'room.updated'
   | 'room.deleted';
 
@@ -232,14 +234,18 @@ export interface RoomEvent {
   id: string;
   roomId: string;
   seq: number;
+  schemaVersion: 1;
   type: RoomEventType;
   payload: {
     messages?: Message[];
     messageIds?: string[];
     turns?: RoomAgentTurn[];
     turnIds?: string[];
+    members?: RoomMember[];
+    memberClientIds?: string[];
     room?: Room;
     roomId?: string;
+    deletedAt?: string;
   };
   createdAt: string;
 }

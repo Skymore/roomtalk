@@ -4,7 +4,7 @@
 
 Status: implemented runtime architecture
 
-Updated: 2026-07-20
+Updated: 2026-07-21
 
 ## One durable synchronization boundary
 
@@ -24,16 +24,16 @@ Room metadata acknowledgements and broadcasts still use the canonical complete `
 ## Source-of-truth layers
 
 ```text
-rooms / room_messages / room_agent_turns
+rooms / room_messages / room_agent_turns / room_members / media_assets
   canonical materialized state
-          │ same PostgreSQL transaction, captured by triggers
+          │ same PostgreSQL transaction; deferred writer builds safe after-images
           ▼
 room_event_streams + room_events
-  bounded replay window
-          │ commit-time NOTIFY; app reads/hydrates exact seq
+  bounded immutable schemaVersion=1 replay window
+          │ commit-time NOTIFY hint; every app reads exact seq
           ▼
-Socket.IO + Redis adapter
-  bounded canonical event fast path or head-only hint
+each app's Socket.IO local adapter
+  io.local event fast path or head-only hint
           │
           ▼
 client reducer + IndexedDB v4 cursor/window
@@ -45,15 +45,16 @@ Redis holds presence, the Socket.IO adapter, and a short-lived recent-message ca
 
 On a cold room open, or after a reset, `get_room_snapshot` reads the room, bounded recent messages, relevant agent turns, and event head in one repeatable-read transaction. The returned boundary is `snapshotSeq`.
 
-If an IndexedDB/memory window already exists, the client paints it immediately. A `room_event_available` notification normally includes the committed hydrated event. When its event list ends at `headSeq` and starts exactly at `lastAppliedSeq + 1`, the reducer applies it and advances without another request. Missing, oversized, duplicate, or non-contiguous payloads remain safe because `headSeq` still drives `get_room_events(afterSeq=lastAppliedSeq)`.
+If an IndexedDB/memory window already exists, the client paints it immediately. A `room_event_available` notification normally includes the exact committed immutable event. When its event list ends at `headSeq` and starts exactly at `lastAppliedSeq + 1`, the reducer applies it and advances without another request. Missing, oversized, duplicate, or non-contiguous payloads remain safe because `headSeq` still drives `get_room_events(afterSeq=lastAppliedSeq)`.
 
-Small gaps use pages of 100 events and 256 KiB by default. When a retained gap exceeds 500 events, the client stops replaying intermediate state and loads a new repeatable-read snapshot, then drains only events committed after `snapshotSeq`. Older history remains independently lazy through `beforeMessageId`.
+Small gaps use pages of 100 events and 256 KiB by default. After one bounded delta probe (needed to recognize a terminal deleted-room tombstone), a retained gap above 500 events loads a new repeatable-read snapshot without applying the intermediate page, then drains only events committed after `snapshotSeq`. Older history remains independently lazy through `beforeMessageId`.
 
 The reducer accepts only a contiguous prefix:
 
 - `seq <= lastAppliedSeq`: duplicate, ignore;
 - `seq === lastAppliedSeq + 1`: apply and advance;
 - a gap: discard the page and load a new bounded snapshot;
+- a retained terminal `room.deleted` tombstone may jump a pruned prefix, because deletion supersedes intermediate state and the room has no snapshot to load;
 - a retained gap over 500 events: skip page-by-page replay and load a new bounded snapshot;
 - `CURSOR_EXPIRED`: retained history is gone, load a snapshot;
 - `CURSOR_AHEAD`: the database was restored behind the browser cache, load a snapshot.
@@ -62,20 +63,23 @@ Older chat history still uses `beforeMessageId`. Prepending an old page never mo
 
 ## Event semantics
 
-The log is a state-transfer changelog, not an audit log and not full event sourcing. Stored payloads contain bounded entity IDs; reads hydrate upserts from current canonical rows.
+The log is a bounded immutable after-image changelog, not an audit log and not full Event Sourcing. Canonical tables remain the source of truth, but each retained event is deterministic by itself: `readRoomEvents()` decodes its stored `schemaVersion: 1` payload and never replaces old content with current `room_messages`, `room_agent_turns`, or `rooms` rows. Stable media asset IDs and metadata are stored with message after-images; internal object keys, uploader IDs, stream owners, password hashes, and expiring signed URLs are excluded.
 
 | Event | Client action |
 | --- | --- |
-| `messages.upserted` | Upsert hydrated messages by ID and canonical order |
+| `messages.upserted` | Upsert stored Message after-images by ID and canonical order |
 | `messages.deleted` | Remove the listed IDs; clear associated media cache entries |
-| `agent_turns.upserted` | Upsert hydrated durable turn metadata |
+| `agent_turns.upserted` | Upsert stored durable RoomAgentTurn after-images |
 | `agent_turns.deleted` | Remove turn IDs |
-| `room.updated` | Apply the hydrated complete room through the normal room commit guard |
+| `members.upserted` / `members.deleted` | Apply durable membership/role after-images or tombstones |
+| `room.updated` | Apply the stored complete SafeRoom after-image through the normal room commit guard |
 | `room.deleted` | Clear the local room/message caches |
 
 Clear, truncate, retry, and edit-and-ask operations are represented by one or more ordered batched upsert/delete events. A business operation is therefore not required to map to exactly one event. What is required is that every committed visible row change and its events share the same transaction, while a rollback leaves neither.
 
 AI chunks and incremental UI updates remain transient Socket fast paths. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
+
+Typing, presence, voice levels, and WebRTC signalling are also transient and do not consume a durable room sequence. If reactions become a durable product model, their `reactions.upserted` / `reactions.deleted` after-images must join this sequence rather than introducing a second version counter.
 
 ## Delete authorization and retention
 
@@ -85,15 +89,25 @@ The hourly maintenance task keeps seven days and at most 10,000 events per room 
 
 ## Multi-instance delivery
 
-Every app instance listens to PostgreSQL `NOTIFY room_event_committed`, reads and hydrates the exact committed sequence from PostgreSQL, and emits `room_event_available {roomId, headSeq, events?}` through Socket.IO. The event payload is included only when the complete serialized notification fits `ROOM_EVENT_FAST_PATH_MAX_BYTES` (256 KiB by default); failures and oversized events fall back to a head-only hint. Per-room hydration is serialized so one instance emits in sequence order. With multiple instances, the Redis adapter may deliver duplicates, but `seq <= lastAppliedSeq` is idempotent and any gap falls back to durable replay.
+Every app instance listens to PostgreSQL `NOTIFY room_event_committed`, reads the exact committed `(roomId, seq)` from PostgreSQL, and emits `room_event_available {roomId, headSeq, events?}` with `io.local.to(roomId)`. The event payload is included only when the complete serialized notification fits `ROOM_EVENT_FAST_PATH_MAX_BYTES` (256 KiB by default); read failures and oversized events fall back to a head-only hint. Per-room reads are serialized so one instance emits in sequence order.
+
+PostgreSQL performs the cross-instance fan-out; each listener informs only sockets attached to that instance. The Redis adapter remains for events that truly originate once and need cross-instance delivery, including transient/user-scoped paths. This avoids the old N-listener × global Redis-broadcast amplification without leader election. Client sequence checks remain a final idempotency guard.
+
+`NOTIFY` is not durable. After an instance successfully re-establishes `LISTEN`, and only after that point, it emits local `room_sync_required {reason: "postgres_listener_reconnected"}`. Active clients replay from their existing `lastAppliedSeq` without clearing rendered state. Socket reconnect, `focus`, and `pageshow` checks provide another anti-entropy layer.
+
+## Protocol cutover boundary
+
+Migration `0003_room_events_immutable_after_images` installs the deferred after-image writer and removes the old ID-only triggers while holding table locks. The migration runner serializes concurrent app startup with a PostgreSQL transaction advisory lock. In that same migration transaction it discards nondeterministic legacy events without resetting stream heads. Active streams advance `minAvailableSeq` to `headSeq + 1`, so old cursors receive `CURSOR_EXPIRED` and snapshot. Deleted streams receive a new V1 `room.deleted` tombstone and retain `deleted_reader_ids`. The server returns that terminal event even to a cursor older than the discarded prefix, and the client permits this one terminal sequence jump, so former members converge without an impossible deleted-room snapshot loop.
+
+This direct boundary intentionally has no long-lived dual decoder. It also needs no realtime outbox: an outbox solves competing-worker side effects and retries, while room replay is fan-out state transfer already persisted with the canonical mutation. Likewise, `messageVersion` would duplicate the room sequence without identifying missing committed changes.
 
 ## Required evidence
 
 The implementation is guarded by:
 
 - store and socket unit/contract tests;
-- broadcaster/reducer tests for committed payload hydration, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, deletes, turns, metadata, and transient AI events;
-- real PostgreSQL tests for schema, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
+- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, deletes, turns, metadata, and transient AI events;
+- real PostgreSQL tests for immutable message/room/turn/member/media after-images, secret exclusion, migration cutover, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
 - Playwright PostgreSQL tests for reload/fresh-context persistence, media/AI/share flows, two clients, and offline replay;
 - Compose health, restart persistence, and backup/restore checks.
 

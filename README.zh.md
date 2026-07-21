@@ -41,9 +41,9 @@ RoomTalk 不只覆盖功能的 happy path，也系统处理了实时协作与 AI
 | --- | --- |
 | 共享的不可信代码执行 | 将可信的 RoomTalk control plane 与每房间 E2B execution plane 分离，通过版本化 JSONL 协议和短期 scoped capability 连接。 |
 | AI 文本与工具事件顺序 | 在最早知道真实顺序的 engine/runner 层保留文本与工具边界，再持久化服务端单调递增的 `position`；客户端只展示顺序，不用 timestamp 猜测。 |
-| 多客户端一致性 | Socket.IO 直接推送有字节上限的已提交 RoomEvent fast path；缺失区间按 PostgreSQL 每房间序列补拉，超过 500 个事件直接切 repeatable-read snapshot。 |
+| 多客户端一致性 | Canonical PostgreSQL 写入同事务保存有界、不可变的 after-image changelog；Socket.IO 直接推送精确的已提交 RoomEvent，缺失区间按房间序列补拉，超过 500 个事件直接切 repeatable-read snapshot。 |
 | 移动端断连恢复 | 由唯一 `RoomSessionController` 管理 connect/register/join/retry；epoch 只随房间或 socket identity 变化，lifecycle signal 合并成消息 resync 而不重复 join，暂态恢复保留已显示的消息和媒体。 |
-| 持久层边界 | PostgreSQL 强制承载业务状态与事件重放；Redis 仅负责可重建的 presence、Socket.IO adapter、锁和短缓存。 |
+| 持久层边界 | PostgreSQL 强制承载 canonical 业务状态与确定性事件重放；Redis 仅负责可重建的 presence、瞬时/全局 Socket.IO 流量、锁和短缓存。 |
 | 缓存一致性 | 最近消息缓存以持久 room-event head 守卫，写回前再次校验，只在 mutation 成功后失效；缓存故障时降级直读 PostgreSQL。 |
 | 房间并发写 | PostgreSQL 在同一事务串行 canonical 写入并分配连续 room-event 序列；Redis Lua 只协调临时多 socket presence。 |
 | 产品级移动体验 | 用锁定模式的手势状态机解决媒体手势冲突，以 `requestAnimationFrame` 批量更新 transform，组合 Object URL/Cache API/network 媒体缓存，并处理 IME 与 Visual Viewport。 |
@@ -97,6 +97,27 @@ flowchart LR
 MacBook 长期运行五个 Compose 服务：app、PostgreSQL、Redis、SeaweedFS 和 `cloudflared`。PostgreSQL 使用 durable Docker volume，SeaweedFS 持久化到 `runtime/object-storage`，Redis 刻意保持可重建。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
 
 `room.ruit.me` 是主域名，`roomtalk.ruit.me` 是兼容入口。Runtime 同时 allowlist `ai-chat.wenlin.dev`，但该域名的 DNS 切换单独管理。旧 Fly app 已暂停；Supabase、Tigris 和 Upstash 仅作为临时回滚资源保留，不再接收生产写入。
+
+### 房间事件 fan-out 拓扑
+
+```mermaid
+flowchart LR
+  Write["Canonical PostgreSQL mutation"] -->|"同一事务"| Log["room_events\n不可变 after-image + room seq"]
+  Log -->|"commit 后 NOTIFY hint"| A["App 实例 A LISTEN"]
+  Log -->|"commit 后 NOTIFY hint"| B["App 实例 B LISTEN"]
+  A -->|"io.local fast path"| CA["A 的本机 sockets"]
+  B -->|"io.local fast path"| CB["B 的本机 sockets"]
+  CA -->|"有 gap: get_room_events"| A
+  CB -->|"有 gap: get_room_events"| B
+  A -->|"精确读取 / replay"| Log
+  B -->|"精确读取 / replay"| Log
+  A <-.->|"仅 transient/global"| Redis["Redis Socket.IO adapter"]
+  Redis <-.->|"仅 transient/global"| B
+```
+
+`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的 canonical 行” hydrate。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 读取精确的不可变事件，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。PG listener 重连成功后，本实例先发送 local `room_sync_required` 做反熵，再依赖后续 hint。
+
+这是一份有界状态传输 changelog，不是 Event Sourcing；canonical 表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。
 
 ### 关键难点是怎么工作的
 

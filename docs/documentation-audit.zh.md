@@ -3,7 +3,7 @@
 [English](documentation-audit.md)
 
 状态：当前文档 inventory
-审计日期：2026-07-20
+审计日期：2026-07-21
 
 本审计对仓库文档分类并记录质量控制。它不替代 [文档索引](README.zh.md)、当前架构、runbook、源码或测试。
 
@@ -69,6 +69,10 @@
 - 把双语面试资料从退役的 `messageVersion`/Redis durable/Fly 假设更新为当前 event cursor、PostgreSQL authoritative、SeaweedFS 与可迁移 AWS 架构。
 - 把 room-event 投递从“只做唤醒”校正为混合协议：有界的已提交事件 Socket fast path、缺序时 durable replay，以及保留窗口内落后超过 500 events 时的 repeatable-read snapshot 恢复。
 - 补充 AI message 端到端生命周期：用户/placeholder/final 的 durable room event、事务性 AI outbox claim/retry、临时 `ai_chunk` UX 投递，以及最终 durable 收敛。
+- 用实际实现的有界、不可变 `schemaVersion: 1` after-image 合约替换旧 ID-only/current-row hydration 描述，并记录稳定 media projection 与 secret 排除。
+- 把多实例边界记录为 PostgreSQL fan-out + 每个 listener 的 `io.local`，并记录 listener 成功重连后的 local `room_sync_required` 反熵。
+- 记录一次性 legacy-event migration：advisory lock 串行并发启动、保留 stream head、active cursor expiry 与带授权的 V1 deleted-room tombstone。源码已验证，但本次明确不部署。
+- 记录为什么 room replay 不需要 realtime delivery outbox 或 `messageVersion`，并让 transient typing/presence/AI chunk/voice/WebRTC 流量保持在 durable sequence 之外。
 
 ## 早期审计修正（2026-07-13）
 

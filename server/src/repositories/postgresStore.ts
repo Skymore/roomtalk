@@ -55,8 +55,21 @@ type RoomEventRow = {
   room_id: string;
   seq: number | string;
   event_type: RoomEventType;
+  schema_version: number | string;
   payload: unknown;
   created_at: string | Date;
+};
+
+type StoredMediaAssetSnapshotRow = {
+  id: string;
+  message_id: string;
+  kind: MediaAsset['kind'];
+  mime_type: string;
+  byte_size: number | string;
+  filename?: string | null;
+  width?: number | string | null;
+  height?: number | string | null;
+  duration_ms?: number | string | null;
 };
 
 type MessageRow = {
@@ -851,10 +864,21 @@ export class PostgresStore implements DurableRoomStore {
 
       // Apply the migration and record it atomically, so a crash mid-migration
       // never leaves it marked as applied without its effect (or vice versa).
+      // The transaction-scoped advisory lock plus the in-transaction recheck
+      // also makes concurrent app startup safe: only one process may execute a
+      // migration body, including destructive replay-window cutovers.
       await this.transaction(async client => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('roomtalk_schema_migrations'))");
+        const alreadyApplied = await client.query(
+          'SELECT 1 FROM schema_migrations WHERE id = $1 LIMIT 1',
+          [migration.id]
+        );
+        if (alreadyApplied.rows.length > 0) {
+          return;
+        }
         await client.query(migration.sql);
         await client.query(
-          'INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING',
+          'INSERT INTO schema_migrations (id) VALUES ($1)',
           [migration.id]
         );
       });
@@ -1619,31 +1643,42 @@ export class PostgresStore implements DurableRoomStore {
     const afterSeq = Number(options.afterSeq);
     const limit = Math.min(500, Math.max(1, Math.floor(options.limit || 100)));
     const maxBytes = Math.min(1024 * 1024, Math.max(16 * 1024, Math.floor(options.maxBytes || 256 * 1024)));
-    const stream = await this.pool.query<{ head_seq: number | string; min_available_seq: number | string }>(
-      'SELECT head_seq, min_available_seq FROM room_event_streams WHERE room_id = $1',
+    const stream = await this.pool.query<{
+      head_seq: number | string;
+      min_available_seq: number | string;
+      deleted_at: string | Date | null;
+    }>(
+      'SELECT head_seq, min_available_seq, deleted_at FROM room_event_streams WHERE room_id = $1',
       [roomId]
     );
     const headSeq = Number(stream.rows[0]?.head_seq || 0);
     const minAvailableSeq = Number(stream.rows[0]?.min_available_seq || 1);
+    let queryAfterSeq = afterSeq;
     if (afterSeq < minAvailableSeq - 1) {
-      throw new RoomEventCursorExpiredError(roomId, afterSeq, minAvailableSeq);
+      if (stream.rows[0]?.deleted_at) {
+        // A deleted room has no canonical snapshot to fall back to. Its retained
+        // terminal tombstone is sufficient even when an old prefix was pruned.
+        queryAfterSeq = minAvailableSeq - 1;
+      } else {
+        throw new RoomEventCursorExpiredError(roomId, afterSeq, minAvailableSeq);
+      }
     }
     if (afterSeq > headSeq) {
       throw new RoomEventCursorAheadError(roomId, afterSeq, headSeq);
     }
 
     const result = await this.pool.query<RoomEventRow>(
-      `SELECT room_id, seq, event_type, payload, created_at
+      `SELECT room_id, seq, event_type, schema_version, payload, created_at
       FROM room_events
       WHERE room_id = $1 AND seq > $2
       ORDER BY seq ASC
       LIMIT $3`,
-      [roomId, afterSeq, limit + 1]
+      [roomId, queryAfterSeq, limit + 1]
     );
-    const hydrated = await this.hydrateRoomEvents(roomId, result.rows.slice(0, limit));
+    const decoded = this.decodeRoomEvents(result.rows.slice(0, limit));
     const events: RoomEvent[] = [];
     let usedBytes = 0;
-    for (const event of hydrated) {
+    for (const event of decoded) {
       const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
       if (events.length > 0 && usedBytes + eventBytes > maxBytes) break;
       events.push(event);
@@ -1657,6 +1692,18 @@ export class PostgresStore implements DurableRoomStore {
       minAvailableSeq,
       hasMore: lastSeq < headSeq,
     };
+  }
+
+  async readRoomEvent(roomId: string, seq: number): Promise<RoomEvent | null> {
+    if (!Number.isSafeInteger(seq) || seq <= 0) return null;
+    const result = await this.pool.query<RoomEventRow>(
+      `SELECT room_id, seq, event_type, schema_version, payload, created_at
+      FROM room_events
+      WHERE room_id = $1 AND seq = $2
+      LIMIT 1`,
+      [roomId, seq]
+    );
+    return result.rows[0] ? this.decodeRoomEvents([result.rows[0]])[0] : null;
   }
 
   async pruneRoomEvents(options: RoomEventRetentionOptions): Promise<number> {
@@ -3254,7 +3301,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE github_connections, codex_connections, outbox_events, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
@@ -3495,74 +3542,89 @@ export class PostgresStore implements DurableRoomStore {
     };
   }
 
-  private async hydrateRoomEvents(roomId: string, rows: RoomEventRow[]): Promise<RoomEvent[]> {
-    const parsedPayloads = rows.map(row => parseJsonValue<Record<string, unknown>>(row.payload) || {});
+  private decodeRoomEvents(rows: RoomEventRow[]): RoomEvent[] {
+    const readObjects = <T>(value: unknown): T[] => Array.isArray(value)
+      ? value.filter((item): item is T => Boolean(item) && typeof item === 'object')
+      : [];
     const readIds = (value: unknown): string[] => Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string')
       : [];
-    const messageIds = Array.from(new Set(parsedPayloads.flatMap(payload => readIds(payload.messageIds))));
-    const turnIds = Array.from(new Set(parsedPayloads.flatMap(payload => readIds(payload.turnIds))));
 
-    let messages: Message[] = [];
-    if (messageIds.length > 0) {
-      const messageRows = await this.pool.query<MessageRow>(
-        `SELECT ${MESSAGE_COLUMNS}, position
-        FROM room_messages
-        WHERE room_id = $1 AND id = ANY($2::text[])
-        ORDER BY position ASC, timestamp ASC`,
-        [roomId, messageIds]
-      );
-      messages = orderMessageBatches(await this.attachMediaAssets(roomId, messageRows.rows.map(mapMessage)));
-    }
-    const messagesById = new Map(messages.map(message => [message.id, message]));
-
-    const turns = turnIds.length > 0
-      ? await this.readRoomAgentTurns(roomId, turnIds)
-      : [];
-    const turnsById = new Map(turns.map(turn => [turn.id, turn]));
-
-    const needsRoom = rows.some(row => row.event_type === 'room.updated');
-    const currentRoom = needsRoom ? await this.getRoomById(roomId) : null;
-
-    return rows.map((row, index) => {
+    return rows.map(row => {
+      const schemaVersion = Number(row.schema_version);
+      if (schemaVersion !== 1) {
+        throw new Error(`Unsupported room event schema version ${schemaVersion} for ${row.room_id}:${row.seq}`);
+      }
       const seq = Number(row.seq);
-      const rawPayload = parsedPayloads[index];
-      const ids = readIds(rawPayload.messageIds);
-      const eventTurns = readIds(rawPayload.turnIds);
+      const rawPayload = parseJsonValue<Record<string, unknown>>(row.payload) || {};
       const payload: RoomEvent['payload'] = {};
       switch (row.event_type) {
-        case 'messages.upserted':
-          payload.messageIds = ids;
-          payload.messages = ids.flatMap(id => {
-            const message = messagesById.get(id);
-            return message ? [message] : [];
+        case 'messages.upserted': {
+          const messages = orderMessageBatches(readObjects<MessageRow>(rawPayload.messageRows).map(mapMessage));
+          const mediaByMessageId = new Map(
+            readObjects<StoredMediaAssetSnapshotRow>(rawPayload.mediaAssets).map(asset => {
+              const media: MessageMediaAsset = {
+                id: asset.id,
+                kind: asset.kind,
+                mimeType: asset.mime_type,
+                byteSize: Number(asset.byte_size) || 0,
+              };
+              if (asset.filename) media.filename = asset.filename;
+              const width = toOptionalNumber(asset.width ?? null);
+              const height = toOptionalNumber(asset.height ?? null);
+              const durationMs = toOptionalNumber(asset.duration_ms ?? null);
+              if (width !== undefined) media.width = width;
+              if (height !== undefined) media.height = height;
+              if (durationMs !== undefined) media.durationMs = durationMs;
+              return [asset.message_id, media] as const;
+            })
+          );
+          payload.messages = messages.map(message => {
+            const mediaAsset = mediaByMessageId.get(message.id);
+            return mediaAsset ? { ...message, mediaAsset } : message;
           });
+          payload.messageIds = payload.messages.map(message => message.id);
           break;
+        }
         case 'messages.deleted':
-          payload.messageIds = ids;
+          payload.messageIds = readIds(rawPayload.messageIds);
           break;
         case 'agent_turns.upserted':
-          payload.turnIds = eventTurns;
-          payload.turns = eventTurns.flatMap(id => {
-            const turn = turnsById.get(id);
-            return turn ? [turn] : [];
-          });
+          payload.turns = readObjects<RoomAgentTurnRow>(rawPayload.turnRows).map(mapRoomAgentTurn);
+          payload.turnIds = payload.turns.map(turn => turn.id);
           break;
         case 'agent_turns.deleted':
-          payload.turnIds = eventTurns;
+          payload.turnIds = readIds(rawPayload.turnIds);
           break;
-        case 'room.updated':
-          payload.roomId = roomId;
-          if (currentRoom) payload.room = currentRoom;
+        case 'members.upserted':
+          payload.members = readObjects<RoomMemberRow>(rawPayload.memberRows).map(mapRoomMember);
+          payload.memberClientIds = payload.members.map(member => member.clientId);
           break;
+        case 'members.deleted':
+          payload.memberClientIds = readIds(rawPayload.memberClientIds);
+          break;
+        case 'room.updated': {
+          payload.roomId = row.room_id;
+          const roomRow = rawPayload.roomRow;
+          if (roomRow && typeof roomRow === 'object') {
+            const storedRoom = roomRow as RoomRow & { has_password?: boolean };
+            payload.room = mapRoom({
+              ...storedRoom,
+              password_hash: storedRoom.has_password ? '__event_has_password__' : null,
+            });
+          }
+          break;
+        }
         case 'room.deleted':
-          payload.roomId = roomId;
+          payload.roomId = row.room_id;
           break;
       }
+      if (typeof rawPayload.deletedAt === 'string') payload.deletedAt = rawPayload.deletedAt;
       return {
-        id: `${roomId}:${seq}`,
-        roomId,
+        id: `${row.room_id}:${seq}`,
+        roomId: row.room_id,
         seq,
+        schemaVersion: 1,
         type: row.event_type,
         payload,
         createdAt: toIsoString(row.created_at),

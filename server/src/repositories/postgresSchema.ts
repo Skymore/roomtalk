@@ -214,267 +214,23 @@ export const POSTGRES_SCHEMA_SQL = [
       'messages.deleted',
       'agent_turns.upserted',
       'agent_turns.deleted',
+      'members.upserted',
+      'members.deleted',
       'room.updated',
       'room.deleted'
     )),
+    schema_version SMALLINT NOT NULL DEFAULT 1 CHECK (schema_version = 1),
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (room_id, seq)
   )`,
+  `ALTER TABLE room_events ADD COLUMN IF NOT EXISTS schema_version SMALLINT NOT NULL DEFAULT 1`,
   `CREATE INDEX IF NOT EXISTS idx_room_events_created_at
     ON room_events (created_at)`,
   `INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, updated_at)
     SELECT id, 0, 1, NOW()
     FROM rooms
     ON CONFLICT (room_id) DO NOTHING`,
-  `CREATE OR REPLACE FUNCTION append_room_event(
-    target_room_id TEXT,
-    target_event_type TEXT,
-    target_payload JSONB
-  ) RETURNS BIGINT AS $$
-  DECLARE
-    next_seq BIGINT;
-  BEGIN
-    INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, updated_at)
-    VALUES (target_room_id, 0, 1, NOW())
-    ON CONFLICT (room_id) DO NOTHING;
-
-    UPDATE room_event_streams
-    SET head_seq = head_seq + 1,
-      updated_at = NOW()
-    WHERE room_id = target_room_id
-    RETURNING head_seq INTO next_seq;
-
-    INSERT INTO room_events (room_id, seq, event_type, payload, created_at)
-    VALUES (target_room_id, next_seq, target_event_type, target_payload, NOW());
-
-    PERFORM pg_notify(
-      'room_event_committed',
-      json_build_object('roomId', target_room_id, 'headSeq', next_seq)::text
-    );
-    RETURN next_seq;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_inserted_room_messages()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT room_id, jsonb_agg(id ORDER BY position) AS message_ids
-      FROM inserted_room_messages
-      GROUP BY room_id
-    LOOP
-      PERFORM append_room_event(
-        changed.room_id,
-        'messages.upserted',
-        jsonb_build_object('messageIds', changed.message_ids)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_updated_room_messages()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT room_id, jsonb_agg(id ORDER BY position) AS message_ids
-      FROM updated_room_messages
-      GROUP BY room_id
-    LOOP
-      PERFORM append_room_event(
-        changed.room_id,
-        'messages.upserted',
-        jsonb_build_object('messageIds', changed.message_ids)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_deleted_room_messages()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT room_id, jsonb_agg(id ORDER BY position) AS message_ids
-      FROM deleted_room_messages
-      GROUP BY room_id
-    LOOP
-      PERFORM append_room_event(
-        changed.room_id,
-        'messages.deleted',
-        jsonb_build_object('messageIds', changed.message_ids)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS room_messages_event_insert ON room_messages`,
-  `CREATE TRIGGER room_messages_event_insert
-    AFTER INSERT ON room_messages
-    REFERENCING NEW TABLE AS inserted_room_messages
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_inserted_room_messages()`,
-  `DROP TRIGGER IF EXISTS room_messages_event_update ON room_messages`,
-  `CREATE TRIGGER room_messages_event_update
-    AFTER UPDATE ON room_messages
-    REFERENCING NEW TABLE AS updated_room_messages
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_updated_room_messages()`,
-  `DROP TRIGGER IF EXISTS room_messages_event_delete ON room_messages`,
-  `CREATE TRIGGER room_messages_event_delete
-    AFTER DELETE ON room_messages
-    REFERENCING OLD TABLE AS deleted_room_messages
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_deleted_room_messages()`,
-  `CREATE OR REPLACE FUNCTION capture_upserted_room_agent_turns()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT room_id, jsonb_agg(id ORDER BY id) AS turn_ids
-      FROM upserted_room_agent_turns
-      GROUP BY room_id
-    LOOP
-      PERFORM append_room_event(
-        changed.room_id,
-        'agent_turns.upserted',
-        jsonb_build_object('turnIds', changed.turn_ids)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_deleted_room_agent_turns()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT room_id, jsonb_agg(id ORDER BY id) AS turn_ids
-      FROM deleted_room_agent_turns
-      GROUP BY room_id
-    LOOP
-      PERFORM append_room_event(
-        changed.room_id,
-        'agent_turns.deleted',
-        jsonb_build_object('turnIds', changed.turn_ids)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS room_agent_turns_event_insert ON room_agent_turns`,
-  `CREATE TRIGGER room_agent_turns_event_insert
-    AFTER INSERT ON room_agent_turns
-    REFERENCING NEW TABLE AS upserted_room_agent_turns
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_upserted_room_agent_turns()`,
-  `DROP TRIGGER IF EXISTS room_agent_turns_event_update ON room_agent_turns`,
-  `CREATE TRIGGER room_agent_turns_event_update
-    AFTER UPDATE ON room_agent_turns
-    REFERENCING NEW TABLE AS upserted_room_agent_turns
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_upserted_room_agent_turns()`,
-  `DROP TRIGGER IF EXISTS room_agent_turns_event_delete ON room_agent_turns`,
-  `CREATE TRIGGER room_agent_turns_event_delete
-    AFTER DELETE ON room_agent_turns
-    REFERENCING OLD TABLE AS deleted_room_agent_turns
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_deleted_room_agent_turns()`,
-  `CREATE OR REPLACE FUNCTION capture_inserted_rooms()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN SELECT id FROM inserted_rooms LOOP
-      PERFORM append_room_event(
-        changed.id,
-        'room.updated',
-        jsonb_build_object('roomId', changed.id)
-      );
-      UPDATE room_event_streams
-      SET deleted_at = NULL,
-        deleted_reader_ids = ARRAY[]::TEXT[]
-      WHERE room_id = changed.id;
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_updated_rooms()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    changed RECORD;
-  BEGIN
-    FOR changed IN
-      SELECT new_rows.id
-      FROM updated_rooms_new AS new_rows
-      JOIN updated_rooms_old AS old_rows USING (id)
-      WHERE new_rows.name IS DISTINCT FROM old_rows.name
-        OR new_rows.description IS DISTINCT FROM old_rows.description
-        OR new_rows.creator_id IS DISTINCT FROM old_rows.creator_id
-        OR new_rows.password_hash IS DISTINCT FROM old_rows.password_hash
-        OR new_rows.posting_schedule IS DISTINCT FROM old_rows.posting_schedule
-        OR new_rows.type IS DISTINCT FROM old_rows.type
-        OR new_rows.sandbox_id IS DISTINCT FROM old_rows.sandbox_id
-        OR new_rows.sandbox_status IS DISTINCT FROM old_rows.sandbox_status
-        OR new_rows.sandbox_updated_at IS DISTINCT FROM old_rows.sandbox_updated_at
-        OR new_rows.sandbox_artifact_version IS DISTINCT FROM old_rows.sandbox_artifact_version
-        OR new_rows.sandbox_code_agent_source_ref IS DISTINCT FROM old_rows.sandbox_code_agent_source_ref
-        OR new_rows.code_agent_session_id IS DISTINCT FROM old_rows.code_agent_session_id
-        OR new_rows.code_agent_status IS DISTINCT FROM old_rows.code_agent_status
-        OR new_rows.code_agent_access IS DISTINCT FROM old_rows.code_agent_access
-        OR new_rows.code_agent_mode IS DISTINCT FROM old_rows.code_agent_mode
-        OR new_rows.code_agent_backend IS DISTINCT FROM old_rows.code_agent_backend
-    LOOP
-      PERFORM append_room_event(
-        changed.id,
-        'room.updated',
-        jsonb_build_object('roomId', changed.id)
-      );
-    END LOOP;
-    RETURN NULL;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION capture_deleted_rooms()
-  RETURNS TRIGGER AS $$
-  DECLARE
-    reader_ids TEXT[];
-  BEGIN
-    SELECT COALESCE(array_agg(reader_id ORDER BY reader_id), ARRAY[]::TEXT[])
-    INTO reader_ids
-    FROM (
-      SELECT client_id AS reader_id FROM room_members WHERE room_id = OLD.id
-      UNION
-      SELECT OLD.creator_id AS reader_id
-    ) AS readers;
-
-    INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, deleted_at, deleted_reader_ids, updated_at)
-    VALUES (OLD.id, 0, 1, NOW(), reader_ids, NOW())
-    ON CONFLICT (room_id) DO UPDATE SET
-      deleted_at = EXCLUDED.deleted_at,
-      deleted_reader_ids = EXCLUDED.deleted_reader_ids;
-
-    PERFORM append_room_event(
-      OLD.id,
-      'room.deleted',
-      jsonb_build_object('roomId', OLD.id)
-    );
-    RETURN OLD;
-  END;
-  $$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS rooms_event_insert ON rooms`,
-  `CREATE TRIGGER rooms_event_insert
-    AFTER INSERT ON rooms
-    REFERENCING NEW TABLE AS inserted_rooms
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_inserted_rooms()`,
-  `DROP TRIGGER IF EXISTS rooms_event_update ON rooms`,
-  `CREATE TRIGGER rooms_event_update
-    AFTER UPDATE ON rooms
-    REFERENCING OLD TABLE AS updated_rooms_old NEW TABLE AS updated_rooms_new
-    FOR EACH STATEMENT EXECUTE FUNCTION capture_updated_rooms()`,
-  `DROP TRIGGER IF EXISTS rooms_event_delete ON rooms`,
-  `CREATE TRIGGER rooms_event_delete
-    BEFORE DELETE ON rooms
-    FOR EACH ROW EXECUTE FUNCTION capture_deleted_rooms()`,
   `CREATE TABLE IF NOT EXISTS code_agent_room_leases (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     turn_id TEXT NOT NULL,
@@ -809,5 +565,567 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: `ALTER TABLE rooms
       DROP COLUMN IF EXISTS message_version,
       DROP COLUMN IF EXISTS room_version`,
+  },
+  {
+    // Replace the old ID-only/current-state-hydrated replay log atomically.
+    // Canonical mutations enqueue changed aggregate IDs inside their transaction;
+    // a deferred trigger materializes safe immutable after-images only after every
+    // row in that domain transaction (including media_assets) has been written.
+    id: '0003_room_events_immutable_after_images',
+    sql: `
+      LOCK TABLE rooms, room_messages, room_agent_turns, room_members, media_assets,
+        room_event_streams, room_events IN ACCESS EXCLUSIVE MODE;
+
+      DROP TRIGGER IF EXISTS room_messages_event_insert ON room_messages;
+      DROP TRIGGER IF EXISTS room_messages_event_update ON room_messages;
+      DROP TRIGGER IF EXISTS room_messages_event_delete ON room_messages;
+      DROP TRIGGER IF EXISTS room_agent_turns_event_insert ON room_agent_turns;
+      DROP TRIGGER IF EXISTS room_agent_turns_event_update ON room_agent_turns;
+      DROP TRIGGER IF EXISTS room_agent_turns_event_delete ON room_agent_turns;
+      DROP TRIGGER IF EXISTS rooms_event_insert ON rooms;
+      DROP TRIGGER IF EXISTS rooms_event_update ON rooms;
+      DROP TRIGGER IF EXISTS rooms_event_delete ON rooms;
+
+      DROP FUNCTION IF EXISTS capture_inserted_room_messages();
+      DROP FUNCTION IF EXISTS capture_updated_room_messages();
+      DROP FUNCTION IF EXISTS capture_deleted_room_messages();
+      DROP FUNCTION IF EXISTS capture_upserted_room_agent_turns();
+      DROP FUNCTION IF EXISTS capture_deleted_room_agent_turns();
+      DROP FUNCTION IF EXISTS capture_inserted_rooms();
+      DROP FUNCTION IF EXISTS capture_updated_rooms();
+      DROP FUNCTION IF EXISTS capture_deleted_rooms();
+
+      ALTER TABLE room_events
+        ADD COLUMN IF NOT EXISTS schema_version SMALLINT NOT NULL DEFAULT 1;
+      ALTER TABLE room_events DROP CONSTRAINT IF EXISTS room_events_schema_version_check;
+      ALTER TABLE room_events ADD CONSTRAINT room_events_schema_version_check
+        CHECK (schema_version = 1);
+      ALTER TABLE room_events DROP CONSTRAINT IF EXISTS room_events_event_type_check;
+      ALTER TABLE room_events ADD CONSTRAINT room_events_event_type_check CHECK (event_type IN (
+        'messages.upserted',
+        'messages.deleted',
+        'agent_turns.upserted',
+        'agent_turns.deleted',
+        'members.upserted',
+        'members.deleted',
+        'room.updated',
+        'room.deleted'
+      ));
+
+      CREATE TABLE IF NOT EXISTS room_event_pending_changes (
+        transaction_id BIGINT NOT NULL,
+        room_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('room', 'message', 'agent_turn', 'member')),
+        entity_id TEXT NOT NULL,
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (transaction_id, room_id, entity_type, entity_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_room_event_pending_changes_transaction
+        ON room_event_pending_changes (transaction_id);
+
+      CREATE OR REPLACE FUNCTION append_room_event(
+        target_room_id TEXT,
+        target_event_type TEXT,
+        target_payload JSONB
+      ) RETURNS BIGINT AS $$
+      DECLARE
+        next_seq BIGINT;
+      BEGIN
+        INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, updated_at)
+        VALUES (target_room_id, 0, 1, NOW())
+        ON CONFLICT (room_id) DO NOTHING;
+
+        UPDATE room_event_streams
+        SET head_seq = head_seq + 1,
+          updated_at = NOW()
+        WHERE room_id = target_room_id
+        RETURNING head_seq INTO next_seq;
+
+        INSERT INTO room_events (room_id, seq, event_type, schema_version, payload, created_at)
+        VALUES (target_room_id, next_seq, target_event_type, 1, target_payload, NOW());
+
+        PERFORM pg_notify(
+          'room_event_committed',
+          json_build_object('roomId', target_room_id, 'headSeq', next_seq)::text
+        );
+        RETURN next_seq;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION enqueue_room_event_change(
+        target_room_id TEXT,
+        target_entity_type TEXT,
+        target_entity_id TEXT
+      ) RETURNS VOID AS $$
+      BEGIN
+        INSERT INTO room_event_pending_changes (
+          transaction_id, room_id, entity_type, entity_id, changed_at
+        ) VALUES (
+          txid_current(), target_room_id, target_entity_type, target_entity_id, clock_timestamp()
+        )
+        ON CONFLICT (transaction_id, room_id, entity_type, entity_id)
+        DO UPDATE SET changed_at = EXCLUDED.changed_at;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION queue_room_event_entity_change()
+      RETURNS TRIGGER AS $$
+      DECLARE
+        target_room_id TEXT;
+        target_entity_id TEXT;
+      BEGIN
+        IF TG_OP = 'DELETE' THEN
+          target_room_id := OLD.room_id;
+          IF TG_TABLE_NAME = 'room_members' THEN
+            target_entity_id := OLD.client_id;
+          ELSE
+            target_entity_id := OLD.id;
+          END IF;
+        ELSE
+          target_room_id := NEW.room_id;
+          IF TG_TABLE_NAME = 'room_members' THEN
+            target_entity_id := NEW.client_id;
+          ELSE
+            target_entity_id := NEW.id;
+          END IF;
+        END IF;
+        IF TG_TABLE_NAME = 'room_messages' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'message', target_entity_id);
+        ELSIF TG_TABLE_NAME = 'room_agent_turns' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'agent_turn', target_entity_id);
+        ELSIF TG_TABLE_NAME = 'room_members' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'member', target_entity_id);
+        END IF;
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION queue_media_asset_message_change()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF TG_OP = 'DELETE' THEN
+          IF OLD.message_id IS NOT NULL THEN
+            PERFORM enqueue_room_event_change(OLD.room_id, 'message', OLD.message_id);
+          END IF;
+          RETURN OLD;
+        END IF;
+        IF TG_OP = 'UPDATE' AND OLD.message_id IS NOT NULL THEN
+          PERFORM enqueue_room_event_change(OLD.room_id, 'message', OLD.message_id);
+        END IF;
+        IF NEW.message_id IS NOT NULL THEN
+          PERFORM enqueue_room_event_change(NEW.room_id, 'message', NEW.message_id);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION queue_active_room_change()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        INSERT INTO room_event_streams (room_id, head_seq, min_available_seq, updated_at)
+        VALUES (NEW.id, 0, 1, NOW())
+        ON CONFLICT (room_id) DO UPDATE SET
+          deleted_at = NULL,
+          deleted_reader_ids = ARRAY[]::TEXT[],
+          updated_at = NOW();
+        PERFORM enqueue_room_event_change(NEW.id, 'room', NEW.id);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION queue_deleted_room_change()
+      RETURNS TRIGGER AS $$
+      DECLARE
+        reader_ids TEXT[];
+      BEGIN
+        SELECT COALESCE(array_agg(reader_id ORDER BY reader_id), ARRAY[]::TEXT[])
+        INTO reader_ids
+        FROM (
+          SELECT client_id AS reader_id FROM room_members WHERE room_id = OLD.id
+          UNION
+          SELECT OLD.creator_id AS reader_id
+        ) AS readers;
+
+        INSERT INTO room_event_streams (
+          room_id, head_seq, min_available_seq, deleted_at, deleted_reader_ids, updated_at
+        ) VALUES (
+          OLD.id, 0, 1, NOW(), reader_ids, NOW()
+        )
+        ON CONFLICT (room_id) DO UPDATE SET
+          deleted_at = EXCLUDED.deleted_at,
+          deleted_reader_ids = EXCLUDED.deleted_reader_ids,
+          updated_at = NOW();
+        PERFORM enqueue_room_event_change(OLD.id, 'room', OLD.id);
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION flush_room_event_changes()
+      RETURNS TRIGGER AS $$
+      DECLARE
+        current_transaction_id BIGINT := txid_current();
+        changed_room RECORD;
+        room_snapshot JSONB;
+        message_rows JSONB;
+        media_rows JSONB;
+        deleted_message_ids JSONB;
+        turn_rows JSONB;
+        deleted_turn_ids JSONB;
+        member_rows JSONB;
+        deleted_member_ids JSONB;
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM room_event_pending_changes
+          WHERE transaction_id = current_transaction_id
+        ) THEN
+          RETURN NULL;
+        END IF;
+
+        FOR changed_room IN
+          SELECT DISTINCT room_id
+          FROM room_event_pending_changes
+          WHERE transaction_id = current_transaction_id
+          ORDER BY room_id
+        LOOP
+          SELECT jsonb_build_object(
+            'id', room_row.id,
+            'name', room_row.name,
+            'description', room_row.description,
+            'created_at', room_row.created_at,
+            'last_activity_at', room_row.last_activity_at,
+            'creator_id', room_row.creator_id,
+            'has_password', room_row.password_hash IS NOT NULL,
+            'posting_schedule', room_row.posting_schedule,
+            'type', room_row.type,
+            'sandbox_id', room_row.sandbox_id,
+            'sandbox_status', room_row.sandbox_status,
+            'sandbox_updated_at', room_row.sandbox_updated_at,
+            'sandbox_artifact_version', room_row.sandbox_artifact_version,
+            'sandbox_code_agent_source_ref', room_row.sandbox_code_agent_source_ref,
+            'code_agent_session_id', room_row.code_agent_session_id,
+            'code_agent_status', room_row.code_agent_status,
+            'code_agent_access', room_row.code_agent_access,
+            'code_agent_mode', room_row.code_agent_mode,
+            'code_agent_backend', room_row.code_agent_backend,
+            'updated_at', room_row.updated_at
+          )
+          INTO room_snapshot
+          FROM rooms AS room_row
+          WHERE room_row.id = changed_room.room_id;
+
+          IF room_snapshot IS NULL THEN
+            IF EXISTS (
+              SELECT 1 FROM room_event_pending_changes
+              WHERE transaction_id = current_transaction_id
+                AND room_id = changed_room.room_id
+                AND entity_type = 'room'
+            ) THEN
+              PERFORM append_room_event(
+                changed_room.room_id,
+                'room.deleted',
+                jsonb_build_object(
+                  'roomId', changed_room.room_id,
+                  'deletedAt', COALESCE(
+                    (SELECT deleted_at FROM room_event_streams WHERE room_id = changed_room.room_id),
+                    NOW()
+                  )
+                )
+              );
+            END IF;
+            CONTINUE;
+          END IF;
+
+          IF EXISTS (
+            SELECT 1 FROM room_event_pending_changes
+            WHERE transaction_id = current_transaction_id
+              AND room_id = changed_room.room_id
+              AND entity_type = 'room'
+          ) THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'room.updated',
+              jsonb_build_object('roomRow', room_snapshot)
+            );
+          END IF;
+
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object(
+              'room_id', member_row.room_id,
+              'client_id', member_row.client_id,
+              'role', member_row.role,
+              'joined_at', member_row.joined_at
+            ) ORDER BY member_row.client_id),
+            '[]'::jsonb
+          )
+          INTO member_rows
+          FROM room_members AS member_row
+          JOIN room_event_pending_changes AS pending
+            ON pending.transaction_id = current_transaction_id
+            AND pending.room_id = member_row.room_id
+            AND pending.entity_type = 'member'
+            AND pending.entity_id = member_row.client_id
+          WHERE member_row.room_id = changed_room.room_id;
+
+          SELECT COALESCE(jsonb_agg(pending.entity_id ORDER BY pending.entity_id), '[]'::jsonb)
+          INTO deleted_member_ids
+          FROM room_event_pending_changes AS pending
+          LEFT JOIN room_members AS member_row
+            ON member_row.room_id = pending.room_id
+            AND member_row.client_id = pending.entity_id
+          WHERE pending.transaction_id = current_transaction_id
+            AND pending.room_id = changed_room.room_id
+            AND pending.entity_type = 'member'
+            AND member_row.client_id IS NULL;
+
+          IF jsonb_array_length(member_rows) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'members.upserted',
+              jsonb_build_object('memberRows', member_rows)
+            );
+          END IF;
+          IF jsonb_array_length(deleted_member_ids) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'members.deleted',
+              jsonb_build_object('memberClientIds', deleted_member_ids, 'deletedAt', NOW())
+            );
+          END IF;
+
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object(
+              'id', message_row.id,
+              'room_id', message_row.room_id,
+              'client_id', message_row.client_id,
+              'client_message_id', message_row.client_message_id,
+              'client_batch_id', message_row.client_batch_id,
+              'client_batch_index', message_row.client_batch_index,
+              'content', message_row.content,
+              'timestamp', message_row.timestamp,
+              'updated_at', message_row.updated_at,
+              'message_type', message_row.message_type,
+              'username', message_row.username,
+              'avatar', message_row.avatar,
+              'mime_type', message_row.mime_type,
+              'status', message_row.status,
+              'turn_id', message_row.turn_id,
+              'model_step_id', message_row.model_step_id,
+              'model_step_sequence', message_row.model_step_sequence,
+              'tool_call_id', message_row.tool_call_id,
+              'tool_name', message_row.tool_name,
+              'tool_args', message_row.tool_args,
+              'tool_output_preview', message_row.tool_output_preview,
+              'exit_code', message_row.exit_code,
+              'is_error', message_row.is_error,
+              'ai_model', message_row.ai_model,
+              'usage', message_row.usage,
+              'cost', message_row.cost,
+              'reply_to', message_row.reply_to,
+              'ui_payload', message_row.ui_payload,
+              'code_agent_mode', message_row.code_agent_mode,
+              'code_agent_queued_input', message_row.code_agent_queued_input,
+              'code_agent_image_message_ids', message_row.code_agent_image_message_ids
+            ) ORDER BY message_row.position),
+            '[]'::jsonb
+          )
+          INTO message_rows
+          FROM room_messages AS message_row
+          JOIN room_event_pending_changes AS pending
+            ON pending.transaction_id = current_transaction_id
+            AND pending.room_id = message_row.room_id
+            AND pending.entity_type = 'message'
+            AND pending.entity_id = message_row.id
+          WHERE message_row.room_id = changed_room.room_id;
+
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_strip_nulls(jsonb_build_object(
+                'id', asset.id,
+                'message_id', asset.message_id,
+                'kind', asset.kind,
+                'mime_type', asset.mime_type,
+                'byte_size', asset.byte_size,
+                'filename', asset.filename,
+                'width', asset.width,
+                'height', asset.height,
+                'duration_ms', asset.duration_ms,
+                'created_at', asset.created_at
+              )) ORDER BY asset.id
+            ),
+            '[]'::jsonb
+          )
+          INTO media_rows
+          FROM media_assets AS asset
+          JOIN room_event_pending_changes AS pending
+            ON pending.transaction_id = current_transaction_id
+            AND pending.room_id = asset.room_id
+            AND pending.entity_type = 'message'
+            AND pending.entity_id = asset.message_id
+          WHERE asset.room_id = changed_room.room_id;
+
+          SELECT COALESCE(jsonb_agg(pending.entity_id ORDER BY pending.entity_id), '[]'::jsonb)
+          INTO deleted_message_ids
+          FROM room_event_pending_changes AS pending
+          LEFT JOIN room_messages AS message_row
+            ON message_row.room_id = pending.room_id
+            AND message_row.id = pending.entity_id
+          WHERE pending.transaction_id = current_transaction_id
+            AND pending.room_id = changed_room.room_id
+            AND pending.entity_type = 'message'
+            AND message_row.id IS NULL;
+
+          IF jsonb_array_length(message_rows) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'messages.upserted',
+              jsonb_build_object('messageRows', message_rows, 'mediaAssets', media_rows)
+            );
+          END IF;
+          IF jsonb_array_length(deleted_message_ids) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'messages.deleted',
+              jsonb_build_object('messageIds', deleted_message_ids, 'deletedAt', NOW())
+            );
+          END IF;
+
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object(
+              'id', turn_row.id,
+              'room_id', turn_row.room_id,
+              'status', turn_row.status,
+              'started_at', turn_row.started_at,
+              'completed_at', turn_row.completed_at,
+              'final_message_id', turn_row.final_message_id,
+              'backend', turn_row.backend,
+              'assistant_name', turn_row.assistant_name,
+              'phase', turn_row.phase,
+              'phase_message', turn_row.phase_message,
+              'last_heartbeat_at', turn_row.last_heartbeat_at,
+              'updated_at', turn_row.updated_at
+            ) ORDER BY turn_row.id),
+            '[]'::jsonb
+          )
+          INTO turn_rows
+          FROM room_agent_turns AS turn_row
+          JOIN room_event_pending_changes AS pending
+            ON pending.transaction_id = current_transaction_id
+            AND pending.room_id = turn_row.room_id
+            AND pending.entity_type = 'agent_turn'
+            AND pending.entity_id = turn_row.id
+          WHERE turn_row.room_id = changed_room.room_id;
+
+          SELECT COALESCE(jsonb_agg(pending.entity_id ORDER BY pending.entity_id), '[]'::jsonb)
+          INTO deleted_turn_ids
+          FROM room_event_pending_changes AS pending
+          LEFT JOIN room_agent_turns AS turn_row
+            ON turn_row.room_id = pending.room_id
+            AND turn_row.id = pending.entity_id
+          WHERE pending.transaction_id = current_transaction_id
+            AND pending.room_id = changed_room.room_id
+            AND pending.entity_type = 'agent_turn'
+            AND turn_row.id IS NULL;
+
+          IF jsonb_array_length(turn_rows) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'agent_turns.upserted',
+              jsonb_build_object('turnRows', turn_rows)
+            );
+          END IF;
+          IF jsonb_array_length(deleted_turn_ids) > 0 THEN
+            PERFORM append_room_event(
+              changed_room.room_id,
+              'agent_turns.deleted',
+              jsonb_build_object('turnIds', deleted_turn_ids, 'deletedAt', NOW())
+            );
+          END IF;
+        END LOOP;
+
+        DELETE FROM room_event_pending_changes
+        WHERE transaction_id = current_transaction_id;
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER room_messages_queue_event_change
+        AFTER INSERT OR UPDATE OR DELETE ON room_messages
+        FOR EACH ROW EXECUTE FUNCTION queue_room_event_entity_change();
+      CREATE TRIGGER room_agent_turns_queue_event_change
+        AFTER INSERT OR UPDATE OR DELETE ON room_agent_turns
+        FOR EACH ROW EXECUTE FUNCTION queue_room_event_entity_change();
+      CREATE TRIGGER room_members_queue_event_change
+        AFTER INSERT OR UPDATE OR DELETE ON room_members
+        FOR EACH ROW EXECUTE FUNCTION queue_room_event_entity_change();
+      CREATE TRIGGER media_assets_queue_message_event_change
+        AFTER INSERT OR UPDATE OR DELETE ON media_assets
+        FOR EACH ROW EXECUTE FUNCTION queue_media_asset_message_change();
+      CREATE TRIGGER rooms_queue_insert_event_change
+        AFTER INSERT ON rooms
+        FOR EACH ROW EXECUTE FUNCTION queue_active_room_change();
+      CREATE TRIGGER rooms_queue_update_event_change
+        AFTER UPDATE ON rooms
+        FOR EACH ROW
+        WHEN (
+          NEW.name IS DISTINCT FROM OLD.name
+          OR NEW.description IS DISTINCT FROM OLD.description
+          OR NEW.creator_id IS DISTINCT FROM OLD.creator_id
+          OR NEW.password_hash IS DISTINCT FROM OLD.password_hash
+          OR NEW.posting_schedule IS DISTINCT FROM OLD.posting_schedule
+          OR NEW.type IS DISTINCT FROM OLD.type
+          OR NEW.sandbox_id IS DISTINCT FROM OLD.sandbox_id
+          OR NEW.sandbox_status IS DISTINCT FROM OLD.sandbox_status
+          OR NEW.sandbox_updated_at IS DISTINCT FROM OLD.sandbox_updated_at
+          OR NEW.sandbox_artifact_version IS DISTINCT FROM OLD.sandbox_artifact_version
+          OR NEW.sandbox_code_agent_source_ref IS DISTINCT FROM OLD.sandbox_code_agent_source_ref
+          OR NEW.code_agent_session_id IS DISTINCT FROM OLD.code_agent_session_id
+          OR NEW.code_agent_status IS DISTINCT FROM OLD.code_agent_status
+          OR NEW.code_agent_access IS DISTINCT FROM OLD.code_agent_access
+          OR NEW.code_agent_mode IS DISTINCT FROM OLD.code_agent_mode
+          OR NEW.code_agent_backend IS DISTINCT FROM OLD.code_agent_backend
+        )
+        EXECUTE FUNCTION queue_active_room_change();
+      CREATE TRIGGER rooms_queue_delete_event_change
+        BEFORE DELETE ON rooms
+        FOR EACH ROW EXECUTE FUNCTION queue_deleted_room_change();
+      CREATE CONSTRAINT TRIGGER room_event_pending_changes_flush
+        AFTER INSERT ON room_event_pending_changes
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION flush_room_event_changes();
+
+      DELETE FROM room_events;
+      UPDATE room_event_streams
+      SET min_available_seq = head_seq + 1,
+        updated_at = NOW()
+      WHERE deleted_at IS NULL;
+
+      DO $$
+      DECLARE
+        deleted_stream RECORD;
+        tombstone_seq BIGINT;
+      BEGIN
+        FOR deleted_stream IN
+          SELECT room_id, deleted_at
+          FROM room_event_streams
+          WHERE deleted_at IS NOT NULL
+          ORDER BY room_id
+        LOOP
+          tombstone_seq := append_room_event(
+            deleted_stream.room_id,
+            'room.deleted',
+            jsonb_build_object(
+              'roomId', deleted_stream.room_id,
+              'deletedAt', deleted_stream.deleted_at
+            )
+          );
+          UPDATE room_event_streams
+          SET min_available_seq = tombstone_seq,
+            updated_at = NOW()
+          WHERE room_id = deleted_stream.room_id;
+        END LOOP;
+      END;
+      $$;
+    `,
   },
 ];

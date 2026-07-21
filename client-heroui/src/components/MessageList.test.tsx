@@ -53,6 +53,7 @@ const socketMock = vi.hoisted(() => {
       id: `${roomId}:${headSeq}`,
       roomId,
       seq: headSeq,
+      schemaVersion: 1,
       type,
       payload,
       createdAt: '2026-07-20T00:00:00.000Z',
@@ -63,6 +64,7 @@ const socketMock = vi.hoisted(() => {
   const api = {
     id: 'socket-1',
     handlers,
+    publishEvent,
     on: vi.fn((event: string, handler: (...args: any[]) => void) => {
       const eventHandlers = handlers.get(event) || new Set();
       eventHandlers.add(handler);
@@ -78,19 +80,6 @@ const socketMock = vi.hoisted(() => {
         const pending = pendingHistory.shift();
         if (pending) resolveHistory(pending, history);
         else queuedHistory.push(history);
-        return;
-      }
-      if (event === 'new_message' || event === 'message_edited') {
-        const saved = args[0] as Message;
-        publishEvent(saved.roomId, 'messages.upserted', { messageIds: [saved.id], messages: [saved] });
-        return;
-      }
-      if (event === 'message_deleted') {
-        publishEvent(args[1] as string, 'messages.deleted', { messageIds: [args[0] as string] });
-        return;
-      }
-      if (event === 'messages_cleared') {
-        publishEvent(args[0] as string, 'room.deleted', { roomId: args[0] as string });
         return;
       }
       handlers.get(event)?.forEach(handler => handler(...args));
@@ -432,8 +421,8 @@ describe('MessageList optimistic messages', () => {
     });
 
     act(() => {
-      socketMock.trigger('new_message', saved);
-      socketMock.trigger('new_message', saved);
+      socketMock.publishEvent(saved.roomId, 'messages.upserted', { messageIds: [saved.id], messages: [saved] });
+      socketMock.publishEvent(saved.roomId, 'messages.upserted', { messageIds: [saved.id], messages: [saved] });
     });
 
     await waitFor(() => {
@@ -633,7 +622,7 @@ describe('MessageList optimistic messages', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('does not downgrade Ask AI to ordinary delivery retry when broadcast arrives before a failed ack', async () => {
+  it('does not downgrade Ask AI to ordinary delivery retry when a committed room event arrives before a failed ack', async () => {
     const ref = createRef<MessageListHandle>();
     render(
       <MessageList
@@ -656,10 +645,11 @@ describe('MessageList optimistic messages', () => {
       }));
     });
     act(() => {
-      socketMock.trigger('new_message', message({
+      const saved = message({
         id: 'canonical-ask-ai',
         clientMessageId,
-      }));
+      });
+      socketMock.publishEvent(saved.roomId, 'messages.upserted', { messageIds: [saved.id], messages: [saved] });
     });
     act(() => {
       ref.current?.markOptimisticMessageFailed(clientMessageId, 'ack timeout');

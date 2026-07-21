@@ -4,7 +4,7 @@
 
 Status: production cutover completed at `room.ruit.me`
 
-Updated: 2026-07-20
+Updated: 2026-07-21
 
 ## Final decision
 
@@ -13,7 +13,7 @@ RoomTalk uses materialized PostgreSQL state plus a bounded per-room change log:
 ```text
 rooms / room_messages / room_agent_turns  canonical current state
 room_event_streams                       headSeq, retention floor, delete readers
-room_events                              bounded replay log
+room_events                              bounded immutable after-image replay log
 outbox_events                            one-worker claim/retry jobs
 Redis                                    presence, Socket.IO adapter, short cache only
 object storage                           media and off-host backups
@@ -21,7 +21,7 @@ object storage                           media and off-host backups
 
 This is similar to consuming a MySQL binlog in that clients advance a monotonic cursor, but it is deliberately an application protocol rather than a database replication log. Browsers receive stable room/message semantics and never depend on WAL/binlog formats.
 
-It is not full event sourcing. Normalized tables remain the source of truth, and the change log may be pruned.
+It is not full Event Sourcing. Normalized tables remain the source of truth, each retained event is an immutable state-transfer after-image, and old prefixes may be pruned.
 
 ## Why this replaces version comparison
 
@@ -40,22 +40,25 @@ The old history socket is rejected with `UPGRADE_REQUIRED`; it is not served by 
 
 ## Database mechanics
 
-PostgreSQL statement transition-table triggers capture message and agent-turn inserts, updates, and deletes. Room inserts/updates are captured as room events; a row-level before-delete trigger records authorized readers and writes the deletion tombstone before cascades.
+Row triggers enqueue room, message, agent-turn, membership, and media changes inside the domain transaction. A deferred writer runs only after all statements in that transaction have assembled the aggregate, so a media event observes both `room_messages` and the subsequently inserted `media_assets`. A room before-delete trigger also captures authorized readers before cascades.
 
-`append_room_event` locks one stream row by updating it, allocates the next sequence, inserts the event, and calls `pg_notify`. Because triggers execute inside the domain transaction:
+The deferred writer constructs bounded, safe `schemaVersion: 1` after-images, then `append_room_event` locks one stream row, allocates the next sequence, inserts the immutable event, and calls `pg_notify`. Because this happens inside the domain transaction:
 
 - rollback removes both state and event;
 - concurrent writers to one room serialize at the stream/room boundary;
 - an idempotent request that performs no second write performs no second event;
 - clear/truncate/edit-and-ask may produce multiple ordered batched events, which is expected.
 
-Stored event payloads contain bounded IDs. The delta read hydrates upserts from current canonical rows, so this is a state-transfer changelog rather than a historical audit trail.
+`readRoomEvents()` directly decodes stored payloads. It never hydrates an old event from current canonical rows, so editing B cannot rewrite the earlier event that recorded A. Message after-images include stable media IDs and metadata but no internal object key, uploader/stream owner, or expiring signed URL. `room.updated` stores a SafeRoom and never stores `password_hash`.
 
 Implemented event types are:
 
 - `messages.upserted`, `messages.deleted`;
 - `agent_turns.upserted`, `agent_turns.deleted`;
+- `members.upserted`, `members.deleted`;
 - `room.updated`, `room.deleted`.
+
+Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 
@@ -63,16 +66,24 @@ Implemented event types are:
 
 `get_room_events` accepts `afterSeq`, count limit, and byte limit. It returns ordered events, `headSeq`, `minAvailableSeq`, and `hasMore`.
 
-- After `NOTIFY`, each app reads and hydrates the exact committed sequence from PostgreSQL. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only `headSeq`.
+- After `NOTIFY`, each app reads the exact immutable committed sequence from PostgreSQL. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only `headSeq`.
 - A client applies the fast path only when it forms the next contiguous prefix and ends at `headSeq`; a successful fast path advances `lastAppliedSeq` without `get_room_events`.
 - A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
 - A browser cursor ahead of a restored database receives `CURSOR_AHEAD` and resnapshots.
 - A non-contiguous page is never partially applied.
-- A retained gap above 500 events resnapshots instead of replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
+- After one bounded probe for a possible terminal deletion tombstone, a retained gap above 500 events resnapshots instead of applying/replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
 - IndexedDB v4 stores the message window and `lastAppliedSeq`.
 - `beforeMessageId` pagination prepends old history without moving the live cursor.
 
-The fast path changes latency, not the correctness boundary. Every app instance may emit duplicates through the Redis adapter; clients ignore already-applied sequences and replay any gap from PostgreSQL. Read/hydration failure and oversized events automatically fall back to the same durable head-only path.
+The fast path changes latency, not the correctness boundary. PostgreSQL fans the hint out to every app listener, and every listener emits only to its own sockets with `io.local`; the Redis adapter does not multiply this durable notification. Clients still ignore already-applied sequences and replay any gap. Exact-event read failure and oversized events automatically fall back to the same durable head-only path.
+
+Because `NOTIFY` is ephemeral, a successful listener re-LISTEN is followed by local `room_sync_required {reason: "postgres_listener_reconnected"}`. Clients keep their rendered window and replay from `lastAppliedSeq`; simultaneous fast-path events remain safe through the same sequence idempotency.
+
+## One-time immutable-event boundary
+
+Migration `0003_room_events_immutable_after_images` takes table locks so no business write can land between replacing the writer and deleting legacy ID-only events. Concurrent app startup is serialized by a transaction-scoped advisory lock and a second migration-record check. The migration preserves every stream `head_seq`, clears nondeterministic history, and sets active `min_available_seq = head_seq + 1`; an old cursor therefore snapshots once and resumes without a sequence reset.
+
+Deleted rooms cannot be snapshotted. For those streams, the migration appends a new V1 `room.deleted` tombstone and preserves `deleted_reader_ids`, with the retention floor pointing at that tombstone. Even a cursor older than the discarded prefix receives this terminal event, and the client allows this single deletion-only sequence jump. This avoids a `CURSOR_EXPIRED` → impossible snapshot loop. There is no permanent dual-format decoder.
 
 ## Retention, not periodic merge
 
@@ -92,6 +103,8 @@ These tables have different consumers and must remain separate:
 | Cleanup | Retained prefix | Processed/failed policy |
 
 For example, a request can commit a user message, its room event, an assistant-run record, and an AI job outbox row together. The worker later commits the final AI message, which creates another room event.
+
+This is why Socket delivery itself has no durable outbox: room data is already recoverable by cursor, and every authorized client is a fan-out reader rather than a competing worker. Retrying Socket notifications would duplicate the log's job. A `messageVersion` is likewise unnecessary because the room sequence already identifies both order and the exact missing range.
 
 ## Portable runtime
 

@@ -75,7 +75,7 @@ import { PostgresCodexConnectionStore, RedisCodexConnectionStore } from './servi
 import { GitHubConnectionService, GitHubTokenCipher } from './services/githubConnection';
 import { resolveGitHubConnectionConfig } from './services/githubConnectionConfig';
 import { PostgresGitHubConnectionStore, RedisGitHubConnectionStore } from './services/githubConnectionStore';
-import { RoomEventBroadcaster } from './services/roomEventBroadcaster';
+import { emitRoomEventLocally, emitRoomSyncRequiredLocally, RoomEventBroadcaster } from './services/roomEventBroadcaster';
 import { RoomEventNotifier } from './services/roomEventNotifier';
 
 dotenv.config();
@@ -298,10 +298,12 @@ const roomEventBroadcaster = new RoomEventBroadcaster({
   store,
   logger: postgresLogger,
   maxPayloadBytes: parsePositiveIntegerEnv('ROOM_EVENT_FAST_PATH_MAX_BYTES', 256 * 1024),
-  emit: event => io.to(event.roomId).emit('room_event_available', event),
+  emit: event => emitRoomEventLocally(io, event),
 });
 const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, event => {
   void roomEventBroadcaster.handle(event);
+}, () => {
+  emitRoomSyncRequiredLocally(io, { reason: 'postgres_listener_reconnected' });
 });
 let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
 

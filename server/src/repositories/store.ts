@@ -1,4 +1,4 @@
-import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -328,6 +328,7 @@ export interface DurableRoomStore {
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions): Promise<RoomMessagePage>;
   readRoomSnapshot?(roomId: string, options?: RoomMessagePageOptions): Promise<RoomSnapshot>;
   readRoomEvents?(roomId: string, options: RoomEventPageOptions): Promise<RoomEventPage>;
+  readRoomEvent?(roomId: string, seq: number): Promise<RoomEvent | null>;
   readRoomEventHead?(roomId: string): Promise<number>;
   canReadRoomEvents?(roomId: string, clientId: string): Promise<boolean>;
   pruneRoomEvents?(options: RoomEventRetentionOptions): Promise<number>;
@@ -653,6 +654,10 @@ export class CompositeRoomStore implements RoomStore {
       throw new Error('The durable store does not support room event replay');
     }
     return this.durableStore.readRoomEvents(roomId, options);
+  }
+
+  readRoomEvent(roomId: string, seq: number) {
+    return this.durableStore.readRoomEvent?.(roomId, seq) || Promise.resolve(null);
   }
 
   readRoomEventHead(roomId: string) {

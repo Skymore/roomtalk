@@ -455,7 +455,7 @@ describe('message socket handlers', () => {
     });
   });
 
-  it('rejects unregistered or invalid sends and broadcasts valid messages', async () => {
+  it('rejects invalid sends and leaves durable fan-out to room_events after a valid write', async () => {
     const unregistered = createHarness(null);
     let unregisteredResponse: unknown;
     await unregistered.socket.invoke('send_message', { roomId: 'room-1', content: 'hello' }, (response: unknown) => {
@@ -509,12 +509,11 @@ describe('message socket handlers', () => {
     assert.equal(created.clientBatchIndex, 1);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
-      { roomId: 'room-1', event: 'new_message', args: [created] },
     ]);
     assert.deepEqual(validResponse, { success: true, message: created });
   });
 
-  it('returns the canonical text message for duplicate client message IDs without rebroadcasting', async () => {
+  it('returns the canonical text message for duplicate client message IDs without duplicate side effects', async () => {
     const text = createHarness('client-2');
     const textResponses: Array<{ success: boolean; message?: Message }> = [];
     const textPayload = {
@@ -533,7 +532,7 @@ describe('message socket handlers', () => {
     });
 
     assert.equal(text.store.appendedMessages.length, 1);
-    assert.equal(text.io.roomEmits.length, 2);
+    assert.equal(text.io.roomEmits.length, 1);
     assert.equal(textResponses.length, 2);
     assert.equal(textResponses[1].message?.id, textResponses[0].message?.id);
     assert.equal(textResponses[1].message?.content, 'retry-safe text');
@@ -631,7 +630,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(closed.io.roomEmits, []);
   });
 
-  it('does not broadcast WebSocket messages when persistence fails', async () => {
+  it('does not expose ghost message state when persistence fails', async () => {
     const failing = createHarness('client-2');
     failing.store.appendMessageIdempotent = async (newMessage: Message) => {
       failing.store.appendedMessages.push(newMessage);
@@ -684,7 +683,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(missingResponse, { success: false, error: 'Quoted message not found' });
   });
 
-  it('edits messages with callbacks and broadcasts successful updates', async () => {
+  it('edits messages with callbacks and leaves durable fan-out to room_events', async () => {
     const unregistered = createHarness(null);
     let unregisteredResponse: unknown;
     await unregistered.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'new' }, (response: unknown) => {
@@ -722,7 +721,6 @@ describe('message socket handlers', () => {
     assert.equal(valid.store.savedHistory.length, 0);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
-      { roomId: 'room-1', event: 'message_edited', args: [response!.updatedMessage] },
     ]);
 
     const ownerEditingOtherUser = createHarness('client-1');
@@ -737,7 +735,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(ownerEditingOtherUser.store.editedMessages, [{ roomId: 'room-1', messageId: 'message-1', newContent: 'owner edit' }]);
   });
 
-  it('does not broadcast edited messages when message mutation fails', async () => {
+  it('does not expose ghost edited state when message mutation fails', async () => {
     const failing = createHarness();
     failing.store.updateMessageContent = async (roomId: string, messageId: string, newContent: string) => {
       failing.store.editedMessages.push({ roomId, messageId, newContent });
@@ -755,7 +753,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(failing.io.roomEmits, []);
   });
 
-  it('deletes messages idempotently and broadcasts only real deletions', async () => {
+  it('deletes messages idempotently and leaves durable fan-out to room_events', async () => {
     const unregistered = createHarness(null);
     let unregisteredResponse: unknown;
     await unregistered.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (response: unknown) => {
@@ -790,7 +788,6 @@ describe('message socket handlers', () => {
     assert.equal(valid.store.savedHistory.length, 0);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
-      { roomId: 'room-1', event: 'message_deleted', args: ['message-1', 'room-1'] },
     ]);
 
     const ownerDeletingOtherUser = createHarness('client-1');
@@ -803,7 +800,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(ownerDeletingOtherUser.store.deletedMessages, [{ roomId: 'room-1', messageId: 'message-1' }]);
   });
 
-  it('does not broadcast deleted messages when message mutation fails', async () => {
+  it('does not expose a ghost deletion when message mutation fails', async () => {
     const failing = createHarness();
     failing.store.deleteMessageById = async (roomId: string, messageId: string) => {
       failing.store.deletedMessages.push({ roomId, messageId });
@@ -821,7 +818,7 @@ describe('message socket handlers', () => {
     assert.deepEqual(failing.io.roomEmits, []);
   });
 
-  it('clears room messages and emits reset events for registered clients', async () => {
+  it('clears room messages, leaves durable reset to room_events, and refreshes transient cost state', async () => {
     const unregistered = createHarness(null);
     await unregistered.socket.invoke('clear_room_messages', 'room-1');
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
@@ -851,12 +848,11 @@ describe('message socket handlers', () => {
 
     assert.deepEqual(valid.store.clearedRooms, ['room-1']);
     assert.deepEqual(valid.io.roomEmits, [
-      { roomId: 'room-1', event: 'messages_cleared', args: ['room-1'] },
       { roomId: 'room-1', event: 'ai_cost_total', args: [roomCost()] },
     ]);
   });
 
-  it('does not broadcast clear events when clearing persistence throws', async () => {
+  it('does not expose a ghost clear when persistence throws', async () => {
     const failing = createHarness();
     failing.store.clearRoomMessages = async (roomId: string) => {
       failing.store.clearedRooms.push(roomId);
@@ -977,7 +973,7 @@ describe('sticker messages over send_message', () => {
     assert.deepEqual(h.io.roomEmits, []);
   });
 
-  it('accepts a valid sticker and broadcasts a sticker message storing only the id', async () => {
+  it('accepts a valid sticker, stores only its id, and leaves durable fan-out to room_events', async () => {
     const h = createHarness('client-2');
     let response: { success: boolean; message?: Message } | undefined;
     await h.socket.invoke('send_message', {
@@ -996,12 +992,11 @@ describe('sticker messages over send_message', () => {
     assert.equal(created.clientMessageId, 'cm-sticker-1');
     assert.deepEqual(h.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
-      { roomId: 'room-1', event: 'new_message', args: [created] },
     ]);
     assert.deepEqual(response, { success: true, message: created });
   });
 
-  it('returns the canonical sticker for a duplicate client message ID without rebroadcasting', async () => {
+  it('returns the canonical sticker for a duplicate client message ID without duplicate side effects', async () => {
     const h = createHarness('client-2');
     const responses: Array<{ success: boolean; message?: Message }> = [];
     const payload = {
@@ -1015,7 +1010,7 @@ describe('sticker messages over send_message', () => {
     await h.socket.invoke('send_message', payload, (response: { success: boolean; message?: Message }) => responses.push(response));
 
     assert.equal(h.store.appendedMessages.length, 1);
-    assert.equal(h.io.roomEmits.length, 2);
+    assert.equal(h.io.roomEmits.length, 1);
     assert.equal(responses[1].message?.id, responses[0].message?.id);
   });
 

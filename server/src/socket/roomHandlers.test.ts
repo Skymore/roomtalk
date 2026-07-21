@@ -1276,7 +1276,7 @@ describe('room socket handlers', () => {
     assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), false);
   });
 
-  it('updates posting schedules, stamps updatedAt, and broadcasts room_updated', async () => {
+  it('updates posting schedules and keeps room_updated user-scoped', async () => {
     const { io, socket } = createHarness('client-1');
     let response: unknown;
 
@@ -1292,7 +1292,7 @@ describe('room socket handlers', () => {
     assert.equal(typeof ack.room?.updatedAt, 'string');
     assert.equal(ack.room?.postingSchedule?.enabled, true);
     const updateEmits = io.roomEmits.filter(item => item.event === 'room_updated');
-    assert.deepEqual(updateEmits.map(item => item.roomId), ['client-1', 'room-1']);
+    assert.deepEqual(updateEmits.map(item => item.roomId), ['client-1']);
     assert.equal(io.roomEmits.some(item => item.event === 'room_permissions_invalidated'), true);
   });
 
@@ -1377,7 +1377,6 @@ describe('room socket handlers', () => {
     assert.equal(valid.store.rooms[0].name, 'Renamed Room');
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [valid.store.rooms[0]] },
-      { roomId: 'room-1', event: 'room_updated', args: [valid.store.rooms[0]] },
     ]);
   });
 

@@ -1062,7 +1062,6 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    io.to(roomId).emit('new_message', message);
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message, logger: routeLogger });
     return res.status(201).json(message);
   });
@@ -1323,7 +1322,6 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
     await store.deletePendingMediaUpload(assetId);
     io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
-    io.to(roomId).emit('new_message', appendResult.message);
     notifyRoomMessageBestEffort({ store, room: appendResult.room, message: appendResult.message, logger: routeLogger });
     return res.status(201).json(appendResult.message);
   });

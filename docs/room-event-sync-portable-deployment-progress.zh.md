@@ -2,9 +2,9 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：已完成的实现与生产切换记录
+状态：不可变事件源码实现已完成；尚未执行生产 migration
 
-实现并切换：2026-07-20
+原基础设施切换：2026-07-20；不可变事件实现验证：2026-07-21
 
 事实源设计：[目标架构](room-event-sync-portable-deployment.zh.md)
 
@@ -28,21 +28,25 @@
 | 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | `bdad6d2f`、`94d7feed`、`f878752d` |
 | 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke 与显式凭据 | 完成 | `a554554c`、`56871060` |
 | 7 | 已提交事件 Socket fast path、有界 payload fallback 与大差距 snapshot 恢复 | 完成 | 当前发布；聚焦证据见下文 |
+| 8 | 不可变 after-image event、listener local-only fan-out、重连反熵与一次性旧事件边界 | 源码完成，未部署 | 当前工作发布；验证见下文 |
 
 定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。runtime 同时接受 `ai-chat.wenlin.dev`，该域名可在原有 DNS zone 中单独切换。
 
 ## 已交付架构
 
 - PostgreSQL 是唯一 durable serving authority；Redis 只保存可重建的 realtime/cache state。
-- Canonical 表仍是事实源；`room_events` 是有界状态传输 changelog，不是完整 Event Sourcing。
-- PostgreSQL trigger 在 room/message/agent-turn 原事务内原子追加 room event。
-- 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`。PostgreSQL `NOTIFY` 标识已提交 sequence；app 再从 PostgreSQL 读取该 sequence，并通常把 hydrate 后的 event 放入 `room_event_available`。
+- Canonical 表仍是事实源；`room_events` 是有界、不可变的 `schemaVersion: 1` after-image changelog，不是完整 Event Sourcing。
+- PostgreSQL row trigger 收集 room/message/agent-turn/member/media mutation，deferred writer 在原事务内追加完整安全 after-image；delta read 直接解码保存 payload，不 hydrate 当前 canonical 行。
+- 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`。PostgreSQL `NOTIFY` 只是 commit 后 hint；每个 app 读取精确 sequence，再用 `io.local` 通知本机 sockets。
 - 客户端只有在 Socket payload 与 `lastAppliedSeq` 严格连续时才直接应用。Payload 缺失、超限、重复或有 gap 仍然安全，因为 `headSeq` 会驱动 durable replay。
+- PG listener 成功 re-LISTEN 后，本实例发送 local `room_sync_required`；客户端保留 UI，从当前 cursor replay。
 - 差距不超过 500 events 时按每页 100 / 256 KiB replay；更大的保留窗口内差距直接切 repeatable-read snapshot，再只排空 snapshot 后的 tail。
 - `CURSOR_EXPIRED`、无法收敛的序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。
 - 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
 - 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
 - AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
+- 旧 `new_message`、`message_edited`、`message_deleted`、`messages_cleared` durable broadcast 已移除；user-scoped `room_updated` 继续服务 room list 与 permission invalidation。
+- Migration `0003_room_events_immutable_after_images` 串行化并发启动、安装新 writer、保留 stream head、让 active 旧历史过期，并为 deleted stream 追加带授权的 V1 tombstone。它只在 disposable PostgreSQL database 验证；本轮没有对生产执行 migration，也没有部署应用。
 - 本地生产 Compose 在现有 S3 adapter 后运行 SeaweedFS 4.29，并继续使用带过期时间的 SigV4 URL；Tigris 与未来 AWS S3 共用相同 object key 和 SDK 边界，`/api/status` 会报告媒体是否就绪。
 - Compose 命令强制带 `--env-file .env.compose`，确保 app 与 PostgreSQL 使用同一份配置凭据，而不是各自落到无关默认值。
 
@@ -54,6 +58,10 @@
 - [x] `get_room_snapshot` / `get_room_events` 与旧协议 upgrade fence。
 - [x] `CURSOR_EXPIRED`、`CURSOR_AHEAD`、条数/字节分页限制。
 - [x] PostgreSQL `LISTEN/NOTIFY` 跨 app instance 唤醒。
+- [x] 每实例 `LISTEN` + `io.local`，避免 Redis adapter 把同一 durable hint 放大 N 份。
+- [x] Listener re-LISTEN 后发送 local `room_sync_required` 反熵。
+- [x] 不可变 Message/Room/RoomAgentTurn/Member/media after-image 与 `schemaVersion: 1` decoder。
+- [x] 并发安全 legacy-event migration boundary，active cursor expiry 与 deleted-room V1 tombstone。
 - [x] 删除服务端运行协议与 cache 对 message/room version 的依赖。
 - [x] Redis recent-message cache 改用 durable event head 守卫。
 - [x] 默认 7 天、每房间 10,000 events 的 retention；删除房间 tombstone 过期后清理 stream。
@@ -88,17 +96,18 @@
 - [x] 生产 local media 的签名/过期/method 约束、浏览器上传刷新、app restart 后字节持久化，以及 database/media 成对恢复。
 - [x] 无权限用户不能读 snapshot/delta；删除前有权限用户可重放 `room.deleted` tombstone。
 - [x] 房间删除 cascade 后 tombstone 仍可读，retention 后连同授权 stream 清理。
+- [x] 两个 Store 同时初始化同一 schema 时，immutable-event migration 只应用一次；显式 DTO allowlist 不会泄漏后来新增的内部列。
 
 ## 最终验证证据
 
 | 验证 | 结果 |
 | --- | --- |
-| Server full suite | 753/753 |
-| Client full suite | 989/989 |
-| 原始 Event hook focused | 15/15 |
-| 已提交事件 fast-path follow-up | 客户端 hook 19/19，broadcaster 4/4 |
+| Server full suite | 756/756 |
+| Client full suite | 992/992 |
+| Event hook focused | 22/22 |
+| Broadcaster + listener focused | 7/7 |
 | Message socket focused | 29/29 |
-| 真实 PostgreSQL event integration | 6/6 |
+| 真实 PostgreSQL event integration | 全新 disposable database 12/12 |
 | PostgreSQL Playwright | 4/4 |
 | Server/client production build | 通过 |
 | 根 Dockerfile 独立构建 | 通过，不依赖 Compose build 输入 |

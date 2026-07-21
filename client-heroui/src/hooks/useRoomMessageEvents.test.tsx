@@ -91,6 +91,7 @@ const event = (seq: number, overrides: Partial<RoomEvent> = {}): RoomEvent => ({
   id: `room-1:${seq}`,
   roomId: 'room-1',
   seq,
+  schemaVersion: 1,
   type: 'messages.upserted',
   payload: { messages: [message({ id: `message-${seq}` })], messageIds: [`message-${seq}`] },
   createdAt: '2026-07-20T00:00:00.000Z',
@@ -378,7 +379,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       roomId: 'room-1', messages: [message({ id: 'cached' })], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
     };
     socketMock.requestEvents.mockImplementation(async request => eventPage(request.requestId, request.afterSeq, {
-      headSeq: request.afterSeq,
+      headSeq: 1000,
     }));
     socketMock.requestSnapshot
       .mockRejectedValueOnce(new Error('temporary snapshot failure'))
@@ -577,6 +578,35 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(3));
   });
 
+  it('replays from lastAppliedSeq after PostgreSQL listener reconnect and merges a duplicate fast path', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 4, hasMore: false, cachedAt: Date.now(),
+    };
+    let releaseReplay: ((value: ReturnType<typeof eventPage>) => void) | undefined;
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, { headSeq: 4 }))
+      .mockImplementationOnce(_request => new Promise(resolve => {
+        releaseReplay = resolve;
+      }));
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_sync_required', { reason: 'postgres_listener_reconnected' }));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(2));
+    expect(socketMock.requestEvents.mock.calls[1][0].afterSeq).toBe(4);
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1', headSeq: 5, events: [event(5)],
+    }));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
+
+    await act(async () => {
+      releaseReplay?.(eventPage('listener-reconnect', 4, { headSeq: 5, events: [event(5)] }));
+    });
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('message-5'));
+    expect(screen.getByTestId('state').dataset.seq).toBe('5');
+  });
+
   it('keeps browser-local optimistic messages while replacing a snapshot', async () => {
     socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
       requestId: request.requestId,
@@ -609,6 +639,45 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.messages).toBe('');
     expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
     expect(mediaCacheMock.clearCachedMediaForRoom).toHaveBeenCalledWith('room-1');
+  });
+
+  it('applies a terminal room deletion tombstone across a pruned legacy prefix', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message()], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: 8,
+      minAvailableSeq: 8,
+      events: [event(8, { type: 'room.deleted', payload: { roomId: 'room-1' } })],
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
+    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+  });
+
+  it('reads a head-only large-gap hint before choosing snapshot so a terminal deletion can converge', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message()], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq))
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        headSeq: 1000,
+        minAvailableSeq: 1000,
+        events: [event(1000, { type: 'room.deleted', payload: { roomId: 'room-1' } })],
+      }));
+
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 1000 }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1000'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
+    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
   });
 
   it('keeps transient AI chunks outside the durable cursor and settles them on stream end', async () => {

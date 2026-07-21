@@ -2,10 +2,25 @@ import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { RoomEvent } from '../types';
 import { RoomEventAvailable } from './roomEventNotifier';
+import type { Server } from 'socket.io';
 
 export interface RoomEventBroadcast extends RoomEventAvailable {
   events?: RoomEvent[];
 }
+
+export interface RoomSyncRequired {
+  reason: 'postgres_listener_reconnected';
+}
+
+export const emitRoomEventLocally = (
+  io: Pick<Server, 'local'>,
+  event: RoomEventBroadcast,
+) => io.local.to(event.roomId).emit('room_event_available', event);
+
+export const emitRoomSyncRequiredLocally = (
+  io: Pick<Server, 'local'>,
+  event: RoomSyncRequired,
+) => io.local.emit('room_sync_required', event);
 
 interface RoomEventBroadcasterOptions {
   store: RoomStore;
@@ -49,17 +64,18 @@ export class RoomEventBroadcaster {
   }
 
   private async broadcast(event: RoomEventAvailable): Promise<void> {
-    if (!this.options.store.readRoomEvents) {
+    if (!this.options.store.readRoomEvent && !this.options.store.readRoomEvents) {
       this.options.emit(event);
       return;
     }
 
-    const page = await this.options.store.readRoomEvents(event.roomId, {
-      afterSeq: event.headSeq - 1,
-      limit: 1,
-      maxBytes: Math.max(16 * 1024, this.options.maxPayloadBytes),
-    });
-    const committedEvent = page.events.find(candidate => candidate.seq === event.headSeq);
+    const committedEvent = this.options.store.readRoomEvent
+      ? await this.options.store.readRoomEvent(event.roomId, event.headSeq)
+      : (await this.options.store.readRoomEvents!(event.roomId, {
+          afterSeq: event.headSeq - 1,
+          limit: 1,
+          maxBytes: Math.max(16 * 1024, this.options.maxPayloadBytes),
+        })).events.find(candidate => candidate.seq === event.headSeq);
     if (!committedEvent) {
       this.options.emit(event);
       return;

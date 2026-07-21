@@ -120,6 +120,12 @@ const reduceRoomEvents = (
       case 'room.updated':
         if (event.payload.room) updatedRoom = event.payload.room;
         break;
+      case 'members.upserted':
+      case 'members.deleted':
+        // Membership is durable in the room sequence, but the active message
+        // window does not own permission/member state. Existing user-scoped
+        // permission events continue to refresh that separate projection.
+        break;
     }
   });
 
@@ -314,10 +320,13 @@ export const useRoomMessageEvents = ({
       for (const event of events) {
         if (event.roomId !== roomId || event.seq <= lastAppliedSeq) continue;
         if (event.seq !== expectedSeq) {
-          return false;
+          // A retained room.deleted tombstone is terminal and can safely jump a
+          // pruned prefix: the deleted room has no snapshot to load instead.
+          if (accepted.length > 0 || event.type !== 'room.deleted') return false;
+          expectedSeq = event.seq;
         }
         accepted.push(event);
-        expectedSeq += 1;
+        expectedSeq = event.seq + 1;
       }
       if (accepted.length === 0) return true;
 
@@ -362,16 +371,6 @@ export const useRoomMessageEvents = ({
             if (!loaded) break;
           }
 
-          if (
-            desiredHeadSeq - lastAppliedSeq > ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD
-            && desiredHeadSeq > lastGapSnapshotTarget
-          ) {
-            const gapSnapshotTarget = desiredHeadSeq;
-            const loaded = await loadSnapshot({ reason: 'event-gap-threshold' });
-            if (!loaded) break;
-            lastGapSnapshotTarget = gapSnapshotTarget;
-          }
-
           let keepReading = true;
           while (keepReading && !cancelled && sessionReadyRef.current) {
             const requestId = `${Date.now()}-${++requestSequence}`;
@@ -384,9 +383,13 @@ export const useRoomMessageEvents = ({
                 maxBytes: ROOM_EVENT_PAGE_MAX_BYTES,
               });
               desiredHeadSeq = Math.max(desiredHeadSeq, page.headSeq);
+              const hasTerminalDeletion = page.events.some(event => (
+                event.type === 'room.deleted' && event.seq === page.headSeq
+              ));
               if (
                 page.headSeq - lastAppliedSeq > ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD
                 && page.headSeq > lastGapSnapshotTarget
+                && !hasTerminalDeletion
               ) {
                 const gapSnapshotTarget = page.headSeq;
                 const loaded = await loadSnapshot({ reason: 'event-gap-threshold' });
@@ -515,6 +518,7 @@ export const useRoomMessageEvents = ({
       if (!hasBaseline || lastAppliedSeq < desiredHeadSeq) void syncFromCursor();
     };
     const handleReconnect = () => void syncFromCursor();
+    const handleRoomSyncRequired = () => void syncFromCursor();
     const handlePageResume = () => {
       if (document.visibilityState === 'visible') void syncFromCursor();
     };
@@ -580,6 +584,7 @@ export const useRoomMessageEvents = ({
     };
 
     socket.on('room_event_available', handleRoomEventAvailable);
+    socket.on('room_sync_required', handleRoomSyncRequired);
     socket.on('connect', handleReconnect);
     socket.on('ai_chunk', handleAIChunk);
     socket.on('a2ui_update', handleA2UIUpdate);
@@ -598,6 +603,7 @@ export const useRoomMessageEvents = ({
       if (scrollTimer) clearTimeout(scrollTimer);
       if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
       socket.off('room_event_available', handleRoomEventAvailable);
+      socket.off('room_sync_required', handleRoomSyncRequired);
       socket.off('connect', handleReconnect);
       socket.off('ai_chunk', handleAIChunk);
       socket.off('a2ui_update', handleA2UIUpdate);

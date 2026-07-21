@@ -19,7 +19,7 @@ interface PgNotificationClient {
   end(): Promise<void>;
 }
 
-type PgModule = {
+export type PgModule = {
   Client: new (config: {
     connectionString: string;
     ssl?: { rejectUnauthorized: boolean; ca?: string } | boolean;
@@ -33,11 +33,15 @@ export class RoomEventNotifier {
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectionGeneration = 0;
+  private hasListened = false;
 
   constructor(
     private readonly databaseUrl: string,
     private readonly logger: Logger,
     private readonly onEventAvailable: (event: RoomEventAvailable) => void,
+    private readonly onListenerReconnected?: () => void,
+    private readonly pgModule?: PgModule,
+    private readonly reconnectDelayMs = RECONNECT_DELAY_MS,
   ) {}
 
   async start(): Promise<void> {
@@ -63,7 +67,7 @@ export class RoomEventNotifier {
 
   private async connect(): Promise<void> {
     const generation = ++this.connectionGeneration;
-    const pg = require('pg') as PgModule;
+    const pg = this.pgModule || require('pg') as PgModule;
     const client = new pg.Client({
       connectionString: this.databaseUrl,
       ssl: resolvePostgresSslConfig(),
@@ -97,7 +101,12 @@ export class RoomEventNotifier {
     try {
       await client.connect();
       await client.query('LISTEN room_event_committed');
+      const reconnected = this.hasListened;
+      this.hasListened = true;
       this.logger.info('Listening for committed room events');
+      if (reconnected) {
+        this.onListenerReconnected?.();
+      }
     } catch (error) {
       if (this.client === client) this.client = null;
       await client.end().catch(() => undefined);
@@ -115,7 +124,7 @@ export class RoomEventNotifier {
         this.logger.warn('Failed to reconnect PostgreSQL room event listener', { error });
         this.scheduleReconnect(this.connectionGeneration);
       });
-    }, RECONNECT_DELAY_MS);
+    }, this.reconnectDelayMs);
     this.reconnectTimer.unref?.();
   }
 }

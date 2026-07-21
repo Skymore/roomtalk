@@ -393,7 +393,6 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     const persistedMessage = appendResult.message;
     if (appendResult.inserted) {
       io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
-      io.to(messageData.roomId).emit('new_message', persistedMessage);
       notifyRoomMessageBestEffort({ store, room: appendResult.room, message: persistedMessage, logger: socketLogger });
     }
     callback?.({ success: true, message: persistedMessage });
@@ -451,7 +450,6 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       }
 
       io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
-      io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
       socketLogger.info('Message edited successfully', { messageId: data.messageId, roomId: data.roomId, editorClientId: clientId });
 
       callback?.({ success: true, updatedMessage: editResult.updatedMessage });
@@ -509,7 +507,6 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       }
 
       io.to(deleteResult.room.creatorId).emit('room_updated', deleteResult.room);
-      io.to(data.roomId).emit('message_deleted', data.messageId, data.roomId);
       socketLogger.info('Message deleted successfully', { messageId: data.messageId, roomId: data.roomId, deleterClientId: clientId });
 
       callback?.({ success: true });
@@ -557,7 +554,6 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
         socketLogger.debug('No messages to clear or key did not exist', { socketId: socket.id, clientId, roomId });
       }
 
-      io.to(roomId).emit('messages_cleared', roomId);
       io.to(roomId).emit('ai_cost_total', await store.readRoomAICost(roomId));
       callback?.({ success: true });
     } catch (error) {

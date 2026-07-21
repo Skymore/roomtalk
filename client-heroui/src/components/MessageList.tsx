@@ -886,7 +886,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       const deliveryError = error instanceof Error
         ? error.message
         : t(failedMessage.messageType === 'sticker' ? 'failedToSendSticker' : 'errorSendingMessage');
-      // A new_message broadcast can replace the optimistic row before its ack
+      // A durable room event can replace the optimistic row before its ack
       // times out. Never turn that already-saved canonical row back into failed.
       updateMessages(previous => previous.map(message => (
         message.clientMessageId === clientMessageId && message.deliveryStatus === 'pending'

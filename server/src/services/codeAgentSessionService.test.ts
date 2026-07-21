@@ -776,8 +776,6 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[1].status, 'complete');
     assert.equal(messages[1].content, 'Working...');
     assert.equal((messages[1] as any).aiStreamOwnerId, 'owner-1');
-    const emittedPlaceholder = emitter.roomEmits.find(event => event.event === 'new_message')?.args[0] as Message;
-    assert.equal((emittedPlaceholder as any).aiStreamOwnerId, undefined);
     assert.equal(messages[2].toolCallId, 'tool-1');
     assert.equal(messages[3].toolOutputPreview, '# RoomTalk');
     assert.equal(messages[3].content, '# RoomTalk');
@@ -1710,12 +1708,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[5].id, 'ai-2');
     assert.equal(messages[5].status, 'complete');
     assert.equal(messages[5].content, 'Done. The program prints Hello, World!');
-    assert.deepEqual(
-      emitter.roomEmits
-        .filter(event => event.event === 'message_deleted')
-        .map(event => event.args[0]),
-      ['ai-1']
-    );
+    assert.equal(emitter.roomEmits.some(event => event.event === 'message_deleted'), false);
   });
 
   it('does not render final answers when a tool-only turn sends no text delta', async () => {
@@ -1750,12 +1743,7 @@ describe('CodeAgentSessionService', () => {
     assert.ok((messages[1].cost?.totalUsd || 0) > 0);
     assert.equal(messages[1].modelStepId, 'turn-1:step:1');
     assert.equal(store.roomCost.totalUsd, messages[1].cost?.totalUsd);
-    assert.deepEqual(
-      emitter.roomEmits
-        .filter(event => event.event === 'message_deleted')
-        .map(event => event.args[0]),
-      ['ai-1']
-    );
+    assert.equal(emitter.roomEmits.some(event => event.event === 'message_deleted'), false);
   });
 
   it('stops the runner before broadcasting the final stream end', async () => {
@@ -2283,7 +2271,7 @@ describe('CodeAgentSessionService', () => {
     await runner.waitForCompletions(2);
   });
 
-  it('returns and broadcasts only the canonical queued message for an idempotent retry', async () => {
+  it('returns only the canonical queued message for an idempotent retry and leaves durable fan-out to room_events', async () => {
     const runner = new BlockingRunner();
     const { emitter, service, store } = createService({
       runner,
@@ -2316,12 +2304,7 @@ describe('CodeAgentSessionService', () => {
       store.messages.get('room-1')?.filter(item => item.clientMessageId === 'queue-request-1').length,
       1,
     );
-    const queuedMessageEmits = emitter.roomEmits.filter(event => (
-      event.event === 'new_message'
-      && (event.args[0] as Message).clientMessageId === 'queue-request-1'
-    ));
-    assert.equal(queuedMessageEmits.length, 1);
-    assert.equal((queuedMessageEmits[0].args[0] as Message).id, 'queued-canonical');
+    assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
 
     await service.cancelQueuedTurn('room-1', 'client-1', 'queued-canonical');
     runner.release();
@@ -2594,12 +2577,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[2].messageType, 'sandbox_status');
     assert.equal(messages[2].isError, true);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
-    const errorBroadcast = emitter.roomEmits.find(event =>
-      event.event === 'new_message' && (event.args[0] as Message).id === messages[1].id
-      && (event.args[0] as Message).status === 'error'
-    );
-    assert.equal((errorBroadcast?.args[0] as Message | undefined)?.status, 'error');
-    assert.equal((errorBroadcast?.args[0] as Message | undefined)?.content, 'runner crashed');
+    assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 
   it('closes pending tool calls with failed results when the runner errors', async () => {
@@ -2623,10 +2601,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(store.roomCost.totalUsd, messages[2].cost?.totalUsd);
     assert.match(messages[3].content, /Tool interrupted before completion/);
     assert.match(messages[3].content, /E2B command wait failed/);
-    const toolResultBroadcast = emitter.roomEmits.find(event =>
-      event.event === 'new_message' && (event.args[0] as Message).messageType === 'tool_result'
-    );
-    assert.equal((toolResultBroadcast?.args[0] as Message | undefined)?.toolCallId, 'tool-1');
+    assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 
   it('closes pending tool calls with failed results when the runner finalizes after interruption', async () => {
@@ -2653,9 +2628,6 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[2].status, 'error');
     assert.equal(messages[2].isError, true);
     assert.match(messages[2].content, /agent turn ended before tool completion/);
-    const toolResultBroadcast = emitter.roomEmits.find(event =>
-      event.event === 'new_message' && (event.args[0] as Message).messageType === 'tool_result'
-    );
-    assert.equal((toolResultBroadcast?.args[0] as Message | undefined)?.toolCallId, 'tool-1');
+    assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 });

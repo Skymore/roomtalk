@@ -1279,7 +1279,6 @@ export function registerAIHandlers({
       callback?.({ success: false, error: 'Unable to queue AI response' });
       return;
     }
-    io.to(roomId).emit('new_message', initialAiMessage);
     callback?.({ success: true, messageId: aiMessageId });
     if (runnerMode === 'worker') {
       openaiLogger.info('Queued AI run for outbox worker', { runId: aiRunId, messageId: aiMessageId, roomId, model: selectedModel.id });
@@ -2133,7 +2132,6 @@ export function registerAIHandlers({
     }
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    io.to(data.roomId).emit('new_message', userMessage);
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message: userMessage, logger: socketLogger });
 
     if (roomForAIRequest?.type === 'codeAgent') {
@@ -2278,7 +2276,6 @@ export function registerAIHandlers({
     }
 
     io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
-    io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
     notifyMessageHistoryInvalidated(data.roomId, 'edit-and-ask-truncated');
 
     if (isCodeAgentRoom) {
@@ -2360,7 +2357,6 @@ export function registerAIHandlers({
     }
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    io.to(roomId).emit('new_message', followUpMessage);
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message: followUpMessage, logger: socketLogger });
 
     const latestHistory = await store.readMessagesByRoom(roomId);

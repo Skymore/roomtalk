@@ -192,6 +192,13 @@ export interface Room {
 
 export type RoomMemberRole = 'owner' | 'admin' | 'member';
 
+export interface RoomMember {
+  roomId: string;
+  clientId: string;
+  role: RoomMemberRole;
+  joinedAt: string;
+}
+
 export interface RoomPostingWindow {
   days: number[];
   start: string;
@@ -225,6 +232,8 @@ export type RoomEventType =
   | 'messages.deleted'
   | 'agent_turns.upserted'
   | 'agent_turns.deleted'
+  | 'members.upserted'
+  | 'members.deleted'
   | 'room.updated'
   | 'room.deleted';
 
@@ -232,14 +241,18 @@ export interface RoomEvent {
   id: string;
   roomId: string;
   seq: number;
+  schemaVersion: 1;
   type: RoomEventType;
   payload: {
     messages?: Message[];
     messageIds?: string[];
     turns?: RoomAgentTurn[];
     turnIds?: string[];
+    members?: RoomMember[];
+    memberClientIds?: string[];
     room?: Room;
     roomId?: string;
+    deletedAt?: string;
   };
   createdAt: string;
 }
@@ -269,6 +282,10 @@ export interface RoomEventAvailable {
   roomId: string;
   headSeq: number;
   events?: RoomEvent[];
+}
+
+export interface RoomSyncRequired {
+  reason: 'postgres_listener_reconnected';
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

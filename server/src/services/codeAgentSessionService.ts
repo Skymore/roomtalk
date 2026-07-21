@@ -31,7 +31,7 @@ import {
   DEFAULT_CODE_AGENT_RUNNER_COMMAND,
 } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
-import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
+import { withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
 import type { MediaObjectStorage } from './mediaObjectStorage';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
@@ -369,7 +369,6 @@ export class CodeAgentSessionService {
           throw new Error(publicFailureMessage);
         }
         this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
-        this.emitter.to(input.roomId).emit('message_edited', materialized.updatedMessage);
       }
 
       const placeholderRoom = await this.store.upsertMessage(aiMessage);
@@ -391,7 +390,6 @@ export class CodeAgentSessionService {
         lastHeartbeatAt: turnStartedAt,
         updatedAt: turnStartedAt,
       });
-      this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
       placeholderAnnounced = true;
       heartbeatTimer = setInterval(() => {
         void updateTurn({ lastHeartbeatAt: this.now().toISOString() });
@@ -679,7 +677,6 @@ export class CodeAgentSessionService {
           return null;
         });
         if (deleteResult) {
-          this.emitter.to(input.roomId).emit('message_deleted', aiMessageId, input.roomId);
         }
       }
 
@@ -690,7 +687,6 @@ export class CodeAgentSessionService {
           await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
             this.logger.warn('Failed to clean up unused code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
           });
-          this.emitter.to(input.roomId).emit('message_deleted', aiMessageId, input.roomId);
         }
       }
 
@@ -868,7 +864,6 @@ export class CodeAgentSessionService {
     const persistedMessage = appendResult.message;
     if (appendResult.inserted) {
       this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
-      this.emitter.to(input.roomId).emit('new_message', persistedMessage);
     }
 
     // Queue is also valid in the completion race: it becomes the next turn immediately.
@@ -907,7 +902,6 @@ export class CodeAgentSessionService {
       return { success: false, error: 'Queued agent input is no longer cancellable' };
     }
     this.emitter.to(result.room.creatorId).emit('room_updated', result.room);
-    this.emitter.to(roomId).emit('message_deleted', messageId, roomId);
     return { success: true };
   }
 
@@ -1755,7 +1749,6 @@ export class CodeAgentSessionService {
       return { success: false, error: missingError };
     }
     this.emitter.to(result.room.creatorId).emit('room_updated', result.room);
-    this.emitter.to(roomId).emit('message_edited', result.updatedMessage);
     return { success: true };
   }
 
@@ -1781,7 +1774,6 @@ export class CodeAgentSessionService {
       return;
     }
     this.emitter.to(claim.room.creatorId).emit('room_updated', claim.room);
-    this.emitter.to(roomId).emit('message_edited', claim.message);
 
     const hasCodexSettings = Boolean(
       queuedInput.codexModel ||
@@ -1924,7 +1916,6 @@ export class CodeAgentSessionService {
       }
       active.pendingSteerMessageIds.delete(event.messageId);
       this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
-      this.emitter.to(roomId).emit('message_edited', materialized.updatedMessage);
       return;
     }
     if (event.type === 'usage') {
@@ -1970,7 +1961,6 @@ export class CodeAgentSessionService {
           throw new Error('Unable to create new AI segment message');
         }
         this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
-        this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
         state.activeMessageId = newId;
         state.lastMessageId = newId;
         state.segmentContent = '';
@@ -2034,7 +2024,6 @@ export class CodeAgentSessionService {
       }
       state.lastMessageId = mapped.message.id;
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-      this.emitter.to(roomId).emit('new_message', mapped.message);
     }
   }
 
@@ -2100,7 +2089,6 @@ export class CodeAgentSessionService {
       state.segmentHasUnsealedText = false;
       await this.commitCocoModelStepCost(roomId, state, step);
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-      this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(completedMessage));
     } else if (event.toolCallIds.length === 0) {
       throw new Error(`Coco model step has no text or tool calls: ${event.stepId}`);
     }
@@ -2160,7 +2148,6 @@ export class CodeAgentSessionService {
       });
       if (updatedRoom) {
         this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-        this.emitter.to(roomId).emit('new_message', message);
       }
       await this.recordObservabilityEvent({
         level: 'warn',
@@ -2241,7 +2228,6 @@ export class CodeAgentSessionService {
       return null;
     });
     if (updatedRoom) {
-      this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(errorMessage));
     }
     const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
     if (errorRoom) {

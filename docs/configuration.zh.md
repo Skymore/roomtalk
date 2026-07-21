@@ -38,7 +38,7 @@
 
 唯一受支持的 serving model 是 PostgreSQL durable state + Redis realtime/cache state。Redis 运行时仍必需，但允许清空并重建，不能作为 durable fallback。旧 Redis store 只保留给 import 与 contract coverage。
 
-`room_event_streams` 与 `room_events` 是客户端同步边界。事务提交后，app 从 PostgreSQL 读取通知对应的 sequence，并通常把 hydrate 后的 event 放入 `room_event_available`；客户端只直接应用连续 fast path，否则从 `lastAppliedSeq` 补拉。保留窗口内落后超过 500 个事件会直接切 repeatable-read snapshot，较小 gap 默认按每页 100 events / 256 KiB 读取。Event log 是有界 replay changelog，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制。
+`room_event_streams` 与 `room_events` 是客户端同步边界。Canonical mutation 与安全的 `schemaVersion: 1` after-image 同事务提交。`NOTIFY` 只是 hint：每个 app 读取精确的不可变事件，再用 `io.local` 发送，通常在 `room_event_available` 中直接携带 event；客户端只直接应用连续 fast path，否则从 `lastAppliedSeq` 补拉。Listener re-LISTEN 会向本机发 `room_sync_required`。保留窗口内落后超过 500 个事件会直接切 repeatable-read snapshot，较小 gap 默认按每页 100 events / 256 KiB 读取。Event log 有界，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制，transient Socket event 不消耗 room seq。
 
 ## 媒体与 Artifact
 

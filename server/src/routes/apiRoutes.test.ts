@@ -1265,7 +1265,7 @@ describe('API routes', () => {
     assert.deepEqual(await messageResponse.json(), { error: 'Client ID, room ID, and message content are required' });
   });
 
-  it('creates text messages by default and broadcasts them to the room', async () => {
+  it('creates text messages and leaves durable room fan-out to room_events', async () => {
     server.store.members.add('room-1:client-2');
     const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, {
       method: 'POST',
@@ -1282,7 +1282,6 @@ describe('API routes', () => {
     assert.equal(server.store.appendedMessages[0].id, message.id);
     assert.deepEqual(server.emitted, [
       { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
-      { target: 'room-1', event: 'new_message', payload: message },
     ]);
   });
 
@@ -1301,7 +1300,7 @@ describe('API routes', () => {
     assert.deepEqual(server.emitted, []);
   });
 
-  it('creates media messages through the atomic media append path and broadcasts the saved message', async () => {
+  it('creates media messages atomically and leaves durable room fan-out to room_events', async () => {
     server.store.members.add('room-1:client-2');
 
     const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
@@ -1369,10 +1368,8 @@ describe('API routes', () => {
     assert.equal(server.store.appendedMessages[0].id, message.id);
     assert.equal(server.store.appendedMediaAssets[0].messageId, message.id);
     assert.equal(server.store.pendingMediaUploads.has(upload.assetId), false);
-    const broadcastMessage = server.store.appendedMessages[0];
     assert.deepEqual(server.emitted, [
       { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
-      { target: 'room-1', event: 'new_message', payload: broadcastMessage },
     ]);
   });
 

@@ -2,9 +2,9 @@
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: Completed implementation and production cutover record
+Status: Immutable-event source implementation complete; production migration not executed
 
-Implemented and cut over: 2026-07-20
+Original infrastructure cutover: 2026-07-20. Immutable-event implementation verified: 2026-07-21.
 
 Design authority: [target architecture](room-event-sync-portable-deployment.md)
 
@@ -28,22 +28,26 @@ Work started from clean local `master` at `d94d2cd0`. The old client recovered b
 | 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | `bdad6d2f`, `94d7feed`, `f878752d` |
 | 6 | Final write freeze, log archive, data restore, DNS route, public HTTP/WebSocket/S3 smoke, explicit credentials | Complete | `a554554c`, `56871060` |
 | 7 | Committed-event Socket fast path, bounded payload fallback, and large-gap snapshot recovery | Complete | Current release; focused evidence below |
+| 8 | Immutable after-image events, local-only listener fan-out, listener reconnect anti-entropy, and one-time legacy-event boundary | Source complete; not deployed | Current working release; verification below |
 
 The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supabase and Tigris remain intact as rollback sources. `room.ruit.me`, the compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` now route to the Mac through a dedicated Cloudflare Tunnel. `ai-chat.wenlin.dev` is accepted by the runtime and can be routed separately through its existing DNS zone.
 
 ## Delivered architecture
 
 - PostgreSQL is the only durable serving authority; Redis is rebuildable realtime/cache state.
-- Canonical tables remain the source of truth. `room_events` is a bounded state-transfer changelog, not full Event Sourcing.
-- PostgreSQL triggers append committed room events atomically with room, message, and agent-turn writes.
-- Clients use `snapshotSeq`, `afterSeq`, and `lastAppliedSeq`. PostgreSQL `NOTIFY` identifies a committed sequence; the app reads that sequence back from PostgreSQL and normally includes the hydrated event in `room_event_available`.
+- Canonical tables remain the source of truth. `room_events` is a bounded immutable `schemaVersion: 1` after-image changelog, not full Event Sourcing.
+- PostgreSQL row triggers collect room/message/agent-turn/member/media mutations and a deferred writer appends complete safe after-images in the original transaction. Delta reads decode stored payloads and do not hydrate current canonical rows.
+- Clients use `snapshotSeq`, `afterSeq`, and `lastAppliedSeq`. PostgreSQL `NOTIFY` is only a post-commit hint; every app reads the exact sequence and emits it to local sockets with `io.local`.
 - A client applies a Socket payload only when it is exactly contiguous with `lastAppliedSeq`. Missing, oversized, duplicate, or gapped payloads remain safe because `headSeq` drives durable replay.
+- After a PG listener successfully re-LISTENs, the instance sends local `room_sync_required`; clients replay from the current cursor without clearing UI.
 - Gaps of at most 500 events replay in pages of 100 / 256 KiB. A larger retained gap switches directly to a repeatable-read snapshot, then drains only the post-snapshot tail.
 - `CURSOR_EXPIRED`, irreconcilable gaps, and `CURSOR_AHEAD` all resnapshot safely.
 - The old history socket returns `UPGRADE_REQUIRED`; runtime `messageVersion`/`roomVersion` fields and database columns are gone.
 - Complete-room ack/broadcast ordering uses a database-stamped, strictly monotonic `updatedAt`; it is a last-write guard, not another synchronization version.
 - Hourly retention removes old contiguous prefixes. There is no periodic event-to-message merge because canonical state is already updated in the original transaction.
 - AI execution continues to use a separate claim/retry outbox; room replay events are not worker jobs.
+- Legacy `new_message`, `message_edited`, `message_deleted`, and `messages_cleared` durable broadcasts are removed. User-scoped `room_updated` remains for room lists and permission invalidation.
+- Migration `0003_room_events_immutable_after_images` serializes concurrent startup, installs the writer, preserves stream heads, expires active legacy history, and appends an authorized V1 tombstone for deleted streams. It has been tested only in a disposable PostgreSQL database; this work did not run it against production or deploy the application.
 - Local production Compose runs SeaweedFS 4.29 behind the existing S3 adapter and expiring SigV4 URLs. Tigris and future AWS S3 use the same object keys and SDK boundary. `/api/status` reports media readiness.
 - Compose commands require `--env-file .env.compose`, so the app and PostgreSQL receive the same configured credentials instead of unrelated defaults.
 
@@ -51,12 +55,12 @@ The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supaba
 
 | Boundary | Result |
 | --- | --- |
-| Server full suite | 753/753 |
-| Client full suite | 989/989 |
-| Original event hook focused suite | 15/15 |
-| Committed-event fast-path follow-up | 19/19 client hook tests and 4/4 broadcaster tests |
+| Server full suite | 756/756 |
+| Client full suite | 992/992 |
+| Event hook focused suite | 22/22 |
+| Broadcaster and listener focused suites | 7/7 |
 | Socket message handlers | 29/29 |
-| Real PostgreSQL event integration | 6/6 |
+| Real PostgreSQL event integration | 12/12 in a fresh disposable database |
 | PostgreSQL Playwright | 4/4 |
 | Production builds and client lint | Passed |
 | Standalone root Dockerfile build | Passed without Compose-specific build inputs |
@@ -74,7 +78,7 @@ The event-schema restore contained one room, member, message, stream, and two or
 
 ## Covered common cases
 
-Automation covers a repeatable snapshot boundary, contiguous committed-event delivery without another read, oversized-payload head-only fallback, offline replay without refresh, duplicate notifications/events, sequence gaps, gaps over 500 events switching to snapshot, cursor retention expiry, restored-database cursor rollback, concurrent writers, monotonic complete-room metadata, idempotent retries, transaction rollback, edit/delete/clear/truncate flows, AI final/error recovery, media completion, two-client realtime, authorization, and deleted-room tombstone replay. Media coverage now also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
+Automation covers immutable A-then-B message history after later deletion, distinct room and agent-turn after-images, stable media metadata, membership/role events, explicit DTO allowlisting against a future internal column, secret and expiring-URL exclusion, deletion tombstones after canonical rows disappear, rollback without sequence advancement, concurrent unique sequences, two stores concurrently applying the active/deleted legacy cutover exactly once, exact fast-path reads, oversized head-only fallback, three-instance local-only fan-out, listener re-LISTEN anti-entropy, simultaneous reconnect replay and duplicate fast path, cursor expiry, restored-database rollback, and the existing snapshot/replay flows. Media coverage also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
 
 The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `room.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
 

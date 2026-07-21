@@ -396,9 +396,7 @@ describe('AI socket handlers', () => {
     assert.deepEqual(store.messages.map(item => item.id), ['message-1', streamingMessage.id]);
     assert.equal(store.messages[1].status, 'complete');
 
-    const newMessageEvent = io.roomEmits.find(event => event.event === 'new_message');
-    assert.ok(newMessageEvent);
-    assert.equal(((newMessageEvent.args[0] as Message) as any).aiStreamOwnerId, undefined);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.deepEqual(response, { success: true, messageId: streamingMessage.id });
     const aiChunkEvents = io.roomEmits.filter(event => event.event === 'ai_chunk');
@@ -455,7 +453,7 @@ describe('AI socket handlers', () => {
     assert.equal(store.outboxEvents[0].attempts, 0);
     assert.equal(store.outboxEvents[0].payload.runId, store.assistantRuns[0].id);
     assert.equal(store.outboxEvents[0].payload.aiMessageId, store.upsertedMessages[0].id);
-    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
@@ -1173,8 +1171,7 @@ describe('AI socket handlers', () => {
 
     assert.deepEqual(store.editAndTruncateCalls, [{ roomId: 'room-1', messageId: 'message-edited', newContent: 'edited prompt' }]);
     assert.equal(store.savedHistories.length, 0);
-    const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
-    assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
+    assert.equal(store.messages.find(item => item.id === 'message-edited')?.content, 'edited prompt');
     const historyInvalidatedEvent = io.roomEmits.find(event => event.event === 'message_history_invalidated');
     assert.deepEqual(historyInvalidatedEvent?.args[0], {
       roomId: 'room-1',
@@ -1236,8 +1233,7 @@ describe('AI socket handlers', () => {
       promptMessageId: 'message-edited',
     });
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
-    const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
-    assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
+    assert.equal(store.messages.find(item => item.id === 'message-edited')?.content, 'edited prompt');
     const historyInvalidatedEvent = io.roomEmits.find(event => event.event === 'message_history_invalidated');
     assert.deepEqual(historyInvalidatedEvent?.args[0], {
       roomId: 'room-1',
@@ -1288,15 +1284,7 @@ describe('AI socket handlers', () => {
     assert.equal(response?.aiMessageId, store.upsertedMessages[0].id);
     assert.equal(response?.aiStarted, true);
 
-    const userMessageEventIndex = io.roomEmits.findIndex(event =>
-      event.event === 'new_message' && (event.args[0] as Message).id === userMessage.id
-    );
-    const aiPlaceholderEventIndex = io.roomEmits.findIndex(event =>
-      event.event === 'new_message' && (event.args[0] as Message).clientId === 'ai_assistant'
-    );
-    assert.ok(userMessageEventIndex !== -1);
-    assert.ok(aiPlaceholderEventIndex !== -1);
-    assert.ok(userMessageEventIndex < aiPlaceholderEventIndex);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(store.upsertedMessages[1].content, expectedE2EFakeContent('fresh prompt'));
   });
 
@@ -1408,9 +1396,7 @@ describe('AI socket handlers', () => {
     assert.equal(response?.userMessage, store.appendedMessages[0]);
     assert.equal(response?.aiMessageId, 'code-agent-ai-2');
     assert.equal(response?.aiStarted, true);
-    assert.equal(io.roomEmits.some(event =>
-      event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
-    ), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
   });
 
   it('rejects code-agent send-message-and-ask-ai before saving when the member cannot use code agent', async () => {
@@ -1487,9 +1473,7 @@ describe('AI socket handlers', () => {
     assert.equal(response?.aiStarted, false);
     assert.equal(response?.aiMessageId, undefined);
     assert.equal(response?.aiError, 'Unable to start a durable AI response');
-    assert.equal(io.roomEmits.some(event =>
-      event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
-    ), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
@@ -1598,7 +1582,7 @@ describe('AI socket handlers', () => {
     assert.ok(followUp, 'expected a follow-up user message to be appended');
     assert.match(followUp!.content, /selectedNextStep/);
     assert.doesNotMatch(followUp!.content, /followUp/);
-    assert.ok(io.roomEmits.some(event => event.event === 'new_message'));
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.ok(io.roomEmits.some(event => event.event === 'ai_stream_end'), 'expected a new AI turn to complete');
   });
 
