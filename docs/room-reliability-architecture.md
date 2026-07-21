@@ -77,7 +77,7 @@ The log is a bounded immutable after-image changelog, not an audit log and not f
 
 Clear, truncate, retry, and edit-and-ask operations are represented by one or more ordered batched upsert/delete events. A business operation is therefore not required to map to exactly one event. What is required is that every committed visible row change and its events share the same transaction, while a rollback leaves neither.
 
-AI chunks and incremental UI updates remain transient Socket fast paths. They can arrive before the placeholder's independent PostgreSQL notification, so the browser buffers unmatched `ai_chunk`, `a2ui_update`, and `ai_stream_end` events by `messageId`, then drains them in arrival order when the placeholder appears. The buffer is bounded to 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
+AI chunks and incremental UI updates remain transient Socket fast paths. They can arrive before the placeholder's independent PostgreSQL notification, so the browser buffers unmatched `ai_chunk`, `a2ui_update`, and `ai_stream_end` events by `messageId`, then drains them in arrival order when the placeholder appears. The buffer is bounded to 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. Once the placeholder exists, each transient handler updates the canonical projection and applies the same reducer to the current React state instead of replacing it, so a concurrently added pending/failed optimistic send remains visible. The durable placeholder and final/error message are room-event fast paths after commit and remain replayable after missed delivery.
 
 Typing, presence, voice levels, and WebRTC signalling are also transient and do not consume a durable room sequence. If reactions become a durable product model, their `reactions.upserted` / `reactions.deleted` after-images must join this sequence rather than introducing a second version counter.
 
@@ -108,7 +108,8 @@ This direct boundary intentionally has no long-lived dual decoder. It also needs
 The implementation is guarded by:
 
 - store and socket unit/contract tests;
-- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, invalid-payload snapshots, deletes, turns, metadata, and early transient AI event buffering;
+- broadcaster/reducer tests for exact committed payloads, local-only fan-out, listener reconnect anti-entropy, size fallback, per-room ordering, fast-path application without replay, large-gap snapshots, cache resume, expiry, restore-behind, invalid-payload snapshots, deletes, turns, metadata, early transient AI event buffering, and optimistic-send preservation during transient AI updates;
+- database-independent strict V1 payload unit tests for every event type, empty AI/media content, missing/extra fields, room binding, duplicate IDs, and retired ID-only payloads;
 - real PostgreSQL tests for immutable message/room/turn/media after-images, empty public membership signals, member-event privacy repair, strict payload rejection, secret exclusion, migration cutover, snapshot boundaries, idempotency, rollback, concurrent writers, monotonic room metadata, retention, and deletion authorization;
 - Playwright PostgreSQL tests for reload/fresh-context persistence, media/AI/share flows, two clients, and offline replay;
 - Compose health, restart persistence, and backup/restore checks.

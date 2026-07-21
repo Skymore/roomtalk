@@ -82,6 +82,7 @@
 - [x] 完整 room ack/broadcast 以 canonical `updatedAt` 防止旧对象回踩。
 - [x] `updatedAt` 由数据库 trigger 严格单调盖章，只是完整对象的 last-write guard，不是第二套同步 version。
 - [x] placeholder 前 AI chunk/A2UI/end 有界暂存并按序 drain；durable final 始终优先。
+- [x] AI transient 更新分别处理 canonical 与当前 UI state，不覆盖动态加入的 pending/failed optimistic message。
 - [x] 旧 IndexedDB cache 通过数据库名升级不再读取。
 
 ## 常见用例自动化矩阵
@@ -103,14 +104,15 @@
 - [x] 房间删除 cascade 后 tombstone 仍可读，retention 后连同授权 stream 清理。
 - [x] 两个 Store 同时初始化同一 schema 时，immutable-event migration 只应用一次；显式 DTO allowlist 不会泄漏后来新增的内部列。
 - [x] 公共成员 event 不含 member ID/role；`0004` 会清洗旧 payload；坏 event 不推进 cursor，合法空内容 AI placeholder 可严格解码。
+- [x] 普通 Server test 不依赖 PostgreSQL 即覆盖全部 V1 event type、空 AI/media content 与各类非法 payload。
 
 ## 最终验证证据
 
 | 验证 | 结果 |
 | --- | --- |
-| Server full suite | 757/757 |
-| Client full suite | 999/999 |
-| Event hook + pending-AI-buffer focused | 29/29 |
+| Server full suite | 763/763 |
+| Client full suite | 1,000/1,000 |
+| Event hook + pending-AI-buffer focused | 30/30 |
 | Broadcaster + listener focused | 7/7 |
 | Message socket focused | 30/30 |
 | 真实 PostgreSQL event integration | 全新 disposable database 15/15 |

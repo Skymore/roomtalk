@@ -76,6 +76,8 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 - Hardened the public event contract so membership changes reveal no IDs or roles; privileged member data remains behind `get_room_role_members`, and migration `0004` scrubs any pre-production member payloads.
 - Documented strict V1 payload decoding: malformed stored events return `EVENT_PAYLOAD_INVALID`, do not advance the cursor, and converge through a canonical snapshot.
 - Documented the bounded client buffer for AI chunk/A2UI/end events that arrive before their durable placeholder, including durable-final precedence and the 60-second / 64-ID / 512-event / 512-KiB limits.
+- Clarified that AI transient reducers update canonical and current UI state separately, preserving concurrently added pending/failed optimistic sends.
+- Added database-independent unit coverage for every strict V1 payload variant and its critical rejection cases, so ordinary server CI protects the protocol even when PostgreSQL integration tests are skipped.
 - Recorded the production release boundary: stop old app instances before `0003`/`0004`; a future multi-instance rollout requires two-phase compatibility or the same maintenance window.
 
 ## Earlier Audit Corrections (2026-07-13)

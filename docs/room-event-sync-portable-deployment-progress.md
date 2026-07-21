@@ -58,9 +58,9 @@ The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supaba
 
 | Boundary | Result |
 | --- | --- |
-| Server full suite | 757/757 |
-| Client full suite | 999/999 |
-| Event hook + pending-AI-buffer focused suites | 29/29 |
+| Server full suite | 763/763 |
+| Client full suite | 1,000/1,000 |
+| Event hook + pending-AI-buffer focused suites | 30/30 |
 | Broadcaster and listener focused suites | 7/7 |
 | Socket message handlers | 30/30 |
 | Real PostgreSQL event integration | 15/15 in a fresh disposable database |
@@ -81,7 +81,7 @@ The event-schema restore contained one room, member, message, stream, and two or
 
 ## Covered common cases
 
-Automation covers immutable A-then-B message history after later deletion, distinct room and agent-turn after-images, stable media metadata, empty public member-change signals and legacy member-payload scrubbing, strict rejection of malformed payloads, valid empty-content AI placeholders, bounded early transient buffering, durable-final precedence, explicit DTO allowlisting against a future internal column, secret and expiring-URL exclusion, deletion tombstones after canonical rows disappear, rollback without sequence advancement, concurrent unique sequences, two stores concurrently applying the active/deleted legacy cutover exactly once, exact fast-path reads, oversized head-only fallback, three-instance local-only fan-out, listener re-LISTEN anti-entropy, simultaneous reconnect replay and duplicate fast path, cursor expiry, restored-database rollback, and the existing snapshot/replay flows. Media coverage also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
+Automation covers immutable A-then-B message history after later deletion, distinct room and agent-turn after-images, stable media metadata, empty public member-change signals and legacy member-payload scrubbing, strict rejection of malformed payloads, database-independent valid/invalid coverage for every V1 event contract, valid empty-content AI/media messages, bounded early transient buffering, durable-final precedence, preservation of dynamically added optimistic sends during chunk/A2UI/end updates, explicit DTO allowlisting against a future internal column, secret and expiring-URL exclusion, deletion tombstones after canonical rows disappear, rollback without sequence advancement, concurrent unique sequences, two stores concurrently applying the active/deleted legacy cutover exactly once, exact fast-path reads, oversized head-only fallback, three-instance local-only fan-out, listener re-LISTEN anti-entropy, simultaneous reconnect replay and duplicate fast path, cursor expiry, restored-database rollback, and the existing snapshot/replay flows. Media coverage also exercises explicit local and S3 selection, production signed-URL rejection/acceptance, browser upload/reload under `NODE_ENV=production`, app-restart persistence, and paired database/media restore.
 
 The completion audit also rendered Compose with a custom `.env.compose` password and proved that the PostgreSQL service password and application `DATABASE_URL` matched. A fresh isolated stack used separate ports and volumes; after verification it was removed. Current Fly secrets were imported into macOS Keychain, and local production values were rewritten for `room.ruit.me`, PostgreSQL/Redis Compose services, and SeaweedFS without writing credentials into tracked files.
 

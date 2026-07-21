@@ -76,6 +76,8 @@
 - 收紧公共事件合约：成员变化不再暴露 ID 或角色，特权成员数据继续由 `get_room_role_members` 保护；migration `0004` 会清理预生产阶段可能存在的成员 payload。
 - 记录严格 V1 payload 解码：损坏事件返回 `EVENT_PAYLOAD_INVALID`，不推进 cursor，并通过 canonical snapshot 收敛。
 - 记录 AI chunk/A2UI/end 抢在 durable placeholder 前到达时的有界客户端缓冲、durable final 优先级，以及 60 秒 / 64 IDs / 512 events / 512 KiB 上限。
+- 明确 AI transient reducer 分别更新 canonical 与当前 UI state，保留并发加入的 pending/failed optimistic send。
+- 为全部严格 V1 payload variant 与关键拒绝场景增加不依赖数据库的单测；即使 PostgreSQL integration 被跳过，普通 Server CI 也能保护协议。
 - 明确生产发布边界：执行 `0003`/`0004` 前先停止旧 app；未来多实例发布必须使用两阶段兼容迁移或同样的维护窗口。
 
 ## 早期审计修正（2026-07-13）

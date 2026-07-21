@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useCallback, useRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CachedRoomMessageWindow } from '../utils/messageHistoryCache';
@@ -134,6 +134,7 @@ type HarnessProps = {
   isRoomSessionReady?: boolean;
   messageSyncRequestId?: number;
   initialMessages?: Message[];
+  optimisticMessageToAdd?: Message;
   messageToDeleteId?: string;
   messageToEditId?: string;
   closeDeleteModal?: () => void;
@@ -149,6 +150,7 @@ const Harness = ({
   isRoomSessionReady = true,
   messageSyncRequestId = 0,
   initialMessages = [],
+  optimisticMessageToAdd,
   messageToDeleteId,
   messageToEditId,
   closeDeleteModal = noop,
@@ -202,19 +204,26 @@ const Harness = ({
     requestHistoryRef,
   });
 
-  return <div
-    ref={containerRef}
-    data-testid="state"
-    data-messages={messages.map(item => item.id).join(',')}
-    data-contents={messages.map(item => item.content).join('|')}
-    data-statuses={messages.map(item => item.status || '').join('|')}
-    data-ui-messages={messages.reduce((total, item) => total + (item.uiPayload?.messages.length || 0), 0)}
-    data-turns={turns.map(item => item.id).join(',')}
-    data-seq={lastAppliedSeq}
-    data-more={String(hasMore)}
-    data-oldest={oldestMessageId || ''}
-    data-loading={String(isLoading)}
-  />;
+  return <>
+    <div
+      ref={containerRef}
+      data-testid="state"
+      data-messages={messages.map(item => item.id).join(',')}
+      data-contents={messages.map(item => item.content).join('|')}
+      data-statuses={messages.map(item => item.status || '').join('|')}
+      data-ui-messages={messages.reduce((total, item) => total + (item.uiPayload?.messages.length || 0), 0)}
+      data-turns={turns.map(item => item.id).join(',')}
+      data-seq={lastAppliedSeq}
+      data-more={String(hasMore)}
+      data-oldest={oldestMessageId || ''}
+      data-loading={String(isLoading)}
+    />
+    {optimisticMessageToAdd && <button
+      type="button"
+      data-testid="add-optimistic"
+      onClick={() => setMessages(previous => [...previous, optimisticMessageToAdd])}
+    >add optimistic</button>}
+  </>;
 };
 
 const installDefaultProtocolMocks = () => {
@@ -700,6 +709,54 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     act(() => socketMock.trigger('ai_stream_end', { roomId: 'room-1', messageId: 'ai-1', content: 'final' }));
     expect(screen.getByTestId('state').dataset.contents).toBe('final');
     expect(screen.getByTestId('state').dataset.seq).toBe('5');
+  });
+
+  it('preserves a dynamically added optimistic message across AI transient updates', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({
+        id: 'ai-1', clientId: 'ai_assistant', content: '', status: 'streaming', messageType: 'ai',
+      })],
+      lastAppliedSeq: 5,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    const optimistic = message({
+      id: 'temp-user-1',
+      content: 'pending user message',
+      clientMessageId: 'client-message-1',
+      deliveryStatus: 'pending',
+    });
+    render(<Harness optimisticMessageToAdd={optimistic} />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
+
+    fireEvent.click(screen.getByTestId('add-optimistic'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('ai-1,temp-user-1');
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-1', chunk: 'partial',
+    }));
+    expect(screen.getByTestId('state').dataset.messages).toBe('ai-1,temp-user-1');
+    expect(screen.getByTestId('state').dataset.contents).toBe('partial|pending user message');
+
+    act(() => socketMock.trigger('a2ui_update', {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      uiPayload: {
+        format: 'a2ui',
+        version: 'v0.9',
+        messages: [{ version: 'v0.9', createSurface: { surfaceId: 'surface-1' } }],
+      },
+    }));
+    expect(screen.getByTestId('state').dataset.messages).toBe('ai-1,temp-user-1');
+    expect(screen.getByTestId('state').dataset.uiMessages).toBe('1');
+
+    act(() => socketMock.trigger('ai_stream_end', {
+      roomId: 'room-1', messageId: 'ai-1', content: 'final answer',
+    }));
+    expect(screen.getByTestId('state').dataset.messages).toBe('ai-1,temp-user-1');
+    expect(screen.getByTestId('state').dataset.contents).toBe('final answer|pending user message');
+    expect(screen.getByTestId('state').dataset.statuses).toBe('complete|');
   });
 
   it('buffers an AI chunk that arrives before its durable placeholder event', async () => {

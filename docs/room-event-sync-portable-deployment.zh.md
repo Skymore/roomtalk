@@ -60,7 +60,7 @@ Deferred writer 构造有界、安全的 `schemaVersion: 1` after-image，再由
 
 公共事件流绝不包含 member ID、离线成员列表、joined timestamp 或 owner/admin role。`members.changed` 只表示“成员关系发生变化”；完整成员投影继续通过现有 `room.manageMembers` 鉴权和 `get_room_role_members` 请求读取。
 
-Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 transient。AI chunk、A2UI update 或 stream end 可能抢在 durable placeholder 通知前到达，因此浏览器按 `messageId` 临时缓存未匹配事件，placeholder 出现后按到达顺序 drain。上限为 64 个 message ID、512 个事件、512 KiB 与 60 秒 TTL。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
+Typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 继续保持 transient。AI chunk、A2UI update 或 stream end 可能抢在 durable placeholder 通知前到达，因此浏览器按 `messageId` 临时缓存未匹配事件，placeholder 出现后按到达顺序 drain。上限为 64 个 message ID、512 个事件、512 KiB 与 60 秒 TTL。Placeholder 已存在时，transient reducer 分别更新 canonical projection 与当前 React state，保留只存在于 UI 的 pending/failed optimistic message。未来 durable reaction mutation 应把 `reactions.upserted` / `reactions.deleted` 加入同一 room sequence；本次切换不凭空实现 reaction 数据模型。
 
 ## 快照与增量
 

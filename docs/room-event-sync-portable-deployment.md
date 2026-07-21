@@ -60,7 +60,7 @@ Implemented event types are:
 
 The public stream never contains member IDs, offline-member lists, join timestamps, or owner/admin roles. `members.changed` only invalidates the fact of membership; privileged member projections remain behind the existing `room.manageMembers` authorization and `get_room_role_members` request.
 
-Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
+Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. When the placeholder already exists, the transient reducer updates the canonical projection and the current React state separately, preserving UI-only pending or failed optimistic sends. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 

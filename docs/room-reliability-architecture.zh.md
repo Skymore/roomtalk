@@ -77,7 +77,7 @@ Reducer 只接受连续前缀：
 
 clear、truncate、retry、edit-and-ask 会表现为一个或多个有序批量 upsert/delete 事件。因此“一次业务操作恰好一个事件”不是约束；真正约束是：每个已提交的可见行变化与事件同事务，事务回滚时两者都不存在。
 
-AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 placeholder 的独立 PostgreSQL 通知前到达，因此浏览器按 `messageId` 缓存未匹配的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end`，placeholder 出现后按到达顺序 drain。缓存上限是 64 个 message ID、512 个事件、512 KiB 和 60 秒 TTL。持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
+AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 placeholder 的独立 PostgreSQL 通知前到达，因此浏览器按 `messageId` 缓存未匹配的 `ai_chunk`、`a2ui_update` 与 `ai_stream_end`，placeholder 出现后按到达顺序 drain。缓存上限是 64 个 message ID、512 个事件、512 KiB 和 60 秒 TTL。Placeholder 已存在后，每个 transient handler 分别更新 canonical projection，并对当前 React state 应用相同 reducer，而不是整体替换，因此并发加入的 pending/failed optimistic send 不会消失。持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
 
 Typing、presence、voice level 和 WebRTC signalling 同样属于 transient，不消耗 durable room sequence。未来如果 reaction 成为持久产品模型，它的 `reactions.upserted` / `reactions.deleted` after-image 应进入这条 sequence，而不是引入第二套 version counter。
 
@@ -108,7 +108,8 @@ Migration `0004_public_member_change_events` 会把 pre-production member after-
 当前实现由以下层次保护：
 
 - store、socket unit/contract tests；
-- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、坏 payload snapshot、删除、turn、room metadata 与提前到达 AI transient buffer tests；
+- 精确已提交 payload、local-only fan-out、listener reconnect 反熵、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、坏 payload snapshot、删除、turn、room metadata、提前到达 AI transient buffer，以及 transient AI 更新期间保留 optimistic send 的 tests；
+- 不依赖数据库的严格 V1 payload 单测覆盖全部 event type、空 AI/media content、缺失/额外字段、room 绑定、重复 ID 与退役 ID-only payload；
 - 真实 PostgreSQL 的不可变 message/room/turn/media after-image、空公共成员 signal、旧成员事件隐私修复、严格 payload 拒绝、secret 排除、migration 切换、快照、幂等、回滚、并发、room metadata 单调性、retention 与删除授权测试；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；
 - Compose health、重启持久化与 backup/restore。

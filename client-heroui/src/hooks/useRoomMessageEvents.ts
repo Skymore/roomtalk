@@ -597,7 +597,7 @@ export const useRoomMessageEvents = ({
         return;
       }
       canonicalMessages = appendAIChunk(canonicalMessages, data.messageId, data.chunk);
-      updateMessages(canonicalMessages);
+      updateMessages(previous => appendAIChunk(previous, data.messageId, data.chunk));
       const container = containerRef.current;
       if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) {
         scheduleScroll('smooth', 50);
@@ -610,7 +610,7 @@ export const useRoomMessageEvents = ({
         return;
       }
       canonicalMessages = appendA2UIPayload(canonicalMessages, data.messageId, data.uiPayload);
-      updateMessages(canonicalMessages);
+      updateMessages(previous => appendA2UIPayload(previous, data.messageId, data.uiPayload));
     };
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
@@ -625,7 +625,13 @@ export const useRoomMessageEvents = ({
         usage: data.usage,
         cost: data.cost,
       });
-      updateMessages(canonicalMessages);
+      updateMessages(previous => completeAIMessage(previous, data.messageId, {
+        content: data.content,
+        uiPayload: data.uiPayload,
+        aiModel: data.aiModel,
+        usage: data.usage,
+        cost: data.cost,
+      }));
       cacheWindow(canonicalMessages);
       if (data.sessionCost) setSessionCostUsd(data.sessionCost.totalUsd);
       onAIStreamSettled?.();
