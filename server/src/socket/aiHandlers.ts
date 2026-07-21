@@ -51,6 +51,10 @@ const getE2EFakeAIChunkDelayMs = () => {
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
 
+const appendAIErrorNotice = (content: string, notice: string) => (
+  content.trim().length > 0 ? `${content}\n\n${notice}` : notice
+);
+
 const firstHeaderValue = (value: string | string[] | undefined) => (
   Array.isArray(value) ? value[0] : value
 );
@@ -709,17 +713,19 @@ export const executeQueuedAssistantRun = async (
     fallbackUsageMessages = validMessagesForAPI;
     const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
     if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
+      const errorNotice = 'Sorry, cannot generate a response without any context or question.';
       const errorAiMessage: Message = {
         ...initialAiMessage,
         status: 'error',
-        content: 'Cannot generate a response without any context or question.',
+        content: errorNotice,
         timestamp: new Date().toISOString(),
       };
-      await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
-        error: 'Sorry, cannot generate a response without any context or question.',
+        error: errorNotice,
         roomId,
+        ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({ status: 'error', completedAt: new Date().toISOString(), error: 'Cannot generate a response without context' });
       return;
@@ -796,16 +802,19 @@ export const executeQueuedAssistantRun = async (
 
     const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
     if (!finalSaved) {
-      await saveAIErrorMessage({
+      const errorNotice = 'Sorry, unable to save the AI response.';
+      const errorAiMessage: Message = {
         ...initialAiMessage,
         status: 'error',
-        content: streamedTextContent || 'Error saving response.',
+        content: appendAIErrorNotice(streamedTextContent, errorNotice),
         timestamp: new Date().toISOString(),
-      }, 'final-save error');
+      };
+      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'final-save error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
-        error: 'Sorry, unable to save the AI response.',
+        error: errorNotice,
         roomId,
+        ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({ status: 'error', completedAt: new Date().toISOString(), error: 'Failed to save final AI response' });
       return;
@@ -900,23 +909,25 @@ export const executeQueuedAssistantRun = async (
       return;
     }
 
+    const errorNotice = hasPartialContent
+      ? 'The AI provider connection closed before a normal finish. The partial response above was saved.'
+      : 'Sorry, an error occurred while generating the AI response.';
     const errorAiMessage: Message = {
       ...initialAiMessage,
       status: 'error',
-      content: streamedTextContent || 'Error generating response.',
+      content: appendAIErrorNotice(streamedTextContent, errorNotice),
       timestamp: new Date().toISOString(),
     };
     if (streamedA2UIPayload) {
       errorAiMessage.uiPayload = streamedA2UIPayload;
     }
-    await saveAIErrorMessage(errorAiMessage, 'stream error');
+    const errorSaved = await saveAIErrorMessage(errorAiMessage, 'stream error');
     io.to(roomId).emit('ai_stream_error', {
       messageId: aiMessageId,
-      error: hasPartialContent
-        ? 'The AI provider connection closed before a normal finish. The partial response above was saved.'
-        : 'Sorry, an error occurred while generating the AI response.',
+      error: errorNotice,
       roomId,
       partial: hasPartialContent,
+      ...(errorSaved ? { message: errorAiMessage } : {}),
     });
     await updateAssistantRun({
       status: 'error',
@@ -1265,16 +1276,19 @@ export function registerAIHandlers({
       : undefined;
     const runRecorded = await recordAssistantRunStart(runnerMode, queuedPayload);
     if (runnerMode === 'worker' && !runRecorded) {
-      await saveAIErrorMessage({
+      const errorNotice = 'Sorry, unable to queue the AI response.';
+      const errorAiMessage: Message = {
         ...initialAiMessage,
         status: 'error',
-        content: 'Unable to queue AI response.',
+        content: errorNotice,
         timestamp: new Date().toISOString(),
-      }, 'queue error');
+      };
+      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'queue error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
-        error: 'Sorry, unable to queue the AI response.',
+        error: errorNotice,
         roomId,
+        ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       callback?.({ success: false, error: 'Unable to queue AI response' });
       return;
@@ -1564,16 +1578,19 @@ export function registerAIHandlers({
 
       const finalSaved = await saveAIMessage(finalAiMessage, 'E2E fake complete');
       if (!finalSaved) {
-        await saveAIErrorMessage({
+        const errorNotice = 'Sorry, unable to save the AI response.';
+        const errorAiMessage: Message = {
           ...initialAiMessage,
           status: 'error',
-          content: 'Error saving response.',
+          content: errorNotice,
           timestamp: new Date().toISOString(),
-        }, 'E2E fake final-save error');
+        };
+        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'E2E fake final-save error');
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
-          error: 'Sorry, unable to save the AI response.',
+          error: errorNotice,
           roomId,
+          ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
         return;
@@ -1609,17 +1626,19 @@ export function registerAIHandlers({
       const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
       if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
         openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
+        const errorNotice = 'Sorry, cannot generate a response without any context or question.';
         const errorAiMessage: Message = {
           ...initialAiMessage,
           status: 'error',
-          content: 'Cannot generate a response without any context or question.',
+          content: errorNotice,
           timestamp: new Date().toISOString(),
         };
-        await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
-          error: 'Sorry, cannot generate a response without any context or question.',
+          error: errorNotice,
           roomId,
+          ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Cannot generate a response without context' });
         return;
@@ -1696,16 +1715,19 @@ export function registerAIHandlers({
       }
       const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
       if (!finalSaved) {
-        await saveAIErrorMessage({
+        const errorNotice = 'Sorry, unable to save the AI response.';
+        const errorAiMessage: Message = {
           ...initialAiMessage,
           status: 'error',
-          content: 'Error saving response.',
+          content: appendAIErrorNotice(streamedTextContent, errorNotice),
           timestamp: new Date().toISOString(),
-        }, 'final-save error');
+        };
+        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'final-save error');
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
-          error: 'Sorry, unable to save the AI response.',
+          error: errorNotice,
           roomId,
+          ...(errorSaved ? { message: errorAiMessage } : {}),
         });
         await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
         return;
@@ -1774,17 +1796,20 @@ export function registerAIHandlers({
 
         const finalSaved = await saveAIMessage(finalAiMessage, 'premature-close complete');
         if (!finalSaved) {
-          await saveAIErrorMessage({
+          const errorNotice = 'The AI response was generated, but could not be saved.';
+          const errorAiMessage: Message = {
             ...initialAiMessage,
             status: 'error',
-            content: streamedTextContent,
+            content: appendAIErrorNotice(streamedTextContent, errorNotice),
             timestamp: new Date().toISOString(),
-          }, 'premature-close final-save error');
+          };
+          const errorSaved = await saveAIErrorMessage(errorAiMessage, 'premature-close final-save error');
           io.to(roomId).emit('ai_stream_error', {
             messageId: aiMessageId,
-            error: 'The AI response was generated, but could not be saved.',
+            error: errorNotice,
             roomId,
             partial: true,
+            ...(errorSaved ? { message: errorAiMessage } : {}),
           });
           await updateAssistantRun({ status: 'error', error: 'Failed to save premature-close AI response' });
           return;
@@ -1822,23 +1847,25 @@ export function registerAIHandlers({
         return;
       }
 
+      const errorNotice = hasPartialContent
+        ? 'The AI provider connection closed before a normal finish. The partial response above was saved.'
+        : 'Sorry, an error occurred while generating the AI response.';
       const errorAiMessage: Message = {
         ...initialAiMessage,
         status: 'error',
-        content: streamedTextContent || 'Error generating response.',
+        content: appendAIErrorNotice(streamedTextContent, errorNotice),
         timestamp: new Date().toISOString(),
       };
       if (streamedA2UIPayload) {
         errorAiMessage.uiPayload = streamedA2UIPayload;
       }
-      await saveAIErrorMessage(errorAiMessage, 'stream error');
+      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'stream error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
-        error: hasPartialContent
-          ? 'The AI provider connection closed before a normal finish. The partial response above was saved.'
-          : 'Sorry, an error occurred while generating the AI response.',
+        error: errorNotice,
         roomId,
         partial: hasPartialContent,
+        ...(errorSaved ? { message: errorAiMessage } : {}),
       });
       await updateAssistantRun({
         status: 'error',

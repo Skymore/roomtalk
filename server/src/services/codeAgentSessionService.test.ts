@@ -2578,6 +2578,9 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[2].isError, true);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
+    const streamError = emitter.roomEmits.find(event => event.event === 'ai_stream_error');
+    assert.ok(streamError);
+    assert.deepEqual((streamError.args[0] as any).message, messages[1]);
   });
 
   it('closes pending tool calls with failed results when the runner errors', async () => {

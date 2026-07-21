@@ -54,7 +54,6 @@ interface UseRoomMessageEventsArgs {
   messageToEditId?: string;
   onAIStreamSettled?: () => void;
   onRoomUpdated?: (room: Room) => void;
-  warningPrefix: string;
   requestHistoryRef: MutableRefObject<RoomMessageHistoryRequest | null>;
 }
 
@@ -155,7 +154,6 @@ export const useRoomMessageEvents = ({
   messageToEditId,
   onAIStreamSettled,
   onRoomUpdated,
-  warningPrefix,
   requestHistoryRef,
 }: UseRoomMessageEventsArgs) => {
   const messageToDeleteIdRef = useRef(messageToDeleteId);
@@ -255,9 +253,12 @@ export const useRoomMessageEvents = ({
         // an older buffered chunk after it would duplicate content.
         if (message.status === 'complete' || message.status === 'error') {
           pending.forEach(event => {
-            if (event.type !== 'ai_stream_end') return;
-            if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
-            settledCount++;
+            if (event.type === 'ai_stream_end') {
+              if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
+              settledCount++;
+            } else if (event.type === 'ai_stream_error') {
+              settledCount++;
+            }
           });
           return;
         }
@@ -279,6 +280,12 @@ export const useRoomMessageEvents = ({
                 cost: event.data.cost,
               });
               if (event.data.sessionCost) setSessionCostUsd(event.data.sessionCost.totalUsd);
+              settledCount++;
+              break;
+            case 'ai_stream_error':
+              if (event.data.message) {
+                nextMessages = upsertMessage(nextMessages, event.data.message);
+              }
               settledCount++;
               break;
           }
@@ -470,11 +477,21 @@ export const useRoomMessageEvents = ({
               }
               keepReading = page.hasMore || lastAppliedSeq < desiredHeadSeq;
             } catch (error) {
+              if (error instanceof SocketRequestError && error.code === 'CURSOR_AHEAD') {
+                // The database may have been restored to an older sequence. Drop
+                // the stale target before requesting the replacement snapshot.
+                // Notifications received while that request is in flight raise
+                // desiredHeadSeq again and applySnapshot preserves that new head.
+                desiredHeadSeq = 0;
+                const loaded = await loadSnapshot({ reason: 'cursor-ahead' });
+                if (!loaded) return;
+                keepReading = true;
+                continue;
+              }
               if (
                 error instanceof SocketRequestError
                 && (
                   error.code === 'CURSOR_EXPIRED'
-                  || error.code === 'CURSOR_AHEAD'
                   || error.code === 'EVENT_PAYLOAD_INVALID'
                 )
               ) {
@@ -650,14 +667,20 @@ export const useRoomMessageEvents = ({
     };
     const handleAIStreamError = (data: AIStreamErrorEvent) => {
       if (data.roomId !== roomId) return;
-      updateMessages(previous => {
-        const next = previous.map(message => message.id === data.messageId
-          ? { ...message, content: `${message.content || ''}\n\n${warningPrefix}: ${data.error}`, status: 'error' as const }
-          : message);
-        canonicalMessages = next;
-        cacheWindow(next);
-        return next;
-      });
+      const errorMessage = data.message;
+      if (
+        errorMessage
+        && errorMessage.id === data.messageId
+        && errorMessage.roomId === roomId
+      ) {
+        if (!canonicalMessages.some(message => message.id === data.messageId)) {
+          queuePendingAIEvent({ type: 'ai_stream_error', data });
+          return;
+        }
+        canonicalMessages = upsertMessage(canonicalMessages, errorMessage);
+        updateMessages(previous => upsertMessage(previous, errorMessage));
+        cacheWindow(canonicalMessages);
+      }
       onAIStreamSettled?.();
     };
 
@@ -713,7 +736,6 @@ export const useRoomMessageEvents = ({
     closeEditModal,
     onAIStreamSettled,
     onRoomUpdated,
-    warningPrefix,
     requestHistoryRef,
   ]);
 

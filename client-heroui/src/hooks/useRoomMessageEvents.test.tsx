@@ -200,7 +200,6 @@ const Harness = ({
     messageToDeleteId,
     messageToEditId,
     onRoomUpdated,
-    warningPrefix: 'Warning',
     requestHistoryRef,
   });
 
@@ -449,6 +448,45 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
     expect(screen.getByTestId('state').dataset.messages).toBe('restored');
     expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a stale desired head after CURSOR_AHEAD while preserving notifications received during the snapshot', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'future' })], lastAppliedSeq: 20, hasMore: false, cachedAt: Date.now(),
+    };
+    let rejectInitialRequest!: (error: Error) => void;
+    const initialRequest = new Promise<RoomEventPagePayload>((_resolve, reject) => {
+      rejectInitialRequest = reject;
+    });
+    let resolveSnapshot!: (value: RoomSnapshotPayload) => void;
+    const restoredSnapshot = new Promise<RoomSnapshotPayload>(resolve => {
+      resolveSnapshot = resolve;
+    });
+    socketMock.requestEvents.mockImplementation(async request => {
+      if (request.afterSeq === 20) return initialRequest;
+      if (request.afterSeq === 8) {
+        return eventPage(request.requestId, request.afterSeq, { events: [event(9)], headSeq: 9 });
+      }
+      return eventPage(request.requestId, request.afterSeq, { headSeq: 9 });
+    });
+    socketMock.requestSnapshot.mockImplementationOnce(async () => restoredSnapshot);
+
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 30 }));
+    act(() => rejectInitialRequest(new socketMock.SocketRequestError('CURSOR_AHEAD', 'ahead')));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 9 }));
+    act(() => resolveSnapshot(snapshot({
+      messages: [message({ id: 'restored' })],
+      snapshotSeq: 8,
+    })));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('9'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-9,restored');
+    await waitFor(() => expect(socketMock.requestEvents.mock.calls.map(call => call[0].afterSeq)).toEqual([20, 8, 9]));
   });
 
   it('detects a non-contiguous page and resets rather than applying it', async () => {
@@ -826,6 +864,79 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.contents).toBe('final answer');
     expect(screen.getByTestId('state').dataset.uiMessages).toBe('1');
   });
+
+  it('buffers a persisted AI error fast path until its placeholder arrives', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+
+    const errorMessage = message({
+      id: 'ai-early',
+      clientId: 'ai_assistant',
+      content: 'The request failed.',
+      status: 'error',
+      messageType: 'ai',
+    });
+    act(() => socketMock.trigger('ai_stream_error', {
+      roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, message: errorMessage,
+    }));
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
+
+    const placeholder = { ...errorMessage, content: '', status: 'streaming' as const };
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 1,
+      events: [event(1, {
+        payload: { messages: [placeholder], messageIds: [placeholder.id] },
+      })],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('ai-early'));
+    expect(screen.getByTestId('state').dataset.contents).toBe('The request failed.');
+    expect(screen.getByTestId('state').dataset.statuses).toBe('error');
+  });
+
+  it.each(['socket-first', 'durable-first'] as const)(
+    'converges to the same persisted AI error when events arrive %s',
+    async order => {
+      const placeholder = message({
+        id: 'ai-error', clientId: 'ai_assistant', content: '', status: 'streaming', messageType: 'ai',
+      });
+      cacheMock.memory = {
+        roomId: 'room-1', messages: [placeholder], lastAppliedSeq: 5, hasMore: false, cachedAt: Date.now(),
+      };
+      render(<Harness />);
+      await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
+
+      const errorMessage = { ...placeholder, content: 'The provider failed.', status: 'error' as const };
+      const emitFastPath = () => socketMock.trigger('ai_stream_error', {
+        roomId: 'room-1', messageId: errorMessage.id, error: errorMessage.content, message: errorMessage,
+      });
+      const emitDurable = () => socketMock.trigger('room_event_available', {
+        roomId: 'room-1',
+        headSeq: 6,
+        events: [event(6, {
+          payload: { messages: [errorMessage], messageIds: [errorMessage.id] },
+        })],
+      });
+
+      act(() => {
+        if (order === 'socket-first') {
+          emitFastPath();
+          emitDurable();
+        } else {
+          emitDurable();
+          emitFastPath();
+        }
+      });
+
+      await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('6'));
+      expect(screen.getByTestId('state').dataset.contents).toBe('The provider failed.');
+      expect(screen.getByTestId('state').dataset.statuses).toBe('error');
+    },
+  );
 
   it('keeps a final durable after-image authoritative over an earlier buffered chunk', async () => {
     cacheMock.memory = {

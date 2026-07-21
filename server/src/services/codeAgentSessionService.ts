@@ -2227,16 +2227,15 @@ export class CodeAgentSessionService {
       this.logger.error('Failed to persist code-agent AI error state', { error: saveError, roomId, messageId: aiMessage.id });
       return null;
     });
-    if (updatedRoom) {
-    }
     const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
     if (errorRoom) {
       this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
     }
     this.emitter.to(roomId).emit('ai_stream_error', {
       messageId: aiMessage.id,
-      error: `${this.displayBackendName(backend)} task failed.`,
+      error: content,
       roomId,
+      ...(updatedRoom ? { message: errorMessage } : {}),
     });
   }
 

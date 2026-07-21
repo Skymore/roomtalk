@@ -1087,9 +1087,11 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages[2].status, 'error');
     assert.equal(store.messages.length, 2);
     assert.equal(store.messages[1].status, 'error');
-    assert.equal(store.messages[1].content, 'Error saving response.');
+    assert.equal(store.messages[1].content, 'Sorry, unable to save the AI response.');
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), true);
+    const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
+    assert.ok(streamError);
+    assert.deepEqual((streamError.args[0] as any).message, store.messages[1]);
   });
 
   it('emits a persistence error when the final-save fallback cannot mark the placeholder failed', async () => {

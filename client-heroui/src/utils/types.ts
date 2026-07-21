@@ -360,6 +360,8 @@ export interface AIStreamErrorEvent {
   messageId: string;
   error: string;
   roomId: string;
+  message?: Message;
+  partial?: boolean;
 }
 
 export interface AIUsage {

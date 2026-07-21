@@ -967,7 +967,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     messageToEditId: messageToEdit?.id,
     onAIStreamSettled: presentation === 'code-agent' ? handleCodeAgentTurnSettled : undefined,
     onRoomUpdated,
-    warningPrefix: t('warningPrefix'),
     requestHistoryRef,
   });
 

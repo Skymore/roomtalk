@@ -1,9 +1,10 @@
-import { A2UIUpdateEvent, AIChunkEvent, AIStreamEndEvent } from './types';
+import { A2UIUpdateEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent } from './types';
 
 export type PendingAITransientEvent =
   | { type: 'ai_chunk'; data: AIChunkEvent }
   | { type: 'a2ui_update'; data: A2UIUpdateEvent }
-  | { type: 'ai_stream_end'; data: AIStreamEndEvent };
+  | { type: 'ai_stream_end'; data: AIStreamEndEvent }
+  | { type: 'ai_stream_error'; data: AIStreamErrorEvent };
 
 export interface PendingAIEventBufferLimits {
   maxMessageIds: number;
