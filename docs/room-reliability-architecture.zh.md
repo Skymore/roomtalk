@@ -30,10 +30,10 @@ rooms / room_messages / room_agent_turns
           ▼
 room_event_streams + room_events
   有界可重放窗口
-          │ commit 后 NOTIFY（只负责唤醒）
+          │ commit 后 NOTIFY；app 读取并 hydrate 指定 seq
           ▼
 Socket.IO + Redis adapter
-  低延迟提示；重复无害
+  有界 canonical event fast path 或 head-only hint
           │
           ▼
 客户端 reducer + IndexedDB v4 cursor/window
@@ -45,13 +45,16 @@ Redis 只负责 presence、Socket.IO adapter 和短 TTL 最近消息缓存，不
 
 冷启动或重置时，`get_room_snapshot` 在一个 repeatable-read 事务中读取房间、最近有界消息、相关 agent turn 与事件 head，返回 `snapshotSeq`。
 
-如果内存/IndexedDB 已有窗口，客户端先即时显示，再请求 `get_room_events(afterSeq=lastAppliedSeq)`，无需先覆盖整页。每一页同时受事件数和序列化字节上限约束。
+如果内存/IndexedDB 已有窗口，客户端先即时显示。`room_event_available` 通常携带已经提交并 hydrate 的 event；当 event list 以 `headSeq` 结束且正好从 `lastAppliedSeq + 1` 连续开始时，reducer 直接应用并推进 cursor，不再额外请求。Payload 缺失、超限、重复或不连续仍然安全，因为 `headSeq` 会触发 `get_room_events(afterSeq=lastAppliedSeq)`。
+
+小 gap 默认按每页 100 events / 256 KiB 追赶。保留窗口内落后超过 500 个事件时，客户端不再逐页重放中间状态，而是加载新的 repeatable-read snapshot，再只排空 `snapshotSeq` 之后的 tail。更旧历史继续独立使用 `beforeMessageId` 懒加载。
 
 Reducer 只接受连续前缀：
 
 - `seq <= lastAppliedSeq`：重复，忽略；
 - `seq === lastAppliedSeq + 1`：应用并推进；
 - 发现缺口：不应用该页，重新加载有界快照；
+- 保留窗口内落后超过 500 个事件：跳过逐页 replay，重新加载有界快照；
 - `CURSOR_EXPIRED`：旧前缀已清理，重新快照；
 - `CURSOR_AHEAD`：数据库恢复点落后于浏览器 cache，重新快照。
 
@@ -72,7 +75,7 @@ Reducer 只接受连续前缀：
 
 clear、truncate、retry、edit-and-ask 会表现为一个或多个有序批量 upsert/delete 事件。因此“一次业务操作恰好一个事件”不是约束；真正约束是：每个已提交的可见行变化与事件同事务，事务回滚时两者都不存在。
 
-AI chunk 和增量 UI 更新仍是临时低延迟事件；最终/错误消息写入后才可重放。
+AI chunk 和增量 UI 更新仍是临时 Socket fast path；持久 placeholder 与最终/错误消息提交后进入 room-event fast path，并可在漏投递后重放。
 
 ## 删除权限与 retention
 
@@ -82,14 +85,14 @@ AI chunk 和增量 UI 更新仍是临时低延迟事件；最终/错误消息写
 
 ## 多实例通知
 
-每个 app 实例都 `LISTEN room_event_committed`，再通过 Socket.IO 广播 `room_event_available {roomId, headSeq}`。多实例加 Redis adapter 可能产生重复唤醒，但通知不携带状态，客户端永远按数据库序列读取，所以重复是幂等的。
+每个 app 实例都 `LISTEN room_event_committed`，从 PostgreSQL 读取并 hydrate 指定的已提交 sequence，再通过 Socket.IO 广播 `room_event_available {roomId, headSeq, events?}`。完整通知只有在序列化后不超过 `ROOM_EVENT_FAST_PATH_MAX_BYTES`（默认 256 KiB）时才携带 event；读取失败或超限会退化为 head-only hint。同房间 hydration 在单个实例内串行，保持 emit 顺序。多实例加 Redis adapter 可能产生重复，但 `seq <= lastAppliedSeq` 会幂等忽略，任何 gap 都回到持久 replay。
 
 ## 验证证据
 
 当前实现由以下层次保护：
 
 - store、socket unit/contract tests；
-- cache 恢复、分页、缺口、过期、数据库回退、删除、turn、room metadata、AI 临时事件 reducer tests；
+- 已提交 payload hydration、字节超限 fallback、同房间顺序、fast path 零补拉、大 gap snapshot、cache 恢复、过期、数据库回退、删除、turn、room metadata 与 AI 临时事件 broadcaster/reducer tests；
 - 真实 PostgreSQL schema、快照、幂等、回滚、并发、room metadata 单调性、retention、删除授权测试；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；
 - Compose health、重启持久化与 backup/restore。

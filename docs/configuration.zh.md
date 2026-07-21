@@ -34,10 +34,11 @@
 | `ROOM_EVENT_RETENTION_DAYS` | 每房间有界重放日志的保留天数，默认 `7`。 |
 | `ROOM_EVENT_MAX_PER_ROOM` | 每个房间最多保留的事件数，默认 `10000`。 |
 | `ROOM_EVENT_PRUNE_INTERVAL_MS` | Event prefix 清理间隔，默认 `3600000`（一小时）。 |
+| `ROOM_EVENT_FAST_PATH_MAX_BYTES` | Socket 通知携带已提交 RoomEvent 的最大序列化字节，默认 `262144`；超限退化为只带 `headSeq` 的 hint。 |
 
 唯一受支持的 serving model 是 PostgreSQL durable state + Redis realtime/cache state。Redis 运行时仍必需，但允许清空并重建，不能作为 durable fallback。旧 Redis store 只保留给 import 与 contract coverage。
 
-`room_event_streams` 与 `room_events` 是客户端同步边界。Event log 是有界 replay changelog，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制。Retention 只删除旧的连续前缀，cursor 落后的客户端会重新加载 snapshot。
+`room_event_streams` 与 `room_events` 是客户端同步边界。事务提交后，app 从 PostgreSQL 读取通知对应的 sequence，并通常把 hydrate 后的 event 放入 `room_event_available`；客户端只直接应用连续 fast path，否则从 `lastAppliedSeq` 补拉。保留窗口内落后超过 500 个事件会直接切 repeatable-read snapshot，较小 gap 默认按每页 100 events / 256 KiB 读取。Event log 是有界 replay changelog，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制。
 
 ## 媒体与 Artifact
 

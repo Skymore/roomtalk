@@ -34,10 +34,11 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 | `ROOM_EVENT_RETENTION_DAYS` | Retained age of the bounded per-room replay log; default `7`. |
 | `ROOM_EVENT_MAX_PER_ROOM` | Maximum retained events per room; default `10000`. |
 | `ROOM_EVENT_PRUNE_INTERVAL_MS` | Event-prefix pruning interval; default `3600000` (one hour). |
+| `ROOM_EVENT_FAST_PATH_MAX_BYTES` | Maximum serialized committed RoomEvent included in a Socket notification; default `262144`. Oversized events fall back to a head-only hint. |
 
 The only supported serving model is PostgreSQL durable state plus Redis realtime/cache state. Redis remains operationally required but may be flushed and rebuilt; it is not a durable fallback. The legacy Redis store exists only for import and contract coverage.
 
-`room_event_streams` and `room_events` are the client synchronization boundary. The event log is a bounded replay changelog, not full event sourcing and not an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker. Retention removes only an old contiguous event prefix; clients whose cursor falls behind resnapshot.
+`room_event_streams` and `room_events` are the client synchronization boundary. After commit, the app reads the notified sequence from PostgreSQL and normally includes the hydrated event in `room_event_available`; a client applies it only when contiguous and otherwise replays from `lastAppliedSeq`. A valid retained gap above 500 events switches directly to a repeatable-read snapshot, while smaller gaps use pages of 100 events / 256 KiB by default. The event log is a bounded replay changelog, not full event sourcing and not an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker.
 
 ## Media and Artifacts
 

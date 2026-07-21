@@ -27,6 +27,7 @@
 | 4 | 完成性审计：本地持久媒体、签名 URL、env interpolation、成对恢复 | 完成 | `77a5826c` |
 | 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | `bdad6d2f`、`94d7feed`、`f878752d` |
 | 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke 与显式凭据 | 完成 | `a554554c`、`56871060` |
+| 7 | 已提交事件 Socket fast path、有界 payload fallback 与大差距 snapshot 恢复 | 完成 | 当前发布；聚焦证据见下文 |
 
 定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。runtime 同时接受 `ai-chat.wenlin.dev`，该域名可在原有 DNS zone 中单独切换。
 
@@ -35,8 +36,10 @@
 - PostgreSQL 是唯一 durable serving authority；Redis 只保存可重建的 realtime/cache state。
 - Canonical 表仍是事实源；`room_events` 是有界状态传输 changelog，不是完整 Event Sourcing。
 - PostgreSQL trigger 在 room/message/agent-turn 原事务内原子追加 room event。
-- 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`；Socket.IO/`NOTIFY` 只做唤醒 hint。
-- `CURSOR_EXPIRED`、序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。
+- 客户端只使用 `snapshotSeq`、`afterSeq`、`lastAppliedSeq`。PostgreSQL `NOTIFY` 标识已提交 sequence；app 再从 PostgreSQL 读取该 sequence，并通常把 hydrate 后的 event 放入 `room_event_available`。
+- 客户端只有在 Socket payload 与 `lastAppliedSeq` 严格连续时才直接应用。Payload 缺失、超限、重复或有 gap 仍然安全，因为 `headSeq` 会驱动 durable replay。
+- 差距不超过 500 events 时按每页 100 / 256 KiB replay；更大的保留窗口内差距直接切 repeatable-read snapshot，再只排空 snapshot 后的 tail。
+- `CURSOR_EXPIRED`、无法收敛的序列缺口和恢复旧数据库后的 `CURSOR_AHEAD` 都会安全重取 snapshot。
 - 旧 history socket 返回 `UPGRADE_REQUIRED`；runtime `messageVersion` / `roomVersion` 字段和数据库列已删除。
 - 每小时 retention 只清理连续旧前缀。Canonical 状态已在原事务更新，不需要定期把 event “合并回” message。
 - AI 任务继续使用独立 claim/retry outbox；面向客户端的 room event 不是 Worker job。
@@ -71,9 +74,9 @@
 ## 常见用例自动化矩阵
 
 - [x] 首次进入房间得到 repeatable-read snapshot 与一致 `snapshotSeq`。
-- [x] 在线连续发送、刷新和第二客户端无需刷新实时收敛。
+- [x] 在线连续发送、刷新和第二客户端无需刷新实时收敛；连续 Socket payload 无需再发 replay request。
 - [x] 浏览器离线期间产生三条消息，恢复后只补缺失 events，无需 reload。
-- [x] 重复唤醒/事件不重复 UI；乱序或 gap 不应用半页并重新 snapshot。
+- [x] 重复通知/事件不重复 UI；oversized payload 退化为 head-only；乱序或小 gap 补拉，超过 500 events 的 gap 直接 snapshot。
 - [x] retention 后旧 cursor 返回 `CURSOR_EXPIRED`；恢复较旧数据库返回 `CURSOR_AHEAD`。
 - [x] 八个 PostgreSQL concurrent writer 得到无缺口 room sequence。
 - [x] 更早开启但更晚写入的事务仍得到更大的 room `updatedAt`，不会旧对象回踩。
@@ -90,9 +93,10 @@
 
 | 验证 | 结果 |
 | --- | --- |
-| Server full suite | 749/749 |
-| Client full suite | 985/985 |
-| Event hook focused | 15/15 |
+| Server full suite | 753/753 |
+| Client full suite | 989/989 |
+| 原始 Event hook focused | 15/15 |
+| 已提交事件 fast-path follow-up | 客户端 hook 19/19，broadcaster 4/4 |
 | Message socket focused | 29/29 |
 | 真实 PostgreSQL event integration | 6/6 |
 | PostgreSQL Playwright | 4/4 |

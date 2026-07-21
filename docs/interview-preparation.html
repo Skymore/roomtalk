@@ -318,8 +318,8 @@
 </head>
 <body>
 <div class="architecture-note">
-  <span data-lang="zh">当前架构版本：2026-07-20。PostgreSQL 物化状态 + 每房间有界事件 cursor 是唯一 durable 同步边界；Redis 只保存可重建实时/cache 状态。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
-  <span data-lang="en">Current architecture as of 2026-07-20: PostgreSQL materialized state plus a bounded per-room event cursor is the sole durable synchronization boundary; Redis holds only rebuildable realtime/cache state. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
+  <span data-lang="zh">当前架构版本：2026-07-20。PostgreSQL 物化状态 + 每房间有界事件 cursor 是唯一 durable 同步边界；Socket.IO 可直接携带不超过 256 KiB 的已提交 event fast path，缺序补拉，落后超过 500 events 则切 snapshot。Redis 只保存可重建实时/cache 状态。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
+  <span data-lang="en">Current architecture as of 2026-07-20: PostgreSQL materialized state plus a bounded per-room event cursor is the sole durable synchronization boundary. Socket.IO may carry a committed-event fast path up to 256 KiB; clients replay missing sequences and switch gaps over 500 events to a snapshot. Redis holds only rebuildable realtime/cache state. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
 </div>
 <div class="lang-toggle">
   <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
@@ -462,17 +462,26 @@ We split storage into durable and realtime layers, but the durable authority is 
 
 <h3 id="arch-ai"><span data-lang="zh">3. AI 流式响应</span><span data-lang="en">3. AI Streaming Response</span></h3>
 
-<div class="diagram">Client → ask_ai event → Server → AI Provider (streaming) → ai_chunk events → Client</div>
+<div class="diagram" data-lang="zh">客户端 → 持久化用户消息 + AI placeholder → assistant_run + outbox → Worker → AI Provider
+   ▲                                           │                     │
+   └──── durable room events ◀─────────────────┴── ai_chunk fast path┘</div>
+<div class="diagram" data-lang="en">Client → persist user + AI placeholder → assistant_run + outbox → Worker → AI Provider
+   ▲                                      │                     │
+   └──── durable room events ◀────────────┴── ai_chunk fast path┘</div>
 
 <ul data-lang="zh">
-  <li>服务端用 OpenAI SDK 的 stream API，逐 chunk 读取，通过 Socket.IO 实时推给客户端。</li>
-  <li>消息创建时 <code>status: 'streaming'</code>，完成后改为 <code>'complete'</code>，出错改为 <code>'error'</code>。</li>
-  <li>服务器重启时，<code>aiStreamRecovery</code> 扫描所有 <code>status = 'streaming'</code> 的消息，标记为 <code>'error'</code>，避免僵尸流。</li>
+  <li>用户消息和 AI <code>status: 'streaming'</code> placeholder 先写 PostgreSQL，各自在原事务里产生 durable room event。</li>
+  <li>默认 worker 模式把 <code>assistant_run</code> 与 <code>outbox_event</code> 原子写入；Worker claim/lease/retry 后调用 Provider。</li>
+  <li>Provider 输出中的 <code>ai_chunk</code> 通过 Socket.IO 直接推送，它是低延迟 UX fast path，不进入 room-event log。</li>
+  <li>完成或失败状态再次写 PostgreSQL，产生最终 durable room event；<code>ai_stream_end</code> 让在线客户端立即收尾，漏掉它的客户端仍可 replay 恢复。</li>
+  <li>服务重启时，Worker 从 outbox/run 状态继续处理；遗留的 streaming message 还有 <code>aiStreamRecovery</code> 兜底，避免僵尸流。</li>
 </ul>
 <ul data-lang="en">
-  <li>The server uses the OpenAI SDK's streaming API, reads chunks incrementally, and pushes them to the client via Socket.IO in real time.</li>
-  <li>Messages are created with <code>status: 'streaming'</code>, changed to <code>'complete'</code> on success, or <code>'error'</code> on failure.</li>
-  <li>On server restart, <code>aiStreamRecovery</code> scans all messages with <code>status = 'streaming'</code> and marks them as <code>'error'</code> to prevent zombie streams.</li>
+  <li>The user message and AI <code>status: 'streaming'</code> placeholder are persisted first; each transaction appends a durable room event.</li>
+  <li>In the default worker mode, the <code>assistant_run</code> and <code>outbox_event</code> are written atomically; a worker claims, leases, and retries the Provider call.</li>
+  <li>Provider output is pushed as direct Socket.IO <code>ai_chunk</code> events. This is a low-latency UX fast path and is not stored in the room-event log.</li>
+  <li>Completion or failure is persisted again and appends the final durable room event. <code>ai_stream_end</code> finishes online clients immediately; clients that miss it still recover by replay.</li>
+  <li>After a restart, the worker continues from outbox/run state, while <code>aiStreamRecovery</code> remains a final guard against orphaned streaming messages.</li>
 </ul>
 
 <div class="card" data-lang="zh">
@@ -1236,19 +1245,57 @@ We used a shared store contract to control behavioral drift during migration, bu
 <ol data-lang="zh">
   <li>PostgreSQL trigger 在 room/message/agent-turn 原事务内追加 <code>room_events</code>；rollback 时 state 与 event 一起消失。</li>
   <li><code>get_room_snapshot</code> 用 repeatable-read 返回 canonical window 与 <code>snapshotSeq</code>。</li>
-  <li>Socket.IO / PostgreSQL <code>NOTIFY</code> 只广播 <code>room_event_available</code> wake-up，不携带权威状态。</li>
-  <li>客户端按 <code>afterSeq=lastAppliedSeq</code> 读取有界 delta，只接受连续序列；duplicate 忽略，gap 重新 snapshot。</li>
-  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后，<code>CURSOR_AHEAD</code> 处理数据库恢复点落后于浏览器 cache。</li>
-  <li>更早历史仍用 <code>beforeMessageId</code> prepend，不推进实时 event cursor。</li>
+  <li>PostgreSQL <code>NOTIFY</code> 只报告已提交的 <code>roomId/headSeq</code>；app 从 PostgreSQL 读回并 hydrate 该 sequence，再通过 Socket.IO 发 <code>room_event_available { headSeq, events? }</code>。</li>
+  <li>完整通知不超过 <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code>（默认 256 KiB）时携带 event；读取失败或超限退化为 head-only hint。</li>
+  <li>客户端只直接应用从 <code>lastAppliedSeq + 1</code> 开始、并以 <code>headSeq</code> 结束的连续 payload；duplicate 忽略，gap 按 <code>afterSeq=lastAppliedSeq</code> 补拉。</li>
+  <li>小 gap 默认按每页 100 events / 256 KiB replay；保留窗口内落后超过 500 events 时直接取新 snapshot，再排空 snapshot 后的 tail。</li>
+  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后，<code>CURSOR_AHEAD</code> 处理数据库恢复点落后于浏览器 cache；更早历史仍用 <code>beforeMessageId</code> prepend。</li>
 </ol>
 <ol data-lang="en">
   <li>PostgreSQL triggers append <code>room_events</code> in the same transaction as room/message/agent-turn writes; rollback removes both state and event.</li>
   <li><code>get_room_snapshot</code> uses repeatable read to return a canonical window plus <code>snapshotSeq</code>.</li>
-  <li>Socket.IO and PostgreSQL <code>NOTIFY</code> emit only a <code>room_event_available</code> wake-up, never authoritative state.</li>
-  <li>The client reads bounded deltas with <code>afterSeq=lastAppliedSeq</code> and accepts only a contiguous sequence; duplicates are ignored and gaps resnapshot.</li>
-  <li><code>CURSOR_EXPIRED</code> handles retention lag; <code>CURSOR_AHEAD</code> handles a restored database behind browser cache.</li>
-  <li>Older history still prepends through <code>beforeMessageId</code> without moving the live event cursor.</li>
+  <li>PostgreSQL <code>NOTIFY</code> reports only the committed <code>roomId/headSeq</code>. The app reads and hydrates that sequence from PostgreSQL, then sends <code>room_event_available { headSeq, events? }</code> over Socket.IO.</li>
+  <li>The event is included when the complete notification fits <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code> (256 KiB by default); read failures or oversized payloads fall back to a head-only hint.</li>
+  <li>The client directly applies only a contiguous payload starting at <code>lastAppliedSeq + 1</code> and ending at <code>headSeq</code>. Duplicates are ignored; gaps replay with <code>afterSeq=lastAppliedSeq</code>.</li>
+  <li>Small gaps replay in pages of 100 events / 256 KiB. A retained gap over 500 events loads a new snapshot and then drains only the post-snapshot tail.</li>
+  <li><code>CURSOR_EXPIRED</code> handles retention lag, <code>CURSOR_AHEAD</code> handles a database restored behind browser cache, and older history still prepends through <code>beforeMessageId</code>.</li>
 </ol>
+
+<div class="diagram" data-lang="zh">客户端(lastAppliedSeq=1041)      App / PostgreSQL
+          │                           │
+          │◀── Socket head=1042 ──────│  假设本次 payload 超限
+          │── GET afterSeq=1041 ─────▶│  request in flight
+          │                           │── commit 1043,1044,1045
+          │◀── Socket head=1043 ──────│
+          │◀── Socket head=1044 ──────│  desiredHeadSeq 只保留 max=1045
+          │◀── Socket head=1045 ──────│
+          │◀── events [1042] ─────────│  请求读取边界较早，所以只返回 1042
+          │ apply 1042; cursor=1042   │  仍未追到 desiredHeadSeq=1045
+          │── GET afterSeq=1042 ─────▶│
+          │◀── events 1043..1045 ─────│
+          │ apply 连续批次; cursor=1045</div>
+<div class="diagram" data-lang="en">Client(lastAppliedSeq=1041)      App / PostgreSQL
+          │                           │
+          │◀── Socket head=1042 ──────│  assume this payload was oversized
+          │── GET afterSeq=1041 ─────▶│  request in flight
+          │                           │── commit 1043,1044,1045
+          │◀── Socket head=1043 ──────│
+          │◀── Socket head=1044 ──────│  desiredHeadSeq keeps max=1045
+          │◀── Socket head=1045 ──────│
+          │◀── events [1042] ─────────│  earlier read boundary returns only 1042
+          │ apply 1042; cursor=1042   │  still behind desiredHeadSeq=1045
+          │── GET afterSeq=1042 ─────▶│
+          │◀── events 1043..1045 ─────│
+          │ apply batch; cursor=1045</div>
+
+<div class="card" data-lang="zh">
+  <h4>追问：既然 Socket 能带 payload，为什么还保留 GET？</h4>
+  <p>因为 Socket fast path 优化的是常见延迟，不承担唯一正确性。正常收到连续的 <code>{ headSeq: 1042, events: [1042] }</code> 时会直接应用，省掉图中的第一个 GET；但客户端可能离线、通知可能重复/乱序、payload 可能超过 256 KiB，app 也可能在 hydrate 时短暂失败。<code>headSeq</code> 告诉客户端目标水位，PostgreSQL replay 才能证明 1042 到 1045 一条不缺。不能证明连续时就补拉或 snapshot。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Follow-up: If Socket can carry payload, why keep GET?</h4>
+  <p>The Socket fast path optimizes common-case latency; it is not the sole correctness path. A normal contiguous <code>{ headSeq: 1042, events: [1042] }</code> is applied directly and removes the first GET shown above. But a client may be offline, notifications may duplicate or reorder, a payload may exceed 256 KiB, or hydration may briefly fail. <code>headSeq</code> gives the target high-water mark, while PostgreSQL replay proves that nothing from 1042 through 1045 is missing. If continuity cannot be proven, the client replays or resnapshots.</p>
+</div>
 
 <blockquote data-lang="zh">
 这不是完整 Event Sourcing。Canonical tables 仍是事实源，<code>room_events</code> 只是可裁剪的状态传输 changelog。它和 MySQL binlog 相似在“单调 cursor + 补缺失区间”，但浏览器读取稳定的应用语义，不依赖 WAL/binlog 格式。AI outbox 也必须分开：room event 给所有客户端重复读取，outbox 由一个 Worker claim/retry。
@@ -1426,7 +1473,7 @@ interface CachedRoomMessageWindow {
   cachedAt: number;
 }</code></pre>
 
-<pre><code class="language-typescript">// 只接受连续事件；gap 不做部分 apply
+<pre><code class="language-typescript">// Socket fast path 与 GET page 共用同一条规则：只接受连续事件；gap 不做部分 apply
 let expectedSeq = lastAppliedSeq + 1;
 for (const event of events) {
   if (event.seq &lt;= lastAppliedSeq) continue; // duplicate
@@ -1442,12 +1489,14 @@ writeCachedRoomMessageWindow({ ...reduced, lastAppliedSeq });</code></pre>
 <ul data-lang="zh">
   <li>Memory window 负责同 tab 即时绘制，IndexedDB v4 负责跨刷新恢复。</li>
   <li>本地 <code>cacheGeneration</code> 只是跨 tab invalidate 的 browser epoch，不是业务同步 version。</li>
+  <li><code>desiredHeadSeq</code> 只维护收到的最高水位，多个通知合并为一次追赶；差距超过 500 直接 snapshot，避免翻很多页重放已被新状态覆盖的中间值。</li>
   <li>Redis 最近消息 cache 同样可丢；异常直接降级读 PostgreSQL。</li>
   <li><code>room.deleted</code> 同时写 tombstone、清 message/media cache；晚到 callback 不能复活已删除房间。</li>
 </ul>
 <ul data-lang="en">
   <li>The memory window paints instantly within a tab; IndexedDB v4 restores across reloads.</li>
   <li>Local <code>cacheGeneration</code> is only a cross-tab invalidation epoch, not a business synchronization version.</li>
+  <li><code>desiredHeadSeq</code> retains only the highest notified watermark, coalescing many notifications into one catch-up. A gap over 500 resnapshots instead of replaying pages of intermediate state already superseded by the latest snapshot.</li>
   <li>The Redis recent-message cache is also disposable; failures fall back to PostgreSQL.</li>
   <li><code>room.deleted</code> records a tombstone and clears message/media caches so late callbacks cannot resurrect the room.</li>
 </ul>
@@ -1839,6 +1888,33 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 <details data-lang="en">
   <summary>What happens if Redis goes down?</summary>
   <div class="answer">Realtime state (online members, sessions) is lost — users need to reconnect, and the server rebuilds it. Persistent data lives in PostgreSQL and is unaffected. Message cache loss just means an extra PostgreSQL query — performance impact but no data loss.</div>
+</details>
+
+<details data-lang="zh">
+  <summary><code>room_event_available</code> 有必要带 payload 吗？</summary>
+  <div class="answer">有，作为常见路径优化：事务提交后，app 按 <code>headSeq</code> 从 PostgreSQL 读回规范事件，完整通知不超过 256 KiB 就直接带给客户端。只要它与 <code>lastAppliedSeq</code> 连续，客户端立即应用并省掉一次 GET。但 payload 不是唯一事实源；超限、读取失败、离线、乱序或 gap 都用 <code>headSeq</code> 回到 durable replay。这样兼顾低延迟与可证明的恢复。</div>
+</details>
+<details data-lang="en">
+  <summary>Should <code>room_event_available</code> include a payload?</summary>
+  <div class="answer">Yes, as a common-case optimization. After commit, the app reads the canonical event at <code>headSeq</code> from PostgreSQL and includes it when the complete notification is at most 256 KiB. If it is contiguous with <code>lastAppliedSeq</code>, the client applies it immediately and saves a GET. The payload is not the sole source of truth: oversized events, read failures, offline clients, reordering, or gaps fall back to durable replay using <code>headSeq</code>. This combines low latency with provable recovery.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>客户端落后很多页时如何快速追赶？</summary>
+  <div class="answer">当前阈值是 500 events。差距不超过 500 时，按每页最多 100 events、256 KiB 从 <code>lastAppliedSeq</code> 连续 replay；超过 500 时直接取 repeatable-read snapshot，把 cursor 推到 <code>snapshotSeq</code>，再只重放 snapshot 之后的短 tail。<code>desiredHeadSeq</code> 只保留通知里的最大水位，所以一秒内 1042、1043、1044、1045 会合并成“追到 1045”，不会启动四个请求。</div>
+</details>
+<details data-lang="en">
+  <summary>How does a far-behind client catch up quickly?</summary>
+  <div class="answer">The current threshold is 500 events. A gap of at most 500 replays continuously from <code>lastAppliedSeq</code> in pages capped at 100 events and 256 KiB. A larger gap loads a repeatable-read snapshot, advances to <code>snapshotSeq</code>, and replays only the short post-snapshot tail. <code>desiredHeadSeq</code> keeps only the maximum notified watermark, so 1042, 1043, 1044, and 1045 arriving in one second become one goal — “catch up to 1045” — rather than four requests.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>一条 AI message 从发送到完成经历什么？</summary>
+  <div class="answer">先鉴权并持久化用户消息，PostgreSQL trigger 追加第一个 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；完成或失败时把最终 AI message 写 PostgreSQL，追加最终 room event，并发 <code>ai_stream_end</code>。在线客户端看到低延迟流，离线或漏包客户端通过 room-event replay 得到最终状态。</div>
+</details>
+<details data-lang="en">
+  <summary>What happens during one AI-message lifecycle?</summary>
+  <div class="answer">The server authorizes and persists the user message, whose PostgreSQL trigger appends the first room event. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. On completion or failure, the final AI message is persisted, a final room event is appended, and <code>ai_stream_end</code> is emitted. Online clients see a low-latency stream, while offline or packet-losing clients recover the final state through room-event replay.</div>
 </details>
 
 <details data-lang="zh">

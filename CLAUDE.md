@@ -49,6 +49,8 @@ The server uses a `CompositeRoomStore` (`server/src/repositories/store.ts`) that
 
 The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding runtime durable operations, implement PostgreSQL first and proxy through `CompositeRoomStore`; keep the legacy Redis contract aligned only when the migration/import path still needs that operation.
 
+Committed room changes append a PostgreSQL room event in the same transaction. `LISTEN/NOTIFY` wakes each app instance, which reads and hydrates that exact event and includes it in `room_event_available` when the serialized payload is within `ROOM_EVENT_FAST_PATH_MAX_BYTES`; otherwise the event carries only `headSeq`. Clients apply only a contiguous fast-path prefix, replay missing ranges, and replace gaps larger than 500 events with a repeatable-read room snapshot before draining the tail.
+
 ### Socket Event Handlers
 
 Socket handlers are split by domain in `server/src/socket/`:

@@ -41,7 +41,7 @@ RoomTalk 不只覆盖功能的 happy path，也系统处理了实时协作与 AI
 | --- | --- |
 | 共享的不可信代码执行 | 将可信的 RoomTalk control plane 与每房间 E2B execution plane 分离，通过版本化 JSONL 协议和短期 scoped capability 连接。 |
 | AI 文本与工具事件顺序 | 在最早知道真实顺序的 engine/runner 层保留文本与工具边界，再持久化服务端单调递增的 `position`；客户端只展示顺序，不用 timestamp 猜测。 |
-| 多客户端一致性 | Socket.IO 只负责唤醒，客户端按 PostgreSQL 每房间事件序列重放；snapshot 与 IndexedDB cursor 修复漏投递。 |
+| 多客户端一致性 | Socket.IO 直接推送有字节上限的已提交 RoomEvent fast path；缺失区间按 PostgreSQL 每房间序列补拉，超过 500 个事件直接切 repeatable-read snapshot。 |
 | 移动端断连恢复 | 由唯一 `RoomSessionController` 管理 connect/register/join/retry；epoch 只随房间或 socket identity 变化，lifecycle signal 合并成消息 resync 而不重复 join，暂态恢复保留已显示的消息和媒体。 |
 | 持久层边界 | PostgreSQL 强制承载业务状态与事件重放；Redis 仅负责可重建的 presence、Socket.IO adapter、锁和短缓存。 |
 | 缓存一致性 | 最近消息缓存以持久 room-event head 守卫，写回前再次校验，只在 mutation 成功后失效；缓存故障时降级直读 PostgreSQL。 |

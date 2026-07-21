@@ -63,19 +63,22 @@ Implemented event types are:
 
 `get_room_events` accepts `afterSeq`, count limit, and byte limit. It returns ordered events, `headSeq`, `minAvailableSeq`, and `hasMore`.
 
+- After `NOTIFY`, each app reads and hydrates the exact committed sequence from PostgreSQL. Socket.IO includes it as `events` when the complete notification is within `ROOM_EVENT_FAST_PATH_MAX_BYTES` (default 256 KiB); otherwise it sends only `headSeq`.
+- A client applies the fast path only when it forms the next contiguous prefix and ends at `headSeq`; a successful fast path advances `lastAppliedSeq` without `get_room_events`.
 - A cursor behind retention receives `CURSOR_EXPIRED` and resnapshots.
 - A browser cursor ahead of a restored database receives `CURSOR_AHEAD` and resnapshots.
 - A non-contiguous page is never partially applied.
+- A retained gap above 500 events resnapshots instead of replaying up to 100 default pages; the client then drains only the post-`snapshotSeq` tail.
 - IndexedDB v4 stores the message window and `lastAppliedSeq`.
 - `beforeMessageId` pagination prepends old history without moving the live cursor.
 
-PostgreSQL `NOTIFY` and Socket.IO only wake readers. Every app instance may emit duplicate wake-ups through the Redis adapter; clients treat them as idempotent hints and read durable events.
+The fast path changes latency, not the correctness boundary. Every app instance may emit duplicates through the Redis adapter; clients ignore already-applied sequences and replay any gap from PostgreSQL. Read/hydration failure and oversized events automatically fall back to the same durable head-only path.
 
 ## Retention, not periodic merge
 
 There is no merge/compaction back into messages: the normalized state was already changed in the original transaction. The hourly job removes only an old contiguous event prefix and advances `minAvailableSeq`.
 
-Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; the Compose examples expose all three. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
+Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; `ROOM_EVENT_FAST_PATH_MAX_BYTES` independently controls the Socket fast-path ceiling. The Compose examples expose all four. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
 
 ## Event log versus AI outbox
 

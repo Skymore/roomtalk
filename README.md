@@ -41,7 +41,7 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | --- | --- |
 | Shared untrusted execution | Split the trusted RoomTalk control plane from a per-room E2B execution plane, connected by a versioned JSONL protocol and short-lived scoped capabilities. |
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
-| Multi-client consistency | Treat Socket.IO as a wake-up path and replay a PostgreSQL-owned per-room event sequence; snapshots and IndexedDB cursors repair missed delivery. |
+| Multi-client consistency | Push a size-bounded committed RoomEvent fast path over Socket.IO, replay any missing PostgreSQL-owned sequence range, and switch gaps over 500 events to a repeatable-read snapshot. |
 | Mobile reconnect recovery | One `RoomSessionController` owns connect/register/join/retry. Epochs change only with room or socket identity; lifecycle signals coalesce into message resync without duplicate joins, and transient recovery preserves rendered messages/media. |
 | Durable-store boundary | Require PostgreSQL for business state and event replay; keep Redis rebuildable for presence, the Socket.IO adapter, locks, and short-lived cache. |
 | Cache correctness | Guard recent-message cache entries with the durable room-event head, double-check before write-back, invalidate after successful mutations, and degrade to PostgreSQL on cache failure. |

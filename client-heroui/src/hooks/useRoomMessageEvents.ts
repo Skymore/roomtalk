@@ -27,6 +27,7 @@ import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 const ROOM_EVENT_PAGE_LIMIT = 100;
 const ROOM_EVENT_PAGE_MAX_BYTES = 256 * 1024;
+const ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD = 500;
 const getEmptyAgentTurns = () => [] as RoomAgentTurn[];
 
 interface UseRoomMessageEventsArgs {
@@ -176,6 +177,7 @@ export const useRoomMessageEvents = ({
     let syncAgain = false;
     let desiredHeadSeq = 0;
     let lastAppliedSeq = 0;
+    let lastGapSnapshotTarget = 0;
     let hasMoreMessages = false;
     let oldestMessageId: string | undefined;
     let canonicalMessages: Message[] = [];
@@ -360,6 +362,16 @@ export const useRoomMessageEvents = ({
             if (!loaded) break;
           }
 
+          if (
+            desiredHeadSeq - lastAppliedSeq > ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD
+            && desiredHeadSeq > lastGapSnapshotTarget
+          ) {
+            const gapSnapshotTarget = desiredHeadSeq;
+            const loaded = await loadSnapshot({ reason: 'event-gap-threshold' });
+            if (!loaded) break;
+            lastGapSnapshotTarget = gapSnapshotTarget;
+          }
+
           let keepReading = true;
           while (keepReading && !cancelled && sessionReadyRef.current) {
             const requestId = `${Date.now()}-${++requestSequence}`;
@@ -372,6 +384,16 @@ export const useRoomMessageEvents = ({
                 maxBytes: ROOM_EVENT_PAGE_MAX_BYTES,
               });
               desiredHeadSeq = Math.max(desiredHeadSeq, page.headSeq);
+              if (
+                page.headSeq - lastAppliedSeq > ROOM_EVENT_SNAPSHOT_GAP_THRESHOLD
+                && page.headSeq > lastGapSnapshotTarget
+              ) {
+                const gapSnapshotTarget = page.headSeq;
+                const loaded = await loadSnapshot({ reason: 'event-gap-threshold' });
+                if (!loaded) return;
+                lastGapSnapshotTarget = gapSnapshotTarget;
+                continue;
+              }
               if (page.events.length === 0 && lastAppliedSeq < page.headSeq) {
                 const loaded = await loadSnapshot({ reason: 'event-gap-empty-page' });
                 if (!loaded) return;
@@ -479,7 +501,18 @@ export const useRoomMessageEvents = ({
     const handleRoomEventAvailable = (event: RoomEventAvailable) => {
       if (event.roomId !== roomId || !Number.isSafeInteger(event.headSeq)) return;
       desiredHeadSeq = Math.max(desiredHeadSeq, event.headSeq);
-      void syncFromCursor();
+      const fastPathEvents = Array.isArray(event.events) ? event.events : [];
+      const fastPathEndsAtHead = fastPathEvents.length > 0
+        && fastPathEvents[fastPathEvents.length - 1].seq === event.headSeq;
+      if (hasBaseline && fastPathEndsAtHead && !applyEventPage(fastPathEvents)) {
+        logRoomMessageDiagnostic('event-fast-path-gap', {
+          roomId,
+          lastAppliedSeq,
+          headSeq: event.headSeq,
+          eventSeqs: fastPathEvents.map(candidate => candidate.seq),
+        });
+      }
+      if (!hasBaseline || lastAppliedSeq < desiredHeadSeq) void syncFromCursor();
     };
     const handleReconnect = () => void syncFromCursor();
     const handlePageResume = () => {

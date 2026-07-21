@@ -291,7 +291,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(socketMock.requestEvents.mock.calls.map(call => call[0].afterSeq)).toEqual([1, 2]);
   });
 
-  it('treats repeated wake-up notifications as idempotent hints', async () => {
+  it('ignores repeated wake-up notifications after the cursor is already caught up', async () => {
     cacheMock.memory = {
       roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
     };
@@ -306,8 +306,97 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 2 });
     });
 
-    await waitFor(() => expect(socketMock.requestEvents.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socketMock.requestEvents).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('state').dataset.messages).toBe('message-2');
+  });
+
+  it('applies a contiguous Socket event payload without another replay request', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 2,
+      events: [event(2)],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-2');
+    expect(socketMock.requestEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays from the durable cursor when a Socket payload has a sequence gap', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, { headSeq: 1 }))
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        events: [event(2), event(3)], headSeq: 3,
+      }));
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 3,
+      events: [event(3)],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('3'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-2,message-3');
+    expect(socketMock.requestEvents.mock.calls.map(call => call[0].afterSeq)).toEqual([1, 1]);
+  });
+
+  it('switches a large retained gap to a consistent snapshot instead of replaying every page', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'cached' })], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementation(async request => eventPage(request.requestId, request.afterSeq, request.afterSeq === 1
+      ? { events: [event(2)], headSeq: 1000, hasMore: true }
+      : { headSeq: 1000 }));
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'snapshot-current' })],
+      snapshotSeq: 1000,
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1000'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('snapshot-current');
+    expect(screen.getByTestId('state').dataset.messages).not.toContain('message-2');
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failed large-gap snapshot when the same high-water notification arrives again', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [message({ id: 'cached' })], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents.mockImplementation(async request => eventPage(request.requestId, request.afterSeq, {
+      headSeq: request.afterSeq,
+    }));
+    socketMock.requestSnapshot
+      .mockRejectedValueOnce(new Error('temporary snapshot failure'))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'snapshot-current' })],
+        snapshotSeq: 1000,
+      }));
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 1000 }));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 1000 }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1000'));
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('state').dataset.messages).toBe('snapshot-current');
   });
 
   it('resets from a snapshot when the retained cursor has expired', async () => {

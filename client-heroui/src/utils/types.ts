@@ -268,6 +268,7 @@ export interface RoomEventPagePayload {
 export interface RoomEventAvailable {
   roomId: string;
   headSeq: number;
+  events?: RoomEvent[];
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

@@ -64,8 +64,11 @@ Original sandbox phases, backend spikes, workspace UI plans, identity/permission
 
 - Replaced the former Fly production guide with the current MacBook/Compose/Cloudflare Tunnel runbook and kept Fly only as a coordinated rollback target.
 - Documented `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS` across runtime examples, Compose, and configuration references.
+- Documented `ROOM_EVENT_FAST_PATH_MAX_BYTES` across runtime examples, Compose, configuration, architecture, deployment, and interview references.
 - Finalized the room-event cutover ledger with real commit IDs and moved it from active work to a completed evidence record.
 - Updated the bilingual interview guide from retired `messageVersion`/Redis-durable/Fly assumptions to the current event-cursor, PostgreSQL-authoritative, SeaweedFS, and portable AWS architecture.
+- Corrected the room-event delivery description from wake-up-only to a hybrid protocol: bounded committed-event Socket fast path, durable replay for missing sequences, and repeatable-read snapshot recovery for retained gaps over 500 events.
+- Added the end-to-end AI message lifecycle: durable user/placeholder/final room events, transactional AI outbox claim/retry, transient `ai_chunk` UX delivery, and final durable convergence.
 
 ## Earlier Audit Corrections (2026-07-13)
 

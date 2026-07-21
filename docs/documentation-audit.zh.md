@@ -64,8 +64,11 @@
 
 - 用当前 MacBook/Compose/Cloudflare Tunnel runbook 替换旧 Fly 生产指南，只把 Fly 保留为需要协调数据的回滚目标。
 - 在 runtime example、Compose 与配置参考中统一记录 `ROOM_EVENT_RETENTION_DAYS`、`ROOM_EVENT_MAX_PER_ROOM` 和 `ROOM_EVENT_PRUNE_INTERVAL_MS`。
+- 在 runtime example、Compose、配置、架构、部署和面试资料中统一记录 `ROOM_EVENT_FAST_PATH_MAX_BYTES`。
 - 用真实 commit ID 收尾 room-event 切换账本，并从 active work 移到已完成证据记录。
 - 把双语面试资料从退役的 `messageVersion`/Redis durable/Fly 假设更新为当前 event cursor、PostgreSQL authoritative、SeaweedFS 与可迁移 AWS 架构。
+- 把 room-event 投递从“只做唤醒”校正为混合协议：有界的已提交事件 Socket fast path、缺序时 durable replay，以及保留窗口内落后超过 500 events 时的 repeatable-read snapshot 恢复。
+- 补充 AI message 端到端生命周期：用户/placeholder/final 的 durable room event、事务性 AI outbox claim/retry、临时 `ai_chunk` UX 投递，以及最终 durable 收敛。
 
 ## 早期审计修正（2026-07-13）
 
