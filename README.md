@@ -78,6 +78,26 @@ The ownership boundary is deliberate:
 - **E2B execution plane** owns untrusted files, processes, terminals, dev servers, and agent execution inside `/workspace`.
 - **Agent backends** own reasoning and native tool loops. They consume RoomTalk capabilities through a narrow JSONL/CLI contract rather than receiving database or infrastructure credentials.
 
+### Current production topology
+
+```mermaid
+flowchart LR
+  Browser["Browser / mobile client"] --> Edge["Cloudflare DNS + TLS"]
+  Edge --> Tunnel["Cloudflare Tunnel on MacBook"]
+  Tunnel -->|"room.ruit.me<br/>roomtalk.ruit.me"| App["RoomTalk app container<br/>Node + Express + Socket.IO"]
+  Tunnel -->|"roomtalk-objects.ruit.me"| Objects["SeaweedFS 4.29<br/>S3-compatible object storage"]
+
+  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + outbox"]
+  App --> Redis["Redis 7<br/>presence + Socket.IO + cache"]
+  App --> Objects
+  App --> E2BProd["E2B<br/>per-room execution sandboxes"]
+  App --> Providers["Google / GitHub / Codex / AI providers"]
+```
+
+The MacBook runs five long-lived Compose services: the app, PostgreSQL, Redis, SeaweedFS, and `cloudflared`. PostgreSQL uses a durable Docker volume, SeaweedFS persists under `runtime/object-storage`, and Redis is intentionally rebuildable. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
+
+`room.ruit.me` is the primary hostname and `roomtalk.ruit.me` is a compatibility hostname. The runtime also allowlists `ai-chat.wenlin.dev`, but that hostname has a separately managed DNS cutover. The former Fly app is suspended; Supabase, Tigris, and Upstash remain only as temporary rollback resources and receive no production writes.
+
 ### How the difficult paths work
 
 - **A code-agent turn** is authorized and persisted before execution, fenced by a durable room lease, then sent to the reusable sandbox daemon with turn-scoped model, context, publish, and the room owner's Codex and optional GitHub connections. Text, tool, approval, usage, and lifecycle events return through one ordered protocol and are persisted before broadcast.
@@ -106,7 +126,7 @@ Requirements:
 - PostgreSQL and Redis. PostgreSQL is the mandatory durable store; Redis is rebuildable realtime/cache state.
 - Optional E2B credentials and pinned template settings for real code-agent rooms.
 
-The quickest full local runtime is `cp .env.compose.example .env.compose && docker compose --env-file .env.compose up -d --build`. PostgreSQL and media use persistent named volumes; Redis is disposable. For manual development, point `DATABASE_URL` and `REDIS_URL` in `server/.env` at local services.
+For the quickest full local runtime, copy `.env.compose.example` to `.env.compose`, generate the required PostgreSQL and S3 credentials, then run `docker compose --env-file .env.compose up -d --build`. PostgreSQL uses a persistent named volume, SeaweedFS uses the configured host directory, and Redis is disposable. The production Mac loads its real secrets from macOS Keychain with `node scripts/local-production.mjs --profile edge up -d --build`. For manual development, point `DATABASE_URL` and `REDIS_URL` in `server/.env` at local services.
 
 Install dependencies and create local configuration:
 
@@ -190,6 +210,28 @@ Migration and rollout references:
 - [Legacy Redis-to-PostgreSQL import runbook](docs/postgres-rollout-runbook.md)
 - [Media object-storage migration](docs/image-object-storage-migration-runbook.md)
 
+## AWS Portability
+
+The current deployment is intentionally portable, but migration is a controlled data cutover rather than a one-click host change. The app is a single container image, durable state is isolated in PostgreSQL, Redis is rebuildable, and all media uses the S3 API.
+
+| Current boundary | AWS mapping | Migration contract |
+| --- | --- | --- |
+| App container + Cloudflare Tunnel | ECS Fargate behind an ALB; EKS is optional | Run the same root image and inject environment/secrets through ECS and Secrets Manager. Cloudflare can remain in front of the AWS origin, or Route 53/CloudFront can replace it. |
+| PostgreSQL 17 | RDS PostgreSQL or Aurora PostgreSQL | Restore a `pg_dump` for a maintenance-window cutover; use logical replication or AWS DMS when the dataset requires a shorter write pause. |
+| Redis 7 | ElastiCache for Valkey/Redis OSS | Start empty and warm naturally because no business state is authoritative in Redis. |
+| SeaweedFS S3 | Amazon S3 | Preserve the bucket object keys and use the existing idempotent `migrate:s3-to-s3` tool to copy and verify bytes. |
+| E2B sandboxes | E2B unchanged | Keep the pinned template/artifact and update only the RoomTalk control-plane origin and scoped callback URLs. |
+
+A practical AWS cutover is:
+
+1. provision ECS, RDS, ElastiCache, S3, Secrets Manager, health checks, logs, and the public edge as a shadow stack;
+2. restore PostgreSQL, run the current schema migrations, and perform a dry-run plus verified copy of all S3 objects;
+3. start RoomTalk against RDS/ElastiCache/S3 and run HTTP, Socket.IO, event-replay, presigned media, Google/GitHub/Codex, and E2B smokes;
+4. take a short write gate, apply the final PostgreSQL and S3 delta, then switch DNS;
+5. keep the Mac stack read-only for a rollback window, noting that DNS-only rollback is unsafe after AWS accepts new writes.
+
+For the current deployment size, a maintenance-window move is operationally straightforward. A true zero-downtime move additionally needs PostgreSQL CDC/logical replication and an explicit write/rollback protocol; the room event log repairs client synchronization but is not a substitute for database replication.
+
 ## Testing
 
 The repository uses layered verification:
@@ -203,9 +245,9 @@ Run focused tests next to changed code and expand to the affected production bui
 
 ## Deployment
 
-`master` remains the release branch, but the scheduled Fly workflow is disabled after the 2026-07-20 self-host cutover. Local cutover commits are intentionally not pushed.
+`master` remains the release branch. The complete event-sync, self-hosted runtime, domain cutover, and credential-hardening change set is committed and pushed to `origin/master`; the former scheduled Fly workflow is manually disabled so a source push does not restart Fly.
 
-Production at `roomtalk.ruit.me` runs the root image on a MacBook through Docker Compose and Cloudflare Tunnel, with PostgreSQL 17, Redis 7, and SeaweedFS 4.29 S3-compatible storage. E2B still provides per-room execution sandboxes. The former Fly/Supabase/Tigris deployment is retained as a rollback source, not a live writer.
+Production at `room.ruit.me` runs the root image on a MacBook through Docker Compose and Cloudflare Tunnel, with PostgreSQL 17, Redis 7, and SeaweedFS 4.29 S3-compatible storage. `roomtalk.ruit.me` remains a compatibility entry point, and E2B still provides per-room execution sandboxes. The former Fly app is suspended; Supabase, Tigris, and Upstash are retained only for the rollback window, not as live writers.
 
 ## Selected Engineering References
 

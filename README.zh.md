@@ -78,6 +78,26 @@ flowchart LR
 - **E2B execution plane**：在 `/workspace` 中承载不可信文件、进程、terminal、dev server 和 Agent 执行。
 - **Agent backend**：拥有推理和原生工具循环，通过窄 JSONL/CLI 合约使用 RoomTalk 能力，不接触数据库或基础设施凭据。
 
+### 当前生产拓扑
+
+```mermaid
+flowchart LR
+  Browser["浏览器 / 手机客户端"] --> Edge["Cloudflare DNS + TLS"]
+  Edge --> Tunnel["MacBook 上的 Cloudflare Tunnel"]
+  Tunnel -->|"room.ruit.me<br/>roomtalk.ruit.me"| App["RoomTalk app container<br/>Node + Express + Socket.IO"]
+  Tunnel -->|"roomtalk-objects.ruit.me"| Objects["SeaweedFS 4.29<br/>S3-compatible 对象存储"]
+
+  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + outbox"]
+  App --> Redis["Redis 7<br/>presence + Socket.IO + cache"]
+  App --> Objects
+  App --> E2BProd["E2B<br/>每房间 execution sandbox"]
+  App --> Providers["Google / GitHub / Codex / AI providers"]
+```
+
+MacBook 长期运行五个 Compose 服务：app、PostgreSQL、Redis、SeaweedFS 和 `cloudflared`。PostgreSQL 使用 durable Docker volume，SeaweedFS 持久化到 `runtime/object-storage`，Redis 刻意保持可重建。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
+
+`room.ruit.me` 是主域名，`roomtalk.ruit.me` 是兼容入口。Runtime 同时 allowlist `ai-chat.wenlin.dev`，但该域名的 DNS 切换单独管理。旧 Fly app 已暂停；Supabase、Tigris 和 Upstash 仅作为临时回滚资源保留，不再接收生产写入。
+
 ### 关键难点是怎么工作的
 
 - **Code Agent turn** 会先授权并持久化，再用 durable fenced room lease 串行执行，随后把 turn-scoped model/context/publish capability 和用户自有 connection 交给可复用 sandbox daemon。文本、工具、审批、usage 和 lifecycle 事件经同一有序协议返回，先持久化再广播。
@@ -106,7 +126,7 @@ docs/                             架构、runbook、方案和复盘
 - PostgreSQL 与 Redis。PostgreSQL 是强制 durable store；Redis 只保存可重建实时/缓存状态。
 - 真实 Code Agent 房间还需要 E2B 凭据和固定 template 配置。
 
-最快的完整本地运行方式是 `cp .env.compose.example .env.compose && docker compose --env-file .env.compose up -d --build`。PostgreSQL 与媒体使用持久 named volume，Redis 可丢弃。手动开发时，在 `server/.env` 中把 `DATABASE_URL` 与 `REDIS_URL` 指向本地服务。
+最快的完整本地运行方式是先复制 `.env.compose.example` 为 `.env.compose`，生成必需的 PostgreSQL 与 S3 凭据，再运行 `docker compose --env-file .env.compose up -d --build`。PostgreSQL 使用持久 named volume，SeaweedFS 使用配置的宿主机目录，Redis 可丢弃。生产 Mac 通过 `node scripts/local-production.mjs --profile edge up -d --build` 从 macOS Keychain 注入真实 secret。手动开发时，在 `server/.env` 中把 `DATABASE_URL` 与 `REDIS_URL` 指向本地服务。
 
 安装依赖并创建本地配置：
 
@@ -190,6 +210,28 @@ npm run test:e2e:postgres
 - [旧 Redis 到 PostgreSQL 导入 runbook](docs/postgres-rollout-runbook.zh.md)
 - [媒体对象存储迁移](docs/image-object-storage-migration-runbook.md)
 
+## AWS 可迁移性
+
+当前部署刻意保持可迁移，但迁移仍是受控的数据切换，不是“一键换宿主机”。App 是单一容器镜像，durable state 隔离在 PostgreSQL，Redis 可重建，全部媒体使用 S3 API。
+
+| 当前边界 | AWS 映射 | 迁移合约 |
+| --- | --- | --- |
+| App container + Cloudflare Tunnel | ALB 后的 ECS Fargate；EKS 可选 | 运行同一个根镜像，通过 ECS 与 Secrets Manager 注入环境变量和 secret。Cloudflare 可以继续放在 AWS origin 前，也可以换成 Route 53/CloudFront。 |
+| PostgreSQL 17 | RDS PostgreSQL 或 Aurora PostgreSQL | 维护窗口方案使用 `pg_dump` 恢复；数据规模要求更短停写时使用 logical replication 或 AWS DMS。 |
+| Redis 7 | ElastiCache for Valkey/Redis OSS | 直接以空实例启动并自然预热，因为 Redis 不承载 authoritative business state。 |
+| SeaweedFS S3 | Amazon S3 | 保持 bucket object key 不变，使用现有幂等 `migrate:s3-to-s3` 工具复制并逐对象校验。 |
+| E2B sandbox | E2B 保持不变 | 保持固定 template/artifact，只更新 RoomTalk control-plane origin 与 scoped callback URL。 |
+
+实际 AWS 切换顺序是：
+
+1. 先建立 ECS、RDS、ElastiCache、S3、Secrets Manager、健康检查、日志和公网 edge 的 shadow stack；
+2. 恢复 PostgreSQL、执行当前 schema migration，并 dry-run 后完整复制校验全部 S3 objects；
+3. 让 RoomTalk 连接 RDS/ElastiCache/S3，执行 HTTP、Socket.IO、event replay、预签名媒体、Google/GitHub/Codex 与 E2B smoke；
+4. 开启短暂 write gate，应用最后的 PostgreSQL 与 S3 增量，然后切 DNS；
+5. 在回滚窗口内把 Mac stack 保持只读；AWS 接受新写入后，不能只改 DNS 回滚。
+
+以当前部署规模，维护窗口迁移在运维上比较直接。真正零停机还需要 PostgreSQL CDC/logical replication 与明确的写入/回滚协议；room event log 用来修复客户端同步，不能替代数据库复制。
+
 ## 测试
 
 仓库采用分层验证：
@@ -203,9 +245,9 @@ npm run test:e2e:postgres
 
 ## 部署
 
-`master` 仍是 release branch，但 2026-07-20 自托管切换后，定时 Fly workflow 已禁用。切换产生的本地 commit 按约定没有 push。
+`master` 仍是 release branch。Event sync、自托管 runtime、域名切换和凭据加固的完整 change set 已提交并推送到 `origin/master`；旧定时 Fly workflow 已手工禁用，因此 source push 不会重新启动 Fly。
 
-`roomtalk.ruit.me` 生产现在通过 Docker Compose 与 Cloudflare Tunnel 在 MacBook 上运行根镜像，使用 PostgreSQL 17、Redis 7 和 SeaweedFS 4.29 S3-compatible 存储；每房间 execution sandbox 仍由 E2B 提供。旧 Fly/Supabase/Tigris 只保留为回滚源，不再接受写入。
+`room.ruit.me` 生产现在通过 Docker Compose 与 Cloudflare Tunnel 在 MacBook 上运行根镜像，使用 PostgreSQL 17、Redis 7 和 SeaweedFS 4.29 S3-compatible 存储；`roomtalk.ruit.me` 继续作为兼容入口，每房间 execution sandbox 仍由 E2B 提供。旧 Fly app 已暂停；Supabase、Tigris 与 Upstash 仅在回滚窗口内保留，不再作为 live writer。
 
 ## 精选工程参考
 
