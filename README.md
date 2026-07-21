@@ -263,7 +263,7 @@ Current architecture and historical records are both part of the engineering evi
 
 - [Documentation index](docs/README.md): current architecture, runbooks, subsystem references, retrospectives, historical plans, reports, and language editions.
 - [Portable deployment and cutover record](docs/room-event-sync-portable-deployment.md): the current Mac production runtime, event sync, storage edge, backup, and rollback boundary.
-- [Legacy Fly deployment guide](DeploymentGuide.md): the disabled GitHub Actions/Fly.io workflow retained for rollback history.
+- [Production deployment guide](DeploymentGuide.md): the current MacBook/Compose release, verification, backup, rollback, and AWS handoff runbook.
 - [Configuration reference](docs/configuration.md): environment groups, storage modes, secret boundaries, and production/development differences.
 - [Security](SECURITY.md): identity, authorization, credential handling, scoped capabilities, media access, and sandbox trust boundaries.
 - [Contributing](CONTRIBUTING.md): development, validation, artifact, commit, and release expectations.

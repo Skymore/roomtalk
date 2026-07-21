@@ -3,7 +3,7 @@
 [English](code-agent-runtime-architecture.md)
 
 状态：当前
-已按 `master` 核对：2026-07-16
+已按 `master` 核对：2026-07-20
 
 本文描述当前实现。`docs/` 中的早期 phase、spike 和 migration plan 保留了演进证据；当前简明入口以本文为准，最终事实源仍是源码和测试。
 
@@ -28,9 +28,9 @@ Code Agent room 不是给 remote shell 包一层 chat prompt，而是一个 room
 ```mermaid
 flowchart TB
   UI["Browser UI"] -->|"Socket.IO + HTTP"| Node["RoomTalk control plane"]
-  Node --> Durable["PostgreSQL or Redis durable store"]
+  Node --> Durable["PostgreSQL durable state + room events"]
   Node --> Redis["Redis realtime/cache"]
-  Node --> Objects["Tigris/S3 media + artifacts"]
+  Node --> Objects["SeaweedFS/S3-compatible media + artifacts"]
   Node --> Lifecycle["Sandbox lifecycle"]
   Lifecycle --> E2B["Room-scoped E2B sandbox"]
   E2B --> Daemon["Reusable JSONL daemon"]
@@ -49,7 +49,7 @@ flowchart TB
 | RoomTalk control plane | Identity、membership、authorization、durable turn/transcript、scoped credential、sandbox lifecycle、object metadata | Agent reasoning、workspace process |
 | E2B execution plane | Workspace file、Git、process、PTY、preview server、Agent execution | Room authorization、database credential、public URL ownership |
 | Agent backend | Reasoning、原生 tool loop、backend session/thread state | RoomTalk auth、database access、sandbox lifecycle |
-| PostgreSQL/Redis/Tigris | Durable fact、realtime coordination/cache、object body/manifest | Agent execution |
+| PostgreSQL/Redis/S3-compatible storage | Durable fact、realtime coordination/cache、object body/manifest | Agent execution |
 
 ## Turn 生命周期
 
@@ -123,9 +123,9 @@ Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、Nod
 
 | Store | 职责 |
 | --- | --- |
-| PostgreSQL 或 Redis durable store | Room、message、member、auth、media metadata、AI run、Code Agent turn/lease/sandbox metadata |
+| PostgreSQL durable store | Room、message、room event、member、auth、media metadata、AI run/outbox、Code Agent turn/lease/sandbox metadata |
 | Redis realtime store | Presence、socket session、pub/sub、counter/lock、可选最近消息 cache |
-| Tigris/S3-compatible storage | 私有媒体 body、versioned static file/manifest |
+| S3-compatible storage | 私有媒体 body、versioned static file/manifest；当前生产使用 SeaweedFS |
 | E2B | 可变 workspace 和进程，不是 durable application database |
 
 Runtime 强制使用 PostgreSQL 保存 durable state，同时仍需 Redis 协调 realtime state；Redis 不再是可选 durable authority。
@@ -134,4 +134,4 @@ Runtime 强制使用 PostgreSQL 保存 durable state，同时仍需 Redis 协调
 
 验证从变更风险出发：protocol/store/auth/ordering 用 focused contract/service test；client state 用 Vitest；跨 browser 流程用 Playwright；真实 sandbox/backend/artifact 边界用 E2B smoke。
 
-Fly 应用发布和 E2B artifact 发布是两条不同链路。修改 runner、tool、prompt、sandbox Dockerfile/dependency 或 code-agent-engine source ref 时，必须更新 lock/version、构建新 template、同步生产 pin 并完成真实验证。只推送 Node 源码不会更新已存 sandbox artifact。
+RoomTalk 应用镜像发布和 E2B artifact 发布是两条不同链路。修改 runner、tool、prompt、sandbox Dockerfile/dependency 或 code-agent-engine source ref 时，必须更新 lock/version、构建新 template、同步生产 pin 并完成真实验证。只推送 Node 源码不会更新已存 sandbox artifact。

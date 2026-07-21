@@ -3,7 +3,7 @@
 [中文](documentation-audit.zh.md)
 
 Status: Current documentation inventory
-Audit date: 2026-07-13
+Audit date: 2026-07-20
 
 This audit classifies repository documentation and records quality controls. It does not replace the [documentation index](README.md), current architecture, runbooks, source, or tests.
 
@@ -23,7 +23,7 @@ This audit classifies repository documentation and records quality controls. It 
 | `docs/README.md` / `docs/README.zh.md` | Complete categorized bilingual documentation index. |
 | `docs/room-reliability-architecture*.md` | Current room-session ownership, message/media continuity, event-cursor convergence, acknowledgement, posting-boundary, diagnostics, and backend ordering contract. |
 | `docs/code-agent-runtime-architecture*.md` | Current code-agent control/execution plane, lifecycle, security, workspace, recovery, persistence, and release boundaries. |
-| `DeploymentGuide.md` / `部署指南.md` | Current GitHub Actions/Fly production runbook. |
+| `DeploymentGuide.md` / `部署指南.md` | Current MacBook/Compose production release, backup, verification, rollback, and AWS handoff runbook. |
 | `docs/configuration*.md` | Operator-facing configuration groups and source-of-truth boundaries. |
 | `CONTRIBUTING*.md` | Human development, validation, artifact, commit, and release contract. |
 | `SECURITY*.md` | Identity, authorization, scoped capabilities, credential, media, and sandbox trust boundaries. |
@@ -61,6 +61,13 @@ Historical counts, machine sizes, file lines, branch names, and commit IDs are l
 Original sandbox phases, backend spikes, workspace UI plans, identity/permission plans, outbox migration, PostgreSQL design/test plans, E2E plans, code reviews, commit reviews, design references, and UI/UX audits remain indexed under Historical Plans or Reports. Their value is the reasoning and review record, not current configuration.
 
 ## Corrected Drift in This Pass
+
+- Replaced the former Fly production guide with the current MacBook/Compose/Cloudflare Tunnel runbook and kept Fly only as a coordinated rollback target.
+- Documented `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS` across runtime examples, Compose, and configuration references.
+- Finalized the room-event cutover ledger with real commit IDs and moved it from active work to a completed evidence record.
+- Updated the bilingual interview guide from retired `messageVersion`/Redis-durable/Fly assumptions to the current event-cursor, PostgreSQL-authoritative, SeaweedFS, and portable AWS architecture.
+
+## Earlier Audit Corrections (2026-07-13)
 
 - Replaced the generic/manual Fly deployment tutorial with the current scheduled/manual-dispatch GitHub Actions workflow.
 - Corrected the production VM declaration to the 1024 MB value in `fly.toml`.

@@ -38,11 +38,11 @@
 | 配置 | [Configuration](configuration.md) | [配置](configuration.zh.md) |
 | 房间事件同步与可迁移部署 | [架构](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
 
-## 进行中的实施记录
+## 已完成实施记录
 
 | 工程主线 | English | 中文 |
 | --- | --- | --- |
-| 房间事件同步与可迁移部署 | [进度](room-event-sync-portable-deployment-progress.md) | [进度](room-event-sync-portable-deployment-progress.zh.md) |
+| 房间事件同步与自托管切换 | [证据记录](room-event-sync-portable-deployment-progress.md) | [证据记录](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## 操作与 Runbook
 

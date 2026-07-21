@@ -2,16 +2,19 @@
 
 [中文](postgres-app-user-runbook.zh.md)
 
-Status: Current runbook
-Updated: 2026-07-12
+Status: Current PostgreSQL role-hardening runbook
+Updated: 2026-07-20
 
 RoomTalk currently calls `PostgresStore.initializeSchema()` on startup in
 PostgreSQL mode. The runtime database role therefore needs enough ownership and
 schema privileges to run the idempotent startup DDL in
 `server/src/repositories/postgresSchema.ts`.
 
-This runbook replaces the broad `postgres` runtime role with a dedicated
-`roomtalk_app` role while keeping the current startup flow compatible.
+This runbook replaces a broad owner/runtime role with a dedicated
+`roomtalk_app` role while keeping the current startup flow compatible. The
+bundled Compose database uses the configured `POSTGRES_USER` as its startup
+owner by default; apply this runbook deliberately when hardening that host or
+when moving to managed PostgreSQL/RDS.
 
 ## Create Or Update The Role
 
@@ -73,20 +76,26 @@ npm run smoke:persistence
 
 ## Switch Production
 
-Only switch after the role has been verified:
+Only switch after the role has been verified. Update the production Keychain
+environment with the application-role database values without printing the
+JSON, then reconcile only the app first:
 
 ```bash
-fly secrets set DATABASE_URL="postgres://roomtalk_app:<password>@<host>:5432/<db>"
+node scripts/local-production.mjs --profile edge up -d app
 ```
 
-This restarts the Fly app. Verify immediately:
+Verify startup schema initialization, room-event listener registration, and
+public health immediately:
 
 ```bash
-curl https://message-system.fly.dev/api/status
+node scripts/local-production.mjs --profile edge logs --tail=200 app
+curl -fsS http://127.0.0.1:3012/api/status
+curl -fsS https://room.ruit.me/api/status
 ```
 
-Rollback is the previous `DATABASE_URL` secret using the existing admin-capable
-role.
+Rollback is the previous known-good Keychain database values, followed by the
+same app reconcile and verification. Keep the admin-capable role as a separate
+emergency/migration credential; never expose it to the browser or sandbox.
 
 ## Future Hardening
 

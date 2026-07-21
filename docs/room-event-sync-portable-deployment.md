@@ -75,7 +75,7 @@ PostgreSQL `NOTIFY` and Socket.IO only wake readers. Every app instance may emit
 
 There is no merge/compaction back into messages: the normalized state was already changed in the original transaction. The hourly job removes only an old contiguous event prefix and advances `minAvailableSeq`.
 
-Defaults are seven days and at most 10,000 events per room. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
+Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; the Compose examples expose all three. Once a deleted room's events age out, its independent stream/auth tombstone is also removed.
 
 ## Event log versus AI outbox
 

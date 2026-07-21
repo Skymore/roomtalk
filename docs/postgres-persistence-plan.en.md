@@ -72,4 +72,4 @@ Documented prerequisites, application-role permissions, smoke tests, observabili
 
 ## Result
 
-The repository now implements the composite pattern described in `CLAUDE.md`: `PERSISTENCE_STORE=redis|postgres` selects the durable authority; Redis always supplies realtime state; PostgreSQL mode can enable Redis message caching. The production migration and broader schema expansion are recorded in the [migration retrospective](postgres-migration-development-summary.md).
+At completion of this historical phase, `PERSISTENCE_STORE=redis|postgres` selected the durable authority while Redis always supplied realtime state. That temporary migration boundary has since been retired: current runtime requires PostgreSQL, Redis is rebuildable realtime/cache state, and room-event cursors replace the version scheme described below. The production migration and broader schema expansion are recorded in the [migration retrospective](postgres-migration-development-summary.md).

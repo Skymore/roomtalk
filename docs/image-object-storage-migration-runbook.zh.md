@@ -2,8 +2,8 @@
 
 [English](image-object-storage-migration-runbook.md)
 
-状态：当前 runbook
-更新：2026-07-12
+状态：当前 legacy-data migration runbook
+更新：2026-07-20
 
 当前入口：
 
@@ -14,11 +14,11 @@ npm run migrate:media-to-object-storage
 
 不要使用旧文档中的 `dist/...migrateImageMessagesToObjectStorage.js`。
 
-本 runbook 处理 PostgreSQL 中遗留 base64 image message：将图像 body 迁移到私有 S3/Tigris object storage，并使用统一 `media_assets` table。旧 `image_assets` 已删除。
+本 runbook 处理 PostgreSQL 中遗留 base64 image message：将图像 body 迁移到私有 S3-compatible object storage，并使用统一 `media_assets` table。当前生产目标是 SeaweedFS，保留的回滚环境是 Tigris，AWS 对应 S3；旧 `image_assets` 已删除。
 
 ## 决策
 
-从本地 workstation 或专用 migration host 运行，不在 serving Fly app VM 运行。迁移会读取大 base64 payload 并用 `sharp` 转换，会与 live Node server 竞争 CPU/memory。Script 默认拒绝 Fly app VM。
+从本地 workstation 或专用 migration container 运行，不在 serving RoomTalk app container 内运行。迁移会读取大 base64 payload 并用 `sharp` 转换，会与 live Node server 竞争 CPU/memory。Script 仍默认拒绝 Fly app VM，作为遗留安全 guard。
 
 只对有意准备的非 serving Fly migration machine 设置 `ALLOW_FLY_APP_VM_IMAGE_MIGRATION=true`，不在 serving app 上设置。
 
@@ -33,7 +33,7 @@ npm run migrate:media-to-object-storage
 
 - Execute mode 前存在已验证 PostgreSQL backup。
 - Migration host 可访问 production PostgreSQL 和 object storage。
-- `DATABASE_URL`、PostgreSQL TLS/CA、media bucket/endpoint/region/credential 已配置。
+- `DATABASE_URL`、PostgreSQL TLS/CA、media bucket/endpoint/region/credential 已配置；当前本地生产使用 loopback SeaweedFS S3 endpoint 与 path-style addressing。
 - Backup file 是绝对 path，确实存在，且是本次运行前生成/验证的。
 - 先对特定 room 和全库运行 dry-run。
 

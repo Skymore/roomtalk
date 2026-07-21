@@ -3,7 +3,7 @@
 [中文](code-agent-runtime-architecture.zh.md)
 
 Status: Current
-Verified against `master`: 2026-07-16
+Verified against `master`: 2026-07-20
 
 This document describes the current implementation. Earlier files under `docs/` may describe individual phases, spikes, or migration plans; use this file as the concise architecture entry point and use source/tests as the final authority.
 
@@ -34,7 +34,7 @@ flowchart TB
     WorkspaceUI["Workspace UI\nfiles, diff, review, terminal, browser, artifacts"]
   end
 
-  subgraph Control["RoomTalk control plane - Fly.io"]
+  subgraph Control["RoomTalk control plane - application container"]
     Socket["Authenticated Socket.IO handlers"]
     Sessions["CodeAgentSessionService"]
     Lifecycle["Sandbox lifecycle + daemon registry"]
@@ -47,7 +47,7 @@ flowchart TB
   subgraph Data["Durable and realtime data"]
     Postgres["PostgreSQL"]
     Redis["Redis"]
-    Objects["Tigris/S3 object storage"]
+    Objects["SeaweedFS/S3-compatible object storage"]
   end
 
   subgraph Sandbox["Per-room E2B execution plane"]
@@ -79,10 +79,10 @@ flowchart TB
 | Layer | Owns | Deliberately does not own |
 | --- | --- | --- |
 | Browser | User interaction, local panel state, streamed rendering, review drafts | Provider/E2B secrets, direct sandbox SDK access, persistence ordering |
-| RoomTalk control plane | Identity, room access, permission resolution, turn orchestration, transcript persistence, usage/cost, scoped tokens, sandbox lifecycle, public artifacts | Executing untrusted user commands in the Fly process, agent reasoning internals |
+| RoomTalk control plane | Identity, room access, permission resolution, turn orchestration, transcript persistence, usage/cost, scoped tokens, sandbox lifecycle, public artifacts | Executing untrusted user commands in the application process, agent reasoning internals |
 | E2B execution plane | Workspace files, Git, PTY, commands, background processes, dev servers, agent backend process | Room membership, durable message truth, public object storage ownership |
 | Agent backend | Reasoning, native tool loop, model-specific session/thread state | RoomTalk authorization, database access, public URL ownership |
-| PostgreSQL/Redis/Tigris | Durable records, realtime coordination/cache, object bodies/manifests | Agent execution |
+| PostgreSQL/Redis/S3-compatible storage | Durable records, realtime coordination/cache, object bodies/manifests | Agent execution |
 
 This split is the central security and reliability decision in the project: untrusted code runs in E2B, while every durable or externally visible action is mediated by RoomTalk.
 
@@ -158,7 +158,7 @@ RoomTalk starts one `roomtalk_code_agent_runner.daemon` per sandbox and reuses i
 - health, run, interrupt, steer, approval, thread list/read, and shutdown requests;
 - `daemon_ready`, structured runner events, `turn_released`, and shutdown events.
 
-The Fly process keeps an in-memory registry of daemon handles, but the daemon itself lives in E2B. Startup serializes daemon creation and removes stale daemon/Codex child processes before launching a replacement. SIGTERM/SIGINT shutdown reclaims all daemons owned by the process. A bounded turn-release wait prevents a lost `turn_released` signal from leaving a room permanently `running`; timed-out thread queries terminate and recycle the daemon instead of leaving its request channel wedged.
+Each application process keeps an in-memory registry of daemon handles, but the daemon itself lives in E2B. Startup serializes daemon creation and removes stale daemon/Codex child processes before launching a replacement. SIGTERM/SIGINT shutdown reclaims all daemons owned by the process. A bounded turn-release wait prevents a lost `turn_released` signal from leaving a room permanently `running`; timed-out thread queries terminate and recycle the daemon instead of leaving its request channel wedged.
 
 Codex and GitHub connection records remain keyed by RoomTalk client, but a code-agent room resolves both through its current `creatorId`. Settings starts OpenAI/Codex device authorization and optional GitHub PAT storage for the owner; RoomTalk encrypts the resulting auth material at rest and writes it to the E2B secret directory only for an authorized room turn. The requesting member remains the actor for prompt ownership, room authorization, observability, and approvals. A signed Codex refresh token binds both the actor and credential owner so an ownership transfer cannot silently switch accounts during a running turn.
 
@@ -213,7 +213,7 @@ Writable modes receive a separate turn-scoped publish token. `roomtalk site publ
 
 1. validate paths, sizes, entry file, mode, room ownership, and slug;
 2. request presigned object uploads from RoomTalk;
-3. upload static bytes directly from E2B to Tigris;
+3. upload static bytes directly from E2B to the configured S3-compatible store;
 4. finalize after the server verifies object sizes;
 5. atomically replace the manifest for `/p/:slug/`.
 
@@ -282,11 +282,11 @@ The system does not yet claim a general immutable workspace-revision/rollback la
 
 | Store | Responsibilities |
 | --- | --- |
-| PostgreSQL or Redis durable store | Rooms, messages, members, auth, media metadata, AI runs, code-agent turns, fenced room leases, sandbox metadata |
+| PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, AI runs/outbox, code-agent turns, fenced room leases, sandbox metadata |
 | Redis realtime store | Presence, socket sessions, pub/sub, locks/counters, optional short-TTL message cache |
-| Tigris/S3 object storage | Private media, published-site versions/manifests, migration/object payloads |
+| S3-compatible object storage | Private media, published-site versions/manifests, migration/object payloads; SeaweedFS in current production |
 
-Server-assigned message positions and room versions are the ordering authorities. Browser timestamps are display metadata, not the consistency mechanism.
+Server-assigned message positions order canonical history, while the PostgreSQL-owned per-room event sequence is the synchronization authority. `updatedAt` is only a complete-room last-write guard. Browser timestamps are display metadata, not the consistency mechanism.
 
 ## Verification Strategy
 
@@ -302,7 +302,7 @@ Changes are tested at the contract boundary where they can fail:
 
 There are two independently deployed layers:
 
-1. The RoomTalk application image on Fly.io.
+1. The RoomTalk application image, currently deployed through Docker Compose on the production Mac and portable to ECS/EKS.
 2. The pinned E2B template containing the runner, daemon, tools, prompts, and agent engine source.
 
 Any runner/tool/prompt/Dockerfile/context or agent-engine change is incomplete until:
@@ -312,7 +312,7 @@ Any runner/tool/prompt/Dockerfile/context or agent-engine change is incomplete u
 3. a new E2B template is built;
 4. E2B smoke passes against that template;
 5. production template/artifact/source pins match;
-6. Fly deploy and real room behavior are verified.
+6. the E2B pins are applied to the production application environment and real room behavior is verified.
 
 App-only UI, store, or socket changes do not require an E2B rebuild unless they change the sandbox contract. Their validation should follow the actual affected boundary: focused tests plus the affected build, expanding to both builds or external smoke only when the risk crosses those boundaries.
 
@@ -320,4 +320,4 @@ App-only UI, store, or socket changes do not require an E2B rebuild unless they 
 
 The strongest way to describe this subsystem is:
 
-> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, fenced room execution, durable turns, scoped model/context/publish access, and sandbox lifecycle. Each room gets an isolated E2B execution plane with a reusable daemon that runs Coco, our self-built CLI agent, or Codex app-server through the requesting user's own subscription. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while the server preserves event ordering and recovers queued turns, paused sandboxes, stale daemons, and artifact upgrades.
+> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, fenced room execution, durable turns, scoped model/context/publish access, and sandbox lifecycle. Each room gets an isolated E2B execution plane with a reusable daemon that runs Coco, our self-built CLI agent, or Codex app-server through the room owner's connected subscription for authorized members. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while the server preserves event ordering and recovers queued turns, paused sandboxes, stale daemons, and artifact upgrades.

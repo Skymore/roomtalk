@@ -5,6 +5,8 @@
 Status: Historical migration plan with implemented foundations
 Reviewed: 2026-07-12
 
+> 2026-07-20 update: RoomTalk later introduced the separate bounded `room_events` replay log described in [Room Event Sync and Portable Deployment](room-event-sync-portable-deployment.md). Statements below about not introducing room sequencing describe this plan's original scope; `outbox_events` remains a one-worker claim/retry mechanism and must not be used as the client replay stream.
+
 ## Goal
 
 Move RoomTalk AI generation from a socket-handler-owned process to a durable, observable, retryable run model without changing the user-facing streaming experience.

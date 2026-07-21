@@ -75,7 +75,7 @@ PostgreSQL `NOTIFY` 和 Socket.IO 只负责唤醒。多个 app 实例经 Redis a
 
 不需要把事件“合并”回 messages：当前状态已经在原事务里同步改变。每小时任务只删除连续旧前缀并推进 `minAvailableSeq`。
 
-默认保留 7 天且每房间最多 10,000 个事件。删除房间的全部事件过期后，对应独立 stream/授权 tombstone 也会删除。
+默认保留 7 天且每房间最多 10,000 个事件。Operator 可通过 `ROOM_EVENT_RETENTION_DAYS`、`ROOM_EVENT_MAX_PER_ROOM` 与 `ROOM_EVENT_PRUNE_INTERVAL_MS` 覆盖，Compose example 已暴露这三个变量。删除房间的全部事件过期后，对应独立 stream/授权 tombstone 也会删除。
 
 ## 房间事件与 AI Outbox
 

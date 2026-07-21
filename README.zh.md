@@ -263,7 +263,7 @@ npm run test:e2e:postgres
 
 - [文档索引](docs/README.zh.md)：当前架构、runbook、子系统参考、复盘、历史方案、报告和语言版本。
 - [可迁移部署与切换记录](docs/room-event-sync-portable-deployment.zh.md)：当前 Mac 生产 runtime、event sync、对象存储 edge、备份与回滚边界。
-- [旧 Fly 部署指南](部署指南.md)：为回滚历史保留的、当前已禁用的 GitHub Actions/Fly.io 流程。
+- [生产部署指南](部署指南.md)：当前 MacBook/Compose 的发布、验证、备份、回滚与 AWS 交接 runbook。
 - [配置参考](docs/configuration.zh.md)：环境变量分组、存储模式、secret 边界和生产/开发差异。
 - [安全](SECURITY.zh.md)：身份、授权、credential 处理、scoped capability、媒体访问和 sandbox trust boundary。
 - [贡献指南](CONTRIBUTING.zh.md)：开发、验证、artifact、commit 和 release 要求。

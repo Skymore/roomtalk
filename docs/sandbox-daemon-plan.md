@@ -3,7 +3,7 @@
 [中文](sandbox-daemon-plan.zh.md)
 
 Status: Current runtime; the historical filename is retained to preserve links.
-Verified against `master` and the production non-secret runtime configuration: 2026-07-12
+Verified against `master` and the production non-secret runtime configuration: 2026-07-20
 
 ## Goal
 
@@ -55,7 +55,7 @@ The daemon model makes the lifecycle explicit:
 
 ## Non-Goals
 
-- Do not move shell/file/browser execution onto the Fly server.
+- Do not move shell/file/browser execution into the RoomTalk control-plane container.
 - Do not make RoomTalk server understand Codex internals.
 - Do not require one daemon per agent backend.
 - Do not make daemon handles durable: stdin/stdout handles belong to one Node process and cannot be serialized safely.
@@ -155,4 +155,4 @@ Sandbox timeout is no longer a per-turn substitute.
 
 Daemon or protocol changes touch the E2B runtime contract. They require a runner version bump, matching `artifact.lock.json` and Dockerfile artifact metadata, a rebuilt/published E2B template, focused Python/Node protocol tests, and a real E2B check. Production `CODE_AGENT_E2B_TEMPLATE_ID`, `CODE_AGENT_ARTIFACT_VERSION`, and `CODE_AGENT_SOURCE_REF` must match before the change is complete.
 
-Production currently selects daemon mode explicitly. A Fly source deploy without the matching template does not update the sandbox daemon.
+Production currently selects daemon mode explicitly. A RoomTalk application deploy without the matching template does not update the sandbox daemon.

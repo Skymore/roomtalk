@@ -3,105 +3,108 @@
 [中文](部署指南.md)
 
 Status: Current production runbook
-Updated: 2026-07-12
+Updated: 2026-07-20
 Production: [https://room.ruit.me/](https://room.ruit.me/)
 
 ## Production Shape
 
-RoomTalk production currently uses:
+RoomTalk production currently runs on a MacBook as five long-lived Docker Compose services:
 
-- Fly.io app `message-system` in `dfw` for the Node control plane;
-- one shared 1-vCPU, 1024 MB machine as declared in `fly.toml`;
-- Supabase PostgreSQL as the durable source of truth;
-- Upstash Redis for Socket.IO, presence, sessions, pub/sub, counters, and bounded message caching;
-- Tigris/S3-compatible object storage for private media and published static artifacts;
-- E2B for room-scoped code-agent execution sandboxes;
-- a pinned E2B artifact with the reusable daemon and Codex app-server backend.
+- `app`: the root multi-stage application image, binding Node/Express/Socket.IO to loopback port `3012`;
+- `postgres`: PostgreSQL 17, the only durable serving authority, using the `postgres_data` Docker volume;
+- `redis`: Redis 7 for Socket.IO, presence, sessions, and bounded caches; persistence is intentionally disabled;
+- `object-storage`: SeaweedFS 4.29 exposing an S3-compatible API, persisted under `runtime/object-storage`;
+- `cloudflared`: the outbound Cloudflare Tunnel that provides public DNS/TLS without exposing inbound host ports.
 
-The application can auto-stop at zero traffic and auto-start through Fly Proxy. Treat first-request cold-start latency separately from application health.
+`room.ruit.me` is canonical, `roomtalk.ruit.me` is a compatibility hostname, and `roomtalk-objects.ruit.me` carries presigned browser object transfers. E2B remains the external execution plane for room-scoped code-agent sandboxes.
+
+The former Fly app, Supabase database, Tigris bucket, and Upstash Redis remain rollback sources only. Fly is suspended and its scheduled GitHub Actions workflow is manually disabled; none of those services receives production writes.
 
 ## Release Ownership
 
-`master` is the release branch. `.github/workflows/fly-deploy.yml` owns application deployment.
+`master` is the source release branch, but a Git push does not deploy the Mac. The production checkout and `scripts/local-production.mjs` own the application rollout. The script loads the application environment from the macOS Keychain item `roomtalk-production-env`, creates a mode-`0600` temporary env file for Compose, and removes it after the command.
 
-The workflow:
+The application image and the pinned E2B artifact are separate releases. A normal app rollout does not rebuild existing E2B templates.
 
-1. runs every two hours at minute 23 or by manual dispatch;
-2. compares `master` with the latest successful workflow run;
-3. skips when nothing relevant changed;
-4. builds conservatively when the comparison is incomplete or non-linear;
-5. validates required secrets, translations, client and server production builds;
-6. builds the root multi-stage Docker image;
-7. deploys to Fly and verifies the application.
+## Routine Application Release
 
-Do not run `fly deploy` manually. A Git push does not by itself prove that production was deployed because the workflow is not push-triggered.
+1. Validate the change according to its real failure modes.
+2. Commit and push the completed change to `origin/master`.
+3. Confirm the production checkout is on the intended commit and has no unrelated tracked changes:
 
-## Routine Release
+   ```bash
+   git fetch origin master
+   git status --short --branch
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+   ```
 
-1. Validate the change according to its risk.
-2. Commit and push the finished change to `origin/master`.
-3. Decide whether the scheduled workflow is sufficient or an immediate rollout is required.
-4. For an immediate rollout, dispatch `fly-deploy.yml` from GitHub Actions.
-5. Verify the workflow conclusion and deployed commit/image.
-6. Verify Fly machine state and the public status endpoint.
+4. Build and reconcile the production stack:
 
-Useful read-only checks:
+   ```bash
+   node scripts/local-production.mjs --profile edge up -d --build
+   ```
+
+5. Verify containers and both local/public health:
+
+   ```bash
+   node scripts/local-production.mjs --profile edge ps
+   curl -fsS http://127.0.0.1:3012/api/status
+   curl -fsS https://room.ruit.me/api/status
+   ```
+
+6. Run a risk-based user smoke. Room-event, media, OAuth/connection, and E2B changes require checks at those actual boundaries.
+
+Documentation-only commits do not require a production rebuild.
+
+## First-Time Host Provisioning
+
+1. Install Docker Desktop and keep the Mac on AC power with automatic sleep disabled for the production session.
+2. Copy `.env.compose.example` to ignored `.env.compose`; generate independent PostgreSQL and local S3 credentials.
+3. Store the complete application environment as a JSON object in the macOS Keychain item `roomtalk-production-env`. Never commit or print it.
+4. Create ignored `runtime/cloudflared/config.yml` and `runtime/cloudflared/credentials.json` for the dedicated tunnel.
+5. Restore a paired PostgreSQL custom archive and SeaweedFS snapshot, or initialize an empty environment.
+6. Verify the pinned E2B template/artifact/source-ref set before enabling code-agent rooms.
+7. Start with `node scripts/local-production.mjs --profile edge up -d --build` and complete the verification checklist below.
+
+The full operator-facing variable inventory is in [docs/configuration.md](docs/configuration.md).
+
+## Durable State and Room Event Sync
+
+PostgreSQL owns canonical rooms, messages, members, turns, auth/account data, media metadata, `room_event_streams`, `room_events`, and `outbox_events`. Redis may be flushed and warmed again without losing business state.
+
+`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. `outbox_events` is a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+
+The event log repairs client synchronization after missed Socket.IO notifications. It does not replace PostgreSQL backup, WAL/CDC, or database replication.
+
+## Backup and Restore
+
+Run the paired maintenance backup only in an announced maintenance window:
 
 ```bash
-gh run list --repo Skymore/roomtalk --workflow fly-deploy.yml --branch master --limit 5
-fly status -a message-system
-curl -fsS https://room.ruit.me/api/status
+node scripts/backup-local-production.mjs
 ```
 
-The status response should report `status: "online"`, the intended `persistenceStore`, and a plausible room count.
+This command has no help or dry-run mode. Invoking it immediately stops `cloudflared`, `app`, and `object-storage`, writes a PostgreSQL custom archive plus a matching SeaweedFS tarball under `backups/`, and then restarts the services in a `finally` path.
 
-## First-Time Environment Provisioning
+After every backup:
 
-The routine workflow assumes the Fly app and external services already exist. For a new environment:
+- confirm all five services are healthy and public `/api/status` is online;
+- keep the database dump and object snapshot as one timestamped pair;
+- copy encrypted artifacts off the Mac;
+- periodically restore both artifacts into isolated targets and compare database/object counts.
 
-1. Create the Fly app and configure `fly.toml` for the target app/region.
-2. Provision PostgreSQL, Redis, and S3-compatible object storage.
-3. Create the dedicated PostgreSQL application role.
-4. Add GitHub Actions/Fly credentials required by the deployment workflow.
-5. Add application secrets through the platform secret manager.
-6. Build and publish the pinned E2B template before enabling production code-agent rooms.
-7. Dispatch the workflow and complete the verification checklist below.
-
-Do not use a production serving machine as a general migration host.
-
-## Configuration Groups
-
-The complete operator-facing inventory is in [docs/configuration.md](docs/configuration.md). Important production groups are:
-
-| Area | Representative variables |
-| --- | --- |
-| HTTP/origins | `NODE_ENV`, `PORT`, `CLIENT_URL`, `CLIENT_URLS` |
-| Stores | `REDIS_URL`, `PERSISTENCE_STORE`, `DATABASE_URL`, PostgreSQL TLS/CA, message-cache limits |
-| Media | bucket, endpoint, region, S3 credentials |
-| Chat AI | provider keys, default model, context limits |
-| Optional product services | Google OAuth, AssemblyAI, Web Push |
-| Code Agent | enablement/allowlists, modes, daemon/backend, E2B pins, scoped capability secrets |
-| User-owned connections | Codex/GitHub enablement and encryption keys |
-
-Use `CLIENT_URL` for the canonical RoomTalk browser address. `CLIENT_URLS` is a comma-separated allowlist for deployments that accept additional browser origins. Repository documentation and generated examples use the canonical RoomTalk address.
-
-Changing a Fly secret rolls or restarts machines. Verify health after every change.
-
-## Storage Model and PostgreSQL Cutover
-
-RoomTalk has one serving model: `PERSISTENCE_STORE=postgres`. PostgreSQL owns durable canonical state and room-event replay; Redis remains required only for rebuildable realtime coordination and bounded caches. Runtime startup rejects Redis as a durable authority.
-
-Use the [portable deployment and direct-cutover design](docs/room-event-sync-portable-deployment.md) for PostgreSQL dump/restore, validation, traffic freeze, and rollback boundaries. The [legacy import runbook](docs/postgres-rollout-runbook.md) applies only when importing an old Redis durable snapshot into PostgreSQL. Rollback means restoring or failing over PostgreSQL, not switching durable authority to Redis.
+Local `backups/` alone is not disaster recovery.
 
 ## Code-Agent / E2B Release Contract
 
-Fly deploys the control plane; it does not rebuild existing E2B templates. Runner, daemon, tool, prompt, sandbox Dockerfile, dependency-lock, or code-agent-engine changes require:
+Runner, daemon, tool, prompt, sandbox Dockerfile/dependency-lock, or pinned code-agent-engine changes require:
 
 1. committed and pushed source changes;
-2. updated runner version/lock/source ref as applicable;
-3. a new artifact version and E2B template;
-4. updated production `CODE_AGENT_E2B_TEMPLATE_ID`, `CODE_AGENT_ARTIFACT_VERSION`, and `CODE_AGENT_SOURCE_REF`;
-5. a real E2B smoke or equivalent direct verification.
+2. updated runner/artifact version and source ref as applicable;
+3. a newly built and published E2B template;
+4. matching production `CODE_AGENT_E2B_TEMPLATE_ID`, `CODE_AGENT_ARTIFACT_VERSION`, and `CODE_AGENT_SOURCE_REF` values in the Keychain environment;
+5. a real E2B smoke or equivalent direct verification;
+6. an app restart only when the control-plane configuration or source also changed.
 
 See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 
@@ -109,56 +112,48 @@ See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 
 ### Control plane
 
-- GitHub Actions completed successfully for the intended `master` commit.
-- Fly reports the expected machine image/version and `started` state.
-- `/api/status` is online and reports the intended persistence mode.
-- No startup errors appear for PostgreSQL, Redis, object storage, or socket adapter initialization.
+- All five Compose services report healthy/running.
+- Loopback and public `/api/status` return `status: "online"`, `persistenceStore: "postgres"`, connected Redis, configured media, and a ready socket adapter.
+- `room.ruit.me` and `roomtalk.ruit.me` serve the intended application; the object hostname accepts only signed object operations.
+- No startup errors appear for PostgreSQL schema/event listeners, Redis, object storage, workers, or Socket.IO.
 
-### User flow
+### User and synchronization flow
 
-- Load the canonical application URL.
-- Register/join a room and reload it.
-- Send a text message and confirm it survives refresh.
-- Confirm private media upload/read when media configuration changed.
-- Confirm AI streaming finalizes one durable response when AI configuration changed.
-- Confirm mobile/reconnect behavior when socket or client state changed.
-
-### Code Agent
-
-When the change affects this boundary:
-
-- create or open an authorized code-agent room;
-- verify sandbox creation/reconnect and artifact metadata;
-- run the affected Coco/Codex backend and mode;
-- verify ordered text/tool events, usage, terminal/preview/workspace access as applicable;
-- verify pause/resume or replacement behavior if lifecycle changed.
+- Open or join a room, send text, reload, and verify the message remains.
+- Verify a second client receives a wake-up and converges through `get_room_events`.
+- When relevant, exercise offline replay, `CURSOR_EXPIRED`/resnapshot, edit/delete/clear, and deleted-room tombstones.
+- Verify presigned media PUT/GET when storage or edge configuration changed.
+- Verify Google/GitHub/Codex connections and E2B turns when those boundaries changed.
 
 ## Rollback
 
-### Application rollout
+### Application image
 
-Prefer redeploying a known-good application image through the controlled Fly/GitHub workflow. Preserve logs and the failing image/commit for investigation. Do not combine application rollback with database-mode rollback unless data divergence has been measured.
+Move the production checkout to a known-good commit, rebuild with `scripts/local-production.mjs`, and repeat health/user-flow checks. Preserve the failing commit and logs for investigation.
 
-### Secret/configuration change
+### Configuration
 
-Restore the previous known-good secret value through Fly, wait for the rolling update, and repeat health checks.
+Restore the previous known-good Keychain JSON object, reconcile the stack, and repeat health checks. Do not print the environment while diagnosing.
 
-### E2B artifact
+### Database and objects
 
-Point production pins back to the last verified template/artifact/source-ref set, then verify new sandbox creation. Existing sandboxes may still carry old workspace/runtime state and can require explicit lifecycle handling.
+Restore PostgreSQL and SeaweedFS from the same timestamped maintenance pair. Restoring only one side can leave media metadata and object bytes inconsistent.
 
-### Database
+### Former cloud target
 
-Follow the PostgreSQL runbook. Configuration-only rollback is safe only during the frozen cutover window before PostgreSQL-only writes exist.
+Do not re-enable Fly or change DNS as a standalone rollback after the Mac has accepted writes. First reconcile the PostgreSQL and S3 deltas to the target, stop or gate the current writer, verify the restored target, and only then switch traffic.
 
 ## Operations
 
+Read-only checks:
+
 ```bash
-fly status -a message-system
-fly logs -a message-system
-fly machine list -a message-system
+node scripts/local-production.mjs --profile edge ps
+node scripts/local-production.mjs --profile edge logs --tail=200 app
+node scripts/local-production.mjs --profile edge logs --tail=200 cloudflared
+curl -fsS https://room.ruit.me/api/status
 ```
 
-Use `fly ssh console -C 'sh -lc "..."'` when shell syntax is required. Never print or copy secret values into issues, logs, or documentation.
+Long-running containers use Docker JSON log rotation of 10 MB per file and five files. Database-backed observability, turn, event, and outbox records are not affected by that process-log limit.
 
-Scaling changes must be committed in `fly.toml` so the repository remains the source of truth. The current declaration is one shared CPU and 1024 MB; do not document ad-hoc console scaling as the desired production state.
+For AWS migration, keep the same image and contracts: app to ECS Fargate or EKS, PostgreSQL to RDS/Aurora, Redis to ElastiCache, and SeaweedFS objects to S3. Follow the controlled cutover in [the top-level AWS portability section](README.md#aws-portability); a true zero-downtime move additionally needs PostgreSQL logical replication/CDC or AWS DMS.

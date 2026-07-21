@@ -4,7 +4,7 @@
 
 状态：当前
 更新：2026-07-20
-事实源：`server/.env.example`、runtime config loader、`fly.toml` 和 `.github/workflows/fly-deploy.yml`
+事实源：`server/.env.example`、`.env.compose.example`、`compose.yaml`、runtime config loader 和 `scripts/local-production.mjs`
 
 本文只整理 operator-facing 配置。Test-only 变量和每轮注入 sandbox 的 `ROOMTALK_*` 变量刻意不列入。
 
@@ -31,16 +31,21 @@
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | 可选托管服务 CA；secret manager 中优先 base64。 |
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | PostgreSQL 模式下 Redis 最近消息 cache TTL；`0` 禁用写入。 |
 | `ROOM_MESSAGES_CACHE_MAX_BYTES` | 序列化 cache payload 上限。 |
+| `ROOM_EVENT_RETENTION_DAYS` | 每房间有界重放日志的保留天数，默认 `7`。 |
+| `ROOM_EVENT_MAX_PER_ROOM` | 每个房间最多保留的事件数，默认 `10000`。 |
+| `ROOM_EVENT_PRUNE_INTERVAL_MS` | Event prefix 清理间隔，默认 `3600000`（一小时）。 |
 
 唯一受支持的 serving model 是 PostgreSQL durable state + Redis realtime/cache state。Redis 运行时仍必需，但允许清空并重建，不能作为 durable fallback。旧 Redis store 只保留给 import 与 contract coverage。
+
+`room_event_streams` 与 `room_events` 是客户端同步边界。Event log 是有界 replay changelog，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制。Retention 只删除旧的连续前缀，cursor 落后的客户端会重新加载 snapshot。
 
 ## 媒体与 Artifact
 
 | 变量 | 用途 |
 | --- | --- |
-| `MEDIA_STORAGE_MODE` | 显式存储模式。生产 Compose、Fly 与 AWS 都使用 `s3`；`local` 只作为文件系统开发/恢复 fallback。显式 `s3` 未配置 bucket 时启动失败。 |
-| `MEDIA_BUCKET_NAME` | S3/Tigris bucket。 |
-| `MEDIA_STORAGE_REGION` | 存储 region；Tigris 通常为 `auto`。 |
+| `MEDIA_STORAGE_MODE` | 显式存储模式。当前生产 Compose、保留的 Fly 回滚目标与 AWS 都使用 `s3`；`local` 只作为文件系统开发/恢复 fallback。显式 `s3` 未配置 bucket 时启动失败。 |
+| `MEDIA_BUCKET_NAME` | S3-compatible bucket。 |
+| `MEDIA_STORAGE_REGION` | 存储 region；当前 SeaweedFS 使用 `us-east-1`，Tigris 通常为 `auto`。 |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint。 |
 | `MEDIA_STORAGE_PUBLIC_ENDPOINT` | 可选的浏览器侧 S3 endpoint，只用于生成 presigned URL；服务端对象操作继续使用 `MEDIA_STORAGE_ENDPOINT`。 |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | 可选 path-style addressing。 |
@@ -57,7 +62,7 @@
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | 签名 room/client/turn/mode-scoped publish token。 |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish token 生命期。 |
 
-私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。本地生产 Compose 把 `s3` 指向 bundled SeaweedFS 并启用 path-style addressing；Fly 指向 Tigris，AWS 指向 S3。
+私有媒体和发布的 static site 共用 object-storage abstraction，但授权和 object layout 独立。当前生产 Compose 把 `s3` 指向 bundled SeaweedFS 并启用 path-style addressing；保留的 Fly 回滚目标指向 Tigris，AWS 映射到 S3。
 
 ## Chat AI 与可选服务
 
@@ -130,8 +135,9 @@ Scoped capability：
 
 ## 生产配置规则
 
-- Secret 存入 Fly/GitHub/provider secret manager，不写入 `fly.toml` 或 tracked file。
+- 生产 Mac 把应用环境作为 JSON object 存入 macOS Keychain item `roomtalk-production-env`；`scripts/local-production.mjs` 只在 Compose 调用期间生成 mode `0600` 的临时 env file，结束后立即删除。
+- 非 secret Compose interpolation 放在 ignored `.env.compose`；真实 PostgreSQL、S3、provider、OAuth、E2B、Codex 与 GitHub credential 都不能提交。
 - `server/.env` 保持 ignored 且只在本地使用。
 - 生产 E2B 必须同时对齐 template、artifact version、source ref、runner dependency 和 smoke 证据。
-- 修改 Fly secret 会重启或滚动机器；之后验证 `/api/status`。
-- 定时或手动 dispatch 的 GitHub Actions workflow 拥有应用部署。不要手动执行 `fly deploy`。
+- 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效，随后验证 Compose health、loopback 与公网 `/api/status`。
+- 旧 Fly GitHub Actions workflow 已手工禁用，只保留为回滚历史，不再拥有当前部署。

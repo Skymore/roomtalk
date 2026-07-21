@@ -3,7 +3,7 @@
 [English](sandbox-daemon-plan.md)
 
 状态：当前 runtime；为保留已有链接，沿用历史文件名
-已按 `master` 和生产非 secret 配置核对：2026-07-12
+已按 `master` 和生产非 secret 配置核对：2026-07-20
 
 ## 目标
 
@@ -104,4 +104,4 @@ Daemon 丢失 `turn_released` 不应导致永久挂起；已收到 terminal even
 
 ## 发布合约
 
-Daemon/protocol/runner/tool/prompt/dependency 变化属于 sandbox artifact 边界。必须 bump runner/artifact，重建 E2B template，同步生产 pin，并验证真实 daemon/backend turn。只部署 Fly Node 不会更新已存 artifact。
+Daemon/protocol/runner/tool/prompt/dependency 变化属于 sandbox artifact 边界。必须 bump runner/artifact，重建 E2B template，同步生产 pin，并验证真实 daemon/backend turn。只部署 RoomTalk control plane 不会更新已存 artifact。

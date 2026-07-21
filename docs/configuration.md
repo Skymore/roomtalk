@@ -4,7 +4,7 @@
 
 Status: Current
 Updated: 2026-07-20
-Source of truth: `server/.env.example`, runtime config loaders, `fly.toml`, and `.github/workflows/fly-deploy.yml`
+Source of truth: `server/.env.example`, `.env.compose.example`, `compose.yaml`, runtime config loaders, and `scripts/local-production.mjs`
 
 This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
 
@@ -31,16 +31,21 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | Optional managed-provider CA. Prefer base64 in secret managers. |
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | Redis recent-message cache TTL in PostgreSQL mode; `0` disables writes. |
 | `ROOM_MESSAGES_CACHE_MAX_BYTES` | Maximum serialized cache payload. |
+| `ROOM_EVENT_RETENTION_DAYS` | Retained age of the bounded per-room replay log; default `7`. |
+| `ROOM_EVENT_MAX_PER_ROOM` | Maximum retained events per room; default `10000`. |
+| `ROOM_EVENT_PRUNE_INTERVAL_MS` | Event-prefix pruning interval; default `3600000` (one hour). |
 
 The only supported serving model is PostgreSQL durable state plus Redis realtime/cache state. Redis remains operationally required but may be flushed and rebuilt; it is not a durable fallback. The legacy Redis store exists only for import and contract coverage.
+
+`room_event_streams` and `room_events` are the client synchronization boundary. The event log is a bounded replay changelog, not full event sourcing and not an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker. Retention removes only an old contiguous event prefix; clients whose cursor falls behind resnapshot.
 
 ## Media and Artifacts
 
 | Variable | Purpose |
 | --- | --- |
-| `MEDIA_STORAGE_MODE` | Explicit storage mode. Production Compose, Fly, and AWS use `s3`; `local` is a filesystem development/recovery fallback. Explicit `s3` fails startup without a bucket. |
-| `MEDIA_BUCKET_NAME` | S3/Tigris bucket. |
-| `MEDIA_STORAGE_REGION` | Storage region; Tigris commonly uses `auto`. |
+| `MEDIA_STORAGE_MODE` | Explicit storage mode. Current production Compose, the retained Fly rollback target, and AWS use `s3`; `local` is a filesystem development/recovery fallback. Explicit `s3` fails startup without a bucket. |
+| `MEDIA_BUCKET_NAME` | S3-compatible bucket. |
+| `MEDIA_STORAGE_REGION` | Storage region; current SeaweedFS uses `us-east-1`, while Tigris commonly uses `auto`. |
 | `MEDIA_STORAGE_ENDPOINT` | S3-compatible endpoint. |
 | `MEDIA_STORAGE_PUBLIC_ENDPOINT` | Optional browser-facing S3 endpoint used only when generating presigned URLs; server-side object operations continue to use `MEDIA_STORAGE_ENDPOINT`. |
 | `MEDIA_STORAGE_FORCE_PATH_STYLE` | Optional path-style addressing. |
@@ -57,7 +62,7 @@ The only supported serving model is PostgreSQL durable state plus Redis realtime
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET` | Signs room/client/turn/mode-scoped publish tokens. |
 | `CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS` | Publish-token lifetime. |
 
-Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts. Local production Compose points `s3` at the bundled SeaweedFS service with path-style addressing; Fly points it at Tigris and AWS at S3.
+Private media and published static-site files share the object-storage abstraction but use separate authorization and object layouts. Current production Compose points `s3` at the bundled SeaweedFS service with path-style addressing; the retained Fly rollback target points it at Tigris, and AWS maps it to S3.
 
 ## Chat AI and Optional Services
 
@@ -130,8 +135,9 @@ Do not add new product behavior to the deprecated Codex CLI path. `codex-app-ser
 
 ## Production Configuration Rules
 
-- Store secrets in Fly/GitHub/provider secret managers, not `fly.toml` or tracked files.
+- The production Mac stores the application environment as a JSON object in the macOS Keychain item `roomtalk-production-env`; `scripts/local-production.mjs` writes a mode-`0600` temporary env file only for the Compose invocation and removes it afterward.
+- Keep non-secret Compose interpolation in ignored `.env.compose`; never commit real PostgreSQL, S3, provider, OAuth, E2B, Codex, or GitHub credentials.
 - Keep `server/.env` ignored and local.
 - Production E2B must use matching template, artifact version, source ref, runner dependencies, and smoke evidence.
-- Changing a Fly secret restarts or rolls the machine; verify `/api/status` afterward.
-- A scheduled or manually dispatched GitHub Actions workflow owns application deployment. Do not run `fly deploy` manually.
+- Apply application/configuration changes with `node scripts/local-production.mjs --profile edge up -d --build`, then verify Compose health and both the loopback and public `/api/status` endpoints.
+- The former Fly GitHub Actions workflow is manually disabled. It is rollback history, not the current deployment owner.

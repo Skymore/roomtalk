@@ -3,7 +3,7 @@
 [English](documentation-audit.md)
 
 状态：当前文档 inventory
-审计日期：2026-07-13
+审计日期：2026-07-20
 
 本审计对仓库文档分类并记录质量控制。它不替代 [文档索引](README.zh.md)、当前架构、runbook、源码或测试。
 
@@ -23,7 +23,7 @@
 | `docs/README.md` / `docs/README.zh.md` | 完整分类双语文档索引。 |
 | `docs/room-reliability-architecture*.md` | 当前 room-session ownership、消息/媒体连续性、event-cursor 收敛、ack、posting boundary、诊断日志与后端 ordering contract。 |
 | `docs/code-agent-runtime-architecture*.md` | 当前 Code Agent control/execution plane、lifecycle、security、workspace、recovery、persistence 和 release 边界。 |
-| `DeploymentGuide.md` / `部署指南.md` | 当前 GitHub Actions/Fly 生产 runbook。 |
+| `DeploymentGuide.md` / `部署指南.md` | 当前 MacBook/Compose 生产发布、备份、验证、回滚与 AWS 交接 runbook。 |
 | `docs/configuration*.md` | Operator-facing 配置分组与事实源边界。 |
 | `CONTRIBUTING*.md` | 人类开发、验证、artifact、commit 和 release 合约。 |
 | `SECURITY*.md` | 身份、授权、scoped capability、credential、media 和 sandbox trust boundary。 |
@@ -61,6 +61,13 @@
 原始 sandbox phase、backend spike、workspace UI plan、identity/permission plan、outbox migration、PostgreSQL design/test plan、E2E plan、code review、commit review、design reference 和 UI/UX audit 保留在 Historical Plans 或 Reports。其价值是推理和 review 记录，不是当前配置。
 
 ## 本轮修正的漂移
+
+- 用当前 MacBook/Compose/Cloudflare Tunnel runbook 替换旧 Fly 生产指南，只把 Fly 保留为需要协调数据的回滚目标。
+- 在 runtime example、Compose 与配置参考中统一记录 `ROOM_EVENT_RETENTION_DAYS`、`ROOM_EVENT_MAX_PER_ROOM` 和 `ROOM_EVENT_PRUNE_INTERVAL_MS`。
+- 用真实 commit ID 收尾 room-event 切换账本，并从 active work 移到已完成证据记录。
+- 把双语面试资料从退役的 `messageVersion`/Redis durable/Fly 假设更新为当前 event cursor、PostgreSQL authoritative、SeaweedFS 与可迁移 AWS 架构。
+
+## 早期审计修正（2026-07-13）
 
 - 用当前定时/手动 dispatch GitHub Actions workflow 替换通用/手动 Fly 部署教程。
 - 将生产 VM 声明修正为 `fly.toml` 的 1024 MB。

@@ -3,7 +3,7 @@
 [中文](code-agent-static-publish-implementation.zh.md)
 
 Status: Current
-Verified against `master`: 2026-07-12
+Verified against `master`: 2026-07-20
 
 ## Architecture
 
@@ -103,11 +103,11 @@ Routes:
 
 - `POST /api/code-agent/publish-static-site/prepare`
   - Accepts only file paths and byte sizes, validates the 100-file / 100 MB limits, and returns short-lived presigned upload URLs.
-  - Production sandboxes upload file bytes directly to Tigris; static file bodies do not pass through Fly.
+  - Production sandboxes upload file bytes directly to the configured S3-compatible store; static file bodies do not pass through the RoomTalk app container.
 
 - `POST /api/code-agent/publish-static-site/finalize`
   - Accepts the signed upload token returned by `prepare`.
-  - Verifies every object exists in Tigris with the declared byte size before atomically publishing the new manifest.
+  - Verifies every object exists in the configured object store with the declared byte size before atomically publishing the new manifest.
 
 - `POST /api/code-agent/publish-static-site/activate`
   - Accepts `{ slug, versionId }` with the same active-turn write authorization as publishing.
@@ -142,7 +142,7 @@ Workspace Artifacts include the ordered version list. Selecting a version change
 
 ### 3. Media Object Storage
 
-`MediaObjectStorage` supplies local and S3-compatible reads/writes, presigned PUTs, `HEAD`, and deletion. File bodies bypass Fly on the direct-upload path; Fly still proxies public reads so it can resolve manifests, SPA fallbacks, MIME types, and room ownership consistently.
+`MediaObjectStorage` supplies local and S3-compatible reads/writes, presigned PUTs, `HEAD`, and deletion. File bodies bypass the RoomTalk app on the direct-upload path; RoomTalk still proxies public reads so it can resolve manifests, SPA fallbacks, MIME types, and room ownership consistently. Current production uses SeaweedFS; the retained rollback target uses Tigris and AWS maps the same boundary to S3.
 
 ### 4. Code Agent Session Env
 
@@ -196,8 +196,8 @@ The publish command:
 3. Filters unsafe directories and file names.
 4. Enforces file count and byte limits.
 5. Sends file metadata to the `prepare` control-plane endpoint.
-6. Streams each file directly from the sandbox to its Tigris presigned PUT URL.
-7. Calls `finalize`; Fly verifies object sizes and writes the durable manifest.
+6. Streams each file directly from the sandbox to its S3-compatible presigned PUT URL.
+7. Calls `finalize`; RoomTalk verifies object sizes and writes the durable manifest.
 8. Returns a concise JSON or human-readable result with the durable URL.
 
 The current limits are 100 files, 100 MB per file, and 100 MB total per published version. Because the total cap is also 100 MB, a single file may consume the complete version budget.

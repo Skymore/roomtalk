@@ -65,7 +65,7 @@ All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` con
 - `aiModels.ts` — model registry, normalization, model options from env
 - `aiClients.ts` — OpenRouter/direct API client factory
 - `aiStreamRecovery.ts` — marks interrupted streaming messages as failed on startup
-- `mediaObjectStorage.ts` — S3-compatible object storage (Tigris in prod), presigned URLs
+- `mediaObjectStorage.ts` — S3-compatible object storage (SeaweedFS in current production; Tigris retained for rollback), presigned URLs
 - `clientAuth.ts` — password hashing, token-based auth
 - `googleAuth.ts` — Google OAuth credential verification
 - `pushNotifications.ts` — web-push notifications
@@ -85,7 +85,7 @@ Desktop uses a sidebar layout (`DesktopSidebar`); mobile uses bottom navigation 
 
 ### Media Pipeline
 
-Upload: client requests presigned URL → uploads to S3/Tigris or local media storage → confirms to server → server creates a `MediaAsset` record. Download: server generates signed read URLs on demand. Legacy base64 image cleanup is available through `npm run migrate:media-to-object-storage`; it defaults to dry-run and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL.
+Upload: client requests a presigned URL → uploads to the configured S3-compatible store (SeaweedFS in current production) or explicit local development storage → confirms to the server → the server creates a `MediaAsset` record. Download: the server generates signed read URLs on demand. Legacy base64 image cleanup is available through `npm run migrate:media-to-object-storage`; it defaults to dry-run and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL.
 
 ### AI Streaming
 
@@ -109,9 +109,9 @@ The browser workspace includes files/search/editing, asset previews, Git diff/re
 
 ## Deployment
 
-`master` is the release branch. CI/CD (`.github/workflows/fly-deploy.yml`) runs on its schedule or through manual dispatch; it verifies Fly secrets and deploys through the root multi-stage `Dockerfile`. The Docker client/server builder stages run translations and production builds, while the final runtime stage contains only compiled output and production dependencies. Scheduled runs skip deployment when only documentation or non-runtime files changed. A push alone does not immediately trigger this workflow. When an immediate production rollout is required, dispatch the workflow after pushing and verify both the workflow result and Fly health. Never run `fly deploy` manually.
+`master` is the release branch. Production at [https://room.ruit.me/](https://room.ruit.me/) runs the root multi-stage image on the local MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL 17 owns durable state and the bounded room-event log, Redis 7 is rebuildable realtime/cache state, SeaweedFS 4.29 provides the S3-compatible object boundary, and E2B provides per-room execution sandboxes. `roomtalk.ruit.me` remains a compatibility hostname and `roomtalk-objects.ruit.me` carries presigned browser object transfers.
 
-Production: [https://room.ruit.me/](https://room.ruit.me/) routes to Fly.io app `message-system` in `dfw`, running Node 24.18.0 Alpine on a shared 1-vCPU, 1024MB VM. PostgreSQL is on Supabase, Redis on Upstash, media on Tigris (S3-compatible), and per-room execution sandboxes on E2B. Production currently selects `CODE_AGENT_RUNNER_CLIENT=daemon`, `CODE_AGENT_BACKEND=codex-app-server`, a two-minute idle sandbox TTL, and a one-hour active TTL.
+A source push does not deploy production. Runtime changes are applied from the production checkout with `node scripts/local-production.mjs --profile edge up -d --build`, which loads secrets from the macOS Keychain; verify Compose health plus loopback/public `/api/status`. Documentation-only changes do not require a rebuild. The former scheduled Fly workflow is manually disabled and the Fly app is suspended; Supabase, Tigris, and Upstash remain rollback sources only. Current production selects `CODE_AGENT_RUNNER_CLIENT=daemon`, `CODE_AGENT_BACKEND=codex-app-server`, a two-minute idle sandbox TTL, and a one-hour active TTL.
 
 ### Code Agent / E2B Artifact Rule
 
@@ -132,7 +132,7 @@ Choose validation from the actual diff, affected behavior, and blast radius. Do 
 
 Use engineering judgment rather than change size alone: a one-line auth or schema change can require broad validation, while a larger documentation edit may require none. In the final report, state which checks ran; when tests or builds were intentionally skipped, briefly state why.
 
-After completing and appropriately validating a task, commit the work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree.
+After completing and appropriately validating a task, commit the work and push it directly to `origin/master`; when working from a detached HEAD, use `git push origin HEAD:master`. Confirm that local `HEAD` and `origin/master` resolve to the same commit. Do not leave completed, validated changes only in the local worktree. Treat source push and production deployment as separate states: deploy the Mac only when runtime/build/configuration scope changed and the task requires release, then verify the real public target.
 
 Before the final push, check whether the change falls under the E2B artifact rule above. If it does, the task is not complete until the E2B template and artifact pins are updated, the new template is built and verified, and production is pointed at the matching E2B version. Finish with all source, lockfile, Dockerfile, and production pin changes committed and pushed to `origin/master`.
 

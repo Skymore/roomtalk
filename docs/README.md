@@ -38,11 +38,11 @@ Source code and tests are always the final authority. Start with the current arc
 | Configuration | [Configuration](configuration.md) | [配置](configuration.zh.md) |
 | Room event sync and portable deployment | [Architecture](room-event-sync-portable-deployment.md) | [架构](room-event-sync-portable-deployment.zh.md) |
 
-## Active Implementation Records
+## Completed Implementation Records
 
 | Engineering line | English | 中文 |
 | --- | --- | --- |
-| Room event sync and portable deployment | [Progress](room-event-sync-portable-deployment-progress.md) | [进度](room-event-sync-portable-deployment-progress.zh.md) |
+| Room event sync and self-host cutover | [Evidence record](room-event-sync-portable-deployment-progress.md) | [证据记录](room-event-sync-portable-deployment-progress.zh.md) |
 
 ## Operations and Runbooks
 

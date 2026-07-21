@@ -3,7 +3,7 @@
 [English](SECURITY.md)
 
 状态：当前
-更新：2026-07-12
+更新：2026-07-20
 
 ## 信任边界
 
@@ -29,7 +29,7 @@ Codex subscription auth 和 GitHub personal access token 属于单个用户。Ro
 
 ## 媒体与发布 Artifact
 
-私有媒体 body 位于 S3/Tigris-compatible object storage；durable store 只保存 metadata 和 object key。读取在 room auth 后使用短期签名 URL。Upload completion 在创建 durable message 前验证 metadata 和 object existence。公开 static artifact 会被校验、版本化并关联到仍存在的 room；public route 对 path、MIME 和响应 header 进行防御性处理。
+私有媒体 body 位于 S3-compatible object storage（当前生产为 SeaweedFS）；durable store 只保存 metadata 和 object key。读取在 room auth 后使用短期签名 URL。Upload completion 在创建 durable message 前验证 metadata 和 object existence。公开 static artifact 会被校验、版本化并关联到仍存在的 room；public route 对 path、MIME 和响应 header 进行防御性处理。
 
 ## 输入与资源限制
 

@@ -5,6 +5,8 @@
 状态：已有基础能力的历史迁移方案
 复核：2026-07-12
 
+> 2026-07-20 补充：RoomTalk 后续增加了独立的有界 `room_events` replay log，见[房间事件同步与可迁移部署](room-event-sync-portable-deployment.zh.md)。下文“本方案不引入 room sequencing”描述的是当时 scope；`outbox_events` 仍是单 Worker claim/retry 机制，不能作为客户端 replay stream。
+
 ## 目标
 
 把 RoomTalk 的 AI generation 从“由接收 socket 的 handler 持有整个进程”演进为 durable、observable、retryable 的 run model，同时不改变用户看到的实时流式体验。

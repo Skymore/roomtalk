@@ -3,7 +3,7 @@
 [中文](CONTRIBUTING.zh.md)
 
 Status: Current
-Updated: 2026-07-12
+Updated: 2026-07-20
 
 ## Scope
 
@@ -27,7 +27,7 @@ Choose checks from the actual failure modes of the diff:
 - Documentation/copy only: parsing, link validation, and `git diff --check`.
 - Narrow server or client changes: focused tests and the affected package build/typecheck when compilation is relevant.
 - Persistence, auth, permissions, ordering, shared contracts, or cross-package changes: expand to the relevant suites and production builds.
-- E2E or external-service behavior: run the matching Playwright, persistence, Fly, or E2B smoke only when that boundary changed.
+- E2E or external-service behavior: run the matching Playwright, persistence, public-edge/Compose, or E2B smoke only when that boundary changed.
 
 Common commands:
 
@@ -48,7 +48,7 @@ npm run test:e2e:postgres
 
 ## Code-Agent Artifact Rule
 
-Production code-agent rooms do not run runner source directly from the Fly application image. Changes to any of the following require a new pinned E2B artifact:
+Production code-agent rooms do not run runner source directly from the RoomTalk application image. Changes to any of the following require a new pinned E2B artifact:
 
 - `server/roomtalk_code_agent_runner/`
 - runner tools or system prompts
@@ -61,7 +61,7 @@ For such changes, update source and locks, build the new template, update produc
 
 ## Persistence Changes
 
-New durable operations must be represented in the shared store contract and implemented for both Redis and PostgreSQL. PostgreSQL mode still uses Redis for realtime coordination and caching. Schema, migration, rollback, and cache invalidation behavior must be reviewed together.
+New runtime durable operations must be represented in the shared store contract and implemented in PostgreSQL first. Keep the legacy Redis implementation aligned only when the import/migration path still requires that operation. PostgreSQL owns durable state and room-event replay; Redis remains rebuildable realtime/cache state. Schema, event emission, retention, migration, rollback, and cache invalidation behavior must be reviewed together.
 
 ## Security and Credentials
 
@@ -72,6 +72,6 @@ New durable operations must be represented in the shared store contract and impl
 
 ## Commits and Release
 
-Use short present-tense commit subjects. `master` is the release branch. The scheduled/manual GitHub Actions workflow builds and deploys runtime changes to Fly; a push alone is not proof of deployment. Do not run `fly deploy` manually. Verify the real target when a task requires release validation.
+Use short present-tense commit subjects. `master` is the release branch. A source push does not deploy the production Mac. Runtime releases use `node scripts/local-production.mjs --profile edge up -d --build` from the intended production checkout, followed by Compose and public-edge verification. The former Fly workflow is disabled and retained only for rollback history. E2B artifact changes still require their independent release contract.
 
 Machine-agent instructions remain in `CLAUDE.md`/`AGENTS.md`; this file is the human contributor contract.

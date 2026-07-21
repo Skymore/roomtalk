@@ -3,7 +3,7 @@
 [English](code-agent-static-publish-implementation.md)
 
 状态：当前
-已按 `master` 核对：2026-07-12
+已按 `master` 核对：2026-07-20
 
 ## 架构
 
@@ -80,7 +80,7 @@ Workspace Artifacts 会返回有序版本列表。用户选择版本只切换自
 
 ## Object Storage
 
-`MediaObjectStorage` 同时提供 local 和 S3-compatible 实现，支持 get/put/head/delete 和 presigned PUT。Direct upload 路径上 file body 不经过 Fly Node；public read 仍经过 RoomTalk，用于 manifest、SPA fallback、MIME 和 room ownership 的一致解析。
+`MediaObjectStorage` 同时提供 local 和 S3-compatible 实现，支持 get/put/head/delete 和 presigned PUT。Direct upload 路径上 file body 不经过 RoomTalk app container；public read 仍经过 RoomTalk，用于 manifest、SPA fallback、MIME 和 room ownership 的一致解析。当前生产使用 SeaweedFS，保留的回滚目标使用 Tigris，AWS 映射到 S3。
 
 ## Code Agent Session Env
 

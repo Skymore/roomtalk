@@ -2,31 +2,31 @@
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: Production self-host cutover complete at `room.ruit.me`
+Status: Completed implementation and production cutover record
 
-Started/completed locally: 2026-07-20
+Implemented and cut over: 2026-07-20
 
 Design authority: [target architecture](room-event-sync-portable-deployment.md)
 
-## Working rules
+## Cutover rules used
 
-- Keep every change local; do not push.
+- Keep the direct-cutover series local until production evidence is complete, then publish the verified series to `origin/master`.
 - Replace the old protocol directly; do not add a `messageVersion` compatibility layer.
 - Use one application image across local Compose, Fly, and a future AWS target.
 - Record real PostgreSQL, browser, container, restart, and restore evidence.
 
-## Baseline and local commits
+## Baseline and evidence commits
 
 Work started from clean local `master` at `d94d2cd0`. The old client recovered by comparing `baseMessageVersion`; writes advanced `message_version` and `room_version`; Redis cache generations used `messageVersion`; and the repository had no Compose runtime.
 
-| Stage | Scope | Status | Local commit |
+| Stage | Scope | Status | Evidence commit(s) |
 | --- | --- | --- | --- |
 | 1 | Architecture decision, progress ledger, initial Compose runtime | Complete | `ec0ac9af` |
 | 2 | PostgreSQL event stream, direct socket/client cutover, version retirement, integration/E2E coverage | Complete | `d2c051ab` |
-| 3 | Operational rehearsal, current-doc cleanup, final evidence | Complete | This documentation commit |
-| 4 | Completion audit: persistent local media, signed URLs, env interpolation, paired restore | Complete | This completion commit |
-| 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | This self-host commit |
-| 6 | Final write freeze, log archive, data restore, DNS route, public HTTP/WebSocket/S3 smoke | Complete | This cutover commit |
+| 3 | Operational rehearsal, current-doc cleanup, final evidence | Complete | `63ef29bc` |
+| 4 | Completion audit: persistent local media, signed URLs, env interpolation, paired restore | Complete | `77a5826c` |
+| 5 | Mac production runtime, SeaweedFS S3 target, source-data rehearsal, tunnel, backup/restore drill | Complete | `bdad6d2f`, `94d7feed`, `f878752d` |
+| 6 | Final write freeze, log archive, data restore, DNS route, public HTTP/WebSocket/S3 smoke, explicit credentials | Complete | `a554554c`, `56871060` |
 
 The scheduled Fly workflow is disabled and the Fly app is scaled to zero. Supabase and Tigris remain intact as rollback sources. `room.ruit.me`, the compatibility hostname `roomtalk.ruit.me`, and `roomtalk-objects.ruit.me` now route to the Mac through a dedicated Cloudflare Tunnel. `ai-chat.wenlin.dev` is accepted by the runtime and can be routed separately through its existing DNS zone.
 

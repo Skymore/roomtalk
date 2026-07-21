@@ -2,31 +2,31 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：`room.ruit.me` 生产自托管切换完成
+状态：已完成的实现与生产切换记录
 
-本地开始/完成：2026-07-20
+实现并切换：2026-07-20
 
 事实源设计：[目标架构](room-event-sync-portable-deployment.zh.md)
 
-## 实施原则
+## 当时使用的切换规则
 
-- 所有改动只保留在本地仓库，不 push。
+- 直接切换系列在生产证据完成前先保留本地，验证完整后把整组提交发布到 `origin/master`。
 - 直接替换旧协议，不增加 `messageVersion` 兼容层。
 - 本地 Compose、Fly 与未来 AWS 使用同一个应用镜像，只通过环境配置区分。
 - 完成标准必须包含真实 PostgreSQL、浏览器、容器、重启与恢复证据。
 
-## 基线与本地 commit
+## 基线与证据 commit
 
 实施从干净的本地 `master` `d94d2cd0` 开始。旧客户端通过 `baseMessageVersion` 比较恢复；写入同时推进 `message_version` / `room_version`；Redis cache generation 使用 `messageVersion`；仓库当时没有 Compose runtime。
 
-| 阶段 | 范围 | 状态 | 本地 commit |
+| 阶段 | 范围 | 状态 | 证据 commit |
 | --- | --- | --- | --- |
 | 1 | 架构决策、进度账本、初版 Compose runtime | 完成 | `ec0ac9af` |
 | 2 | PostgreSQL event stream、Socket/client 直接切换、version 退役、integration/E2E | 完成 | `d2c051ab` |
-| 3 | 运维演练、当前文档清理、最终证据 | 完成 | 本文档 commit |
-| 4 | 完成性审计：本地持久媒体、签名 URL、env interpolation、成对恢复 | 完成 | 本次收尾 commit |
-| 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | 本次 self-host commit |
-| 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke | 完成 | 本次 cutover commit |
+| 3 | 运维演练、当前文档清理、最终证据 | 完成 | `63ef29bc` |
+| 4 | 完成性审计：本地持久媒体、签名 URL、env interpolation、成对恢复 | 完成 | `77a5826c` |
+| 5 | Mac 生产 runtime、SeaweedFS S3 目标、源数据演练、tunnel、备份恢复 | 完成 | `bdad6d2f`、`94d7feed`、`f878752d` |
+| 6 | 最终停写、日志归档、数据恢复、DNS route、公开 HTTP/WebSocket/S3 smoke 与显式凭据 | 完成 | `a554554c`、`56871060` |
 
 定时 Fly workflow 已禁用，Fly app 已缩到零；Supabase 与 Tigris 完整保留为回滚源。`room.ruit.me`、兼容域名 `roomtalk.ruit.me` 与 `roomtalk-objects.ruit.me` 已通过专用 Cloudflare Tunnel 指向 Mac。runtime 同时接受 `ai-chat.wenlin.dev`，该域名可在原有 DNS zone 中单独切换。
 

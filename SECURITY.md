@@ -3,7 +3,7 @@
 [中文](SECURITY.zh.md)
 
 Status: Current
-Updated: 2026-07-12
+Updated: 2026-07-20
 
 ## Trust Boundaries
 
@@ -29,7 +29,7 @@ Codex subscription auth and GitHub personal access tokens belong to individual u
 
 ## Media and Published Artifacts
 
-Private media bodies live in S3/Tigris-compatible object storage; durable stores hold metadata and object keys. Reads use short-lived signed URLs after room authorization. Upload completion verifies metadata and object existence before creating the durable message. Public static artifacts are validated, versioned, and associated with an existing room; public routes apply bounded paths, MIME handling, and defensive response headers.
+Private media bodies live in S3-compatible object storage (SeaweedFS in current production); durable stores hold metadata and object keys. Reads use short-lived signed URLs after room authorization. Upload completion verifies metadata and object existence before creating the durable message. Public static artifacts are validated, versioned, and associated with an existing room; public routes apply bounded paths, MIME handling, and defensive response headers.
 
 ## Input and Resource Limits
 
