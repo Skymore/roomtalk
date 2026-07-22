@@ -46,7 +46,7 @@ flowchart TB
 
   subgraph Data["Durable and realtime data"]
     Postgres["PostgreSQL"]
-    Redis["Redis"]
+    Redis["Redis realtime/cache + BullMQ"]
     Objects["SeaweedFS/S3-compatible object storage"]
   end
 
@@ -82,7 +82,7 @@ flowchart TB
 | RoomTalk control plane | Identity, room access, permission resolution, turn orchestration, transcript persistence, usage/cost, scoped tokens, sandbox lifecycle, public artifacts | Executing untrusted user commands in the application process, agent reasoning internals |
 | E2B execution plane | Workspace files, Git, PTY, commands, background processes, dev servers, agent backend process | Room membership, durable message truth, public object storage ownership |
 | Agent backend | Reasoning, native tool loop, model-specific session/thread state | RoomTalk authorization, database access, public URL ownership |
-| PostgreSQL/Redis/S3-compatible storage | Durable records, realtime coordination/cache, object bodies/manifests | Agent execution |
+| PostgreSQL/Redis/S3-compatible storage | Durable records and AI run facts, realtime coordination/BullMQ/cache, object bodies/manifests | Agent execution |
 
 This split is the central security and reliability decision in the project: untrusted code runs in E2B, while every durable or externally visible action is mediated by RoomTalk.
 
@@ -263,7 +263,7 @@ RoomTalk persists:
 
 ### Runtime state
 
-E2B owns the live filesystem, Git worktree, processes, terminals, and preview servers. Redis owns presence, socket sessions, pub/sub, model-gateway counters, and caches. The durable store owns the fenced room execution lease. The Node process owns only local active-turn, preview/terminal-session, and daemon-handle maps.
+E2B owns the live filesystem, Git worktree, processes, terminals, and preview servers. Redis owns presence, socket sessions, pub/sub, model-gateway counters, caches, and the separate ordinary-chat BullMQ queue; Code Agent turns do not use that queue. The durable store owns the fenced room execution lease. The Node process owns only local active-turn, preview/terminal-session, and daemon-handle maps.
 
 ### Recovery paths
 
@@ -282,8 +282,8 @@ The system does not yet claim a general immutable workspace-revision/rollback la
 
 | Store | Responsibilities |
 | --- | --- |
-| PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, AI runs/outbox, code-agent turns, fenced room leases, sandbox metadata |
-| Redis realtime store | Presence, socket sessions, pub/sub, locks/counters, optional short-TTL message cache |
+| PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, `assistant_runs`/dispatch intent, code-agent turns, fenced room leases, sandbox metadata |
+| Redis realtime and queue store | Presence, socket sessions, pub/sub, locks/counters, optional short-TTL message cache, and BullMQ operational jobs for ordinary chat AI |
 | S3-compatible object storage | Private media, published-site versions/manifests, migration/object payloads; SeaweedFS in current production |
 
 Server-assigned message positions order canonical history, while the PostgreSQL-owned per-room event sequence is the synchronization authority. `updatedAt` is only a complete-room last-write guard. Browser timestamps are display metadata, not the consistency mechanism.

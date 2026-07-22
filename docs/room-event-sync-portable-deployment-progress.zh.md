@@ -146,6 +146,30 @@ Schema 也不再由每个 App 冷启动修改。Compose 的一次性 `migrate` s
 
 这仍是更安全的过渡 worker 模型，不是最终 AI aggregate。Durable 终态仍分布在 `assistant_runs`、message、AI 专用 outbox、usage projection、owner lease 和进程内 terminal reconciler。下一阶段仍应把 `assistant_runs` 升为唯一 durable execution aggregate，为临时事件增加 run generation/chunk sequence，在一个事务内幂等保存 terminal payload 与 usage，随后退役 AI 专用 outbox 与内存 terminal retry。已经稳定的 `room_events` 客户端 changefeed 不需要为此改变。
 
+### BullMQ Assistant Worker 切换，2026-07-22
+
+本阶段把上一节仍标为“下一阶段”的 AI aggregate 正式完成。普通聊天 AI 不再由 App 内 PostgreSQL polling worker 执行：App 只接受 Socket 请求并 relay 最小 dispatch intent，独立 Node/TypeScript `ai-worker` 通过 BullMQ 调度，从 PostgreSQL `assistant_runs` 读取完整 request，使用 generation lease 执行 Provider，并把 immutable terminal payload、Message、run 状态与房间费用在受控事务边界内收敛。BullMQ 只拥有 waiting、concurrency、backoff、stalled recovery 与运维 retention；PostgreSQL 仍是唯一业务事实源，也没有引入重复的 `assistant_run_usage` ledger。
+
+首次切换遵守 stop-the-world 协议边界。维护窗口先生成配对备份 `roomtalk-20260722T124306Z.dump` 与 `roomtalk-object-storage-20260722T124306Z.tar.gz`，再停止旧 App 和 edge。确认数据库仍停在 `0009` 后，Compose 才应用 `0010_assistant_run_bullmq_dispatch`、以 named volume + AOF `everysec` + `noeviction` 重建 Redis，并同时启动新 App 与独立 Worker。旧 polling executor 与 BullMQ executor 没有重叠运行。
+
+| 检查 | 结果 |
+| --- | --- |
+| 完整 Server suite | 111 个 suite、851 项通过；真实 PostgreSQL 17 migration/transaction 无 skip |
+| 完整 Client suite | 97 个文件、1,025 项通过 |
+| BullMQ + Redis 集成 | duplicate relay 去重、模拟 Worker crash retry、单次完成通过 |
+| Server / Client production build | 通过 |
+| Production image | `roomtalk-local:dev`，镜像 SHA `128708f3280f` |
+| Migration ledger | 11/11；`0010_assistant_run_bullmq_dispatch` 已记录 |
+| Durable run 不变量 | 10 个历史 run 全部 terminal；0 个 active run 缺 dispatch |
+| Dispatch backlog | pending=0、processing=0 |
+| Redis queue durability | AOF enabled、`everysec`、`noeviction`、最近写入成功 |
+| Worker health | Worker running；queue Redis 与 transient Redis ready |
+| Compose health | App、AI Worker、PostgreSQL、Redis、SeaweedFS、Cloudflare Tunnel 全部运行 |
+| 本机回环、`room.ruit.me`、`roomtalk.ruit.me` | `online`、`ready=true`、`assistantQueue=ready`、100 个 room |
+| 公网 Socket.IO handshake | 成功；可升级 WebSocket |
+
+发布验证没有调用付费 Provider。近十分钟 App、Worker 与 migration 日志中没有 fatal、panic、uncaught、unhandled 或 error 记录。CI 现在同时提供真实 PostgreSQL 17 与 Redis 7，关键测试覆盖队列不可用后的 deferred dispatch、确定性 job 去重、Worker 崩溃恢复、terminal/finalizing run 不重复调用 Provider、精确 generation release，以及 placeholder/run/room event/dispatch 的数据库原子性。
+
 ## 回滚与持续运维
 
 跨过任一生产边界后，回滚都是数据操作。Mac 已接受写入时，不能只重新启用 Fly 或切 DNS。应先停止或 gate 当前 writer，协调 PostgreSQL 与对象增量，恢复匹配的数据库和对象备份，验证目标，然后才切流量。

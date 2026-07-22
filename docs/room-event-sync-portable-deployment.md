@@ -4,7 +4,7 @@
 
 Status: infrastructure and immutable-event production cutovers completed at `room.ruit.me`
 
-Updated: 2026-07-21
+Updated: 2026-07-22
 
 ## Final decision
 
@@ -14,8 +14,9 @@ RoomTalk uses materialized PostgreSQL state plus a bounded per-room change log:
 rooms / room_messages / room_agent_turns  canonical current state
 room_event_streams                       headSeq, retention floor, delete readers
 room_events                              bounded immutable after-image replay log
-outbox_events                            one-worker claim/retry jobs
-Redis                                    presence, Socket.IO adapter, short cache only
+assistant_runs                           ordinary chat AI business lifecycle and result
+task_dispatch_outbox                    transactional BullMQ enqueue intent
+Redis / BullMQ                           realtime/cache plus operational job scheduling
 object storage                           media and off-host backups
 ```
 
@@ -64,7 +65,7 @@ The public stream never contains member IDs, offline-member lists, join timestam
 
 Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Because an AI chunk/A2UI update/stream end can race ahead of its durable placeholder notification, the browser temporarily buffers unmatched AI events by `messageId` and drains them in arrival order when the placeholder appears. The buffer is capped at 64 message IDs, 512 events, 512 KiB, and a 60-second TTL. When the placeholder already exists, the transient reducer updates the canonical projection and the current React state separately, preserving UI-only pending or failed optimistic sends.
 
-`ai_stream_error` is not allowed to invent canonical text. It carries an explicit `persisted` flag. A normal error includes the exact persisted safe Message; if immediate terminal persistence fails, `{ persisted: false }` terminalizes the browser placeholder while an in-process reconciler retries the same terminal after-image with exponential backoff. PostgreSQL owner leases protect live streams and allow another process to recover an orphan only after its owner expires. The local terminal overlay remains until a durable final after-image supersedes it. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
+`ai_stream_error` is not allowed to invent canonical text. It carries an explicit `persisted` flag. A normal error includes the exact persisted safe Message. If immediate projection fails, `{ persisted: false }` terminalizes the browser placeholder while the immutable terminal payload remains staged on `assistant_runs`; BullMQ retry then projects that same payload without another Provider call. PostgreSQL generation leases reject stale Worker writes. The local terminal overlay remains until a durable final after-image supersedes it. Future durable reaction mutations should add `reactions.upserted` / `reactions.deleted` to the same room sequence; this cutover does not invent a reaction model.
 
 ## Snapshot and replay
 
@@ -92,9 +93,9 @@ Because `NOTIFY` is ephemeral, a failed listener generation is closed and ignore
 
 Rolling app releases require ownership rules beyond room-event delivery. RoomTalk now assigns each process a unique runtime instance ID. Redis stores an instance TTL heartbeat, the socket IDs owned by that instance, and each socket's room/browser presence. Startup never clears global presence. A singleton reconciliation pass removes only records owned by an instance whose heartbeat expired, so starting instance B cannot erase instance A's online users.
 
-The same rule protects work. Code Agent turns and sandboxes are recoverable only when no matching unexpired fenced room lease exists. AI placeholders carry a per-instance stream owner whose PostgreSQL lease is renewed with the runtime heartbeat. Recovery also checks for a queued/running assistant run backed by a pending/processing outbox event; such a job stays recoverable even after the request instance's owner lease expires, so startup cannot mark its placeholder failed before the worker resumes. Only a placeholder with neither a live owner nor a recoverable durable job is normalized to an error terminal state. Expired, unreferenced owner leases are removed in the same maintenance path.
+The same rule protects work. Code Agent turns and sandboxes are recoverable only when no matching unexpired fenced room lease exists. Ordinary chat AI no longer belongs to an App runtime instance: a queued run has durable dispatch intent, an active Worker owns a generation lease, and a `finalizing` run already has an immutable terminal payload. App restart therefore cannot kill a job. BullMQ retry or a replacement Worker claims a higher generation only after the old lease is gone, while stale transient and terminal writes fail their fence.
 
-Recovery and retention loops run in every replica but acquire named PostgreSQL advisory locks; one replica performs each pass and the others skip it. The event broadcaster keeps fixed per-room min/max pending state rather than one waiter per notification. Together with the no-local-subscriber short circuit, this bounds both cross-instance reads and burst memory. PostgreSQL is also the clock authority for AI-owner and outbox lease expiry when the caller does not supply an explicit test timestamp, avoiding cross-node wall-clock skew.
+Recovery and retention loops run in every replica but acquire named PostgreSQL advisory locks; one replica performs each pass and the others skip it. The event broadcaster keeps fixed per-room min/max pending state rather than one waiter per notification. Together with the no-local-subscriber short circuit, this bounds both cross-instance reads and burst memory. PostgreSQL is also the clock authority for assistant-run and dispatch lease expiry when the caller does not supply an explicit test timestamp, avoiding cross-node wall-clock skew.
 
 The lease schema has its own cutover rule. A pre-`0006` App does not heartbeat `ai_stream_owner_leases`, so it cannot safely overlap the first `0006`-aware process: the new process could recover the old process's active placeholder. Stop every old App for the release that introduces `0006`. After every replica speaks the lease protocol, later compatible image releases may roll; changing the lease protocol again requires either another maintenance boundary or a two-phase migration.
 
@@ -118,20 +119,20 @@ There is no merge/compaction back into messages: the normalized state was alread
 
 Defaults are seven days and at most 10,000 events per room. Operators can override them with `ROOM_EVENT_RETENTION_DAYS`, `ROOM_EVENT_MAX_PER_ROOM`, and `ROOM_EVENT_PRUNE_INTERVAL_MS`; `ROOM_EVENT_FAST_PATH_MAX_BYTES` independently controls the Socket fast-path ceiling. The Compose examples expose all four. Once a deleted room's events age out, its independent stream/auth tombstone is also removed. The hourly maintenance log reports broadcaster pending/active rooms, coalesced notifications, batch count, fast-path event bytes, head-only fallbacks, no-local-subscriber skips, authorization-unavailable fallbacks, and maximum pending sequence span. Before AWS scale-out, alert on sustained queue span, head-only/auth-unavailable growth, expired-instance cleanup, and lease-recovery counts; also add PostgreSQL table/index size, dead tuples, event bytes per room, and prune duration to the platform dashboard.
 
-## Event log versus AI outbox
+## Event log versus AI dispatch and BullMQ
 
-These tables have different consumers and must remain separate:
+These mechanisms have different consumers and must remain separate:
 
-| | `room_events` | `outbox_events` |
+| | `room_events` | `task_dispatch_outbox` | BullMQ |
 | --- | --- | --- |
-| Consumer | Every authorized client | One claiming worker |
-| Delivery | Repeatable cursor read | Claim, lease, retry |
-| Purpose | Reconstruct visible state | Reliably execute a side effect |
-| Cleanup | Retained prefix | Processed/failed policy |
+| Consumer | Every authorized client | App dispatch relay | One AI worker |
+| Delivery | Repeatable cursor read | Fenced claim and enqueue acknowledgement | Competing job claim, retry, stalled recovery |
+| Purpose | Reconstruct visible state | Bridge the PostgreSQL commit to Redis without losing intent | Schedule provider execution |
+| Cleanup | Retained prefix | Settled after deterministic enqueue | Operational completed/failed retention |
 
-In worker mode, the AI placeholder, assistant-run record, and AI job outbox row commit in one PostgreSQL transaction; the placeholder room event is produced by that same commit. A worker cannot observe only part of that start state. The worker claims one event at a time by default because a claim lease starts immediately and the current executor is serial. Raising the batch without renewing every claimed item would recreate a duplicate-provider-call window. The worker later conditionally commits the final AI message, which creates another room event.
+The AI placeholder, `assistant_runs`, room event, and dispatch row commit in one PostgreSQL transaction. The relay then enqueues a minimal `{ schemaVersion: 1, runId }` job with `jobId=runId`; duplicate relay delivery is harmless. A queue outage returns the dispatch row to pending, so an accepted request cannot disappear between PostgreSQL and Redis. The dedicated Worker fetches the request from PostgreSQL, claims that exact run with a new generation, and continuously renews its owner lease while the Provider executes.
 
-This is an intentionally safer intermediate model, not the final AI execution architecture. The next convergence step is to make `assistant_runs` itself the sole durable job with generation, database lease, request/terminal payload, and idempotent usage ledger; the AI-specific outbox and process-local terminal reconciler can then be retired. That change does not alter the already stable `room_events` client changefeed.
+`assistant_runs` is the only business aggregate: it owns the request snapshot, generation, lease, immutable terminal payload, status, error, and usage. BullMQ state is not queried to answer whether a run succeeded, and its result backend is unused. If a retry sees a staged terminal payload, it projects Message/run/cost only and does not call the Provider again. The locked terminal transition itself prevents duplicate cost, so a second `assistant_run_usage` ledger is intentionally absent.
 
 This is why Socket delivery itself has no durable outbox: room data is already recoverable by cursor, and every authorized client is a fan-out reader rather than a competing worker. Retrying Socket notifications would duplicate the log's job. A `messageVersion` is likewise unnecessary because the room sequence already identifies both order and the exact missing range.
 
@@ -141,12 +142,12 @@ The same root `Dockerfile` runs on the current Mac production host, the retained
 
 | Current Mac production | Retained rollback cloud | AWS target |
 | --- | --- | --- |
-| app container | Fly Machine | ECS Fargate or EKS |
+| app + ai-worker from one image | Fly Machine | ECS Fargate services or EKS deployments |
 | PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
-| Redis 7, rebuildable | managed Redis | ElastiCache |
+| Redis 7, AOF realtime + BullMQ | managed Redis | ElastiCache for Redis OSS |
 | SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
 
-Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the image, PostgreSQL schema/dump/WAL contracts, Redis's disposable role, and the S3 boundary. Current production uses SeaweedFS, the rollback deployment uses Tigris, and AWS will use S3 without changing application object keys or APIs.
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the shared App/Worker image, PostgreSQL schema/dump/WAL contracts, BullMQ's Redis contract, separate `REDIS_URL` / `QUEUE_REDIS_URL` boundaries, and the S3 API. Realtime/cache keys may warm naturally after migration, but active BullMQ jobs must be drained or restored. Current production uses SeaweedFS, the rollback deployment uses Tigris, and AWS will use S3 without changing object keys or APIs.
 
 Local start and backup:
 
@@ -160,11 +161,11 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before starting those exact stopped containers again. The recovery path deliberately uses `compose start`, not `compose up`, so a backup cannot reconcile a newer Compose definition against an older image and become an accidental deployment. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
-Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
+Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, `assistant_runs`, dispatch intent, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr. Redis uses a named volume, AOF `everysec`, and `noeviction` for active BullMQ jobs.
 
-Health is not one optimistic boolean. `/api/health/live` is a dependency-free process probe. `/api/status` and `/api/health/ready` perform a real RoomTalk table query, Redis `PING`, S3-compatible bucket probe, and Socket adapter check; they return HTTP 503 and `rooms: null` on dependency failure rather than reporting a false empty database. Compose uses readiness for the App container. AWS should map liveness and readiness separately, and alert on host filesystem/Docker disk-image capacity in addition to container state because every durable local service can be running while the Mac has no space left to commit writes.
+Health is not one optimistic boolean. `/api/health/live` is an App process probe. `/api/status` and `/api/health/ready` test a real table read, realtime Redis, S3, and the Socket adapter. A serving failure returns HTTP 503 and `rooms: null`; queue-only failure keeps the App ready but reports `degraded` and deferred dispatch. `ai-worker` has its own health probe for PostgreSQL, queue Redis, transient Redis, and worker state. AWS should map these separately and also alert on host/disk and queue backlog.
 
-GitHub CI uses Node 24.18, starts PostgreSQL 17, and always sets `ROOM_EVENT_TEST_DATABASE_URL` for the server suite. Trigger, transaction, lease, advisory-lock, tombstone, byte-boundary, retention-clock, and cross-room message-invariant tests therefore fail the job instead of silently skipping when no database is available.
+GitHub CI uses Node 24.18, starts PostgreSQL 17 and Redis 7, and sets `ROOM_EVENT_TEST_DATABASE_URL` plus `BULLMQ_TEST_REDIS_URL`. Trigger/transaction/fencing tests and real BullMQ dedupe/stalled-retry tests therefore fail the job instead of silently skipping.
 
 ## Immutable-event production migration
 

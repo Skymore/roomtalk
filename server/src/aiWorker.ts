@@ -143,12 +143,20 @@ const shutdown = async (signal: string) => {
   const forceExit = setTimeout(() => process.exit(1), 15_000);
   forceExit.unref();
   healthServer.close();
-  await Promise.allSettled([
+  // Stop accepting jobs and let the active processor finish while its
+  // PostgreSQL/Redis dependencies are still usable. Closing those connections
+  // concurrently would turn an otherwise graceful drain into a failed job.
+  const [workerClose] = await Promise.allSettled([
     worker?.close(false) || Promise.resolve(),
+  ]);
+  await Promise.allSettled([
     transientRedis.quit(),
     queueConnection.quit(),
     postgresPool.end?.() || Promise.resolve(),
   ]);
+  if (workerClose.status === 'rejected') {
+    logger.error('Assistant run BullMQ worker did not drain cleanly', { error: workerClose.reason });
+  }
   clearTimeout(forceExit);
   process.exit(0);
 };
@@ -160,4 +168,3 @@ void start().catch(error => {
   logger.error('Assistant run BullMQ worker failed to start', { error });
   process.exit(1);
 });
-

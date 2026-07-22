@@ -1,11 +1,13 @@
 # AI Run / Outbox / Worker 迁移方案
 
+> 历史方案，已于 2026-07-22 被替代。当前实现以 `assistant_runs` 作为唯一业务 aggregate，`task_dispatch_outbox` 只桥接 PostgreSQL commit 与 BullMQ，并使用独立 Node/TypeScript `ai-worker`。现行设计见 [Assistant Runs 与 BullMQ](assistant-run-bullmq-design-progress.zh.md)。下文各阶段作为设计演进证据保留，不再是当前操作说明。
+
 [English](ai-run-outbox-worker-migration-plan.md)
 
 状态：已有基础能力的历史迁移方案
 复核：2026-07-12
 
-> 2026-07-20 补充：RoomTalk 后续增加了独立的有界 `room_events` replay log，见[房间事件同步与可迁移部署](room-event-sync-portable-deployment.zh.md)。下文“本方案不引入 room sequencing”描述的是当时 scope；`outbox_events` 仍是单 Worker claim/retry 机制，不能作为客户端 replay stream。
+> 2026-07-20 补充（历史）：RoomTalk 后续增加了独立的有界 `room_events` replay log，见[房间事件同步与可迁移部署](room-event-sync-portable-deployment.zh.md)。当时 `outbox_events` 是单 Worker claim/retry 机制；普通 Chat AI 后续已改为 `task_dispatch_outbox` + BullMQ。
 
 ## 目标
 

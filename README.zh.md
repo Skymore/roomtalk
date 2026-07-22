@@ -43,7 +43,7 @@ RoomTalk 不只覆盖功能的 happy path，也系统处理了实时协作与 AI
 | AI 文本与工具事件顺序 | 在最早知道真实顺序的 engine/runner 层保留文本与工具边界，再持久化服务端单调递增的 `position`；客户端只展示顺序，不用 timestamp 猜测。 |
 | 多客户端一致性 | Canonical PostgreSQL 写入同事务保存有界、不可变的 after-image changelog；Socket.IO 直接推送精确的已提交 RoomEvent，缺失区间按房间序列补拉，超过 500 个事件直接切 repeatable-read snapshot。 |
 | 移动端断连恢复 | 由唯一 `RoomSessionController` 管理 connect/register/join/retry；epoch 只随房间或 socket identity 变化，lifecycle signal 合并成消息 resync 而不重复 join，暂态恢复保留已显示的消息和媒体。 |
-| 持久层边界 | PostgreSQL 强制承载 canonical 业务状态与确定性事件重放；Redis 仅负责可重建的 presence、瞬时/全局 Socket.IO 流量、锁和短缓存。 |
+| 持久层边界 | PostgreSQL 保存业务事实与确定性重放，BullMQ/Redis 负责运行时调度；事务型 dispatch outbox 只桥接两者，不让任一侧冒充另一侧的状态源。 |
 | 缓存一致性 | 最近消息缓存以持久 room-event head 守卫，写回前再次校验，只在 mutation 成功后失效；缓存故障时降级直读 PostgreSQL。 |
 | 房间并发写 | PostgreSQL 在同一事务串行 canonical 写入并分配连续 room-event 序列；Redis Lua 只协调临时多 socket presence。 |
 | 产品级移动体验 | 用锁定模式的手势状态机解决媒体手势冲突，以 `requestAnimationFrame` 批量更新 transform，组合 Object URL/Cache API/network 媒体缓存，并处理 IME 与 Visual Viewport。 |
@@ -59,7 +59,11 @@ flowchart LR
   Store --> Durable["PostgreSQL\ndurable state + room event log"]
   Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
 
-  Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
+  Control --> Dispatch["PostgreSQL dispatch relay"]
+  Dispatch --> Queue["Redis 上的 BullMQ"]
+  Queue --> ChatAI["独立 AI worker\nprovider clients + fenced runs"]
+  ChatAI --> Durable
+  ChatAI -.->|"transient stream"| Realtime
   Control --> Media["S3-compatible storage\nSeaweedFS、Tigris 或 AWS S3"]
 
   Control --> Lifecycle["Sandbox lifecycle + access control"]
@@ -87,14 +91,17 @@ flowchart LR
   Tunnel -->|"room.ruit.me<br/>roomtalk.ruit.me"| App["RoomTalk app container<br/>Node + Express + Socket.IO"]
   Tunnel -->|"roomtalk-objects.ruit.me"| Objects["SeaweedFS 4.29<br/>S3-compatible 对象存储"]
 
-  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + outbox"]
-  App --> Redis["Redis 7<br/>presence + Socket.IO + cache"]
+  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + dispatch intent"]
+  App --> Redis["Redis 7<br/>realtime + AOF BullMQ"]
+  Redis --> Worker["AI worker container<br/>BullMQ consumer"]
+  Worker --> Postgres
+  Worker --> Providers["AI providers"]
   App --> Objects
   App --> E2BProd["E2B<br/>每房间 execution sandbox"]
   App --> Providers["Google / GitHub / Codex / AI providers"]
 ```
 
-MacBook 长期运行五个 Compose 服务：app、PostgreSQL、Redis、SeaweedFS 和 `cloudflared`。PostgreSQL 使用 durable Docker volume，SeaweedFS 持久化到 `runtime/object-storage`，Redis 刻意保持可重建。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
+MacBook 长期运行六个 Compose 服务：app、独立 `ai-worker`、PostgreSQL、Redis、SeaweedFS 和 `cloudflared`。PostgreSQL 与 Redis 都使用 named volume；由于 Redis 现在既承载可重建的 realtime/cache key，也承载 BullMQ 运行任务，因此启用 AOF `everysec` 与 `noeviction`。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
 
 `room.ruit.me` 是主域名，`roomtalk.ruit.me` 是兼容入口。Runtime 同时 allowlist `ai-chat.wenlin.dev`，但该域名的 DNS 切换单独管理。旧 Fly app 已暂停；Supabase、Tigris 和 Upstash 仅作为临时回滚资源保留，不再接收生产写入。
 
@@ -119,7 +126,7 @@ flowchart LR
 
 连续 payload 直接应用；缺失 payload 从 `lastAppliedSeq` replay；单条 event 超限、cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。Deleted stream 直接返回最终 tombstone，不会逐页追向一个已经不存在的 snapshot。Per-room 的 `idle/replay/replace/prepend` 状态机让实时 replay 优先于分页；实时 mutation 会使在途 prepend 失效，过期 `beforeMessageId` 会 replace window。数据库恢复返回 `CURSOR_AHEAD` 时同时清除旧目标水位与 gap target，并保留 snapshot 期间的新通知。V1 payload 严格解码，坏事件返回 `EVENT_PAYLOAD_INVALID`。公共成员事件只有 `members.changed {}`，但 durable replay 会刷新页面权限；`room.deleted` / `ROOM_ACCESS_DENIED` 会真正退出旧页面。
 
-这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 会声明终态是否已经持久化：`{ persisted: true, message }` 携带同一条安全错误 after-image；`{ persisted: false }` 会立刻终止本地 placeholder，服务端用指数退避持续补写同一终态。PostgreSQL stream-owner lease 只有在原 owner 过期后才允许其他实例接管。
+这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`。普通 Chat AI 使用另一条职责清晰的路径：placeholder、`assistant_runs` 与窄化的 `task_dispatch_outbox` 同事务提交，App relay 只把 `{ runId }` 以确定性 job ID 送入 BullMQ。BullMQ 管 waiting、并发、延迟重试、stalled recovery 与运行记录；PostgreSQL 才描述 queued/running/finalizing/terminal 业务状态、不可变 Provider 结果与费用。Worker 按 generation lease claim 精确 run，旧进程接管后不能继续写 chunk 或终态；terminal payload 已落库时，重试只做 projection，不会再次调用 Provider。Worker 的瞬时 chunk 经 Redis Pub/Sub 到达每个 App，由 App 重新鉴权本机 socket 后 `io.local` 投递；丢失仍由最终 durable room event 收敛。客户端会暂存早到事件、丢弃旧 generation，并保留 optimistic message。
 
 横向进程 ownership 也已经收敛。每个 app 用唯一 runtime instance ID 与 TTL heartbeat 只拥有自己的 Redis presence；滚动启动不会清空其他活实例。Code Agent turn/sandbox 只在 fenced lease 过期后恢复，recovery/retention 通过 PostgreSQL advisory lock 保证每轮 singleton。这些边界已有两实例 presence test 和真实 PostgreSQL 17 lease/advisory-lock tests。首次引入 AI owner lease 时必须先停止所有 pre-`0006` App，因为旧 binary 不会为新表续租；跨过该边界后，ECS/EKS 才能滚动发布后续协议兼容版本。不兼容 room-event 或 lease schema 仍需维护窗口或两阶段协议。
 
@@ -150,10 +157,10 @@ docs/                             架构、runbook、方案和复盘
 环境要求：
 
 - Node.js 24.18.0 或更高版本。
-- PostgreSQL 与 Redis。PostgreSQL 是强制 durable store；Redis 只保存可重建实时/缓存状态。
+- PostgreSQL 与 Redis。PostgreSQL 是强制业务事实源；Redis 保存实时/缓存状态和 AOF-backed BullMQ 运行队列。
 - 真实 Code Agent 房间还需要 E2B 凭据和固定 template 配置。
 
-最快的完整本地运行方式是先复制 `.env.compose.example` 为 `.env.compose`，生成必需的 PostgreSQL 与 S3 凭据，再运行 `docker compose --env-file .env.compose up -d --build`。PostgreSQL 使用持久 named volume，SeaweedFS 使用配置的宿主机目录，Redis 可丢弃。生产 Mac 通过 `node scripts/local-production.mjs --profile edge up -d --build` 从 macOS Keychain 注入真实 secret。手动开发时，在 `server/.env` 中把 `DATABASE_URL` 与 `REDIS_URL` 指向本地服务。
+最快的完整本地运行方式是先复制 `.env.compose.example` 为 `.env.compose`，生成必需的 PostgreSQL 与 S3 凭据，再运行 `docker compose --env-file .env.compose up -d --build`。一次性 `migrate` 成功后，同一镜像分别启动 App 与 `ai-worker`；PostgreSQL 和 Redis 使用持久 named volume，SeaweedFS 使用配置的宿主机目录。生产 Mac 通过 `node scripts/local-production.mjs --profile edge up -d --build` 从 macOS Keychain 注入真实 secret。手动开发时，在 `server/.env` 中配置 `DATABASE_URL`、`REDIS_URL` 和可选的 `QUEUE_REDIS_URL`，然后分别启动 App 与 `npm run start:ai-worker`。
 
 安装依赖并创建本地配置：
 
@@ -212,7 +219,7 @@ npm run test:e2e:postgres
 | 范围 | 示例 |
 | --- | --- |
 | HTTP 与 origin | `PORT`、`CLIENT_URL`、`CLIENT_URLS`、`NODE_ENV` |
-| 持久/实时存储 | `PERSISTENCE_STORE`、`DATABASE_URL`、`REDIS_URL`、PostgreSQL TLS、message cache TTL |
+| 持久/实时/队列 | `PERSISTENCE_STORE`、`DATABASE_URL`、`REDIS_URL`、`QUEUE_REDIS_URL`、PostgreSQL TLS、message cache 与 BullMQ 参数 |
 | 普通 Chat AI | Provider API key、默认模型、OpenRouter 路由 metadata |
 | 媒体与 artifact | `MEDIA_STORAGE_MODE`；S3-compatible bucket、endpoint、region 与凭据；文件系统模式只保留为开发 fallback |
 | 可选服务 | Google OAuth、AssemblyAI、Web Push VAPID |
@@ -227,7 +234,7 @@ npm run test:e2e:postgres
 `CompositeRoomStore` 分离持久与实时职责：
 
 - Runtime 启动强制要求 `PERSISTENCE_STORE=postgres` 与 `DATABASE_URL`。PostgreSQL 保存 canonical record 和有界 room-event replay log。
-- Redis 负责可重建的 presence、socket session、pub/sub、counter 和短 TTL message cache；Redis 仍必需，但不再是 durable authority。
+- Redis 负责可重建的 presence、socket session、pub/sub、counter、短 TTL message cache，以及 BullMQ 的运行队列。它不是业务事实源，但 active job 通过 AOF 保存，不能再按 disposable cache 处理。
 - `migrate:redis-to-postgres` 只保留为旧 Redis durable snapshot 的可重复、支持 dry-run 的 importer，不是受支持 serving mode 或回滚目标。
 - 本地 Compose 运行 SeaweedFS 4.29 作为私有 S3-compatible 服务；Fly 使用 Tigris、AWS 使用 S3，三者共用同一套 SDK/配置边界。文件系统 adapter 只保留为开发或恢复 fallback。
 
@@ -239,13 +246,13 @@ npm run test:e2e:postgres
 
 ## AWS 可迁移性
 
-当前部署刻意保持可迁移，但迁移仍是受控的数据切换，不是“一键换宿主机”。App 是单一容器镜像，durable state 隔离在 PostgreSQL，Redis 可重建，全部媒体使用 S3 API。
+当前部署刻意保持可迁移，但迁移仍是受控的数据切换，不是“一键换宿主机”。App 与 Worker 共享同一镜像，业务状态隔离在 PostgreSQL，运行任务位于 BullMQ/Redis，全部媒体使用 S3 API。
 
 | 当前边界 | AWS 映射 | 迁移合约 |
 | --- | --- | --- |
 | App container + Cloudflare Tunnel | ALB 后的 ECS Fargate；EKS 可选 | 运行同一个根镜像，通过 ECS 与 Secrets Manager 注入环境变量和 secret。Cloudflare 可以继续放在 AWS origin 前，也可以换成 Route 53/CloudFront。 |
 | PostgreSQL 17 | RDS PostgreSQL 或 Aurora PostgreSQL | 维护窗口方案使用 `pg_dump` 恢复；数据规模要求更短停写时使用 logical replication 或 AWS DMS。 |
-| Redis 7 | ElastiCache for Valkey/Redis OSS | 直接以空实例启动并自然预热，因为 Redis 不承载 authoritative business state。 |
+| Redis 7 | ElastiCache for Redis OSS | 切换前恢复或排空 BullMQ job；realtime/cache key 可自然预热。以后只需设置 `QUEUE_REDIS_URL` 就能迁到独立 replication group。 |
 | SeaweedFS S3 | Amazon S3 | 保持 bucket object key 不变，使用现有幂等 `migrate:s3-to-s3` 工具复制并逐对象校验。 |
 | E2B sandbox | E2B 保持不变 | 保持固定 template/artifact，只更新 RoomTalk control-plane origin 与 scoped callback URL。 |
 

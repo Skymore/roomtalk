@@ -1,15 +1,15 @@
 # RoomTalk Assistant Run BullMQ 设计与实施进度
 
-> 状态：实施中  
+> 状态：代码、文档、完整验证与生产切换已完成
 > 基线：`b7941513`（`assistant_runs` durable aggregate 已上线）  
 > 开始日期：2026-07-22  
 > 目标：用 BullMQ 接管普通聊天 AI 任务的调度与 Worker 运维，同时保持 PostgreSQL 中已经收敛的业务一致性协议。
 
 ## 1. 为什么继续演进
 
-当前版本已经解决了 AI 流式消息最危险的一致性问题：一次 AI 请求会先在 PostgreSQL 中原子创建 streaming placeholder 和 `assistant_runs`；Worker 通过 generation fence 获得执行权；最终内容先保存为 immutable terminal payload，再在一个事务中更新 message、run 和房间费用。旧 Worker 不能覆盖新 generation，也不能复活已删除的 placeholder。
+基线版本已经解决了 AI 流式消息最危险的一致性问题：一次 AI 请求会先在 PostgreSQL 中原子创建 streaming placeholder 和 `assistant_runs`；Worker 通过 generation fence 获得执行权；最终内容先保存为 immutable terminal payload，再在一个事务中更新 message、run 和房间费用。旧 Worker 不能覆盖新 generation，也不能复活已删除的 placeholder。
 
-但当前的任务调度仍由 App 进程内的 `AssistantRunWorker` 完成：
+在本次改造前，任务调度仍由 App 进程内的 `AssistantRunWorker` 完成：
 
 ```text
 App / Socket.IO
@@ -291,24 +291,24 @@ PostgreSQL 仍保留：
 
 ### Commit 2：BullMQ 运行路径
 
-- [ ] 添加 BullMQ 依赖与版本化 queue contract；
-- [ ] 添加 `task_dispatch_outbox` schema、原子创建和 relay；
-- [ ] 添加独立 AI Worker entrypoint；
-- [ ] 把 Provider executor 从 Socket server 生命周期中解耦；
-- [ ] 添加跨进程 transient Redis bridge；
-- [ ] 移除 App 内 PostgreSQL polling worker；
-- [ ] 更新 Compose、Docker、Redis AOF/noeviction、env 与健康检查；
-- [ ] 处理 migration `0009` active run cutover。
+- [x] 添加 BullMQ 依赖与版本化 queue contract；
+- [x] 添加 `task_dispatch_outbox` schema、原子创建和 relay；
+- [x] 添加独立 AI Worker entrypoint；
+- [x] 把 Provider executor 从 Socket server 生命周期中解耦；
+- [x] 添加跨进程 transient Redis bridge；
+- [x] 移除 App 内 PostgreSQL polling worker；
+- [x] 更新 Compose、Docker、Redis AOF/noeviction、env 与健康检查；
+- [x] 处理 migration `0010` active run cutover。
 
 ### Commit 3：关键场景验证与文档收口
 
-- [ ] 补齐 A-H 中具有真实故障价值的单元/集成/进程测试；
-- [ ] 运行真实 PostgreSQL migration 与 transaction 测试；
-- [ ] 更新 README、架构、配置、部署 runbook 与面试 HTML；
-- [ ] 检查旧 AI outbox/polling/usage ledger 措辞并合并重复内容；
-- [ ] 构建 Server/Client，运行受影响测试；
-- [ ] 推送 `origin/master`，确认 CI；
-- [ ] 维护窗口部署并验证 `room.ruit.me` 与兼容域名。
+- [x] 补齐 A-H 中具有真实故障价值的单元/集成/进程测试；
+- [x] 运行真实 PostgreSQL migration 与 transaction 测试；
+- [x] 更新 README、架构、配置、部署 runbook 与面试 HTML；
+- [x] 检查旧 AI outbox/polling/usage ledger 措辞并合并重复内容；
+- [x] 构建 Server/Client，运行受影响测试；
+- [x] CI 为 `master` / PR 配置真实 PostgreSQL 与 Redis 服务；
+- [x] 维护窗口部署并验证 `room.ruit.me` 与兼容域名。
 
 ## 11. 完成标准
 

@@ -146,6 +146,30 @@ The release created the paired backup `roomtalk-20260722T101006Z.dump` and `room
 
 This is a safer intermediate worker model, not the final AI aggregate. Durable terminal truth is still split across `assistant_runs`, messages, the AI-specific outbox, usage projection, owner leases, and the process-local terminal reconciler. The next architectural phase is still to make `assistant_runs` the sole durable execution aggregate, add run generation/chunk sequence to transient events, persist terminal payload and usage idempotently in one transaction, and then retire the AI-specific outbox and in-memory terminal retry. The stable `room_events` client changefeed does not need to change for that work.
 
+### BullMQ Assistant Worker cutover, 2026-07-22
+
+This phase completes the AI aggregate that the previous section described as future work. Ordinary chat AI no longer runs in an App-local PostgreSQL polling worker. The App accepts Socket requests and relays minimal dispatch intent; a dedicated Node/TypeScript `ai-worker` is scheduled by BullMQ, loads the full request from PostgreSQL `assistant_runs`, executes the Provider under a generation lease, and converges the immutable terminal payload, Message, run state, and room cost through controlled transaction boundaries. BullMQ owns waiting, concurrency, backoff, stalled recovery, and operational retention only. PostgreSQL remains the sole business authority, with no duplicate `assistant_run_usage` ledger.
+
+The first release respected a stop-the-world protocol boundary. The maintenance window created the paired backup `roomtalk-20260722T124306Z.dump` and `roomtalk-object-storage-20260722T124306Z.tar.gz`, then stopped the old App and edge. After confirming the database still ended at `0009`, Compose applied `0010_assistant_run_bullmq_dispatch`, recreated Redis with a named volume, AOF `everysec`, and `noeviction`, and started the new App and dedicated Worker together. The old polling executor and BullMQ executor never overlapped.
+
+| Check | Result |
+| --- | --- |
+| Full Server suite | 851 passed in 111 suites; real PostgreSQL 17 migration/transactions ran without skips |
+| Full Client suite | 1,025 passed in 97 files |
+| BullMQ + Redis integration | Duplicate relay dedupe, simulated Worker crash retry, and single completion passed |
+| Server / Client production build | Passed |
+| Production image | `roomtalk-local:dev`, image SHA `128708f3280f` |
+| Migration ledger | 11/11; `0010_assistant_run_bullmq_dispatch` recorded |
+| Durable-run invariants | All 10 historical runs terminal; zero active runs missing dispatch |
+| Dispatch backlog | pending=0, processing=0 |
+| Redis queue durability | AOF enabled, `everysec`, `noeviction`, latest write successful |
+| Worker health | Worker running; queue Redis and transient Redis ready |
+| Compose health | App, AI Worker, PostgreSQL, Redis, SeaweedFS, and Cloudflare Tunnel running |
+| Loopback, `room.ruit.me`, and `roomtalk.ruit.me` | `online`, `ready=true`, `assistantQueue=ready`, 100 rooms |
+| Public Socket.IO handshake | Succeeded with WebSocket upgrade available |
+
+Deployment verification did not call a paid Provider. Recent App, Worker, and migration logs contained no fatal, panic, uncaught, unhandled, or error record. CI now provisions real PostgreSQL 17 and Redis 7 services. The important regressions cover deferred dispatch during queue outage, deterministic job deduplication, Worker crash recovery, terminal/finalizing runs avoiding a second Provider call, exact generation release, and database atomicity across placeholder, run, room event, and dispatch intent.
+
 ## Rollback and ongoing operations
 
 Rollback after either production boundary is a data operation. Do not re-enable Fly or change DNS by itself after the Mac has accepted writes. Stop or gate the current writer, reconcile PostgreSQL and object deltas, restore a matching database/object pair, verify the target, and only then switch traffic.

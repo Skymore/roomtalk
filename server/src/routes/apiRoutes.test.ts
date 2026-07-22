@@ -195,6 +195,7 @@ async function createTestServer(overrides: {
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
   codeAgentAccess?: Parameters<typeof registerApiRoutes>[1]['codeAgentAccess'];
   socketAdapterReady?: Parameters<typeof registerApiRoutes>[1]['socketAdapterReady'];
+  assistantQueueHealth?: Parameters<typeof registerApiRoutes>[1]['assistantQueueHealth'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -554,6 +555,7 @@ async function createTestServer(overrides: {
     io: io as any,
     redisClient: redisClient as any,
     socketAdapterReady: overrides.socketAdapterReady,
+    assistantQueueHealth: overrides.assistantQueueHealth,
     routeLogger: routeLogger as any,
     getAIModelResponse: () => ({
       defaultModel: 'gpt-5.5',
@@ -2208,6 +2210,24 @@ describe('API routes', () => {
       assert.equal(payload.dependencies.redis, 'ready');
     } finally {
       await adapterFailureServer.close();
+    }
+  });
+
+  it('keeps the API ready and reports deferred dispatch while BullMQ Redis is unavailable', async () => {
+    const queueFailureServer = await createTestServer({
+      assistantQueueHealth: async () => { throw new Error('queue redis unavailable'); },
+    });
+    try {
+      const response = await fetch(`${queueFailureServer.baseUrl}/api/health/ready`);
+      assert.equal(response.status, 200);
+      const payload = await response.json() as any;
+      assert.equal(payload.ready, true);
+      assert.equal(payload.status, 'degraded');
+      assert.equal(payload.dependencies.assistantQueue, 'unavailable');
+      assert.equal(payload.assistantQueue.dispatch, 'deferred');
+      assert.equal(payload.rooms, 1);
+    } finally {
+      await queueFailureServer.close();
     }
   });
 

@@ -3,7 +3,7 @@
 [English](README.md)
 
 状态：当前索引
-更新：2026-07-21
+更新：2026-07-22
 
 本索引将当前事实源、runbook、子系统参考、工程复盘、已完成方案和报告分开。历史文档仍是一等工程证据；它们的原始日期和决策会被保留。
 
@@ -29,6 +29,7 @@
 | 主题 | English | 中文 |
 | --- | --- | --- |
 | 房间可靠性与同步协议 | [Architecture](room-reliability-architecture.md) | [架构](room-reliability-architecture.zh.md) |
+| 普通 Chat AI 与 BullMQ | [Design and progress](assistant-run-bullmq-design-progress.md) | [设计与进度](assistant-run-bullmq-design-progress.zh.md) |
 | Code Agent runtime | [Architecture](code-agent-runtime-architecture.md) | [架构](code-agent-runtime-architecture.zh.md) |
 | E2B sandbox artifact | [Artifact contract](code-agent-sandbox-artifact.md) | [Artifact 合约](code-agent-sandbox-artifact.zh.md) |
 | Sandbox daemon | [Runtime and protocol](sandbox-daemon-plan.md) | [运行时与协议](sandbox-daemon-plan.zh.md) |
@@ -43,6 +44,7 @@
 | 工程主线 | English | 中文 |
 | --- | --- | --- |
 | 房间事件与自托管切换 | [Evidence ledger](room-event-sync-portable-deployment-progress.md) | [证据账本](room-event-sync-portable-deployment-progress.zh.md) |
+| BullMQ assistant-run 切换 | [Design and progress](assistant-run-bullmq-design-progress.md) | [设计与进度](assistant-run-bullmq-design-progress.zh.md) |
 
 ## 操作与 Runbook
 
@@ -78,7 +80,7 @@
 | Workspace UI | [Plan](code-agent-workspace-ui-plan.md) | [方案](code-agent-workspace-ui-plan.zh.md) |
 | Identity 与 permission | [Plan](identity-code-agent-permission-plan.en.md) | [方案](identity-code-agent-permission-plan.md) |
 | Static-publish requirements | [Requirements](code-agent-static-publish-requirements.md) | [需求](code-agent-static-publish-requirements.zh.md) |
-| AI-run outbox worker | [Migration plan](ai-run-outbox-worker-migration-plan.md) | [迁移方案](ai-run-outbox-worker-migration-plan.zh.md) |
+| 原 AI-run outbox worker | [已被替代的迁移方案](ai-run-outbox-worker-migration-plan.md) | [已被替代的迁移方案](ai-run-outbox-worker-migration-plan.zh.md) |
 | PostgreSQL persistence | [Completed plan](postgres-persistence-plan.en.md) | [已完成方案](postgres-persistence-plan.md) |
 | PostgreSQL test coverage | [Coverage plan](postgres-test-coverage-plan.md) | [测试方案](postgres-test-coverage-plan.zh.md) |
 | E2E user flows | [Plan](e2e-user-flows-plan.md) | [方案](e2e-user-flows-plan.zh.md) |

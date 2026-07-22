@@ -61,7 +61,7 @@ npm run test:e2e:postgres
 
 ## 持久化改动
 
-新 runtime durable operation 必须进入共享 store contract，并优先在 PostgreSQL 实现；只有 import/migration 路径仍需要时才继续对齐旧 Redis 实现。PostgreSQL 拥有 durable state 与 room-event replay，Redis 只保存可重建 realtime/cache 状态。Schema、event emission、retention、迁移、回滚与 cache invalidation 必须一起审查。
+新 runtime durable operation 必须进入共享 store contract，并优先在 PostgreSQL 实现；只有 import/migration 路径仍需要时才继续对齐旧 Redis 实现。PostgreSQL 拥有业务状态与 room-event replay；Redis 拥有 realtime/cache 与 BullMQ 运维调度。Queue state 不是业务事实，但 active job 需要 AOF/no-eviction。Schema、event emission、dispatch、retention、迁移、回滚与 cache invalidation 必须一起审查。
 
 ## 安全与凭据
 

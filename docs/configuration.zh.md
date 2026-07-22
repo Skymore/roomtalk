@@ -3,7 +3,7 @@
 [English](configuration.md)
 
 状态：当前
-更新：2026-07-21
+更新：2026-07-22
 事实源：`server/.env.example`、`.env.compose.example`、`compose.yaml`、runtime config loader 和 `scripts/local-production.mjs`
 
 本文只整理 operator-facing 配置。Test-only 变量和每轮注入 sandbox 的 `ROOMTALK_*` 变量刻意不列入。
@@ -23,7 +23,8 @@
 
 | 变量 | 用途 |
 | --- | --- |
-| `REDIS_URL` | 可重建实时与 cache 状态所需的 Redis。 |
+| `REDIS_URL` | Realtime/cache、Socket.IO 与 Worker transient event 使用的 Redis。 |
+| `QUEUE_REDIS_URL` | BullMQ 连接；默认回退 `REDIS_URL`，以后可只改配置迁到独立 Redis。 |
 | `PERSISTENCE_STORE` | 必须为 `postgres`；其他值会启动失败。 |
 | `DATABASE_URL` | 必需的 PostgreSQL durable-store URL。 |
 | `MIGRATION_DATABASE_URL` | 仅供 `migrate:schema` 使用的可选 owner/DDL URL；本地 Compose 默认回退 `DATABASE_URL`。 |
@@ -37,9 +38,9 @@
 | `ROOM_EVENT_PRUNE_INTERVAL_MS` | Event prefix 清理间隔，默认 `3600000`（一小时）。 |
 | `ROOM_EVENT_FAST_PATH_MAX_BYTES` | Socket 通知携带已提交 RoomEvent 的最大序列化字节，默认 `262144`；超限退化为只带 `headSeq` 的 hint。 |
 
-唯一受支持的 serving model 是 PostgreSQL durable state + Redis realtime/cache state。Redis 运行时仍必需，但允许清空并重建，不能作为 durable fallback。旧 Redis store 只保留给 import 与 contract coverage。
+唯一受支持的 serving model 是 PostgreSQL 业务状态 + Redis realtime/调度。`assistant_runs` 的业务生命周期和结果只以 PostgreSQL 为准。Realtime/cache key 可以重建，但 active BullMQ job 是需要 AOF `everysec` 与 `noeviction` 保护的运行状态；任务运行时不能随意 flush queue Redis。旧 Redis durable store 只保留给 import 与 contract coverage。
 
-`room_event_streams` 与 `room_events` 是客户端同步边界。规范 mutation 与安全的 `schemaVersion: 1` after-image 同事务提交。`NOTIFY` 只是 hint：每个 app 读取精确的不可变事件，再用 `io.local` 发送，通常在 `room_event_available` 中直接携带 event；客户端只直接应用连续 fast path，否则从 `lastAppliedSeq` 补拉。Listener re-LISTEN 会向本机发 `room_sync_required`。保留窗口内落后超过 500 个事件会直接切 repeatable-read snapshot，较小 gap 默认按每页 100 events / 256 KiB 读取。`CURSOR_AHEAD` 会在 reset snapshot 前清除旧目标水位，但不会丢掉请求期间到达的新通知。Event log 有界，不是完整 Event Sourcing，也不是 AI job queue；`outbox_events` 仍是独立的单 Worker claim/retry 机制，临时 Socket event 不消耗 room seq。已持久化 AI error Message 可以通过 `ai_stream_error` 走 fast path，但正文必须与 durable after-image 完全一致。
+`room_event_streams` 与 `room_events` 是客户端同步边界。规范 mutation 与安全的 `schemaVersion: 1` after-image 同事务提交。`NOTIFY` 只是 hint：每个 app 读取精确不可变事件后以 `io.local` 发送；客户端只直接应用连续 fast path，否则从 `lastAppliedSeq` 补拉。保留窗口内落后超过 500 个事件会切 repeatable-read snapshot，`CURSOR_AHEAD` 会清除旧水位但保留请求期间的新通知。Event log 有界，不是完整 Event Sourcing，也不是 AI queue。普通 Chat AI 会把 placeholder、`assistant_runs` 与 `task_dispatch_outbox` 同事务提交，再由 BullMQ 调度一个 Worker；临时 Socket event 不消耗 room seq。
 
 生产已于 2026-07-21 在所有旧 app 停止的维护窗口执行不可变事件 migration `0003` 和 `0004`。
 
@@ -133,14 +134,32 @@ Scoped capability：
 
 不要继续为已废弃 Codex CLI 路径增加产品能力。`codex-app-server` 是受支持 backend。
 
-## Worker 与 Observability
+## Assistant Queue、Worker 与 Observability
 
-`OUTBOX_WORKER_ENABLED` 选择 durable AI-run outbox 路径。`OUTBOX_WORKER_BATCH_SIZE` 默认是 `1`：当前 executor 串行运行，而且只有正在执行的任务续租；提前 claim 更大的 batch 会让排队中的 claim 过期并可能重复执行。未来要提高并发，必须从 claim 时刻起为每条已占有任务续租。Poll interval、lock duration、retry delay 和 maximum attempts 由其他 `OUTBOX_WORKER_*` 变量控制。`LOG_FILE_ENABLED` 控制可选文件日志；生产日志应保持结构化且不含 secret。
+App 与 `ai-worker` 使用同一镜像、不同进程。App 只提交业务事务与 dispatch intent，再 relay 到 BullMQ；只有 `ai-worker` 会调用普通 Chat AI Provider。Queue payload 只有版本号与 `runId`，prompt、terminal output、usage 和业务状态留在 PostgreSQL。
+
+| 变量 | 用途 |
+| --- | --- |
+| `ASSISTANT_RUN_QUEUE_NAME` | 可选 BullMQ namespace；所有 App/Worker 必须一致。 |
+| `ASSISTANT_RUN_DISPATCH_POLL_INTERVAL_MS` | PostgreSQL dispatch relay 轮询间隔，默认 `1000`。 |
+| `ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS` | Redis enqueue 失败后的重试延迟，默认 `5000`。 |
+| `ASSISTANT_RUN_DISPATCH_LOCK_MS` | 带 fence 的 dispatch claim 时长，默认 `60000`。 |
+| `ASSISTANT_RUN_DISPATCH_BATCH_SIZE` | 每 tick 最大 relay 数，默认 `20`。 |
+| `ASSISTANT_RUN_WORKER_CONCURRENCY` | 单个 Worker 进程并发 job 数，默认 `2`。 |
+| `ASSISTANT_RUN_WORKER_LEASE_MS` | Provider 执行期间续租的 PostgreSQL run owner lease，默认 `60000`。 |
+| `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | `assistant_runs` 记录的 domain claim 上限，默认 `10`。 |
+| `ASSISTANT_RUN_QUEUE_ATTEMPTS` | BullMQ infrastructure attempt 上限，默认 `12`。 |
+| `ASSISTANT_RUN_QUEUE_BACKOFF_MS` | BullMQ 指数退避基准，默认 `5000`。 |
+| `ASSISTANT_RUN_QUEUE_LOCK_MS` | BullMQ active job lock，默认 `60000`。 |
+| `ASSISTANT_RUN_QUEUE_*_RETENTION_*` | 可选 completed/failed job 的 age/count 运维保留上限。 |
+| `AI_WORKER_HEALTH_PORT` | Worker 专用 health endpoint；Compose 使用 `3013`。 |
+
+Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 pending，relay 恢复后继续投递；App 会报告 `degraded` 与 deferred dispatch，而不是丢请求。BullMQ retry 用于基础设施中断；已经持久化的 Provider error 是业务终态，不会无限重试。`LOG_FILE_ENABLED` 控制可选文件日志，生产日志必须结构化且不包含 secret。
 
 ## PostgreSQL Schema 生命周期
 
 - `npm run migrate:schema` 是唯一受支持的 schema writer；容器内编译命令是 `npm run migrate:schema:compiled`。
-- Compose 在 `app` 前运行一次性 `migrate` service；Kubernetes/AWS 应映射为 pre-deploy Job，而不是让每个 App 启动时改表。
+- Compose 在 `app` 与 `ai-worker` 前运行一次性 `migrate` service；Kubernetes/AWS 应映射为 pre-deploy Job，而不是让每个进程启动时改表。
 - `schema_migrations` 为每个 immutable migration 保存 SHA-256 checksum；缺失或改写都会让部署失败。
 - `POSTGRES_SCHEMA_SQL` 冻结为 `0000` bootstrap；以后只能新增 `POSTGRES_MIGRATIONS`，不能编辑已应用项。
 - App 启动只执行只读 `verifySchema()`；漏跑 migration job 时拒绝 readiness。
@@ -151,7 +170,7 @@ Scoped capability：
 - 非 secret Compose interpolation 放在 ignored `.env.compose`；真实 PostgreSQL、S3、provider、OAuth、E2B、Codex 与 GitHub credential 都不能提交。
 - `server/.env` 保持 ignored 且只在本地使用。
 - 生产 E2B 必须同时对齐 template、artifact version、source ref、runner dependency 和 smoke 证据。
-- 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效。该命令先运行 migration job，再替换 App；随后验证 Compose health、loopback 与公网 `/api/status`。
-- `/api/health/live` 只用于进程 liveness；`/api/health/ready` 与 `/api/status` 会验证 PostgreSQL schema 读取、Redis `PING`、对象存储 bucket 和 Socket adapter。依赖不可用时返回 `503 degraded` 与 `rooms: null`。
-- `local-production.mjs` 会在 detached startup 后自动验证五个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH` 与 `ROOMTALK_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
+- 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效。该命令先运行 migration job，再替换 App 与 Worker；随后验证 Compose health、Worker health、loopback 与公网 `/api/status`。
+- `/api/health/live` 只用于进程 liveness；`/api/health/ready` 与 `/api/status` 会验证 PostgreSQL schema、realtime Redis、对象存储和 Socket adapter。Serving dependency 不可用时返回 `503` 与 `rooms: null`；只有 queue 不可用时，App 仍 ready 但状态为 `degraded`，因为 PostgreSQL 能安全延迟 dispatch。
+- `local-production.mjs` 会在 detached startup 后自动验证六个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH` 与 `ROOMTALK_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
 - 旧 Fly GitHub Actions workflow 已手工禁用，只保留为回滚历史，不再拥有当前部署。

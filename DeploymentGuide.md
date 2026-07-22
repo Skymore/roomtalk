@@ -3,16 +3,17 @@
 [中文](部署指南.md)
 
 Status: Current production runbook
-Updated: 2026-07-21
+Updated: 2026-07-22
 Production: [https://room.ruit.me/](https://room.ruit.me/)
 
 ## Production Shape
 
-RoomTalk production currently runs on a MacBook as five long-lived Docker Compose services:
+RoomTalk production currently runs on a MacBook as six long-lived Docker Compose services:
 
 - `app`: the root multi-stage application image, binding Node/Express/Socket.IO to loopback port `3012`;
+- `ai-worker`: the same image running the BullMQ consumer and ordinary chat AI providers, with a private health endpoint on `3013`;
 - `postgres`: PostgreSQL 17, the only durable serving authority, using the `postgres_data` Docker volume;
-- `redis`: Redis 7 for Socket.IO, presence, sessions, and bounded caches; persistence is intentionally disabled;
+- `redis`: Redis 7 for Socket.IO, presence, sessions, bounded caches, transient Worker events, and BullMQ; a named volume plus AOF `everysec` and `noeviction` protect active jobs;
 - `object-storage`: SeaweedFS 4.29 exposing an S3-compatible API, persisted under `runtime/object-storage`;
 - `cloudflared`: the outbound Cloudflare Tunnel that provides public DNS/TLS without exposing inbound host ports.
 
@@ -52,7 +53,7 @@ The application image and the pinned E2B artifact are separate releases. A norma
    curl -fsS https://room.ruit.me/api/status
    ```
 
-   `/api/health/live` is process liveness and intentionally ignores downstream failures. Compose and Kubernetes readiness use `/api/health/ready`: it verifies that PostgreSQL can read the RoomTalk schema, Redis answers `PING`, object storage accepts a bucket probe, and the Socket adapter exists. A dependency failure returns `503 degraded` with `rooms: null`; do not interpret it as an empty installation. After a detached `up`, `local-production.mjs` waits for the four stateful/App services plus Cloudflare Tunnel, checks loopback and public readiness, and reports host free space plus allocated `Docker.raw` space. `ROOMTALK_MIN_HOST_FREE_GB` and `ROOMTALK_DOCKER_RAW_WARN_GB` override the 20 GiB and 50 GiB warning thresholds.
+   `/api/health/live` is process liveness and intentionally ignores downstream failures. Compose and Kubernetes readiness use `/api/health/ready`: it verifies PostgreSQL, realtime Redis, object storage, and the Socket adapter. A serving failure returns `503 degraded` with `rooms: null`; queue-only failure remains ready but reports deferred dispatch because PostgreSQL can retain the request. The Worker separately checks PostgreSQL, queue Redis, transient Redis, and its processing loop. After a detached `up`, `local-production.mjs` waits for the five local App/Worker/stateful services plus Cloudflare Tunnel, checks loopback and public readiness, and reports host free space plus allocated `Docker.raw` space.
 
 6. Run a risk-based user smoke. Room-event, media, OAuth/connection, and E2B changes require checks at those actual boundaries.
 
@@ -74,11 +75,11 @@ The full operator-facing variable inventory is in [docs/configuration.md](docs/c
 
 ## Durable State and Room Event Sync
 
-PostgreSQL owns canonical rooms, messages, members, turns, auth/account data, media metadata, `room_event_streams`, `room_events`, and `outbox_events`. Redis may be flushed and warmed again without losing business state.
+PostgreSQL owns canonical rooms, messages, members, turns, auth/account data, media metadata, `room_event_streams`, `room_events`, `assistant_runs`, and `task_dispatch_outbox`. Redis is not the business authority, but it cannot be flushed while BullMQ jobs are active; realtime/cache keys remain rebuildable.
 
-`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, an app with local subscribers reads the exact immutable event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; an oversized event or read failure falls back to a head-only hint. Clients replay smaller gaps and switch an individually oversized event or a gap above 500 events to a repeatable-read snapshot. Deleted streams return their final tombstone directly. Live replay invalidates older pagination, and stale `beforeMessageId` boundaries rebuild the window. `outbox_events` remains a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with singleton hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, an app with local subscribers reads the exact immutable event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; an oversized event or read failure falls back to a head-only hint. Clients replay smaller gaps and use a repeatable-read snapshot for large/oversized gaps. Ordinary chat AI commits placeholder, run, room event, and dispatch intent together; the App relays a minimal deterministic job to BullMQ, while `assistant_runs` remains the only business status/result source. See [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md) and [Assistant Runs and BullMQ](docs/assistant-run-bullmq-design-progress.md).
 
-Every app process owns only its Redis presence through a unique runtime ID and TTL heartbeat. Periodic recovery cleans expired owners, excludes Code Agent work protected by a live fenced lease, and recovers AI placeholders only after their PostgreSQL stream-owner lease expires. Immediate AI terminal-write failures are retried in process with exponential backoff. Recovery and retention use PostgreSQL advisory locks. Introducing migration `0006` still requires a maintenance cutover because a pre-`0006` process does not write the new owner heartbeat and would look dead to a new process. Once all replicas understand the lease contract, later compatible releases may roll without one startup clearing another replica's state. Incompatible event or lease protocols still require a maintenance window or two-phase migration.
+Every App process owns only its Redis presence through a unique runtime ID and TTL heartbeat. Periodic recovery cleans expired owners and excludes Code Agent work protected by a live fenced lease. The dedicated AI Worker claims exact assistant-run generations and renews PostgreSQL leases. Terminal payload is staged before projection, so a retry after a partial failure does not call the Provider again. Recovery and retention use PostgreSQL advisory locks. Migration `0010` is a maintenance cutover because the old embedded polling executor and the new BullMQ Worker must never claim the same active run.
 
 AI text chunks remain transient. An AI error is persisted as a complete Message before `ai_stream_error` carries that same Message as a fast path. This keeps Socket-first, room-event-first, and error-before-placeholder delivery deterministic.
 
@@ -92,11 +93,11 @@ Run the paired maintenance backup only in an announced maintenance window:
 node scripts/backup-local-production.mjs
 ```
 
-This command has no help or dry-run mode. Invoking it immediately stops `cloudflared`, `app`, and `object-storage`, writes a PostgreSQL custom archive plus a matching SeaweedFS tarball under `backups/`, and then restarts the services in a `finally` path.
+This command has no help or dry-run mode. Invoking it immediately stops `cloudflared`, `app`, `ai-worker`, and `object-storage`, writes a PostgreSQL custom archive plus a matching SeaweedFS tarball under `backups/`, and then restarts those services in a `finally` path.
 
 After every backup:
 
-- confirm all five services are healthy and public `/api/status` is online;
+- confirm all six services are healthy and public `/api/status` is online;
 - keep the database dump and object snapshot as one timestamped pair;
 - copy encrypted artifacts off the Mac;
 - periodically restore both artifacts into isolated targets and compare database/object counts.
@@ -120,7 +121,7 @@ See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 
 ### Control plane
 
-- All five Compose services report healthy/running.
+- All six Compose services report healthy/running, including the dedicated `ai-worker`.
 - Loopback and public `/api/status` return `status: "online"`, `ready: true`, `persistenceStore: "postgres"`, ready PostgreSQL/Redis/media dependencies, and a ready socket adapter.
 - `room.ruit.me` and `roomtalk.ruit.me` serve the intended application; the object hostname accepts only signed object operations.
 - No startup errors appear for PostgreSQL schema/event listeners, Redis, object storage, workers, or Socket.IO.
@@ -159,10 +160,11 @@ Read-only checks:
 ```bash
 node scripts/local-production.mjs --profile edge ps
 node scripts/local-production.mjs --profile edge logs --tail=200 app
+node scripts/local-production.mjs --profile edge logs --tail=200 ai-worker
 node scripts/local-production.mjs --profile edge logs --tail=200 cloudflared
 curl -fsS https://room.ruit.me/api/status
 ```
 
-Long-running containers use Docker JSON log rotation of 10 MB per file and five files. Database-backed observability, turn, event, and outbox records are not affected by that process-log limit.
+Long-running containers use Docker JSON log rotation of 10 MB per file and five files. Database-backed observability, turn, event, run, and dispatch records are not affected by that process-log limit.
 
-For AWS migration, keep the same image and contracts: app to ECS Fargate or EKS, PostgreSQL to RDS/Aurora, Redis to ElastiCache, and SeaweedFS objects to S3. Follow the controlled cutover in [the top-level AWS portability section](README.md#aws-portability); a true zero-downtime move additionally needs PostgreSQL logical replication/CDC or AWS DMS.
+For AWS migration, run the same image as separate App and Worker ECS services or EKS deployments, PostgreSQL on RDS/Aurora, BullMQ/realtime on ElastiCache for Redis OSS, and SeaweedFS objects on S3. `QUEUE_REDIS_URL` can split scheduling from realtime later. Follow the controlled cutover in [the top-level AWS portability section](README.md#aws-portability).

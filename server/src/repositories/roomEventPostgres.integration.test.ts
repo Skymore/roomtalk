@@ -864,6 +864,103 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.000015);
   });
 
+  it('commits queue dispatch with the placeholder and safely retries a failed Redis enqueue', async () => {
+    const roomId = 'assistant-run-dispatch-room';
+    const messageId = 'assistant-run-dispatch-message';
+    const runId = 'assistant-run-dispatch';
+    const initialTime = '2026-07-22T00:00:00.000Z';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const placeholder = message(roomId, messageId, {
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+      aiModel: assistantMessageModel,
+    });
+    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+      id: runId,
+      roomId,
+      requestedByClientId: 'event-test-owner',
+      aiMessageId: messageId,
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt: initialTime,
+      queuedAt: initialTime,
+      updatedAt: initialTime,
+      requestPayload: assistantRequest(roomId),
+      generation: 0,
+      attempt: 0,
+      availableAt: initialTime,
+    }));
+
+    const durable = await pool.query<{ message_count: string; run_count: string; dispatch_count: string }>(
+      `SELECT
+        (SELECT COUNT(*) FROM room_messages WHERE id = $1) AS message_count,
+        (SELECT COUNT(*) FROM assistant_runs WHERE id = $2) AS run_count,
+        (SELECT COUNT(*) FROM task_dispatch_outbox WHERE run_id = $2 AND status = 'pending') AS dispatch_count`,
+      [messageId, runId],
+    );
+    assert.deepEqual(durable.rows.map(row => [
+      Number(row.message_count),
+      Number(row.run_count),
+      Number(row.dispatch_count),
+    ]), [[1, 1, 1]]);
+
+    const first = await store.claimTaskDispatches({
+      workerId: 'relay-1',
+      now: initialTime,
+      lockMs: 1_000,
+    });
+    assert.equal(first.length, 1);
+    assert.equal(first[0].runId, runId);
+    assert.equal(first[0].attempts, 1);
+    assert.equal((await store.claimTaskDispatches({
+      workerId: 'relay-2',
+      now: '2026-07-22T00:00:00.500Z',
+      lockMs: 1_000,
+    })).length, 0);
+
+    assert.equal(await store.releaseTaskDispatch(
+      runId,
+      { workerId: 'relay-1', attempt: 1 },
+      'queue redis unavailable',
+      1_000,
+      initialTime,
+    ), true);
+    assert.equal((await store.claimTaskDispatches({
+      workerId: 'relay-2',
+      now: '2026-07-22T00:00:00.999Z',
+    })).length, 0);
+    const retry = await store.claimTaskDispatches({
+      workerId: 'relay-2',
+      now: '2026-07-22T00:00:01.001Z',
+    });
+    assert.equal(retry[0]?.attempts, 2);
+    assert.equal(await store.markTaskDispatchDispatched(
+      runId,
+      { workerId: 'relay-1', attempt: 1 },
+      '2026-07-22T00:00:02.000Z',
+    ), false);
+    assert.equal(await store.markTaskDispatchDispatched(
+      runId,
+      { workerId: 'relay-2', attempt: 2 },
+      '2026-07-22T00:00:02.000Z',
+    ), true);
+    assert.deepEqual(await store.readTaskDispatchMetrics(), {
+      pendingCount: 0,
+      processingCount: 0,
+    });
+
+    const claimedRun = await store.claimAssistantRunById(runId, {
+      workerId: 'bull-worker-1',
+      now: '2026-07-22T00:00:02.001Z',
+    });
+    assert.equal(claimedRun?.run.id, runId);
+    assert.equal(claimedRun?.phase, 'execute');
+  });
+
   it('rolls message and room cost back when the final run transition fails', async () => {
     const roomId = 'assistant-run-atomic-projection-room';
     const messageId = 'assistant-run-atomic-projection-message';
@@ -1305,7 +1402,11 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const migrationPool = createPostgresPool(scopedUrl.toString(), logger as any);
     try {
       for (const sql of POSTGRES_SCHEMA_SQL) await migrationPool.query(sql);
-      for (const migration of POSTGRES_MIGRATIONS.slice(0, -1)) {
+      const aggregateMigrationIndex = POSTGRES_MIGRATIONS.findIndex(
+        migration => migration.id === '0009_assistant_run_execution_aggregate',
+      );
+      assert.ok(aggregateMigrationIndex >= 0);
+      for (const migration of POSTGRES_MIGRATIONS.slice(0, aggregateMigrationIndex)) {
         await migrationPool.query(migration.sql);
       }
 
@@ -1370,7 +1471,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         [roomId, JSON.stringify({ contextMessages: [message(roomId, 'legacy-context')] }), createdAt],
       );
 
-      await migrationPool.query(POSTGRES_MIGRATIONS.at(-1)!.sql);
+      await migrationPool.query(POSTGRES_MIGRATIONS[aggregateMigrationIndex].sql);
 
       const activeRun = await migrationStore.getAssistantRun('legacy-active-run');
       assert.equal(activeRun?.status, 'queued');

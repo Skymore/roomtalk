@@ -43,7 +43,7 @@ RoomTalk is also a study in building reliable realtime and AI systems beyond the
 | AI/tool event ordering | Preserve text and tool boundaries at the engine/runner source, then persist a monotonic server-side `position`; the client renders that order instead of reconstructing it from timestamps. |
 | Multi-client consistency | Store a bounded immutable after-image changelog with the canonical PostgreSQL write, push the exact committed RoomEvent as a size-bounded Socket fast path, replay missing room sequences, and switch gaps over 500 events to a repeatable-read snapshot. |
 | Mobile reconnect recovery | One `RoomSessionController` owns connect/register/join/retry. Epochs change only with room or socket identity; lifecycle signals coalesce into message resync without duplicate joins, and transient recovery preserves rendered messages/media. |
-| Durable-store boundary | Require PostgreSQL for canonical business state and deterministic event replay; keep Redis rebuildable for presence, transient/global Socket.IO traffic, locks, and short-lived cache. |
+| Durable-store boundary | Keep business truth and replay in PostgreSQL, use BullMQ/Redis for operational scheduling, and bridge the two with a transactional dispatch outbox so neither system pretends to own the other's state. |
 | Cache correctness | Guard recent-message cache entries with the durable room-event head, double-check before write-back, invalidate after successful mutations, and degrade to PostgreSQL on cache failure. |
 | Concurrent room writes | Serialize canonical writes in PostgreSQL and allocate contiguous room-event sequences in the same transaction; use Redis Lua only for ephemeral multi-socket presence coordination. |
 | Product-grade mobile UI | Resolve overlapping media gestures with a locked gesture-state machine, batch transforms through `requestAnimationFrame`, layer Object URL/Cache API/network media caching, and guard IME composition and visual viewport changes. |
@@ -59,7 +59,11 @@ flowchart LR
   Store --> Durable["PostgreSQL\ndurable state + room event log"]
   Store --> Realtime["Redis\npresence, sessions, pub/sub, cache"]
 
-  Control --> ChatAI["Chat AI runtime\nprovider clients + outbox/recovery"]
+  Control --> Dispatch["PostgreSQL dispatch relay"]
+  Dispatch --> Queue["BullMQ on Redis"]
+  Queue --> ChatAI["Dedicated AI worker\nprovider clients + fenced runs"]
+  ChatAI --> Durable
+  ChatAI -.->|"transient stream"| Realtime
   Control --> Media["S3-compatible storage\nSeaweedFS, Tigris, or AWS S3"]
 
   Control --> Lifecycle["Sandbox lifecycle + access control"]
@@ -87,14 +91,17 @@ flowchart LR
   Tunnel -->|"room.ruit.me<br/>roomtalk.ruit.me"| App["RoomTalk app container<br/>Node + Express + Socket.IO"]
   Tunnel -->|"roomtalk-objects.ruit.me"| Objects["SeaweedFS 4.29<br/>S3-compatible object storage"]
 
-  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + outbox"]
-  App --> Redis["Redis 7<br/>presence + Socket.IO + cache"]
+  App --> Postgres["PostgreSQL 17<br/>canonical state + room events + dispatch intent"]
+  App --> Redis["Redis 7<br/>realtime + AOF BullMQ"]
+  Redis --> Worker["AI worker container<br/>BullMQ consumer"]
+  Worker --> Postgres
+  Worker --> Providers["AI providers"]
   App --> Objects
   App --> E2BProd["E2B<br/>per-room execution sandboxes"]
   App --> Providers["Google / GitHub / Codex / AI providers"]
 ```
 
-The MacBook runs five long-lived Compose services: the app, PostgreSQL, Redis, SeaweedFS, and `cloudflared`. PostgreSQL uses a durable Docker volume, SeaweedFS persists under `runtime/object-storage`, and Redis is intentionally rebuildable. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
+The MacBook runs six long-lived Compose services: the app, a dedicated AI worker, PostgreSQL, Redis, SeaweedFS, and `cloudflared`. PostgreSQL and Redis use named volumes; Redis enables AOF `everysec` and `noeviction` because it now contains BullMQ jobs as well as rebuildable realtime/cache keys. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
 
 `room.ruit.me` is the primary hostname and `roomtalk.ruit.me` is a compatibility hostname. The runtime also allowlists `ai-chat.wenlin.dev`, but that hostname has a separately managed DNS cutover. The former Fly app is suspended; Supabase, Tigris, and Upstash remain only as temporary rollback resources and receive no production writes.
 
@@ -119,7 +126,7 @@ flowchart LR
 
 A contiguous payload is applied immediately. Missing payloads replay from `lastAppliedSeq`; an expired cursor, an individually oversized event, or a retained gap above 500 events takes a repeatable-read snapshot. Transient `ROOM_AUTH_UNAVAILABLE` and `NOT_REGISTERED` failures schedule one bounded exponential replay retry instead of leaving a mounted room permanently stale. Deleted streams return their final `room.deleted` tombstone directly instead of paging through obsolete history toward a snapshot that can no longer exist. A per-room `idle/replay/replace/prepend` state machine gives live replay priority over pagination, rejects a stale `beforeMessageId` with `PAGINATION_BOUNDARY_EXPIRED`, and resnapshots a window that deletion emptied while older history remains. If a restored database returns `CURSOR_AHEAD`, it clears both the stale target head and prior gap target while preserving new notifications received during the snapshot. Listener reconnect uses an explicitly replaced generation and local `room_sync_required` anti-entropy. V1 payloads are decoded strictly: invalid stored data returns `EVENT_PAYLOAD_INVALID` and forces a canonical snapshot without acknowledging the bad sequence. The public member event is only `members.changed {}`; IDs and roles remain behind the privileged member API, while its durable replay still refreshes page permissions. A durable `room.deleted` or `ROOM_ACCESS_DENIED` exits the stale page through the same lifecycle path as the transient Socket notification.
 
-This is a bounded state-transfer changelog, not Event Sourcing. Canonical tables remain authoritative and old event prefixes are pruned. There is no realtime delivery outbox and no `messageVersion`: retryable AI side effects use the separate competing-consumer outbox, while typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient and outside the durable room sequence. Each outbox claim has a worker/attempt token; the worker renews its lease while the provider runs, aborts provider work when renewal fails, and can acknowledge success or failure only with that same token. The claimed attempt also fences the AI placeholder, so a stale worker cannot overwrite a replacement generation or recreate a deleted message. Terminal writes are conditional updates of an existing `status=streaming` row, never upserts. Ownership-only changes are internal PostgreSQL metadata and do not advance the public room seq. If a transient AI event beats its durable placeholder, the client buffers it by `messageId` with TTL/count/byte limits and drains it when the placeholder arrives. `ai_stream_error` declares whether its final state was persisted: `{ persisted: true, message }` carries the exact safe error after-image, while `{ persisted: false }` immediately terminalizes the local placeholder. The server then retries that same conditional terminal transition with exponential backoff; database owner leases let another process recover the placeholder only after the original stream owner expires. PostgreSQL also rejects changing a message ID's room, preventing cross-room ghost projections.
+This is a bounded state-transfer changelog, not Event Sourcing. Canonical tables remain authoritative and old event prefixes are pruned. There is no realtime delivery outbox and no `messageVersion`. Ordinary chat AI uses a different pattern: the placeholder, `assistant_runs`, and a narrow `task_dispatch_outbox` commit together; the App relays only `{ runId }` into BullMQ with a deterministic job ID. BullMQ owns waiting, concurrency, delayed retry, stalled recovery, and operational retention. PostgreSQL remains the only source for queued/running/finalizing/terminal business state, immutable provider output, and cost. A worker claims the exact run with a generation lease, so an old process cannot write chunks or terminal state after takeover. If the provider result is already staged, retry performs only projection and never pays for another provider call. Typing, presence, `ai_chunk`, voice levels, and WebRTC signalling remain transient. Worker chunks cross Redis Pub/Sub to every App, which reauthorizes local room sockets and emits through `io.local`; loss is repaired by the final durable room event. The client buffers an early transient event by `messageId`, rejects old generations, and preserves optimistic sends. PostgreSQL also rejects changing a message ID's room, preventing cross-room ghost projections.
 
 Horizontal process ownership is lease-based. Redis heartbeat acquisition and expired-instance cleanup are atomic Lua operations: cleanup rechecks the heartbeat and removes a socket only if that instance still owns it. If a live process loses and reacquires its own Redis lease, it rehydrates session, room and browser presence for its local sockets after rechecking durable membership. Running Code Agent turns and sandboxes are recovered only after their fenced room lease expires. Recovery and retention tasks use PostgreSQL advisory locks, so one instance performs maintenance while the others keep serving. These boundaries are covered by two-instance presence tests and real PostgreSQL 17 lease/advisory-lock tests. The release that introduces AI owner leases must stop every pre-`0006` app first because old binaries do not heartbeat the new table. Migration `0007_ai_stream_fencing` adds per-placeholder generations, and `0008_ai_stream_internal_event_filter` removes ownership-only writes from the public event sequence; all app/worker replicas must understand fenced terminal transitions before mixed-version rolling deploys resume.
 
@@ -150,10 +157,10 @@ docs/                             architecture, runbooks, plans, and postmortems
 Requirements:
 
 - Node.js 24.18.0 or newer.
-- PostgreSQL and Redis. PostgreSQL is the mandatory durable store; Redis is rebuildable realtime/cache state.
+- PostgreSQL and Redis. PostgreSQL is the mandatory business store; Redis carries realtime/cache state plus AOF-backed BullMQ operational state.
 - Optional E2B credentials and pinned template settings for real code-agent rooms.
 
-For the quickest full local runtime, copy `.env.compose.example` to `.env.compose`, generate the required PostgreSQL and S3 credentials, then run `docker compose --env-file .env.compose up -d --build`. Compose first runs the one-shot `migrate` service; only after every immutable migration and checksum validates does the App start and perform its read-only schema verification. PostgreSQL uses a persistent named volume, SeaweedFS uses the configured host directory, and Redis is disposable. The production Mac loads its real secrets from macOS Keychain with `node scripts/local-production.mjs --profile edge up -d --build`. For manual development, run `cd server && npm run migrate:schema` before starting the App, then point `DATABASE_URL` and `REDIS_URL` in `server/.env` at local services.
+For the quickest full local runtime, copy `.env.compose.example` to `.env.compose`, generate the required PostgreSQL and S3 credentials, then run `docker compose --env-file .env.compose up -d --build`. Compose first runs the one-shot `migrate` service; after migration verification it starts both the App and `ai-worker` from the same image. PostgreSQL and Redis use persistent named volumes, while SeaweedFS uses the configured host directory. The production Mac loads its real secrets from macOS Keychain with `node scripts/local-production.mjs --profile edge up -d --build`. For manual development, run `cd server && npm run migrate:schema`, point `DATABASE_URL`, `REDIS_URL`, and optional `QUEUE_REDIS_URL` at local services, then start the App and `npm run start:ai-worker` separately.
 
 Install dependencies and create local configuration:
 
@@ -227,7 +234,7 @@ Production code-agent rooms use a pinned E2B artifact. Runner, tool, prompt, Doc
 `CompositeRoomStore` separates durable and realtime concerns:
 
 - Runtime startup requires `PERSISTENCE_STORE=postgres` and `DATABASE_URL`. PostgreSQL stores canonical records and the bounded room-event replay log.
-- Redis owns rebuildable presence, socket sessions, pub/sub, counters, and the short-TTL message cache; Redis is still required, but is never the durable authority.
+- Redis owns rebuildable presence, socket sessions, pub/sub, counters, the short-TTL cache, and BullMQ's operational queue. It is not the business authority, but active queue state is persisted with AOF rather than treated as disposable.
 - `migrate:redis-to-postgres` remains an idempotent, dry-run-capable importer for legacy Redis durable snapshots, not a supported serving mode or rollback target.
 - Local Compose runs SeaweedFS 4.29 as a private S3-compatible service; Fly uses Tigris and AWS uses S3 through the same SDK/configuration boundary. The filesystem adapter remains available only as a development or recovery fallback.
 
@@ -239,13 +246,13 @@ Migration and rollout references:
 
 ## AWS Portability
 
-The current deployment is intentionally portable, but migration is a controlled data cutover rather than a one-click host change. The app is a single container image, durable state is isolated in PostgreSQL, Redis is rebuildable, and all media uses the S3 API.
+The current deployment is intentionally portable, but migration is a controlled data cutover rather than a one-click host change. App and Worker share one container image, business state is isolated in PostgreSQL, operational jobs use BullMQ/Redis, and all media uses the S3 API.
 
 | Current boundary | AWS mapping | Migration contract |
 | --- | --- | --- |
 | App container + Cloudflare Tunnel | ECS Fargate behind an ALB; EKS is optional | Run the same root image and inject environment/secrets through ECS and Secrets Manager. Cloudflare can remain in front of the AWS origin, or Route 53/CloudFront can replace it. |
 | PostgreSQL 17 | RDS PostgreSQL or Aurora PostgreSQL | Restore a `pg_dump` for a maintenance-window cutover; use logical replication or AWS DMS when the dataset requires a shorter write pause. |
-| Redis 7 | ElastiCache for Valkey/Redis OSS | Start empty and warm naturally because no business state is authoritative in Redis. |
+| Redis 7 | ElastiCache for Redis OSS | Restore or drain BullMQ jobs during cutover; realtime/cache keys may warm naturally. `QUEUE_REDIS_URL` can target a dedicated replication group later. |
 | SeaweedFS S3 | Amazon S3 | Preserve the bucket object keys and use the existing idempotent `migrate:s3-to-s3` tool to copy and verify bytes. |
 | E2B sandboxes | E2B unchanged | Keep the pinned template/artifact and update only the RoomTalk control-plane origin and scoped callback URLs. |
 

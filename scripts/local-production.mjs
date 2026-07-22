@@ -53,7 +53,7 @@ const verifyReadinessUrl = async url => {
 }
 
 const verifyProduction = async ({ composePrefix, composeEnv, edgeEnabled, roomtalkPort }) => {
-  const expectedServices = ['app', 'postgres', 'redis', 'object-storage']
+  const expectedServices = ['app', 'ai-worker', 'postgres', 'redis', 'object-storage']
   if (edgeEnabled) expectedServices.push('cloudflared')
   const publicStatusUrl = process.env.ROOMTALK_PUBLIC_STATUS_URL || 'https://room.ruit.me/api/status'
   let lastError

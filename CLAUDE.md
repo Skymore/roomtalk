@@ -47,6 +47,8 @@ The server uses a `CompositeRoomStore` (`server/src/repositories/store.ts`) that
 - **RealtimeRoomStore** — always Redis. Manages online presence, socket sessions, ephemeral member counts.
 - **RoomMessageCacheStore** (optional) — Redis TTL cache in front of PostgreSQL reads, invalidated on writes.
 
+The same Redis deployment currently also hosts BullMQ under a separate queue namespace and connection. `REDIS_URL` is the realtime/cache endpoint; `QUEUE_REDIS_URL` defaults to it but can point to a dedicated Redis without code changes. Queue Redis uses AOF and `noeviction`; unlike presence/cache keys, BullMQ state is not treated as disposable while jobs are active.
+
 The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding runtime durable operations, implement PostgreSQL first and proxy through `CompositeRoomStore`; keep the legacy Redis contract aligned only when the migration/import path still needs that operation.
 
 Room synchronization follows these invariants:
@@ -57,7 +59,7 @@ Room synchronization follows these invariants:
 - Stop on `EVENT_PAYLOAD_INVALID`; do not advance past a malformed event. Public membership events remain empty `members.changed` signals.
 - Do not hydrate old events from current rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`.
 - Keep typing, presence, AI chunks, voice, and WebRTC outside the durable sequence. Buffer early AI transient events by `messageId` within the 60-second, 64-ID, 512-event, 512-KiB limits.
-- Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if terminal persistence fails, use `persisted: false` so the client terminalizes the local placeholder while the in-process reconciler retries the same terminal after-image with exponential backoff. PostgreSQL stream-owner leases allow takeover only after the original owner expires.
+- Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if immediate projection fails, `persisted: false` terminalizes the local placeholder while the durable `assistant_runs.terminal_payload` remains available for BullMQ projection retry. PostgreSQL generation leases prevent stale takeover writes.
 - Own Redis presence by a unique runtime instance ID with TTL heartbeats. Cleanup removes only expired instance sockets. Recover Code Agent turns/sandboxes only after their fenced leases expire, and run recovery/retention under PostgreSQL advisory locks instead of destructive all-instance startup cleanup.
 - Keep liveness separate from readiness. `/api/health/live` proves only that the Node process can answer; `/api/status` and `/api/health/ready` execute a real PostgreSQL table query, Redis `PING`, S3-compatible bucket probe, and Socket adapter check. Dependency failure is `503 degraded` with `rooms: null`, never a fabricated business value such as zero rooms.
 - Keep a message ID bound to its original room. PostgreSQL rejects cross-room upserts; a future move operation must be an explicit source delete plus target upsert.
@@ -81,6 +83,7 @@ All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` con
 - `aiModels.ts` — model registry, normalization, model options from env
 - `aiClients.ts` — OpenRouter/direct API client factory
 - `aiStreamRecovery.ts` + `aiTerminalPersistReconciler.ts` — lease streaming owners, retry terminal persistence in-process, and recover only expired owners
+- `assistantRunQueue.ts` + `taskDispatchRelay.ts` + `assistantRunBullProcessor.ts` — enqueue ordinary chat AI runs through BullMQ, bridge the PostgreSQL dispatch outbox, and execute fenced run aggregates in the dedicated worker process
 - `mediaObjectStorage.ts` — S3-compatible object storage (SeaweedFS in current production; Tigris retained for rollback), presigned URLs
 - `clientAuth.ts` — password hashing, token-based auth
 - `googleAuth.ts` — Google OAuth credential verification
@@ -105,7 +108,7 @@ Upload: client requests a presigned URL → uploads to the configured S3-compati
 
 ### AI Streaming
 
-Client sends `ask_ai` with role, model, and context. The server selects the configured provider client (DeepSeek, Anthropic, OpenAI, or OpenRouter) and streams transient `ai_chunk` events after the durable placeholder exists. A successful run persists the final Message before `ai_stream_end`. A failed run persists the complete error Message before `ai_stream_error`, which carries the same Message as a fast path. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
+Client sends `ask_ai` with role, model, and context. One PostgreSQL transaction creates the streaming placeholder, the `assistant_runs` aggregate, its room event, and a narrow `task_dispatch_outbox` row. The App relay publishes `{ schemaVersion: 1, runId }` to BullMQ with `jobId=runId`; a separate `ai-worker` process reads the durable request snapshot and calls DeepSeek, Anthropic, OpenAI, or OpenRouter. Transient chunks cross Redis Pub/Sub back to each App and then use `io.local`; the final Message, run status, and room cost converge in one PostgreSQL transaction. BullMQ owns runtime scheduling/retry, but never becomes the business status or result source. A failed Redis enqueue remains pending in PostgreSQL and is retried after recovery.
 
 ### Code-Agent Runtime
 
@@ -125,7 +128,7 @@ The browser workspace includes files/search/editing, asset previews, Git diff/re
 
 ## Deployment
 
-`master` is the release branch. Production at [https://room.ruit.me/](https://room.ruit.me/) runs the root multi-stage image on the local MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL 17 owns durable state and the bounded room-event log, Redis 7 is rebuildable realtime/cache state, SeaweedFS 4.29 provides the S3-compatible object boundary, and E2B provides per-room execution sandboxes. `roomtalk.ruit.me` remains a compatibility hostname and `roomtalk-objects.ruit.me` carries presigned browser object transfers.
+`master` is the release branch. Production at [https://room.ruit.me/](https://room.ruit.me/) runs the root multi-stage image on the local MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL 17 owns durable business state and the bounded room-event log. Redis 7 serves both rebuildable realtime/cache keys and AOF-backed BullMQ state through separate connections and namespaces. The same image runs as an App process and a dedicated `ai-worker`; SeaweedFS 4.29 provides the S3-compatible object boundary, and E2B provides per-room execution sandboxes. `roomtalk.ruit.me` remains a compatibility hostname and `roomtalk-objects.ruit.me` carries presigned browser object transfers.
 
 A source push does not deploy production. Runtime changes are applied from the production checkout with `node scripts/local-production.mjs --profile edge up -d --build`, which loads secrets from the macOS Keychain; verify Compose health plus loopback/public `/api/status`. Documentation-only changes do not require a rebuild. The former scheduled Fly workflow is manually disabled and the Fly app is suspended; Supabase, Tigris, and Upstash remain rollback sources only. Current production selects `CODE_AGENT_RUNNER_CLIENT=daemon`, `CODE_AGENT_BACKEND=codex-app-server`, a two-minute idle sandbox TTL, and a one-hour active TTL.
 

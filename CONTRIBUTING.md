@@ -61,7 +61,7 @@ For such changes, update source and locks, build the new template, update produc
 
 ## Persistence Changes
 
-New runtime durable operations must be represented in the shared store contract and implemented in PostgreSQL first. Keep the legacy Redis implementation aligned only when the import/migration path still requires that operation. PostgreSQL owns durable state and room-event replay; Redis remains rebuildable realtime/cache state. Schema, event emission, retention, migration, rollback, and cache invalidation behavior must be reviewed together.
+New runtime durable operations must be represented in the shared store contract and implemented in PostgreSQL first. Keep the legacy Redis implementation aligned only when the import/migration path still requires that operation. PostgreSQL owns business state and room-event replay. Redis owns realtime/cache plus BullMQ operational scheduling; queue state is not business truth, but active jobs require AOF/no-eviction handling. Schema, event emission, dispatch, retention, migration, rollback, and cache invalidation behavior must be reviewed together.
 
 ## Security and Credentials
 

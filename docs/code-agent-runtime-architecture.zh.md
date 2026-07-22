@@ -29,7 +29,7 @@ Code Agent room 不是给 remote shell 包一层 chat prompt，而是一个 room
 flowchart TB
   UI["Browser UI"] -->|"Socket.IO + HTTP"| Node["RoomTalk control plane"]
   Node --> Durable["PostgreSQL durable state + room events"]
-  Node --> Redis["Redis realtime/cache"]
+  Node --> Redis["Redis realtime/cache + BullMQ"]
   Node --> Objects["SeaweedFS/S3-compatible media + artifacts"]
   Node --> Lifecycle["Sandbox lifecycle"]
   Lifecycle --> E2B["Room-scoped E2B sandbox"]
@@ -49,7 +49,7 @@ flowchart TB
 | RoomTalk control plane | Identity、membership、authorization、durable turn/transcript、scoped credential、sandbox lifecycle、object metadata | Agent reasoning、workspace process |
 | E2B execution plane | Workspace file、Git、process、PTY、preview server、Agent execution | Room authorization、database credential、public URL ownership |
 | Agent backend | Reasoning、原生 tool loop、backend session/thread state | RoomTalk auth、database access、sandbox lifecycle |
-| PostgreSQL/Redis/S3-compatible storage | Durable fact、realtime coordination/cache、object body/manifest | Agent execution |
+| PostgreSQL/Redis/S3-compatible storage | Durable fact 与 AI run、realtime coordination/BullMQ/cache、object body/manifest | Agent execution |
 
 ## Turn 生命周期
 
@@ -108,7 +108,7 @@ Workspace UI 是 RoomTalk 对 sandbox 能力的授权视图：
 
 Durable state 包括 room/config/membership、message/position、agent turn、queue、backend session ID、usage/cost、sandbox metadata、artifact manifest、用户 connection 和 fenced room lease。
 
-Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、Node 内存 active-turn/daemon/terminal/preview handle，以及 E2B 内的 process。Runtime state 可以丢失；durable state 用来解释并恢复。
+Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、普通 Chat AI 的 BullMQ job、Node 内存 active-turn/daemon/terminal/preview handle，以及 E2B 内的 process。BullMQ 任务是可恢复的运维状态，但不解释业务结果；durable PostgreSQL state 用来解释并收敛。
 
 恢复路径包括：
 
@@ -123,12 +123,12 @@ Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、Nod
 
 | Store | 职责 |
 | --- | --- |
-| PostgreSQL durable store | Room、message、room event、member、auth、media metadata、AI run/outbox、Code Agent turn/lease/sandbox metadata |
-| Redis realtime store | Presence、socket session、pub/sub、counter/lock、可选最近消息 cache |
+| PostgreSQL durable store | Room、message、room event、member、auth、media metadata、`assistant_runs`/dispatch intent、Code Agent turn/lease/sandbox metadata |
+| Redis realtime 与 queue store | Presence、socket session、pub/sub、counter/lock、可选最近消息 cache，以及普通 Chat AI 的 BullMQ operational job |
 | S3-compatible storage | 私有媒体 body、versioned static file/manifest；当前生产使用 SeaweedFS |
 | E2B | 可变 workspace 和进程，不是 durable application database |
 
-Runtime 强制使用 PostgreSQL 保存 durable state，同时仍需 Redis 协调 realtime state；Redis 不再是可选 durable authority。
+Runtime 强制使用 PostgreSQL 保存 durable business state，同时仍需 Redis 协调 realtime 与 BullMQ 调度；Redis 不是业务 authority，但 active queue 通过 AOF 保存。
 
 ## 验证与发布
 

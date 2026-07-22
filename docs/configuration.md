@@ -3,7 +3,7 @@
 [中文](configuration.zh.md)
 
 Status: Current
-Updated: 2026-07-21
+Updated: 2026-07-22
 Source of truth: `server/.env.example`, `.env.compose.example`, `compose.yaml`, runtime config loaders, and `scripts/local-production.mjs`
 
 This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
@@ -23,7 +23,8 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 
 | Variable | Purpose |
 | --- | --- |
-| `REDIS_URL` | Required Redis connection for rebuildable realtime and cache state. |
+| `REDIS_URL` | Required Redis connection for realtime/cache state, Socket.IO, and worker transient events. |
+| `QUEUE_REDIS_URL` | BullMQ connection. Defaults to `REDIS_URL`, but can point to a dedicated Redis later without changing the business protocol. |
 | `PERSISTENCE_STORE` | Must be `postgres`; other values fail startup. |
 | `DATABASE_URL` | Required PostgreSQL durable-store URL. |
 | `MIGRATION_DATABASE_URL` | Optional owner/DDL URL used only by `migrate:schema`; defaults to `DATABASE_URL` for local Compose. |
@@ -42,9 +43,9 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 | `ROOMTALK_INSTANCE_ID` | Optional explicit per-process identity. It must be unique for every simultaneously running replica; normally leave it unset so RoomTalk derives a unique process identity. |
 | `AI_STREAM_OWNER_ID` | Optional deployment namespace for AI stream owners. The runtime instance identity is still included, so replicas do not share one owner lease. |
 
-The only supported serving model is PostgreSQL durable state plus Redis realtime/cache state. Redis remains operationally required but may be flushed and rebuilt; it is not a durable fallback. The legacy Redis store exists only for import and contract coverage.
+The only supported serving model is PostgreSQL business state plus Redis realtime and scheduling. PostgreSQL remains the sole authority for assistant-run lifecycle and results. Redis realtime/cache keys are rebuildable, while active BullMQ jobs are operational state protected by AOF `everysec` and `noeviction`; do not flush the queue while jobs are active. The legacy Redis durable store exists only for import and contract coverage.
 
-`room_event_streams` and `room_events` are the client synchronization boundary. A canonical mutation and its safe `schemaVersion: 1` after-image commit together. `NOTIFY` is only a hint: each app skips rooms without local sockets, reads the exact immutable event, batch-reauthorizes local subscribers, and emits with `io.local`. Authorization unavailability produces a head-only hint without evicting sockets. A client applies payloads only when contiguous and otherwise replays from `lastAppliedSeq`; individually oversized events and retained gaps above 500 events switch to a repeatable-read snapshot. Deleted streams return their terminal tombstone directly. Runtime instance heartbeats scope Redis presence cleanup, Code Agent recovery respects fenced leases, AI terminal writes use in-process retry plus PostgreSQL owner leases, and named advisory locks serialize recovery/retention maintenance across replicas. The log remains bounded and is not Event Sourcing or an AI job queue. `outbox_events` remains a separate claim/retry mechanism for one worker; transient Socket events do not consume room sequence numbers.
+`room_event_streams` and `room_events` are the client synchronization boundary. A canonical mutation and its safe `schemaVersion: 1` after-image commit together. `NOTIFY` is only a hint: each app skips rooms without local sockets, reads the exact immutable event, batch-reauthorizes local subscribers, and emits with `io.local`. Authorization unavailability produces a head-only hint without evicting sockets. A client applies payloads only when contiguous and otherwise replays from `lastAppliedSeq`; individually oversized events and retained gaps above 500 events switch to a repeatable-read snapshot. Deleted streams return their terminal tombstone directly. Runtime instance heartbeats scope Redis presence cleanup, Code Agent recovery respects fenced leases, and named advisory locks serialize recovery/retention maintenance across replicas. The log remains bounded and is not Event Sourcing or an AI queue. Ordinary chat AI commits its placeholder, `assistant_runs`, and `task_dispatch_outbox` together; BullMQ then schedules one worker, while transient chunks do not consume room sequence numbers.
 
 Production applied immutable-event migrations `0003` and `0004` on 2026-07-21 in a maintenance window with all old app processes stopped.
 
@@ -138,14 +139,32 @@ Scoped capabilities:
 
 Do not add new product behavior to the deprecated Codex CLI path. `codex-app-server` is the supported backend.
 
-## Workers and Observability
+## Assistant Queue, Workers, and Observability
 
-`OUTBOX_WORKER_ENABLED` selects the durable AI-run outbox path. `OUTBOX_WORKER_BATCH_SIZE` defaults to `1`: the executor is serial and only the task currently executing renews its lease, so pre-claiming a larger batch could let queued claims expire and be executed twice. Future concurrency must renew every claimed item from claim time. Poll interval, lock duration, retry delay, and maximum attempts use the remaining `OUTBOX_WORKER_*` variables. `LOG_FILE_ENABLED` controls optional file logging; production logs should remain structured and secret-safe.
+The App and `ai-worker` run from the same image but are separate processes. The App writes dispatch intent and relays it to BullMQ; only `ai-worker` calls ordinary chat AI providers. Queue payloads contain only a version and `runId`; prompts, terminal output, usage, and business status stay in PostgreSQL.
+
+| Variable | Purpose |
+| --- | --- |
+| `ASSISTANT_RUN_QUEUE_NAME` | Optional BullMQ namespace override; all App and Worker replicas must match. |
+| `ASSISTANT_RUN_DISPATCH_POLL_INTERVAL_MS` | PostgreSQL dispatch relay poll interval; default `1000`. |
+| `ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS` | Delay before a failed Redis enqueue becomes claimable again; default `5000`. |
+| `ASSISTANT_RUN_DISPATCH_LOCK_MS` | Fenced dispatch claim duration; default `60000`. |
+| `ASSISTANT_RUN_DISPATCH_BATCH_SIZE` | Maximum dispatch intents relayed per tick; default `20`. |
+| `ASSISTANT_RUN_WORKER_CONCURRENCY` | BullMQ jobs executed concurrently by one worker process; default `2`. |
+| `ASSISTANT_RUN_WORKER_LEASE_MS` | PostgreSQL run-owner lease renewed during provider execution; default `60000`. |
+| `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | Domain-level claim limit recorded in `assistant_runs`; default `10`. |
+| `ASSISTANT_RUN_QUEUE_ATTEMPTS` | BullMQ infrastructure attempts; default `12`. |
+| `ASSISTANT_RUN_QUEUE_BACKOFF_MS` | Base exponential BullMQ retry delay; default `5000`. |
+| `ASSISTANT_RUN_QUEUE_LOCK_MS` | BullMQ active-job lock duration; default `60000`. |
+| `ASSISTANT_RUN_QUEUE_*_RETENTION_*` | Optional completed/failed job age and count limits for operations and diagnosis. |
+| `AI_WORKER_HEALTH_PORT` | Worker-only health endpoint; Compose uses `3013`. |
+
+If queue Redis is unavailable after PostgreSQL accepts a request, its dispatch row remains pending and the relay retries; the App reports `degraded` with deferred dispatch rather than losing the request. BullMQ retry handles infrastructure interruption, while a durable terminal provider error is a completed business outcome, not an endlessly retried job. `LOG_FILE_ENABLED` controls optional file logging; production logs must remain structured and secret-safe.
 
 ## PostgreSQL Schema Lifecycle
 
 - `npm run migrate:schema` is the only supported schema writer. The compiled container command is `npm run migrate:schema:compiled`.
-- Compose runs the one-shot `migrate` service before `app`; Kubernetes/AWS should map it to a pre-deploy Job rather than an App init path.
+- Compose runs the one-shot `migrate` service before `app` and `ai-worker`; Kubernetes/AWS should map it to a pre-deploy Job rather than an App init path.
 - `schema_migrations` records every immutable migration with a SHA-256 checksum. A missing or changed migration fails the deployment.
 - `POSTGRES_SCHEMA_SQL` is the frozen `0000` bootstrap. Add later changes as new `POSTGRES_MIGRATIONS` entries; never edit an applied entry.
 - App startup calls read-only `verifySchema()` and refuses readiness when the migration job was skipped.
@@ -156,7 +175,7 @@ Do not add new product behavior to the deprecated Codex CLI path. `codex-app-ser
 - Keep non-secret Compose interpolation in ignored `.env.compose`; never commit real PostgreSQL, S3, provider, OAuth, E2B, Codex, or GitHub credentials.
 - Keep `server/.env` ignored and local.
 - Production E2B must use matching template, artifact version, source ref, runner dependencies, and smoke evidence.
-- Apply application/configuration changes with `node scripts/local-production.mjs --profile edge up -d --build`. This runs the migration job before replacing the App; then verify Compose health and both the loopback and public `/api/status` endpoints.
-- Use `/api/health/live` only for process liveness. `/api/health/ready` and `/api/status` verify PostgreSQL schema reads, Redis `PING`, object-storage bucket access, and the Socket adapter; they return `503 degraded` with `rooms: null` when a dependency is unavailable.
-- `local-production.mjs` automatically verifies all five production services after detached startup and reports host/Docker disk use. `ROOMTALK_MIN_HOST_FREE_GB`, `ROOMTALK_DOCKER_RAW_WARN_GB`, `ROOMTALK_DOCKER_RAW_PATH`, and `ROOMTALK_PUBLIC_STATUS_URL` tune that local operator check.
+- Apply application/configuration changes with `node scripts/local-production.mjs --profile edge up -d --build`. This runs the migration job before replacing the App and Worker; then verify Compose health, worker health, and both loopback and public `/api/status` endpoints.
+- Use `/api/health/live` only for process liveness. `/api/health/ready` and `/api/status` verify PostgreSQL schema reads, realtime Redis `PING`, object-storage bucket access, and the Socket adapter. A required serving dependency returns `503` with `rooms: null`; queue-only failure reports a ready but `degraded` App because PostgreSQL can safely defer dispatch.
+- `local-production.mjs` automatically verifies all six production services after detached startup and reports host/Docker disk use. `ROOMTALK_MIN_HOST_FREE_GB`, `ROOMTALK_DOCKER_RAW_WARN_GB`, `ROOMTALK_DOCKER_RAW_PATH`, and `ROOMTALK_PUBLIC_STATUS_URL` tune that local operator check.
 - The former Fly GitHub Actions workflow is manually disabled. It is rollback history, not the current deployment owner.

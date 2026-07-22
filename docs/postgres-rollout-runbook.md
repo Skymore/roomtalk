@@ -5,7 +5,7 @@
 Status: Legacy Redis-to-PostgreSQL import runbook
 Runtime contract updated: 2026-07-20
 
-The current server accepts only `PERSISTENCE_STORE=postgres`. Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, model-gateway counters, and the bounded recent-message cache, but is not a durable serving authority. For current local/AWS deployment and PostgreSQL-to-PostgreSQL cutover, use the [portable deployment design](room-event-sync-portable-deployment.md).
+The current server accepts only `PERSISTENCE_STORE=postgres`. Redis remains connected for Socket.IO, realtime membership/session state, pub/sub, cache, and BullMQ operational scheduling, but is not the business authority. This document covers only the old durable-Redis import. For current local/AWS deployment and PostgreSQL-to-PostgreSQL/BullMQ cutover, use the [portable deployment design](room-event-sync-portable-deployment.md) and [assistant-run BullMQ design](assistant-run-bullmq-design-progress.md).
 
 ## Supported Storage Models
 
@@ -23,7 +23,7 @@ Redis is still required for Socket.IO scaling, presence, socket sessions, pub/su
 
 - rooms, full message histories, members, saves, password hashes, AI-cost totals;
 - Code Agent turns and media metadata;
-- pending media uploads, audio transcriptions, assistant runs, and outbox events;
+- pending media uploads, audio transcriptions, assistant runs, and historical outbox events; active imported assistant runs also receive current BullMQ dispatch intent;
 - push subscriptions, client accounts/links, passwords, auth tokens, and nicknames;
 - Codex and GitHub connection records.
 

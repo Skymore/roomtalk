@@ -1,11 +1,13 @@
 # AI Run / Outbox / Worker Migration Plan
 
+> Historical plan, superseded on 2026-07-22. The current implementation makes `assistant_runs` the sole business aggregate, uses `task_dispatch_outbox` only to bridge the PostgreSQL commit into BullMQ, and runs a dedicated Node/TypeScript `ai-worker`. See [Assistant Runs and BullMQ](assistant-run-bullmq-design-progress.md). The phase descriptions below are preserved as design history, not current operations.
+
 [中文](ai-run-outbox-worker-migration-plan.zh.md)
 
 Status: Historical migration plan with implemented foundations
 Reviewed: 2026-07-12
 
-> 2026-07-20 update: RoomTalk later introduced the separate bounded `room_events` replay log described in [Room Event Sync and Portable Deployment](room-event-sync-portable-deployment.md). Statements below about not introducing room sequencing describe this plan's original scope; `outbox_events` remains a one-worker claim/retry mechanism and must not be used as the client replay stream.
+> 2026-07-20 update (historical): RoomTalk later introduced the separate bounded `room_events` replay log described in [Room Event Sync and Portable Deployment](room-event-sync-portable-deployment.md). At that stage, `outbox_events` was a one-worker claim/retry mechanism. It has since been replaced for ordinary chat AI by `task_dispatch_outbox` plus BullMQ.
 
 ## Goal
 

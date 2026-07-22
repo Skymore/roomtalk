@@ -5,7 +5,7 @@
 状态：旧 Redis 到 PostgreSQL 导入 runbook
 Runtime 合约更新：2026-07-20
 
-当前服务端只接受 `PERSISTENCE_STORE=postgres`。Redis 仍连接 Socket.IO、实时 membership/session、pub/sub、model-gateway counter 和有界最近消息 cache，但不再是 durable serving authority。当前本地/AWS 部署与 PostgreSQL 到 PostgreSQL 切换以[可迁移部署设计](room-event-sync-portable-deployment.zh.md)为准。
+当前服务端只接受 `PERSISTENCE_STORE=postgres`。Redis 仍连接 Socket.IO、实时 membership/session、pub/sub、cache 与 BullMQ 运维调度，但不是业务 authority。本文只覆盖旧 durable Redis import；当前本地/AWS 与 PostgreSQL/BullMQ 切换以[可迁移部署设计](room-event-sync-portable-deployment.zh.md)和 [Assistant Run BullMQ 设计](assistant-run-bullmq-design-progress.zh.md)为准。
 
 ## 支持的存储模型
 
@@ -21,7 +21,7 @@ Redis 仍用于 Socket.IO scaling、presence、socket session、pub/sub、counte
 
 - room、完整 message history、member、save、password hash、AI cost total；
 - Code Agent turn 和 media metadata；
-- pending media upload、audio transcription、assistant run、outbox event；
+- pending media upload、audio transcription、assistant run 与历史 outbox event；active imported assistant run 还会写入当前 BullMQ dispatch intent；
 - push subscription、client account/link、password、auth token、nickname；
 - Codex/GitHub connection record。
 

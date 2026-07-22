@@ -18,7 +18,7 @@ const run = (args, tolerateFailure = false) => {
 
 let backupSucceeded = false
 try {
-  run(['stop', 'cloudflared', 'app', 'object-storage'])
+  run(['stop', 'cloudflared', 'app', 'ai-worker', 'object-storage'])
   run([
     '--profile',
     'ops',
@@ -34,7 +34,7 @@ try {
   // window. `compose up` may reconcile a newer Compose file against the old
   // application image (for example, a newly added migration command that the
   // old image does not contain), turning a backup into an accidental deploy.
-  run(['--profile', 'edge', 'start', 'object-storage', 'app', 'cloudflared'], true)
+  run(['--profile', 'edge', 'start', 'object-storage', 'app', 'ai-worker', 'cloudflared'], true)
 }
 
 if (!backupSucceeded) {

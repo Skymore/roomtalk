@@ -39,7 +39,7 @@ room_event_streams + room_events
 客户端 reducer + IndexedDB v4 cursor/window
 ```
 
-Redis 只负责 presence、Socket.IO adapter 和短 TTL 最近消息缓存，不再承载不可恢复业务数据。服务端启动时必须连接 PostgreSQL。
+Redis 保存 presence、Socket.IO adapter、短 TTL 最近消息缓存、BullMQ，以及 Worker 到 App 的 transient stream，但不是业务事实源。PostgreSQL 启动时必需，`assistant_runs` 单独描述 durable AI 生命周期与结果。由于 active BullMQ job 是需要恢复的运行状态，生产 Redis 现在使用 AOF `everysec` 与 `noeviction`，不能再把整个实例视为 disposable cache。
 
 ## 快照与增量恢复
 
@@ -83,7 +83,7 @@ AI chunk 和增量 UI 更新仍是临时 Socket fast path。它们可能抢在 p
 
 错误使用同一思想的确定性版本。`ai_stream_error` 必须携带 `messageId`、`error` 与 `persisted`。正常路径先持久化完整、用户可见且 `status: error` 的 Message，再发送 `{ persisted: true, message }`，其中 Message 就是同一条安全 after-image。如果请求路径耗尽即时持久化重试，服务端发送 `{ persisted: false }`；浏览器会立刻把已有 placeholder 改成终态 error，并把本地 error overlay 保留到 replace snapshot 之后，而不是让 UI 永远停在 `streaming`。
 
-这个失败不会一直等到下次重启。进程内 terminal-persist reconciler 保存同一条终态 Message，并用有界指数退避持续重试，直到 PostgreSQL 接受写入并产生正常的 `messages.upserted`。每个 stream owner 同时在 PostgreSQL 续租；周期性的 singleton recovery 只有在 owner lease 缺失或过期，而且不存在仍为 `queued/running` 且 outbox 仍可恢复的 durable job 时，才把 `streaming` placeholder 改为规范化的 error 终态。恢复会同时设置 `is_error/updated_at`、清除 owner，并清理不再被 streaming message 引用的过期 owner lease。这样新实例既不会终止另一台活实例的生成，也不会在 outbox worker 启动前把待恢复任务判死。错误若早于 placeholder 到达，仍按 `messageId` 暂存；后续 durable terminal after-image 会清除 overlay并重新成为事实源。`aiStreamOwnerId` 等内部恢复字段在 fast path 发出前会被删除。
+这个失败不会一直等到下次重启。Worker 先把唯一 immutable terminal payload 写入 `assistant_runs`，再在一个 PostgreSQL 事务里把同一 payload 投影到仍由当前 generation 拥有的 streaming Message、run 状态和房间费用。Provider 已返回但 projection 失败时，BullMQ 重试会识别 `finalizing`，只重做 projection，不再请求 Provider。每个 transient 与 terminal write 都校验 generation/owner lease；placeholder 已删除、已终态或被新 generation 接管时，旧 job 只会变成 obsolete，不会复活消息。
 
 Message identity 还有一条数据库级 invariant：message ID 创建后不能更换 `room_id`。PostgreSQL 会拒绝跨房间冲突 upsert，因此“移动”不会在源房间留下 ghost after-image。未来若产品真的需要移动消息，应显式建模为源房间 delete 与目标房间 upsert，而不是放松这个约束。
 
@@ -105,13 +105,11 @@ PostgreSQL 负责跨实例 fan-out；每个 listener 只通知连接到本实例
 
 `NOTIFY` 本身不持久。失效 listener generation 会被显式关闭，也不能再投递通知。新 generation 成功建立 `LISTEN` 后，而且必须在成功之后，才向本机 socket 发 `room_sync_required {reason: "postgres_listener_reconnected"}`。Active client 保留现有 UI，从自己的 `lastAppliedSeq` replay。Socket reconnect、`focus` 和 `pageshow` 检查构成第二层反熵。
 
-Realtime 与任务恢复也按实例划分。每个进程生成唯一 runtime instance ID，在 Redis 续租 TTL heartbeat，并记录自己拥有的 sockets。Heartbeat 和实例注册在同一段 Lua 内完成；清理也在 Lua 内重新检查 heartbeat，并且只删除 `socket:instances` 仍指向目标实例的记录，避免“清理检查后旧实例复活”的 TOCTOU 竞态。若一个仍有本机连接的进程发现自己曾失去、现在重新取得 lease，它会重新校验 PostgreSQL membership，再重建本机 socket session、room member set 和 browser presence。滚动启动不会清空其他实例的 presence。Code Agent turn 与 sandbox recovery 查询会排除仍受未过期 fenced room lease 保护的记录。Recovery 与 retention loop 都用 PostgreSQL advisory lock，因此所有副本可以运行同一镜像，但每轮只有一个实例执行维护。若某进程暂停到 lease 过期，它就被视为失去所有权；权威依据是 lease，不是进程内存或 hostname。
+Realtime 与任务恢复也按实例划分。每个 App 进程生成唯一 runtime instance ID，在 Redis 续租 TTL heartbeat，并记录自己拥有的 sockets。Heartbeat 和实例注册在同一段 Lua 内完成；清理也重新检查 heartbeat 与 owner。滚动启动不会清空其他实例的 presence。Code Agent turn 与 sandbox recovery 查询会排除未过期 fenced room lease；recovery 与 retention loop 使用 PostgreSQL advisory lock。权威依据是 lease，不是进程内存或 hostname。
 
-AI side effect 和最终消息状态也使用 generation fencing。Worker 模式先在一个 PostgreSQL 事务里写入 streaming placeholder、`assistant_run` 与 `ai.run_requested` outbox；三者要么一起提交并产生 placeholder after-image，要么一起回滚。`outbox_events.attempts` 在 claim 时递增，`workerId + attempt` 构成 claim token；长任务周期续租，续租失败会 abort provider 调用，旧 token 不能 mark processed/failed。相同 attempt 同时写入 AI placeholder 的 `ai_stream_fence`。最终 `complete/error` 只能条件更新仍为 `streaming` 且 owner/fence 完全相同的现有行；placeholder 已删除、已完成或已被更高 fence 接管时返回 obsolete，不插入、不覆盖。进程内 terminal reconciler 也携带同一个 ownership token。`ai_stream_owner_id/ai_stream_fence` 只是并发控制元数据，单独变化不会生成公开 room event；真正内容/status 终态只产生一个 immutable after-image。
+普通 Chat AI 使用独立调度边界。一个事务同时创建 streaming placeholder、`assistant_runs`、对应 room event 与 `task_dispatch_outbox`。App relay 只把 `{ schemaVersion: 1, runId }` 以 `jobId=runId` 送入 BullMQ，再确认精确的 fenced dispatch claim。Redis 不可用时 row 回到 pending，已经接受的用户请求仍留在 PostgreSQL。独立 `ai-worker` claim 精确 run，按配置做有界并发，持续续租 PostgreSQL generation，并通过版本化 Redis channel 发布 transient event；每个 App 在 `io.local` 前重新校验本机 socket 权限。
 
-当前 outbox worker 采用“claim one, execute one”：默认 batch size 为 1。Claim 后 lease 立刻开始计时，而当前实现只为正在执行的任务续租；若先 claim 10 条再串行运行，第 2–10 条可能在等待期间过期并被另一实例重复 claim。将默认值收紧为 1 消除了这个真实重复 Provider 调用窗口。未来若需要并发吞吐，应改为有界并发，并从 claim 时起为每一个已占有任务续租，而不是重新调大串行 batch。
-
-这仍是过渡模型，而不是文档把现状包装成最终答案：终态目前还分布在 message、assistant run、outbox、cost projection、owner lease 与进程内 reconciler。下一步目标是让 `assistant_runs` 成为唯一 durable execution aggregate，直接持有 generation、DB lease、request/terminal payload 与幂等 usage ledger，再逐步删除 AI 专用 outbox 和进程级 terminal retry。Room event changefeed 已经收敛，不应为这次 AI 聚合重构而重做。
+BullMQ 只拥有 waiting、并发、backoff、stalled recovery 与运维 retention，不拥有业务状态或 result backend。`assistant_runs` 拥有 request snapshot、status、generation、immutable terminal payload、error 与 usage；终态事务只累计一次 Message 和 room cost。系统刻意不建立 `assistant_run_usage` ledger，因为锁定的唯一 run transition 已提供幂等边界，而 immutable terminal payload 已保留审计依据。
 
 ## 协议切换边界
 
@@ -136,10 +134,10 @@ Migration `0007_ai_stream_fencing` 给每个 AI placeholder 增加单调 generat
 - store、socket unit/contract tests；
 - broadcaster/reducer/state-machine tests 覆盖精确已提交 payload、无本地订阅短路、local-only fan-out、三态成员授权、有界突发水位合并、listener generation 替换、首事件 byte rejection、fast path 零补拉、实时 replay 与 prepend 竞态、过期分页边界、窗口删空且不缓存无效状态、大 gap snapshot、cache 恢复、数据库回退时重置水位与 gap target、页面生命周期回调、删除、turn、room metadata、提前到达 AI 临时事件、AI 持久/未持久终态、数秒数据库故障后的终态重试，以及临时 AI 更新期间保留 optimistic send；
 - 不依赖数据库的严格 V1 payload 单测覆盖全部 event type、空 AI/media content、缺失/额外字段、room 绑定、重复 ID 与退役 ID-only payload；
-- 真实 PostgreSQL 测试覆盖不可变 message/room/turn/media after-image、message 房间不可变、wall-clock event timestamp、空公共成员 signal、旧成员事件隐私修复、严格 payload 拒绝、secret 排除、migration/checksum 校验、原子 placeholder+run+outbox、可恢复 durable job 的 startup 保护、快照、幂等、回滚、并发、retention、跨 600 条旧事件直达 tombstone、首事件 byte limit、活跃/过期 Code Agent 与 AI owner lease，以及 singleton advisory lock。GitHub CI 在 Node 24.18 下启动 PostgreSQL 17 并强制提供 `ROOM_EVENT_TEST_DATABASE_URL`，因此该套件不能在 CI 静默 skip；
+- 真实 PostgreSQL 测试覆盖不可变 after-image、message 房间不可变、严格 payload、migration/checksum、原子 placeholder+run+dispatch、带 fence 的 dispatch retry/ack、精确 run claim、terminal projection 幂等、快照、回滚、并发、retention、tombstone、Code Agent/AI owner lease 与 advisory lock。GitHub CI 在 Node 24.18 下同时启动 PostgreSQL 17 与 Redis 7，并提供 `ROOM_EVENT_TEST_DATABASE_URL` 与 `BULLMQ_TEST_REDIS_URL`，因此 trigger transaction 与真实 queue dedupe/retry 都不会静默 skip；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；
 - Compose health、重启持久化与 backup/restore。
 
-健康证据会区分进程存活与可对外服务。`/api/health/live` 不依赖任何下游，只回答 Node 进程是否还能处理 HTTP；`/api/status` 与 `/api/health/ready` 会执行真实 RoomTalk 表查询、Redis `PING`、S3-compatible bucket 探测和 Socket adapter 检查。依赖失败会得到 HTTP 503、`status: "degraded"`、明确的依赖状态与 `rooms: null`，数据库故障不再折叠成合法业务状态 `rooms: 0`。Compose 使用 readiness endpoint；Kubernetes 则应分别把两个 endpoint 配给对应 probe。
+健康证据会区分进程存活与可对外服务。`/api/health/live` 只回答 App 能否处理 HTTP；`/api/status` 与 `/api/health/ready` 执行真实表查询、realtime Redis `PING`、S3 bucket 与 Socket adapter 检查。Serving dependency 失败时返回 HTTP 503 与 `rooms: null`；只有 queue 失败时，App 仍 ready 但为 `degraded` 并报告 deferred dispatch，因为 PostgreSQL 仍可安全接受请求。Worker 另有 health endpoint 检查 PostgreSQL、queue Redis、transient Redis 与 worker loop。
 
 部署与迁移细节见 [房间事件同步与可迁移部署架构](room-event-sync-portable-deployment.zh.md)。

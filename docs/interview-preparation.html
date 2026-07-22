@@ -385,10 +385,10 @@
 <h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
 
 <blockquote data-lang="zh">
-RoomTalk 是一个实时 AI 协作平台。多人和 AI 可以在共享房间里对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器提供文件编辑、Git diff 审阅、行级 review comment、PTY terminal 和 dev-server preview，还能把静态产物发布到不受 sandbox 生命周期影响的稳定 URL。RoomTalk control plane 目前通过 Docker Compose 和 Cloudflare Tunnel 运行在 MacBook 上。PostgreSQL 保存 canonical state、room event 和 outbox，Redis 保存可重建的实时/cache 状态，SeaweedFS 提供 S3-compatible 对象存储。每个 Code Agent 房间都有独立的 E2B execution plane，并通过可复用的 JSONL daemon 运行 Coco 或 Codex app-server。
+RoomTalk 是一个实时 AI 协作平台。多人和 AI 可以在共享房间里对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器提供文件编辑、Git diff 审阅、行级 review comment、PTY terminal 和 dev-server preview，还能把静态产物发布到不受 sandbox 生命周期影响的稳定 URL。RoomTalk 目前通过 Docker Compose 和 Cloudflare Tunnel 运行在 MacBook 上。PostgreSQL 保存 canonical state、room event 与 <code>assistant_runs</code> 业务事实；Redis 同时承载 realtime/cache 和 AOF-backed BullMQ 调度；App 与独立 AI Worker 使用同一个 Node/TypeScript 镜像；SeaweedFS 提供 S3-compatible 对象存储。每个 Code Agent 房间另有独立 E2B execution plane，通过可复用 JSONL daemon 运行 Coco 或 Codex app-server。
 </blockquote>
 <blockquote data-lang="en">
-RoomTalk is a realtime AI collaboration platform. People and AI share rooms, while Coco or Codex can edit code, run tests, and start applications in a sandboxed workspace bound to each room. The browser includes file editing, Git diff review, line-level comments, a PTY terminal, and dev-server previews. It can also publish static artifacts to stable URLs that outlive the sandbox. The RoomTalk control plane currently runs on a MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL stores canonical state, room events, and outbox records; Redis stores rebuildable realtime/cache state; SeaweedFS provides S3-compatible object storage. Each code-agent room has its own E2B execution plane, where a reusable JSONL daemon runs Coco or Codex app-server.
+RoomTalk is a realtime AI collaboration platform. People and AI share rooms, while Coco or Codex can edit code, run tests, and start applications in a sandboxed workspace bound to each room. The browser includes file editing, Git diff review, line-level comments, a PTY terminal, and dev-server previews. It can also publish static artifacts to stable URLs that outlive the sandbox. RoomTalk runs on a MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL stores canonical state, room events, and <code>assistant_runs</code> business facts; Redis serves realtime/cache plus AOF-backed BullMQ scheduling; App and a dedicated AI Worker run the same Node/TypeScript image; SeaweedFS provides S3-compatible object storage. Each code-agent room has a separate E2B execution plane where a reusable JSONL daemon runs Coco or Codex app-server.
 </blockquote>
 
 <p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
@@ -410,9 +410,9 @@ RoomTalk is a realtime AI collaboration platform. People and AI share rooms, whi
 │ identity · room access · turn state · ordering · usage/cost        │
 │ sandbox lifecycle · scoped tokens · static publish                 │
 ├──────────────────────┬──────────────────────┬───────────────────────┤
-│ PostgreSQL durable   │ Chat AI + outbox     │ SeaweedFS / S3 API   │
-│ room event log       │ provider clients     │ media + artifacts    │
-│ Redis realtime/cache│                      │                      │
+│ PostgreSQL durable   │ App → dispatch relay │ SeaweedFS / S3 API   │
+│ room events + runs   │ BullMQ → AI Worker   │ media + artifacts    │
+│ Redis realtime/queue │ provider clients     │                      │
 └──────────────────────┴───────────┬──────────┴───────────────────────┘
                                    │ lifecycle + JSONL protocol
 ┌──────────────────────────────────▼──────────────────────────────────┐
@@ -427,21 +427,21 @@ RoomTalk is a realtime AI collaboration platform. People and AI share rooms, whi
 <p data-lang="zh"><code>CompositeRoomStore</code> 定义了后端的状态归属：哪些数据必须持久，哪些状态可以重建，以及客户端最终以哪一层为准。它组合了三个职责不同的子存储：</p>
 <p data-lang="en"><code>CompositeRoomStore</code> defines state ownership in the backend: which data must persist, which state can be rebuilt, and which authority clients eventually follow. It composes three stores with different responsibilities:</p>
 <ul data-lang="zh">
-  <li><code>DurableRoomStore</code>：PostgreSQL 是唯一 runtime 实现，保存房间、消息、room events、成员、媒体 metadata、认证与 AI/outbox record。旧 <code>RedisStore</code> 只为 import/migration 与 contract coverage 保留。</li>
-  <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员、临时状态。服务重启后自动重建。</li>
+  <li><code>DurableRoomStore</code>：PostgreSQL 是唯一 runtime 实现，保存房间、消息、room events、成员、媒体 metadata、认证、<code>assistant_runs</code> 与 dispatch intent。旧 <code>RedisStore</code> 只为 import/migration 与 contract coverage 保留。</li>
+  <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员和临时状态；同一个 Redis 初期也以独立 namespace/connection 承载 BullMQ。</li>
   <li><code>RoomMessageCacheStore</code>：可选的 Redis TTL 缓存，在 PostgreSQL 模式下减少数据库读压力。</li>
 </ul>
 <ul data-lang="en">
-  <li><code>DurableRoomStore</code>: PostgreSQL is the only runtime implementation, owning rooms, messages, room events, members, media metadata, auth, and AI/outbox records. The legacy <code>RedisStore</code> remains only for import/migration and contract coverage.</li>
-  <li><code>RealtimeRoomStore</code>: Always Redis. Manages socket sessions, online members, ephemeral state. Rebuilt automatically on restart.</li>
+  <li><code>DurableRoomStore</code>: PostgreSQL is the only runtime implementation, owning rooms, messages, room events, members, media metadata, auth, <code>assistant_runs</code>, and dispatch intent. The legacy <code>RedisStore</code> remains only for import/migration and contract coverage.</li>
+  <li><code>RealtimeRoomStore</code>: Always Redis. It manages socket sessions, online members, and ephemeral state; the same Redis initially hosts BullMQ through separate namespaces and connections.</li>
   <li><code>RoomMessageCacheStore</code>: Optional Redis TTL cache that reduces database read pressure in PostgreSQL mode.</li>
 </ul>
 
 <blockquote data-lang="zh">
-面试时，我会先说明状态归属。房间、消息和 event sequence 丢失后无法重建，所以由 PostgreSQL 保存；session、presence 和短 TTL cache 即使丢失，也只会触发重连或增加一次数据库读取，所以放在 Redis。PostgreSQL 是唯一的 durable authority。客户端按每个房间的 event sequence 重放，cache 只是带 <code>lastAppliedSeq</code> 的临时窗口，Socket.IO 也不承担最终一致性。
+面试时，我会先说明状态归属。房间、消息、event sequence 和 AI 业务结果无法从运行队列反推，所以由 PostgreSQL 保存；session、presence 与短 TTL cache 可以重建。BullMQ job 也放在 Redis，但它只描述“如何调度”，不回答用户任务是否成功；active job 用 AOF 保存，不能当普通 cache 清空。客户端按房间 sequence 重放，Socket.IO 与 BullMQ 都不是最终业务事实源。
 </blockquote>
 <blockquote data-lang="en">
-In an interview, I start with state ownership. Rooms, messages, and event sequences cannot be reconstructed after loss, so PostgreSQL stores them. Losing sessions, presence, or a short-TTL cache only causes a reconnect or an extra database read, so Redis stores those. PostgreSQL is the sole durable authority. Clients replay each room's event sequence; cache is a temporary window tagged with <code>lastAppliedSeq</code>, and Socket.IO does not carry the final consistency guarantee.
+In an interview, I start with state ownership. Rooms, messages, event sequences, and AI business outcomes cannot be inferred from a runtime queue, so PostgreSQL stores them. Sessions, presence, and short-TTL cache can be rebuilt. BullMQ jobs also live in Redis, but describe scheduling rather than whether the user's task succeeded; active jobs use AOF and are not flushed like cache. Clients replay room sequences, while neither Socket.IO nor BullMQ is the final business authority.
 </blockquote>
 
 <h3 id="arch-socketio"><span data-lang="zh">2. Socket.IO 多实例扩展</span><span data-lang="en">2. Socket.IO Multi-Instance Scaling</span></h3>
@@ -487,28 +487,30 @@ PostgreSQL advisory lock ── one recovery / retention runner per pass</div>
 
 <h3 id="arch-ai"><span data-lang="zh">3. AI 流式响应</span><span data-lang="en">3. AI Streaming Response</span></h3>
 
-<div class="diagram" data-lang="zh">客户端 → 持久化用户消息 + AI placeholder → assistant_run + outbox → Worker → AI Provider
-   ▲                                           │                     │
-   └──── durable room events ◀─────────────────┴── ai_chunk fast path┘</div>
-<div class="diagram" data-lang="en">Client → persist user + AI placeholder → assistant_run + outbox → Worker → AI Provider
-   ▲                                      │                     │
-   └──── durable room events ◀────────────┴── ai_chunk fast path┘</div>
+<div class="diagram" data-lang="zh">客户端 → App → PostgreSQL: placeholder + assistant_run + dispatch intent
+   ▲                         │ commit                 │
+   │                 App relay → BullMQ → 独立 AI Worker → Provider
+   └── durable room event ◀──┴──── Redis transient chunk fast path ──┘</div>
+<div class="diagram" data-lang="en">Client → App → PostgreSQL: placeholder + assistant_run + dispatch intent
+   ▲                       │ commit                 │
+   │               App relay → BullMQ → dedicated AI Worker → Provider
+   └── durable room event ◀┴──── Redis transient chunk fast path ───┘</div>
 
 <ul data-lang="zh">
-  <li>用户消息和 AI <code>status: 'streaming'</code> placeholder 先写 PostgreSQL，各自在原事务里产生 durable room event。</li>
-  <li>默认 worker 模式把 <code>assistant_run</code> 与 <code>outbox_event</code> 原子写入；Worker claim/lease/retry 后调用 Provider。</li>
-  <li>Provider 输出中的 <code>ai_chunk</code> 通过 Socket.IO 直接推送，它是低延迟 UX fast path，不进入 room-event log。</li>
-  <li>如果 chunk/A2UI/end 抢在 durable placeholder event 前到达，客户端按 <code>messageId</code> 有界暂存并在 placeholder 出现后按到达顺序 drain；上限为 60 秒 TTL、64 个 message、512 events、512 KiB，超限时最终 durable event 仍保证收敛。</li>
-  <li>完成时先持久化最终 Message，再发 <code>ai_stream_end</code>。<code>ai_stream_error</code> 显式声明 <code>persisted</code>：正常失败先保存完整错误 Message，再发送 <code>{ persisted: true, message }</code>；如果即时终态保存失败，则发送 <code>{ persisted: false }</code>，客户端立刻把 placeholder 终止为 error。服务端把同一条终态 Message 放入指数退避 reconciler，数据库恢复后无需重启也会补写；只有 stream-owner lease 过期后，其他实例才可以把 orphan placeholder 恢复为 error。</li>
-  <li>服务重启时，Worker 从 outbox/run 状态继续处理；遗留的 streaming message 还有 <code>aiStreamRecovery</code> 兜底，避免僵尸流。</li>
+  <li>一个 PostgreSQL 事务同时创建 <code>status: streaming</code> placeholder、<code>assistant_runs</code>、placeholder room event 与 <code>task_dispatch_outbox</code>。业务请求与待投递意图要么一起提交，要么一起回滚。</li>
+  <li>App relay 只把 <code>{ schemaVersion: 1, runId }</code> 以 <code>jobId=runId</code> 送入 BullMQ。Redis 暂时不可用时 dispatch row 保持 pending，所以“用户看到已接受但任务消失”的窗口被关闭。</li>
+  <li>独立 Node/TypeScript Worker 从 PostgreSQL 读取 request snapshot，claim 精确 run 并得到 generation lease。BullMQ 负责 waiting、并发、backoff 与 stalled recovery；<code>assistant_runs</code> 才负责业务状态和结果。</li>
+  <li>Worker 通过版本化 Redis channel 发布 <code>ai_chunk</code>/<code>a2ui_update</code>/<code>ai_stream_end</code>；每个 App 重新鉴权本机 socket 后用 <code>io.local</code> 转发。早到事件按 <code>messageId</code> 有界暂存，旧 generation 被忽略。</li>
+  <li>Provider 完成后先把 immutable terminal payload 写入 run，再在一个事务里投影最终 Message、run 状态与房间费用。若中途崩溃，retry 只重做 projection，不会重复调用 Provider或计费。</li>
+  <li>终态只允许更新同 room、仍为 streaming、owner/generation 匹配的现有 placeholder。消息已删除、已完成或被新 Worker 接管时，旧 job 变 obsolete，绝不会 upsert 复活。</li>
 </ul>
 <ul data-lang="en">
-  <li>The user message and AI <code>status: 'streaming'</code> placeholder are persisted first; each transaction appends a durable room event.</li>
-  <li>In the default worker mode, the <code>assistant_run</code> and <code>outbox_event</code> are written atomically; a worker claims, leases, and retries the Provider call.</li>
-  <li>Provider output is pushed as direct Socket.IO <code>ai_chunk</code> events. This is a low-latency UX fast path and is not stored in the room-event log.</li>
-  <li>If a chunk/A2UI/end event beats the durable placeholder event, the client buffers it by <code>messageId</code> and drains it in arrival order when the placeholder appears. The buffer is capped at a 60-second TTL, 64 message IDs, 512 events, and 512 KiB; the final durable event still guarantees convergence after eviction.</li>
-  <li>On success, the final Message is persisted before <code>ai_stream_end</code>. <code>ai_stream_error</code> explicitly declares <code>persisted</code>: a normal failure saves the complete error Message and sends <code>{ persisted: true, message }</code>. If the immediate terminal write fails, <code>{ persisted: false }</code> terminalizes the placeholder while the server queues the same Message in an exponential-backoff reconciler. Database recovery completes the write without a restart; another instance may recover an orphan placeholder only after the stream-owner lease expires.</li>
-  <li>After a restart, the worker continues from outbox/run state, while <code>aiStreamRecovery</code> remains a final guard against orphaned streaming messages.</li>
+  <li>One PostgreSQL transaction creates the <code>status: streaming</code> placeholder, <code>assistant_runs</code>, placeholder room event, and <code>task_dispatch_outbox</code>. The accepted business request and enqueue intent commit or roll back together.</li>
+  <li>The App relay sends only <code>{ schemaVersion: 1, runId }</code> to BullMQ with <code>jobId=runId</code>. If Redis is temporarily unavailable, the dispatch row stays pending, closing the “accepted request silently vanished” window.</li>
+  <li>A dedicated Node/TypeScript Worker reads the request snapshot from PostgreSQL and claims the exact run with a generation lease. BullMQ owns waiting, concurrency, backoff, and stalled recovery; <code>assistant_runs</code> owns business status and results.</li>
+  <li>The Worker publishes <code>ai_chunk</code>/<code>a2ui_update</code>/<code>ai_stream_end</code> through a versioned Redis channel. Every App reauthorizes attached sockets and emits with <code>io.local</code>. Early events are bounded-buffered by <code>messageId</code>; older generations are ignored.</li>
+  <li>After the Provider completes, the Worker first stages an immutable terminal payload, then projects final Message, run state, and room cost in one transaction. A crash between those steps retries projection only, never the Provider call or charge.</li>
+  <li>Terminal projection updates only an existing placeholder in the same room that is still streaming and owned by that generation. Deleted, terminal, or replacement-owned messages make the old job obsolete rather than being upserted back to life.</li>
 </ul>
 
 <div class="card" data-lang="zh">
@@ -1212,8 +1214,8 @@ Message sending uses optimistic updates: insert into the local list with a clien
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="zh">主线 C：持久事实、增量恢复与成本边界</h3>
 <h3 style="color:var(--cyan);border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:48px" data-lang="en">Narrative C: Durable Truth, Incremental Recovery, and Cost Boundaries</h3>
 
-<p data-lang="zh">一次离线恢复可以串起这条主线。Socket 通知可能漏，旧 tab 可能拿着过期 cursor，数据库也可能从备份恢复到更早的 head。RoomTalk 把通知当作"有新变化"的提示，再用 PostgreSQL 中可重放的 room event 恢复状态，差距过大时则读取 snapshot。沿着这条恢复路径，就能自然讲到 Redis 迁移、AI outbox 和成本控制。</p>
-<p data-lang="en">One offline recovery path ties this narrative together. A Socket hint may be missed, an old tab may hold a stale cursor, and a restored database may have an earlier head. RoomTalk treats the notification as a "something changed" hint, then rebuilds state from replayable PostgreSQL room events or loads a snapshot when the gap is too large. The same recovery path leads naturally into Redis migration, the AI outbox, and cost control.</p>
+<p data-lang="zh">一次离线恢复可以串起这条主线。Socket 通知可能漏，旧 tab 可能拿着过期 cursor，数据库也可能从备份恢复到更早的 head。RoomTalk 把通知当作“有新变化”的提示，再用 PostgreSQL 中可重放的 room event 恢复状态，差距过大时读取 snapshot。AI 执行也遵守同一原则：BullMQ 负责让某个 Worker 继续运行，<code>assistant_runs</code> 负责解释用户请求到底发生了什么；任务已经接受但 Redis 暂时不可用时，dispatch intent 留在 PostgreSQL 等待补投。</p>
+<p data-lang="en">One offline recovery path ties this narrative together. A Socket hint may be missed, an old tab may hold a stale cursor, and a restored database may have an earlier head. RoomTalk treats the notification as “something changed,” then rebuilds state from replayable PostgreSQL room events or loads a snapshot for a large gap. AI execution follows the same ownership rule: BullMQ makes sure some Worker continues the operation, while <code>assistant_runs</code> explains what happened to the user's request. If Redis is temporarily unavailable after acceptance, PostgreSQL retains dispatch intent for later delivery.</p>
 
 <!-- ===== 难点6：断连恢复 ===== -->
 <h3 id="ch-mobile"><span data-lang="zh">移动浏览器 WebSocket 断连恢复</span><span data-lang="en">Mobile WebSocket Reconnection Recovery</span></h3>
@@ -1385,10 +1387,10 @@ During migration, one Store contract kept both implementations behaviorally alig
 </div>
 
 <blockquote data-lang="zh">
-Canonical tables 仍是事实源，<code>room_events</code> 则是 after-image changelog。它可以裁剪，但在保留期内不可变，也能确定性重放。读取旧 event 时不会再 hydrate 当前行，所以 A 后来改成 B，旧 seq 仍然保存 A。这个设计只采用了 Event Sourcing 的部分思路。它与 MySQL binlog 都使用单调 cursor 补齐缺失区间，但浏览器读取的是稳定的应用语义，不依赖 WAL/binlog 格式。AI outbox 也有不同职责：room event 供所有客户端重复读取，outbox job 只由一个 Worker claim/retry。
+Canonical tables 仍是事实源，<code>room_events</code> 是 fan-out after-image changelog：每个客户端用自己的 cursor 重读。AI 调度是 competing-consumer：<code>task_dispatch_outbox</code> 只桥接 PostgreSQL commit 与 Redis，BullMQ job 只由一个 Worker 执行，而 <code>assistant_runs</code> 保存业务结果。三者都可能与同一次用户操作有关，但 consumer、重试与 retention 完全不同，所以不能合并成一张万能事件表。
 </blockquote>
 <blockquote data-lang="en">
-Canonical tables remain the source of truth, while <code>room_events</code> is an after-image changelog. It can be pruned, but it stays immutable and deterministic during retention. Old events are no longer hydrated from current rows, so if A later becomes B, the old sequence still contains A. This borrows part of the Event Sourcing model. Like a MySQL binlog, it uses a monotonic cursor to consume a missing range, but browsers read stable application semantics instead of WAL or binlog formats. The AI outbox has a different job: every client may replay room events, while one worker claims and retries each outbox job.
+Canonical tables remain authoritative, while <code>room_events</code> is a fan-out after-image changelog that every client reads with its own cursor. AI scheduling is competing-consumer work: <code>task_dispatch_outbox</code> only bridges the PostgreSQL commit into Redis, one Worker executes a BullMQ job, and <code>assistant_runs</code> stores the business result. These mechanisms may originate in one user action, but their consumers, retries, and retention differ, so one universal event table would blur rather than simplify the model.
 </blockquote>
 
 <div class="card" data-lang="zh">
@@ -1688,14 +1690,14 @@ AI context passes through three filters. A retry or edit first truncates history
        durable sandbox queue + per-user/global admission control
 100x:  active code-agent room 使用 distributed lease / room affinity
        PostgreSQL 读副本 + 消息分表
-       独立 AI/chat worker；E2B 仍作为弹性 execution plane</div>
+       App 与 BullMQ AI Worker 独立扩容；E2B 仍作为弹性 execution plane</div>
 <div class="diagram" data-lang="en">Now:   1 MacBook Compose Node control-plane instance + on-demand E2B sandboxes
 10x:   Multiple Node instances, sticky sockets, Redis adapter for single-origin transient events
        PG NOTIFY + io.local for durable room events
        Durable sandbox queue + per-user/global admission control
 100x:  Distributed lease / room affinity for active code-agent rooms
        PostgreSQL read replicas + message table partitioning
-       Separate AI/chat workers; E2B remains the elastic execution plane</div>
+       Scale App and BullMQ AI Workers independently; E2B remains the elastic execution plane</div>
 
 <h3 data-lang="zh">如果要支持 10 万并发连接</h3>
 <h3 data-lang="en">Supporting 100K Concurrent Connections</h3>
@@ -1703,13 +1705,13 @@ AI context passes through three filters. A retry or edit first truncates history
   <li>先用压测得到单实例在真实 payload、TLS 和 heartbeat 下的连接/CPU/内存上限，不用固定经验数字估算</li>
   <li>Socket 层水平扩展，sticky connection 维持连接归属；单源 transient event 用 Redis adapter，durable room event 用 PG NOTIFY + <code>io.local</code></li>
   <li>active Code Agent room 需要 distributed lease，避免两个 control-plane 实例同时控制同一个 sandbox</li>
-  <li>聊天同步继续走 durable room event cursor；AI side effect outbox、sandbox queue 与 chat throughput 分开扩展</li>
+  <li>聊天同步继续走 durable room event cursor；App、BullMQ AI Worker、queue Redis 与 sandbox throughput 分开扩展</li>
 </ol>
 <ol data-lang="en">
   <li>Load-test the real payload, TLS, and heartbeat profile to establish per-instance connection/CPU/memory limits instead of relying on a fixed rule of thumb</li>
   <li>Scale socket instances horizontally. Sticky connections preserve connection ownership; Redis adapter carries single-origin transient events, while PG NOTIFY plus <code>io.local</code> carries durable room events</li>
   <li>Use a distributed lease for active code-agent rooms so two control-plane instances cannot control one sandbox</li>
-  <li>Keep durable room-event sync, the AI side-effect outbox, sandbox queues, and chat throughput as independently scalable boundaries</li>
+  <li>Scale durable room-event sync, App replicas, BullMQ AI Workers, queue Redis, and sandbox throughput as separate boundaries</li>
 </ol>
 
 <div class="card warn" data-lang="zh">
@@ -1845,7 +1847,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
     <div class="star-label s">Situation</div><div class="star-val">项目最初用 Redis 做全量持久化，数据增长后内存成本上升，且缺少关系约束。</div>
     <div class="star-label t">Task</div><div class="star-val">把持久事实迁移到 PostgreSQL，退役多套 version counter，并让移动端能只补漏掉的提交；同时完成从 Fly/Supabase/Tigris 到本地 Compose 的单次受控切换。</div>
     <div class="star-label a">Action</div><div class="star-val">先用 Store contract 和幂等脚本完成数据迁移，再用 PostgreSQL trigger 建立每房间有界 event log，客户端改为 snapshot + cursor replay；对真实数据库、2,857 个对象、备份恢复、WebSocket 与 signed URL 做 rehearsal，最终 write freeze 后切流量。</div>
-    <div class="star-label r">Result</div><div class="star-val">PostgreSQL 成为唯一 durable authority，Redis 可重建；<code>messageVersion/roomVersion</code> 从 runtime 与 schema 删除，客户端可恢复漏事件；生产运行在同一容器镜像 + PG/Redis/S3 合约上，可受控映射到 AWS。</div>
+    <div class="star-label r">Result</div><div class="star-val">PostgreSQL 成为唯一 business authority；Redis 的 realtime/cache 可重建，active BullMQ job 用 AOF 保存。<code>messageVersion/roomVersion</code> 从 runtime 与 schema 删除，客户端可恢复漏事件；同一镜像分别运行 App 与 Worker，PG/Redis/S3 合约可受控映射到 AWS。</div>
   </div>
 </div>
 <div class="card" data-lang="en">
@@ -1854,7 +1856,7 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
     <div class="star-label s">Situation</div><div class="star-val">The project originally used Redis for all persistence. As data grew, memory costs increased and we lacked relational constraints.</div>
     <div class="star-label t">Task</div><div class="star-val">Move durable facts to PostgreSQL, retire multiple version counters, let mobile clients fetch only missed commits, and complete one controlled cutover from Fly/Supabase/Tigris to local Compose.</div>
     <div class="star-label a">Action</div><div class="star-val">Used store contracts and idempotent scripts for data migration, then added a bounded per-room event log with PostgreSQL triggers and moved clients to snapshot + cursor replay. Rehearsed the real database, 2,857 objects, backup/restore, WebSocket, and signed URLs before a final write freeze and traffic switch.</div>
-    <div class="star-label r">Result</div><div class="star-val">PostgreSQL is the sole durable authority and Redis is rebuildable. <code>messageVersion/roomVersion</code> disappeared from runtime and schema, clients recover missed events, and production now uses one image plus PostgreSQL/Redis/S3 contracts that map cleanly to AWS.</div>
+    <div class="star-label r">Result</div><div class="star-val">PostgreSQL is the sole business authority. Redis realtime/cache is rebuildable, while active BullMQ jobs use AOF. <code>messageVersion/roomVersion</code> disappeared from runtime and schema, clients recover missed events, and one image runs separate App/Worker processes behind PostgreSQL/Redis/S3 contracts that map cleanly to AWS.</div>
   </div>
 </div>
 
@@ -1959,20 +1961,20 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么不用微服务架构？</summary>
-  <div class="answer">RoomTalk control plane 当前采用模块化单体。一次房间写入经常同时涉及权限、消息、room event 和 outbox，把它们留在同一进程和数据库事务里，更容易保证一致性，部署与调试也更直接。E2B execution plane 已经按安全边界隔离，AI worker 也有独立的 claim/retry 生命周期。如果以后 AI 任务在吞吐、扩缩容或故障域上出现独立指标，再把 worker 部署成单独服务。现在提前拆分，只会增加网络调用、分布式追踪和跨服务一致性的成本。</div>
+  <div class="answer">RoomTalk 没有把每个领域都拆成远程服务，但也不再是单进程。App 与普通 Chat AI Worker 使用同一镜像和 TypeScript domain code，却以不同进程部署：App 拥有 HTTP/Socket 与 dispatch relay，Worker 拥有 BullMQ consumer 和 Provider 调用。它们通过 PostgreSQL aggregate 与最小 <code>runId</code> queue contract 连接，不互相调用内部 HTTP。这样 AI 并发、重启和故障域可独立控制，同时避免在 Python 或第二个服务里复制 Provider/A2UI/费用语义。E2B execution plane 则因为运行不可信代码，按安全边界真正隔离。</div>
 </details>
 <details data-lang="en">
   <summary>Why not a microservices architecture?</summary>
-  <div class="answer">The RoomTalk control plane currently uses a modular monolith. One room mutation often spans authorization, a message, a room event, and an outbox record. Keeping them in one process and database transaction simplifies consistency, deployment, and debugging. The E2B execution plane is already isolated along its security boundary, and AI workers have their own claim/retry lifecycle. If AI throughput, scaling, or failure behavior later develops independent metrics, the worker can become a separate deployed service. Splitting it now would add network calls, distributed tracing, and cross-service consistency work before those costs solve a measured problem.</div>
+  <div class="answer">RoomTalk does not turn every domain into a remote service, but it is no longer one process either. App and ordinary chat AI Worker share one image and TypeScript domain code while deploying as separate processes: App owns HTTP/Socket and the dispatch relay; Worker owns the BullMQ consumer and Provider calls. They meet through the PostgreSQL aggregate and a minimal <code>runId</code> queue contract, not internal HTTP calls. This separates AI concurrency, restart, and failure behavior without copying provider/A2UI/cost semantics into Python or another service. The E2B execution plane is genuinely isolated because it runs untrusted code.</div>
 </details>
 
 <details data-lang="zh">
   <summary>Redis 挂了怎么办？</summary>
-  <div class="answer">持久数据在 PostgreSQL，不受影响；消息缓存丢失只是多查一次 PostgreSQL。对仍连接在当前进程的 Socket，服务端以认证后保存在 <code>socket.data</code> 的 client ID 为连接期权威：Redis session row 缺失时异步重建，实例 heartbeat 丢失后重新取得 lease 时批量重建本机 session/room/browser presence。若 Redis 中出现与本机身份冲突的非空值，则 fail closed 并要求重新注册，不猜测身份。</div>
+  <div class="answer">需要区分 realtime Redis 与 queue 责任，即使它们当前是一个实例。业务事实仍在 PostgreSQL；cache/presence 丢失会重建，本机 Socket 继续以认证后的 <code>socket.data</code> 为身份权威。Queue 不可用时，App 已提交的 <code>task_dispatch_outbox</code> 保持 pending，状态接口显示 degraded/deferred，Redis 恢复后 relay 再送入 BullMQ，所以请求不丢。正在运行的 job 依赖 Redis AOF 与 BullMQ lock/stalled 机制恢复，因此生产配置使用 named volume、AOF <code>everysec</code> 和 <code>noeviction</code>，不能把整个 Redis 当可随时 flush 的 cache。</div>
 </details>
 <details data-lang="en">
   <summary>What happens if Redis goes down?</summary>
-  <div class="answer">Persistent data remains in PostgreSQL; losing the message cache only adds a PostgreSQL read. For sockets still attached to the current process, the authenticated client ID in <code>socket.data</code> is authoritative for that connection. A missing Redis session row is rebuilt asynchronously, and a process that reacquires its heartbeat lease rehydrates local session, room, and browser presence. A conflicting non-empty Redis identity fails closed and requests registration instead of guessing.</div>
+  <div class="answer">Realtime and queue responsibilities must be separated conceptually even though they initially share one Redis. Business facts remain in PostgreSQL; cache/presence rebuild, and attached sockets retain authenticated <code>socket.data</code> identity. If the queue is unavailable, committed <code>task_dispatch_outbox</code> rows stay pending, status reports degraded/deferred dispatch, and the relay enqueues them after recovery. Active jobs rely on Redis AOF plus BullMQ lock/stalled recovery, so production uses a named volume, AOF <code>everysec</code>, and <code>noeviction</code>; the whole Redis instance is no longer treated as flushable cache.</div>
 </details>
 
 <details data-lang="zh">
@@ -2031,29 +2033,29 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>一条 AI message 从发送到完成经历什么？</summary>
-  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event。默认 worker 模式随后用<strong>同一个 PostgreSQL 事务</strong>创建 <code>status=streaming</code> 的 AI placeholder、<code>assistant_run</code> 和 <code>ai.run_requested</code> outbox；placeholder event 也在这次 commit 中生成。这样不会出现“UI 已看到 placeholder，但 durable job 根本没入队”或“Worker 看见 job，却找不到 placeholder”的半状态。Worker claim 时递增 attempt；<code>workerId + attempt</code> 既是 outbox ack token，也是 placeholder 的 generation fence。Worker 在 Provider 运行期间续租，续租失败就 abort 请求；旧 token 不能再 ack，也不能写终态。生成中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；它仍可能在 PostgreSQL NOTIFY 的浏览器投递之前到达，所以客户端按 <code>messageId</code> 有界暂存。成功或失败时，服务端只能条件更新仍为 <code>streaming</code> 且 owner/fence 相同的现有 placeholder，绝不 upsert；删除、重试或新 Worker 接管后，旧 Worker 不能覆盖或复活消息。Ownership-only UPDATE 不推进公开 room seq。最终 durable after-image 仍是事实源。</div>
+  <div class="answer">鉴权后，一个 PostgreSQL 事务创建 streaming placeholder、<code>assistant_runs</code>、placeholder room event 与 <code>task_dispatch_outbox</code>。App relay 用确定性 <code>jobId=runId</code> 把最小 job 送入 BullMQ。Worker 再从 PostgreSQL 读取完整 request，claim 精确 run 并得到 generation lease；续租失败会停止 owned work，旧 generation 的 chunk/终态都无效。Chunk 经 Redis transient channel 到 App，再由 App 鉴权并 <code>io.local</code> 推给浏览器；早于 placeholder 的 chunk 会有界缓存。Provider 返回后，Worker先把 immutable terminal payload staged 到 run，再用一个事务投影 Message、run terminal status 与 room cost。若 staged 后崩溃，retry 只 project，不再调用 Provider；placeholder 已删除或被新 generation 接管时只返回 obsolete，绝不 upsert 复活。最终 room event 让所有客户端收敛。</div>
 </details>
 <details data-lang="en">
   <summary>What happens during one AI-message lifecycle?</summary>
-  <div class="answer">The server authorizes and persists the user message, whose deferred writer creates its immutable room-event after-image. In default worker mode, the next PostgreSQL transaction creates the AI <code>status=streaming</code> placeholder, <code>assistant_run</code>, and <code>ai.run_requested</code> outbox together; the placeholder event is produced by that commit. This removes both half-states: a visible placeholder without a durable job and a claimable job without its placeholder. Claiming increments the attempt, and <code>workerId + attempt</code> becomes both the outbox acknowledgement token and the placeholder generation fence. The worker renews its lease while the Provider runs and aborts when renewal fails; an old token can neither acknowledge nor commit a terminal result. Generated <code>ai_chunk</code> data goes directly through Socket.IO and may still beat browser delivery of the PostgreSQL notification, so it is bounded-buffered by <code>messageId</code>. Success or failure may only conditionally update an existing <code>streaming</code> placeholder with the same owner/fence—never upsert—so deletion, retry, or takeover prevents a stale worker from overwriting or resurrecting the message. Ownership-only updates do not advance the public room sequence; the durable terminal after-image remains authoritative.</div>
+  <div class="answer">After authorization, one PostgreSQL transaction creates the streaming placeholder, <code>assistant_runs</code>, placeholder room event, and <code>task_dispatch_outbox</code>. The App relay enqueues a minimal job with deterministic <code>jobId=runId</code>. The Worker reads the complete request from PostgreSQL and claims the exact run with a generation lease; lost renewal ends owned work, and stale chunks or terminal writes are rejected. Chunks cross a Redis transient channel to Apps, which reauthorize and emit with <code>io.local</code>; a chunk that beats its placeholder is bounded-buffered. After the Provider returns, the Worker stages an immutable terminal payload and atomically projects Message, run terminal state, and room cost. A crash after staging retries projection only, never the Provider; a deleted or replacement-owned placeholder is obsolete and never upserted back. The final room event converges every client.</div>
 </details>
 
 <details data-lang="zh">
   <summary>部署重启时，为什么 queued AI 不会被 startup recovery 判死？</summary>
-  <div class="answer">Owner lease 过期只说明原进程不再拥有实时 stream，不等于 durable job 已经失败。Recovery 会同时检查 <code>assistant_runs</code> 和 <code>outbox_events</code>：只要 run 仍是 <code>queued/running</code>，并且对应 outbox 仍是 <code>pending/processing</code>，placeholder 就保持 <code>streaming</code>，让新 Worker 重新 claim。只有既没有 live owner、又没有可恢复 durable job 时，Recovery 才把消息规范化成 error，设置 <code>is_error/updated_at</code>、清空 owner，并清理不再被引用的过期 lease。这个判断把“进程所有权丢失”和“业务任务不可恢复”分成了两个事实。</div>
+  <div class="answer"><code>assistant_runs</code> 是业务事实，App/Worker 进程内存不是。Queued run 同时拥有 pending dispatch；migration <code>0010</code> 还会为 cutover 前 active run 回填 dispatch。App 重启后 relay 继续补投，Worker 重启后 BullMQ 重新 claim。Running run 的旧 generation lease 过期后，新 Worker 才能取得更高 generation；finalizing run 只 project。首次切换必须先停止旧 embedded polling Worker，再启动 BullMQ Worker，避免两套 executor 重叠。</div>
 </details>
 <details data-lang="en">
   <summary>Why doesn't startup recovery kill a queued AI job during deployment?</summary>
-  <div class="answer">An expired owner lease proves only that the old process no longer owns the live stream; it does not prove that the durable job failed. Recovery checks <code>assistant_runs</code> and <code>outbox_events</code> together. While a run is <code>queued/running</code> and its outbox row is <code>pending/processing</code>, the placeholder remains <code>streaming</code> for a replacement worker to claim. Only a placeholder with neither a live owner nor a recoverable durable job becomes a normalized error with <code>is_error/updated_at</code> set and ownership cleared. This separates process ownership loss from business-job irrecoverability.</div>
+  <div class="answer"><code>assistant_runs</code> is business truth; App/Worker memory is not. A queued run has pending dispatch, and migration <code>0010</code> backfills dispatch for active pre-cutover runs. App restart resumes relay; Worker restart lets BullMQ reclaim work. A running generation must lose its lease before a replacement claims a higher generation, while a finalizing run performs projection only. The first cutover stops the embedded polling Worker before the BullMQ Worker starts so the two executors never overlap.</div>
 </details>
 
 <details data-lang="zh">
-  <summary>为什么 Outbox 默认 batch size 是 1，不是 10？</summary>
-  <div class="answer">Claim 的 lease 从数据库把任务标成 <code>processing</code> 时就开始计时，但当前 Worker 串行执行，而且只给“正在执行”的那一条续租。若一次 claim 10 条，第 1 条 Provider 调用超过 60 秒，第 2–10 条还没开始就可能过期，被另一个实例重新 claim；message fence 能挡住最后的旧终态，却挡不住重复 Provider 调用、额外成本和瞬时 chunk 混流。所以当前采用 <strong>claim one, execute one</strong>。将来需要吞吐时，正确升级是有界并发，并从 claim 时刻起为每一条已占有任务续租，而不是简单把串行 batch 调大。</div>
+  <summary>BullMQ 并发为什么可以是 2，dispatch batch 却可以是 20？</summary>
+  <div class="answer">它们不是同一种 ownership。Dispatch relay 的 batch 只把 20 个短小 <code>runId</code> enqueue 到 Redis，并用 fenced token 确认 PostgreSQL intent；它不提前 claim Provider execution。BullMQ Worker concurrency=2 表示一个进程同时 active 两个 job，每个 job 在真正开始时才 claim 自己的 <code>assistant_run</code> generation，并独立续租。等待中的 BullMQ job 还没有 run ownership，因此不会重现旧设计“先 claim 10 条、后 9 条在串行等待中 lease 过期”的问题。</div>
 </details>
 <details data-lang="en">
-  <summary>Why is the Outbox batch size 1 rather than 10?</summary>
-  <div class="answer">A claim lease starts when PostgreSQL marks the row <code>processing</code>, but the current worker executes serially and renews only the event being executed. If it claims ten rows and the first Provider call lasts longer than the 60-second lease, rows 2–10 can expire before they start and be reclaimed elsewhere. The message fence can reject a stale final write, but it cannot undo duplicate Provider calls, cost, or transient chunk mixing. The current rule is therefore <strong>claim one, execute one</strong>. A future throughput increase should use bounded concurrency and renew every claimed item from claim time, not enlarge a serial batch.</div>
+  <summary>Why can BullMQ concurrency be 2 while dispatch batch is 20?</summary>
+  <div class="answer">They represent different ownership. A dispatch relay batch only enqueues twenty small <code>runId</code> values and acknowledges fenced PostgreSQL intent; it does not pre-claim Provider execution. Worker concurrency=2 means one process actively executes two jobs, and each job claims its own <code>assistant_run</code> generation only when processing begins, with independent renewal. Waiting BullMQ jobs own no run lease, so this does not recreate the old “claim ten, let nine expire while waiting serially” bug.</div>
 </details>
 
 <details data-lang="zh">
@@ -2075,21 +2077,39 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 </details>
 
 <details data-lang="zh">
-  <summary><code>room_events</code> 和 <code>outbox_events</code> 为什么不能合并？</summary>
-  <div class="answer"><code>room_events</code> 是 fan-out replay：每个获授权客户端都用自己的 cursor 重复读取，目的是重建可见状态；<code>outbox_events</code> 是 competing consumer：一个 Worker claim、lease、retry，目的是可靠执行副作用。两者可以和业务写入同事务产生，但 consumer、投递语义和清理策略完全不同，合并会让客户端 cursor 与 Worker ack 相互污染。</div>
+  <summary><code>room_events</code>、<code>task_dispatch_outbox</code> 和 BullMQ 为什么不能合并？</summary>
+  <div class="answer"><code>room_events</code> 是 fan-out replay：每个客户端有自己的 cursor，用来重建可见状态。<code>task_dispatch_outbox</code> 是跨存储桥：只保证已经 commit 的 run 最终被送到 Redis。BullMQ 是 competing-consumer scheduler：一个 Worker active 执行，并负责 retry/stalled recovery。把三者合并会让客户端 cursor、跨存储投递确认与 Worker ack 混成一种状态。真正的简化不是少两张表，而是让每个机制只回答一个问题；业务结果始终只问 <code>assistant_runs</code>。</div>
 </details>
 <details data-lang="en">
-  <summary>Why can't <code>room_events</code> and <code>outbox_events</code> be one table?</summary>
-  <div class="answer"><code>room_events</code> is fan-out replay: every authorized client repeatedly reads with its own cursor to reconstruct visible state. <code>outbox_events</code> is a competing-consumer queue: one worker claims, leases, and retries a side effect. Both may be created in the same business transaction, but their consumers, delivery semantics, and cleanup policies differ; combining them would mix client cursors with worker acknowledgements.</div>
+  <summary>Why can't <code>room_events</code>, <code>task_dispatch_outbox</code>, and BullMQ be one mechanism?</summary>
+  <div class="answer"><code>room_events</code> is fan-out replay: each client has a cursor for reconstructing visible state. <code>task_dispatch_outbox</code> is a cross-store bridge: it guarantees that a committed run is eventually handed to Redis. BullMQ is a competing-consumer scheduler: one Worker actively executes, retries, and recovers stalled jobs. Combining them would mix client cursors, cross-store delivery acknowledgement, and Worker acknowledgement. The useful simplification is one question per mechanism; business outcome is always read from <code>assistant_runs</code>.</div>
 </details>
 
 <details data-lang="zh">
-  <summary>当前 AI outbox 已经是最终模型了吗？</summary>
-  <div class="answer">还不是。当前版本已经消除了最危险的启动半状态、批量 claim 过期、旧 Worker 复活消息和无 fence ack，但 AI 终态仍由 message、assistant run、outbox、cost projection、owner lease 与进程内 reconciler 共同描述。下一阶段应把 <code>assistant_runs</code> 升格为唯一 durable execution aggregate：直接保存 request payload、generation、lease owner/expiry、attempt、terminal payload 与幂等 usage ledger；Worker 用 <code>FOR UPDATE SKIP LOCKED</code> claim run，终态事务一次更新 run、message 和 usage。这样 terminal payload 已落库但 projection 暂时失败时，只重试 projection，不重新请求 Provider。AI 专用 outbox、message owner fence 和进程内 terminal reconciler 才能逐步退役。重要的是，这项演进不要求重做已经稳定的 <code>room_events</code> 客户端 changefeed。</div>
+  <summary>现在的 AI Worker 是最终模型吗？为什么没有 <code>assistant_run_usage</code>？</summary>
+  <div class="answer">当前业务一致性模型已经收敛：<code>assistant_runs</code> 保存 request、status、generation/lease、immutable terminal payload、error 与 usage；BullMQ 只调度。终态 projection 锁定唯一 run，并在同一事务中更新 Message、run 与 room cost；run 离开 <code>finalizing</code> 后，重复 projection 是 no-op，所以不需要再用 <code>assistant_run_usage</code> 充当幂等凭证。Terminal payload 在消息删除后仍保留用量审计。以后若产品需要发票级账本、跨房间重新结算或不可变财务分录，可以新增 usage ledger；现在加只会复制事实。可继续演进的是运维能力，例如 dashboard、manual retry 与独立 queue Redis，而不是再造一套业务状态。</div>
 </details>
 <details data-lang="en">
-  <summary>Is the current AI outbox the final model?</summary>
-  <div class="answer">Not yet. The current release removes the most dangerous half-start, batch-claim expiry, stale message resurrection, and unfenced acknowledgement paths, but AI terminal truth is still distributed across the message, assistant run, outbox, cost projection, owner lease, and process-local reconciler. The next step is to promote <code>assistant_runs</code> into the sole durable execution aggregate, storing request payload, generation, lease owner/expiry, attempt, terminal payload, and an idempotent usage ledger. Workers would claim runs with <code>FOR UPDATE SKIP LOCKED</code>, while one terminal transaction updates the run, message, and usage. If terminal payload is durable but projection temporarily fails, recovery retries only projection rather than calling the Provider again. The AI-specific outbox, message owner fence, and in-process reconciler can then be retired gradually without redesigning the stable <code>room_events</code> client changefeed.</div>
+  <summary>Is the AI Worker model final, and why is there no <code>assistant_run_usage</code>?</summary>
+  <div class="answer">The business-consistency model is now converged: <code>assistant_runs</code> stores request, status, generation/lease, immutable terminal payload, error, and usage; BullMQ only schedules. Terminal projection locks one run and updates Message, run, and room cost in one transaction. After the run leaves <code>finalizing</code>, repeated projection is a no-op, so a separate <code>assistant_run_usage</code> row is unnecessary as an idempotency receipt. The terminal payload retains usage even if the Message is deleted. A future invoice-grade ledger, cross-room recomputation, or immutable accounting product could justify another table; adding one now would duplicate facts. Future work is operational—dashboards, manual retry, or a dedicated queue Redis—not a second business state machine.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>既然 <code>assistant_runs</code> 已经在 PostgreSQL，为什么还要 BullMQ？</summary>
+  <div class="answer"><code>assistant_runs</code> 回答“这次用户请求是什么、现在处于什么业务状态、最终得到什么结果”；BullMQ 回答“哪个 Worker 什么时候执行、并发多少、失败后何时 retry、进程崩溃后如何识别 stalled job”。只用 PostgreSQL 当然也能做，但需要自己长期维护 polling、延迟调度、lock renewal、stalled detection、并发和运维保留。只用 BullMQ 又会把用户状态绑到 Redis runtime，难以与 Message/room cost 做同事务收敛。两者组合并不等于两套事实源，而是 durable aggregate 与 scheduler 的分工。</div>
+</details>
+<details data-lang="en">
+  <summary>If <code>assistant_runs</code> already lives in PostgreSQL, why add BullMQ?</summary>
+  <div class="answer"><code>assistant_runs</code> answers “what did the user request, what business state is it in, and what terminal result exists?” BullMQ answers “which Worker runs it, when, at what concurrency, after which backoff, and how a crashed active job becomes stalled.” PostgreSQL alone could implement this, but RoomTalk would keep maintaining polling, delayed scheduling, lock renewal, stalled detection, concurrency, and operational retention. BullMQ alone would tie user-visible state to Redis runtime and could not converge Message/run/cost in one database transaction. Together they are not two truth sources; they are a durable aggregate and a scheduler.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>为什么现在一个 Redis 就够了？什么时候要拆两个？</summary>
+  <div class="answer">当前单机规模下，一个 Redis 减少服务、备份、监控与故障点，BullMQ 又通过 queue name、connection 和 key namespace 与 realtime/cache 隔开。代码已经把 <code>REDIS_URL</code> 与 <code>QUEUE_REDIS_URL</code> 分开，因此这是“同实例、不同责任”，不是把接口写死。出现独立容量/可用性需求时再拆：例如 cache eviction 策略与 queue 的 <code>noeviction</code> 冲突、BullMQ latency 影响 Socket、队列需要独立 failover/维护窗口或 Worker 团队独立扩容。拆分只改配置和迁移 active job，不改 PostgreSQL aggregate 或客户端协议。</div>
+</details>
+<details data-lang="en">
+  <summary>Why is one Redis enough now, and when should it split into two?</summary>
+  <div class="answer">At the current single-host scale, one Redis reduces services, backups, monitoring, and failure points. Queue names, connections, and key namespaces still isolate BullMQ from realtime/cache. The code already separates <code>REDIS_URL</code> and <code>QUEUE_REDIS_URL</code>, so this is one instance with distinct responsibilities rather than a hard-coded coupling. Split when measured needs diverge: cache eviction conflicts with queue <code>noeviction</code>, BullMQ latency affects sockets, the queue needs independent failover/maintenance, or Worker capacity has separate ownership. The split changes configuration and active-job migration, not the PostgreSQL aggregate or browser protocol.</div>
 </details>
 
 <details data-lang="zh">
@@ -2103,11 +2123,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>现在迁移 AWS 难吗？</summary>
-  <div class="answer">应用层相对直接：同一镜像到 ECS Fargate（EKS 可选），PostgreSQL 到 RDS/Aurora，Redis 到 ElastiCache，SeaweedFS object key 原样复制到 S3，E2B 不变。允许短暂停写时用 shadow stack + pg_dump/restore + S3 final delta + DNS cutover 即可；真正零停机还要 PostgreSQL logical replication/CDC 或 AWS DMS。Room event log 只修复客户端同步，不能替代数据库复制。</div>
+  <div class="answer">应用层映射已经明确：同一镜像分别运行 App 与 Worker 两个 ECS service（或 EKS deployment），PostgreSQL 到 RDS/Aurora，realtime 与 BullMQ 先共用 ElastiCache for Redis OSS，未来用 <code>QUEUE_REDIS_URL</code> 拆成独立 replication group；SeaweedFS object key 原样复制到 S3，E2B 不变。切换时除了 PostgreSQL/S3 增量，还要排空或迁移 active BullMQ job，不能像纯 cache 一样空启动。真正零停机仍需要 PostgreSQL logical replication/CDC 或 AWS DMS；room event log 只修复客户端同步。</div>
 </details>
 <details data-lang="en">
   <summary>How difficult is an AWS migration now?</summary>
-  <div class="answer">The application mapping is direct: the same image to ECS Fargate (EKS optional), PostgreSQL to RDS/Aurora, Redis to ElastiCache, SeaweedFS object keys copied unchanged to S3, and E2B unchanged. With a short write pause, use a shadow stack + pg_dump/restore + final S3 delta + DNS cutover. True zero downtime additionally needs PostgreSQL logical replication/CDC or AWS DMS. The room-event log repairs client sync; it does not replicate the database.</div>
+  <div class="answer">The mapping is explicit: run the same image as separate App and Worker ECS services (or EKS deployments), PostgreSQL on RDS/Aurora, realtime plus BullMQ initially on ElastiCache for Redis OSS, and later split scheduling through <code>QUEUE_REDIS_URL</code>; copy SeaweedFS object keys unchanged to S3 and keep E2B. Cutover must drain or migrate active BullMQ jobs in addition to PostgreSQL/S3 deltas; queue Redis cannot start empty like pure cache. True zero downtime still needs PostgreSQL logical replication/CDC or AWS DMS. Room events repair clients, not databases.</div>
 </details>
 
 <details data-lang="zh">
