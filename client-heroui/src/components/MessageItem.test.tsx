@@ -1608,6 +1608,130 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('loads the next media history page when the top sentinel intersects without duplicate requests', async () => {
+    let observerCallback: IntersectionObserverCallback | null = null;
+    let observerOptions: IntersectionObserverInit | undefined;
+    let observedElement: Element | null = null;
+    class TestIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        observerCallback = callback;
+        observerOptions = options;
+      }
+      observe = (element: Element) => { observedElement = element; };
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      takeRecords = () => [];
+      root = null;
+      rootMargin = '0px';
+      thresholds = [0];
+    }
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+
+    let resolveNextPage!: (page: {
+      roomId: string;
+      items: Array<{
+        assetId: string;
+        messageId: string;
+        kind: 'image';
+        mimeType: string;
+        byteSize: number;
+        createdAt: string;
+        url: string;
+      }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+      windowMonths: number;
+    }) => void;
+    const nextPage = new Promise<Parameters<typeof resolveNextPage>[0]>(resolve => {
+      resolveNextPage = resolve;
+    });
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/current.webp' });
+    getRoomMediaHistoryMock
+      .mockResolvedValueOnce({
+        roomId: 'room-1',
+        items: [{
+          assetId: 'history-newer',
+          messageId: 'history-newer-message',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 100,
+          createdAt: '2026-06-02T10:00:00.000Z',
+          url: 'https://signed.example/history-newer.webp',
+        }],
+        hasMore: true,
+        nextCursor: 'cursor-1',
+        windowMonths: 6,
+      })
+      .mockReturnValueOnce(nextPage);
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'observer-history-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'observer-current', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText('openMediaViewer'));
+    await waitFor(() => expect(getRoomMediaHistoryMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByLabelText('openMediaHistory'));
+
+    const scrollContainer = await screen.findByTestId('media-history-scroll-container');
+    const sentinel = await screen.findByTestId('media-history-load-more-sentinel');
+    await waitFor(() => expect(observedElement).toBe(sentinel));
+    expect(observerOptions?.root).toBe(scrollContainer);
+    expect(observerOptions?.rootMargin).toBe('240px 0px 0px 0px');
+    expect(screen.queryByText('loadMoreMedia')).toBeNull();
+
+    Object.defineProperty(scrollContainer, 'scrollHeight', { configurable: true, value: 600 });
+    scrollContainer.scrollTop = 40;
+    act(() => {
+      observerCallback?.(
+        [{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      observerCallback?.(
+        [{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+    });
+
+    await waitFor(() => expect(getRoomMediaHistoryMock).toHaveBeenCalledTimes(2));
+    expect(getRoomMediaHistoryMock).toHaveBeenLastCalledWith({
+      roomId: 'room-1',
+      before: 'cursor-1',
+      limit: 36,
+    });
+
+    Object.defineProperty(scrollContainer, 'scrollHeight', { configurable: true, value: 900 });
+    resolveNextPage({
+      roomId: 'room-1',
+      items: [{
+        assetId: 'history-older',
+        messageId: 'history-older-message',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 100,
+        createdAt: '2026-05-02T10:00:00.000Z',
+        url: 'https://signed.example/history-older.webp',
+      }],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    await waitFor(() => expect(screen.getAllByLabelText('openMediaItem')).toHaveLength(2));
+    expect(scrollContainer.scrollTop).toBe(340);
+  });
+
   it('isolates the app, removes covered viewer controls, and restores the original trigger after nested history closes', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/focus-current.webp' });
     getRoomMediaHistoryMock.mockResolvedValue({

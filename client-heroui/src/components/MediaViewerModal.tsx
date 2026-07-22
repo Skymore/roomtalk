@@ -115,6 +115,7 @@ const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
 const MEDIA_CAROUSEL_RENDER_RADIUS = 1;
+const MEDIA_HISTORY_LOAD_MORE_ROOT_MARGIN = "240px 0px 0px 0px";
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
   filter === "all"
@@ -1337,6 +1338,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const statusResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialHistoryRequestKeyRef = React.useRef<string | null>(null);
   const historyRequestSequenceRef = React.useRef(0);
+  const historyScrollContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const historyLoadMoreSentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const historyMoreInFlightRef = React.useRef(false);
+  const historyScrollRestoreRef = React.useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
   const [activeMedia, setActiveMedia] = React.useState<ActiveMedia | null>(null);
   const [downloadStatus, setDownloadStatus] = React.useState<"idle" | "done" | "error">("idle");
   const [shareStatus, setShareStatus] = React.useState<"idle" | "done" | "error">("idle");
@@ -1354,10 +1359,20 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const isHistoryOpenRef = React.useRef(isHistoryOpen);
   const isHistoryPreviewOpenRef = React.useRef(isHistoryPreviewOpen);
   const hasViewedHistoryItemRef = React.useRef(hasViewedHistoryItem);
+  const historyPaginationStateRef = React.useRef({
+    hasMore: hasMoreHistory,
+    isLoading: isHistoryLoading,
+    hasError: historyError,
+  });
   const onCloseRef = React.useRef(onClose);
   isHistoryOpenRef.current = isHistoryOpen;
   isHistoryPreviewOpenRef.current = isHistoryPreviewOpen;
   hasViewedHistoryItemRef.current = hasViewedHistoryItem;
+  historyPaginationStateRef.current = {
+    hasMore: hasMoreHistory,
+    isLoading: isHistoryLoading,
+    hasError: historyError,
+  };
   onCloseRef.current = onClose;
   const isDialogReady = isOpen && Boolean(activeMedia);
 
@@ -1378,7 +1393,8 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     beforeOverride?: string | null,
   ) => {
     if (!historyEnabled) return null;
-    if (isHistoryLoading && mode === "more") return null;
+    if (mode === "more" && (isHistoryLoading || historyMoreInFlightRef.current)) return null;
+    if (mode === "more") historyMoreInFlightRef.current = true;
 
     const requestSequence = historyRequestSequenceRef.current + 1;
     historyRequestSequenceRef.current = requestSequence;
@@ -1415,11 +1431,75 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       setHistoryError(true);
       return null;
     } finally {
+      if (mode === "more") {
+        historyMoreInFlightRef.current = false;
+      }
       if (historyRequestSequenceRef.current === requestSequence) {
         setIsHistoryLoading(false);
       }
     }
   }, [historyCursor, historyEnabled, historyFilter, isHistoryLoading, roomId]);
+
+  const loadHistoryRef = React.useRef(loadHistory);
+  loadHistoryRef.current = loadHistory;
+
+  const requestMoreHistory = React.useCallback(() => {
+    const pagination = historyPaginationStateRef.current;
+    if (
+      !isHistoryOpenRef.current
+      || isHistoryPreviewOpenRef.current
+      || !pagination.hasMore
+      || pagination.isLoading
+      || pagination.hasError
+      || historyMoreInFlightRef.current
+    ) {
+      return;
+    }
+
+    const scrollContainer = historyScrollContainerRef.current;
+    historyScrollRestoreRef.current = scrollContainer ? {
+      scrollTop: scrollContainer.scrollTop,
+      scrollHeight: scrollContainer.scrollHeight,
+    } : null;
+
+    void loadHistoryRef.current("more").then(items => {
+      if (!items || items.length === 0) {
+        historyScrollRestoreRef.current = null;
+      }
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const scrollSnapshot = historyScrollRestoreRef.current;
+    const scrollContainer = historyScrollContainerRef.current;
+    if (!scrollSnapshot || !scrollContainer) return;
+
+    const addedHeight = Math.max(0, scrollContainer.scrollHeight - scrollSnapshot.scrollHeight);
+    scrollContainer.scrollTop = scrollSnapshot.scrollTop + addedHeight;
+    historyScrollRestoreRef.current = null;
+  }, [historyItems]);
+
+  React.useEffect(() => {
+    if (!isHistoryOpen || isHistoryPreviewOpen || !hasMoreHistory || historyError) return undefined;
+    const scrollContainer = historyScrollContainerRef.current;
+    const sentinel = historyLoadMoreSentinelRef.current;
+    if (!scrollContainer || !sentinel || typeof IntersectionObserver === "undefined") return undefined;
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) requestMoreHistory();
+    }, {
+      root: scrollContainer,
+      rootMargin: MEDIA_HISTORY_LOAD_MORE_ROOT_MARGIN,
+      threshold: 0,
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreHistory, historyError, isHistoryOpen, isHistoryPreviewOpen, requestMoreHistory]);
+
+  const handleHistoryScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    if (typeof IntersectionObserver !== "undefined") return;
+    if (event.currentTarget.scrollTop <= 240) requestMoreHistory();
+  }, [requestMoreHistory]);
 
   React.useEffect(() => {
     if (!src) {
@@ -1440,6 +1520,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   React.useEffect(() => {
     initialHistoryRequestKeyRef.current = null;
     historyRequestSequenceRef.current += 1;
+    historyScrollRestoreRef.current = null;
     setIsHistoryOpen(false);
     setIsHistoryPreviewOpen(false);
     setHasViewedHistoryItem(false);
@@ -1573,7 +1654,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     if (!isHistoryOpen) {
       setIsHistoryPreviewOpen(false);
     }
-  }, [isHistoryOpen]);
+    if (!isHistoryOpen || isHistoryPreviewOpen) {
+      historyScrollRestoreRef.current = null;
+    }
+  }, [isHistoryOpen, isHistoryPreviewOpen]);
 
   React.useEffect(() => {
     const requestKey = `${roomId}:${historyFilter}`;
@@ -1708,6 +1792,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   const handleHistoryFilterChange = (nextFilter: MediaHistoryFilter) => {
     if (nextFilter === historyFilter) return;
+    historyScrollRestoreRef.current = null;
     setHistoryFilter(nextFilter);
     setHistoryItems([]);
     setHistoryCursor(null);
@@ -1996,17 +2081,23 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                 </div>
               </header>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4">
+              <div
+                ref={historyScrollContainerRef}
+                data-testid="media-history-scroll-container"
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4"
+                onScroll={handleHistoryScroll}
+              >
                 {(hasMoreHistory || isHistoryLoading) && (
-                  <div className="flex justify-center pb-4">
-                    <Button
-                      size="sm"
-                      className="rounded-full bg-white/10 px-4 text-white hover:bg-white/20"
-                      isLoading={isHistoryLoading}
-                      onPress={() => { void loadHistory(historyItems.length === 0 ? "reset" : "more"); }}
-                    >
-                      {isHistoryLoading ? t("loadingMore") : t("loadMoreMedia")}
-                    </Button>
+                  <div
+                    ref={historyLoadMoreSentinelRef}
+                    data-testid="media-history-load-more-sentinel"
+                    className="flex min-h-8 items-center justify-center pb-4 text-white/60"
+                    role={isHistoryLoading ? "status" : undefined}
+                    aria-label={isHistoryLoading ? t("loadingMore") : undefined}
+                  >
+                    {isHistoryLoading && (
+                      <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin" aria-hidden="true" />
+                    )}
                   </div>
                 )}
 
