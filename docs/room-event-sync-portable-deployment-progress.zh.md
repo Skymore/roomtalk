@@ -2,9 +2,9 @@
 
 [English](room-event-sync-portable-deployment-progress.md)
 
-状态：源码、基础设施、数据与不可变事件生产切换全部完成
+状态：源码、基础设施、数据、不可变事件与所有权模型生产切换全部完成
 
-验证日期：2026-07-21
+验证日期：2026-07-22
 
 本文是 RoomTalk 从 Fly/Supabase/Tigris 迁到 MacBook Compose，以及随后替换 room-event 协议的证据账本。它只记录改了什么、生产何时跨过边界、哪些检查通过。运行协议见[房间可靠性架构](room-reliability-architecture.zh.md)，拓扑和未来迁移方式见[房间事件同步与可迁移部署](room-event-sync-portable-deployment.zh.md)。
 
@@ -35,6 +35,7 @@
 | 10 | 保留 optimistic send、不依赖数据库的 payload 单测 | `a8afcf49` |
 | 11 | `CURSOR_AHEAD` 旧水位清理、持久 AI 错误的确定性 fast path | `fbfd908b` |
 | 12 | Per-room 同步状态机、权限屏障、广播合并、message room 不可变、强制 PostgreSQL CI | `b607ad7a` |
+| 13 | AI 与 outbox fencing、Socket 身份收口、Redis lease 原子化、严格 readiness | `a3b90e0c` |
 
 定时 Fly workflow 继续禁用，Fly machine 保持为零。Supabase、Tigris 和 Upstash 是回滚源，不是 live writer。`ai-chat.wenlin.dev` 仍在允许 origin 中，其 DNS 单独管理。
 
@@ -97,6 +98,28 @@ Commit `b607ad7a` 没有继续增加彼此独立的恢复 flag，而是直接缩
 回归测试覆盖 recovery 与 prepend pagination 竞争、当前窗口被删除清空但仍有旧历史、只有 deletion event 才关闭消息弹窗、未持久化 AI 错误早于或晚于 placeholder、1,000 条通知突发合并、旧 PostgreSQL listener generation、跨房间 message 拒绝，以及真实墙上 event 时间。真实 PostgreSQL suite 使用 PostgreSQL 17 而不是 mock；新的 GitHub workflow 会在每次 `master` push 和 pull request 中提供同样的数据库 service。
 
 更早的完整 Server、Client、PostgreSQL integration、PostgreSQL Playwright、persistence、Compose restart 与成对恢复结果仍保留在产生它们的 Git commit 中。这里不复制每个测试用例，因为当前架构文档已经说明协议层覆盖。
+
+### 所有权模型收口，2026-07-22
+
+Commit `a3b90e0c` 把剩余竞态统一到可证明的所有权规则。AI stream 使用 `(ownerId, fence)`，outbox 使用 `(workerId, attempt)`；续租、终态写入和 ack 都必须携带原 claim token，旧 worker 不能完成或覆盖新 owner 的工作。AI 所有权更新不再进入公开 room-event 流，migration `0007_ai_stream_fencing` 与 `0008_ai_stream_internal_event_filter` 已在生产应用。
+
+Socket 连接以内存中的已认证 `socket.data.roomtalkClientId` 为本连接的权威身份，Redis 只保存可重建索引。Redis 记录缺失时，服务端必须先用 PostgreSQL room membership 重新授权，再修复索引；非空身份冲突则 fail closed。Heartbeat、instance lease 与过期清理改为原子 Lua，清理前再次检查 lease 和 socket owner。Socket.IO adapter 只有在 Redis pub/sub 两端都 ready 时才报告 ready，客户端对瞬时授权不可用使用单一指数退避定时器恢复。
+
+这次发布遵守 stop-the-world 边界：旧 app 已停止后才启动包含新 lease/fence 协议的镜像，没有让旧实例与新实例滚动混跑。Compose 从 `a3b90e0c` 构建，启动日志确认两条新 migration、PostgreSQL listener 和 Redis Socket.IO adapter 就绪。
+
+| 检查 | 结果 |
+| --- | --- |
+| 完整 Client suite | 96 个文件、1,020 项通过 |
+| 完整 Server suite | 105 个 suite、795 项通过 |
+| PostgreSQL 17 upgrade-path integration | 25 项通过 |
+| PostgreSQL 17 fresh-schema integration | 25 项通过 |
+| Server 与 Client production build | 通过 |
+| Compose health | 五个服务 healthy/running |
+| migration ledger | `0006`、`0007`、`0008` 已记录 |
+| 本机回环、`room.ruit.me`、`roomtalk.ruit.me` | `online`、`ready=true`、98 个 room |
+| 依赖状态 | PostgreSQL、Redis、media storage、Socket adapter 全部 ready |
+
+发布后日志没有 fatal、panic、uncaught、unhandled 或 error 记录。工作树清理后不保留生产 env/runtime 符号链接；生产数据仍由原 Compose volume 与 `runtime/` 目录承载。
 
 ## 回滚与持续运维
 

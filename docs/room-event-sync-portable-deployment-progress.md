@@ -2,9 +2,9 @@
 
 [中文](room-event-sync-portable-deployment-progress.zh.md)
 
-Status: completed source, infrastructure, data, and immutable-event production cutovers
+Status: completed source, infrastructure, data, immutable-event, and ownership-model production cutovers
 
-Verified: 2026-07-21
+Verified: 2026-07-22
 
 This is the evidence ledger for the RoomTalk migration from Fly/Supabase/Tigris to MacBook Compose and for the later room-event protocol replacement. It records what changed, when production crossed each boundary, and which checks passed. Runtime semantics belong in [Room Reliability Architecture](room-reliability-architecture.md); topology and future migration guidance belong in [Room Event Sync and Portable Deployment](room-event-sync-portable-deployment.md).
 
@@ -35,6 +35,7 @@ Implementation started from local `master` at `d94d2cd0`.
 | 10 | Optimistic-send preservation and database-independent payload tests | `a8afcf49` |
 | 11 | `CURSOR_AHEAD` stale-watermark reset and deterministic persisted AI error fast path | `fbfd908b` |
 | 12 | Per-room sync state machine, authorization barrier, coalesced broadcaster, immutable message room, mandatory PostgreSQL CI | `b607ad7a` |
+| 13 | AI and outbox fencing, converged Socket identity, atomic Redis leases, strict readiness | `a3b90e0c` |
 
 The scheduled Fly workflow remains disabled and Fly machines remain at zero. Supabase, Tigris, and Upstash are rollback sources, not live writers. `ai-chat.wenlin.dev` is still an allowed origin whose DNS is managed separately.
 
@@ -97,6 +98,28 @@ Production rebuilt and restarted from `b607ad7a`. Startup logs recorded migratio
 The regression suite covers recovery competing with prepend pagination, an emptied current window with older history, modal cleanup only for deletion events, unpersisted AI errors before and after their placeholder, a 1,000-notification broadcaster burst, stale PostgreSQL listener generations, cross-room message rejection, and wall-clock event creation. The real PostgreSQL suite ran against PostgreSQL 17 rather than a mock; the new GitHub workflow provisions the same database service for every `master` push and pull request.
 
 Earlier full Server, Client, PostgreSQL integration, PostgreSQL Playwright, persistence, Compose restart, and paired restore results remain in Git history with the commits that produced them. This ledger avoids copying every test case because the current architecture document already explains the protocol-level coverage.
+
+### Ownership-model convergence, 2026-07-22
+
+Commit `a3b90e0c` reduced the remaining races to explicit ownership rules. AI streams use `(ownerId, fence)` and outbox claims use `(workerId, attempt)`; renewals, terminal writes, and acknowledgements require the original claim token, so an obsolete worker cannot complete or overwrite the replacement owner's work. Ownership-only AI updates no longer enter the public room-event stream. Production applied migrations `0007_ai_stream_fencing` and `0008_ai_stream_internal_event_filter`.
+
+An authenticated `socket.data.roomtalkClientId` is authoritative for that live Socket connection, while Redis remains a rebuildable index. A missing Redis record is repaired only after PostgreSQL room-membership authorization; a non-empty identity conflict fails closed. Heartbeat, instance-lease reacquisition, and expired-instance cleanup use atomic Lua and recheck both the lease and socket owner before cleanup. Socket.IO readiness now requires both Redis pub/sub clients to be ready, and the browser recovers transient authorization failures through one bounded exponential-backoff timer.
+
+The release respected the stop-the-world compatibility boundary: the old app was stopped before the image containing the new fence/lease protocol started, with no mixed rolling window. Compose built from `a3b90e0c`; startup logs confirmed both new migrations, the PostgreSQL listener, and the Redis Socket.IO adapter.
+
+| Check | Result |
+| --- | --- |
+| Full Client suite | 1,020 passed in 96 files |
+| Full Server suite | 795 passed in 105 suites |
+| PostgreSQL 17 upgrade-path integration | 25 passed |
+| PostgreSQL 17 fresh-schema integration | 25 passed |
+| Server and Client production builds | Passed |
+| Compose health | Five services healthy/running |
+| Migration ledger | `0006`, `0007`, and `0008` recorded |
+| Loopback, `room.ruit.me`, and `roomtalk.ruit.me` | `online`, `ready=true`, 98 rooms |
+| Dependency status | PostgreSQL, Redis, media storage, and Socket adapter all ready |
+
+Post-release logs contained no fatal, panic, uncaught, unhandled, or error entries. The deployment worktree retained no production env/runtime symlinks after cleanup; production data remains in the original Compose volumes and `runtime/` directory.
 
 ## Rollback and ongoing operations
 
