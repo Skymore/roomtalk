@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
@@ -1587,6 +1587,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       return await this.readMessagePageWithQueryable(this.pool, roomId, options);
     } catch (error) {
+      if (error instanceof RoomPaginationBoundaryExpiredError) throw error;
       this.logger.error('Error reading PostgreSQL room message page', { error, roomId, options });
       return { roomId, messages: [], hasMore: false };
     }
@@ -1640,6 +1641,16 @@ export class PostgresStore implements DurableRoomStore {
     return Boolean(result.rows[0]?.allowed);
   }
 
+  async readRoomMemberClientIds(roomId: string, clientIds: string[]): Promise<Set<string>> {
+    if (clientIds.length === 0) return new Set();
+    const result = await this.pool.query<{ client_id: string }>(
+      `SELECT client_id FROM room_members
+      WHERE room_id = $1 AND client_id = ANY($2::text[])`,
+      [roomId, clientIds],
+    );
+    return new Set(result.rows.map(row => row.client_id));
+  }
+
   async readRoomEvents(roomId: string, options: RoomEventPageOptions): Promise<RoomEventPage> {
     const afterSeq = Number(options.afterSeq);
     const limit = Math.min(500, Math.max(1, Math.floor(options.limit || 100)));
@@ -1655,14 +1666,14 @@ export class PostgresStore implements DurableRoomStore {
     const headSeq = Number(stream.rows[0]?.head_seq || 0);
     const minAvailableSeq = Number(stream.rows[0]?.min_available_seq || 1);
     let queryAfterSeq = afterSeq;
-    if (afterSeq < minAvailableSeq - 1) {
-      if (stream.rows[0]?.deleted_at) {
-        // A deleted room has no canonical snapshot to fall back to. Its retained
-        // terminal tombstone is sufficient even when an old prefix was pruned.
-        queryAfterSeq = minAvailableSeq - 1;
-      } else {
-        throw new RoomEventCursorExpiredError(roomId, afterSeq, minAvailableSeq);
-      }
+    if (stream.rows[0]?.deleted_at && afterSeq < headSeq) {
+      // A deleted aggregate has no snapshot. Intermediate state is irrelevant:
+      // return its terminal tombstone directly even when the retained prefix is
+      // still large enough to tempt the client into snapshot recovery.
+      queryAfterSeq = headSeq - 1;
+    }
+    if (afterSeq < minAvailableSeq - 1 && !stream.rows[0]?.deleted_at) {
+      throw new RoomEventCursorExpiredError(roomId, afterSeq, minAvailableSeq);
     }
     if (afterSeq > headSeq) {
       throw new RoomEventCursorAheadError(roomId, afterSeq, headSeq);
@@ -1681,7 +1692,10 @@ export class PostgresStore implements DurableRoomStore {
     let usedBytes = 0;
     for (const event of decoded) {
       const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
-      if (events.length > 0 && usedBytes + eventBytes > maxBytes) break;
+      if (events.length === 0 && eventBytes > maxBytes) {
+        throw new RoomEventTooLargeError(roomId, event.seq, eventBytes, maxBytes);
+      }
+      if (usedBytes + eventBytes > maxBytes) break;
       events.push(event);
       usedBytes += eventBytes;
     }
@@ -1797,13 +1811,21 @@ export class PostgresStore implements DurableRoomStore {
   async failInterruptedRoomAgentTurns(completedAt = new Date().toISOString()): Promise<number> {
     try {
       const result = await this.pool.query(
-        `UPDATE room_agent_turns SET status = 'error', completed_at = $1, phase = NULL, phase_message = NULL, last_heartbeat_at = $1, updated_at = $1 WHERE status = 'running'`,
+        `UPDATE room_agent_turns AS turn
+        SET status = 'error', completed_at = $1, phase = NULL, phase_message = NULL, last_heartbeat_at = $1, updated_at = $1
+        WHERE turn.status = 'running'
+          AND NOT EXISTS (
+            SELECT 1 FROM code_agent_room_leases AS lease
+            WHERE lease.room_id = turn.room_id
+              AND lease.turn_id = turn.id
+              AND lease.expires_at > $1::timestamptz
+          )`,
         [completedAt]
       );
       return result.rowCount || 0;
     } catch (error) {
       this.logger.error('Error recovering interrupted PostgreSQL room agent turns', { error });
-      return 0;
+      throw error;
     }
   }
 
@@ -3191,14 +3213,13 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async countRooms(): Promise<number> {
-    try {
-      const result = await this.pool.query<{ count: string | number }>('SELECT COUNT(*) AS count FROM rooms');
-      const count = Number.parseInt(String(result.rows[0]?.count || '0'), 10);
-      return Number.isFinite(count) ? count : 0;
-    } catch (error) {
-      this.logger.error('Error counting PostgreSQL rooms', { error });
-      return 0;
+    const result = await this.pool.query<{ count: string | number }>('SELECT COUNT(*) AS count FROM rooms');
+    const rawCount = result.rows[0]?.count;
+    const count = Number.parseInt(String(rawCount), 10);
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`PostgreSQL returned an invalid room count: ${String(rawCount)}`);
     }
+    return count;
   }
 
   async compareAndSetRoomSandboxStatus(
@@ -3263,18 +3284,24 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async findInterruptedCodeAgentRooms(): Promise<Room[]> {
+  async findInterruptedCodeAgentRooms(now = new Date().toISOString()): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
         `SELECT ${ROOM_COLUMNS}
         FROM rooms
         WHERE type = 'codeAgent'
-          AND (sandbox_status = 'creating' OR code_agent_status = 'running')`
+          AND (sandbox_status = 'creating' OR code_agent_status = 'running')
+          AND NOT EXISTS (
+            SELECT 1 FROM code_agent_room_leases AS lease
+            WHERE lease.room_id = rooms.id
+              AND lease.expires_at > $1::timestamptz
+          )`,
+        [now]
       );
       return result.rows.map(mapRoom);
     } catch (error) {
       this.logger.error('Error finding interrupted PostgreSQL code-agent rooms', { error });
-      return [];
+      throw error;
     }
   }
 
@@ -3302,7 +3329,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
@@ -3324,6 +3351,58 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error marking interrupted PostgreSQL streaming messages', { error });
       return 0;
+    }
+  }
+
+  async heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string, ttlMs: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ai_stream_owner_leases (owner_id, instance_id, last_heartbeat_at, expires_at)
+      VALUES ($1, $2, $3::timestamptz, $3::timestamptz + ($4::bigint * interval '1 millisecond'))
+      ON CONFLICT (owner_id) DO UPDATE SET
+        instance_id = EXCLUDED.instance_id,
+        last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+        expires_at = EXCLUDED.expires_at`,
+      [ownerId, instanceId, now, ttlMs],
+    );
+  }
+
+  async releaseAIStreamOwner(ownerId: string): Promise<void> {
+    await this.pool.query('DELETE FROM ai_stream_owner_leases WHERE owner_id = $1', [ownerId]);
+  }
+
+  async failOrphanedStreamingMessages(content: string, now = new Date().toISOString()): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE room_messages AS message
+      SET status = 'error', content = $1, timestamp = $2::timestamptz
+      WHERE message.status = 'streaming'
+        AND (
+          message.ai_stream_owner_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM ai_stream_owner_leases AS owner
+            WHERE owner.owner_id = message.ai_stream_owner_id
+              AND owner.expires_at > $2::timestamptz
+          )
+        )`,
+      [content, now],
+    );
+    return result.rowCount || 0;
+  }
+
+  async withMaintenanceLock<T>(lockName: string, operation: () => Promise<T>): Promise<{ acquired: boolean; result?: T }> {
+    const client = await this.pool.connect();
+    try {
+      const lock = await client.query<{ acquired: boolean }>(
+        'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+        [lockName],
+      );
+      if (!lock.rows[0]?.acquired) return { acquired: false };
+      try {
+        return { acquired: true, result: await operation() };
+      } finally {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]);
+      }
+    } finally {
+      client.release();
     }
   }
 
@@ -3467,7 +3546,7 @@ export class PostgresStore implements DurableRoomStore {
         [roomId, options.beforeMessageId]
       );
       if (target.rows.length === 0) {
-        return { roomId, messages: [], turns: [], hasMore: false };
+        throw new RoomPaginationBoundaryExpiredError(roomId, options.beforeMessageId);
       }
       boundaryPosition = Number(target.rows[0].position);
       if (target.rows[0].turn_id) {

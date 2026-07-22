@@ -318,8 +318,8 @@
 </head>
 <body>
 <div class="architecture-note">
-  <span data-lang="zh">当前架构版本：2026-07-21，已部署到 <code>room.ruit.me</code>。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，落后超过 500 events 则切 snapshot。AI 成功或失败的最终 Message 都先持久化，Socket 只提供同一状态的 fast path。Redis 只保存可重建实时/cache 状态。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
-  <span data-lang="en">The 2026-07-21 architecture is deployed at <code>room.ruit.me</code>. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately, missing sequences replay, and gaps over 500 events switch to a snapshot. A successful or failed AI turn persists its final Message before Socket carries the same state as a fast path. Redis holds only rebuildable realtime/cache state. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
+  <span data-lang="zh">当前架构版本：2026-07-21，已部署到 <code>room.ruit.me</code>。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、AI stream 与 Code Agent task 都按 runtime instance/lease 划分，滚动启动不会再清理其他活实例的用户或任务。AI 终态短暂写失败时由进程内 reconciler 持续重试，owner 过期后才允许其他实例接管。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
+  <span data-lang="en">The 2026-07-21 architecture is deployed at <code>room.ruit.me</code>. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, AI streams, and Code Agent work are scoped by runtime instance and leases, so rolling startup does not clear another live replica's users or tasks. An in-process reconciler retries failed AI terminal writes, and another instance may take over only after owner expiry. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
 </div>
 <div class="lang-toggle">
   <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
@@ -453,6 +453,28 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
 
 <p data-lang="zh">多实例投递有两条路径。PostgreSQL <code>NOTIFY</code> 已经把 durable room event 发送给每个监听实例，因此每个实例读取精确事件行后只做 <code>io.local</code> 广播。若再经过 Redis adapter，同一事件会被重复放大。由单个实例产生的 transient/global event 才使用 <code>@socket.io/redis-adapter</code>。客户端无须关心连接落在哪个实例上，服务端则要根据事件来源选择投递路径。</p>
 <p data-lang="en">Multi-instance delivery has two paths. PostgreSQL <code>NOTIFY</code> already fans a durable room event out to every listening app, so each app reads the exact event row and broadcasts with <code>io.local</code>; sending it through the Redis adapter would multiply the same event. The <code>@socket.io/redis-adapter</code> is for genuinely single-origin transient or global events. Clients do not need to know which instance owns their connection, but the server must choose the path that matches the event's origin.</p>
+<p data-lang="zh">这里还要区分“收到 NOTIFY”和“本机需要读 payload”。A、B、C 都会收到数据库 hint，但只有本机真的连接了该 room socket 的实例才读取事件行；其余实例直接跳过。通知突发时，每个房间只保存最低和最高 pending seq，不给每条通知创建 Promise waiter。发完整 payload 前，实例批量读取 Redis socket identity，再用一次 PostgreSQL 查询判断成员。明确 unauthorized 才移出 room；授权服务 unavailable 时保留连接，只发 head-only，让后续 GET 再鉴权。这样数据库/Redis 短暂故障不会伪装成“你被踢出房间”。</p>
+<p data-lang="en">Receiving NOTIFY is separate from needing the payload locally. A, B, and C all receive the database hint, but only an instance with a local socket in that room reads the event row. Burst notifications keep one fixed min/max pending range per room rather than one Promise waiter per notification. Before a complete payload leaves the instance, Redis socket identities are resolved in a batch and PostgreSQL membership is queried once. Only explicit unauthorized results remove a socket. If authorization is unavailable, the connection stays joined and receives only a head hint so the later GET can authorize again. A transient Redis/database outage therefore cannot masquerade as a membership revocation.</p>
+<div class="diagram" data-lang="zh">实例 A heartbeat ─┐
+实例 B heartbeat ─┼─ Redis runtime instance TTL + socket ownership
+实例 C heartbeat ─┘
+                      ↓ 只清理 expired owner
+             presence / browser / socket room state
+
+PostgreSQL fenced lease ── 保护 running Code Agent turn / sandbox
+PostgreSQL AI owner lease ─ 保护 streaming placeholder
+PostgreSQL advisory lock ── 每轮只有一个实例做 recovery / retention</div>
+<div class="diagram" data-lang="en">instance A heartbeat ─┐
+instance B heartbeat ─┼─ Redis runtime-instance TTL + socket ownership
+instance C heartbeat ─┘
+                       ↓ clean expired owners only
+              presence / browser / socket-room state
+
+PostgreSQL fenced lease ── protects a running Code Agent turn / sandbox
+PostgreSQL AI owner lease ─ protects a streaming placeholder
+PostgreSQL advisory lock ── one recovery / retention runner per pass</div>
+<p data-lang="zh">因此滚动启动不再执行“清空全部 presence、把全部 running 标成 error”。每个进程生成唯一 instance ID 并续租；过期清理只处理该 owner 名下的 socket。Code Agent recovery 会排除未过期 fenced lease，AI recovery 会排除未过期 stream owner。所有副本都可以运行同一套维护 loop，但只有拿到 advisory lock 的实例真正执行。这是从单机可运行走向 ECS/EKS 滚动发布必须补齐的 ownership contract。不过首次引入 <code>0006</code> 时仍要停止旧 App：旧 binary 不会写新 owner lease，不能与新 recovery 逻辑安全混跑。跨过这条边界后，后续协议兼容版本才适合滚动。</p>
+<p data-lang="en">Rolling startup therefore no longer means clearing all presence or marking every running task failed. Each process gets a unique instance ID and renews its lease; expiry cleanup touches only sockets owned by that instance. Code Agent recovery excludes unexpired fenced leases, and AI recovery excludes unexpired stream owners. Every replica may run the same maintenance loop, but only the advisory-lock holder performs a pass. This ownership contract is what turns a single-host design into one that can safely roll on ECS or EKS. The first <code>0006</code> deployment is still a stop-the-world boundary: an old binary does not write the new owner lease and cannot safely overlap the new recovery logic. Later protocol-compatible releases may roll after every replica has crossed that boundary.</p>
 
 <div class="card warn" data-lang="zh">
   <h4>追问：sticky session 为什么必须？</h4>
@@ -477,7 +499,7 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   <li>默认 worker 模式把 <code>assistant_run</code> 与 <code>outbox_event</code> 原子写入；Worker claim/lease/retry 后调用 Provider。</li>
   <li>Provider 输出中的 <code>ai_chunk</code> 通过 Socket.IO 直接推送，它是低延迟 UX fast path，不进入 room-event log。</li>
   <li>如果 chunk/A2UI/end 抢在 durable placeholder event 前到达，客户端按 <code>messageId</code> 有界暂存并在 placeholder 出现后按到达顺序 drain；上限为 60 秒 TTL、64 个 message、512 events、512 KiB，超限时最终 durable event 仍保证收敛。</li>
-  <li>完成时先持久化最终 Message，再发 <code>ai_stream_end</code>。<code>ai_stream_error</code> 显式声明 <code>persisted</code>：正常失败先保存完整错误 Message，再发送 <code>{ persisted: true, message }</code>；如果终态保存本身失败，则发送 <code>{ persisted: false }</code>，客户端立刻把 placeholder 终止为 error、保留本地 overlay 并触发恢复，不能继续显示“正在生成”。</li>
+  <li>完成时先持久化最终 Message，再发 <code>ai_stream_end</code>。<code>ai_stream_error</code> 显式声明 <code>persisted</code>：正常失败先保存完整错误 Message，再发送 <code>{ persisted: true, message }</code>；如果即时终态保存失败，则发送 <code>{ persisted: false }</code>，客户端立刻把 placeholder 终止为 error。服务端把同一条终态 Message 放入指数退避 reconciler，数据库恢复后无需重启也会补写；只有 stream-owner lease 过期后，其他实例才可以把 orphan placeholder 恢复为 error。</li>
   <li>服务重启时，Worker 从 outbox/run 状态继续处理；遗留的 streaming message 还有 <code>aiStreamRecovery</code> 兜底，避免僵尸流。</li>
 </ul>
 <ul data-lang="en">
@@ -485,7 +507,7 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
   <li>In the default worker mode, the <code>assistant_run</code> and <code>outbox_event</code> are written atomically; a worker claims, leases, and retries the Provider call.</li>
   <li>Provider output is pushed as direct Socket.IO <code>ai_chunk</code> events. This is a low-latency UX fast path and is not stored in the room-event log.</li>
   <li>If a chunk/A2UI/end event beats the durable placeholder event, the client buffers it by <code>messageId</code> and drains it in arrival order when the placeholder appears. The buffer is capped at a 60-second TTL, 64 message IDs, 512 events, and 512 KiB; the final durable event still guarantees convergence after eviction.</li>
-  <li>On success, the final Message is persisted before <code>ai_stream_end</code>. <code>ai_stream_error</code> explicitly declares <code>persisted</code>: a normal failure saves the complete error Message and sends <code>{ persisted: true, message }</code>. If terminal persistence itself fails, <code>{ persisted: false }</code> immediately terminalizes the placeholder, preserves a local error overlay, and triggers recovery instead of leaving the UI at “streaming.”</li>
+  <li>On success, the final Message is persisted before <code>ai_stream_end</code>. <code>ai_stream_error</code> explicitly declares <code>persisted</code>: a normal failure saves the complete error Message and sends <code>{ persisted: true, message }</code>. If the immediate terminal write fails, <code>{ persisted: false }</code> terminalizes the placeholder while the server queues the same Message in an exponential-backoff reconciler. Database recovery completes the write without a restart; another instance may recover an orphan placeholder only after the stream-owner lease expires.</li>
   <li>After a restart, the worker continues from outbox/run state, while <code>aiStreamRecovery</code> remains a final guard against orphaned streaming messages.</li>
 </ul>
 
@@ -1284,28 +1306,28 @@ During migration, one Store contract kept both implementations behaviorally alig
 <ol data-lang="zh">
   <li>PostgreSQL 在 room/message/agent-turn/media 原事务内收集变化，deferred writer 在 aggregate 完整后追加安全、不可变的 <code>schemaVersion: 1</code> after-image；rollback 时 state、event 与 seq 一起消失。成员变更只写空的公共 <code>members.changed {}</code>，成员 ID/role 继续由特权接口保护。</li>
   <li><code>get_room_snapshot</code> 用 repeatable-read 返回 canonical window 与 <code>snapshotSeq</code>。</li>
-  <li>PostgreSQL <code>NOTIFY</code> 只报告已提交的 <code>roomId/headSeq</code>；每个 app 从 PostgreSQL 读回精确的不可变 event，再用 <code>io.local</code> 发 <code>room_event_available { headSeq, events? }</code>，不经过 Redis adapter 全局放大。</li>
-  <li>完整通知不超过 <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code>（默认 256 KiB）时携带 event；读取失败或超限退化为 head-only hint。</li>
+  <li>PostgreSQL <code>NOTIFY</code> 只报告已提交的 <code>roomId/headSeq</code>；每个 app 先判断本机是否有该 room subscriber，有才从 PostgreSQL 读回精确不可变 event，再用 <code>io.local</code> 发 <code>room_event_available { headSeq, events? }</code>，不经过 Redis adapter 全局放大。</li>
+  <li>完整通知不超过 <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code>（默认 256 KiB）时携带 event；读取失败或超限退化为 head-only hint。若 <code>get_room_events</code> 的第一条 event 就超过请求的 <code>maxBytes</code>，服务端返回 <code>EVENT_TOO_LARGE</code>，客户端改取 snapshot。</li>
   <li>客户端只直接应用从 <code>lastAppliedSeq + 1</code> 开始、并以 <code>headSeq</code> 结束的连续 payload；duplicate 忽略，gap 按 <code>afterSeq=lastAppliedSeq</code> 补拉。</li>
   <li>小 gap 默认按每页 100 events / 256 KiB replay；保留窗口内落后超过 500 events 时直接取新 snapshot，再排空 snapshot 后的 tail。</li>
-  <li>客户端由 per-room <code>idle / replay / replace / prepend</code> 状态机统一调度。Replay 和 replace recovery 的优先级高于历史分页，因此 prepend 不会取消 recovery；删除清空当前窗口但仍有旧历史时会重新 replace snapshot。</li>
-  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后。遇到 <code>CURSOR_AHEAD</code> 时同时清除数据库恢复前的旧 <code>desiredHeadSeq</code> 与 gap target，再请求 snapshot；snapshot 进行中收到的新通知会重新抬高水位，随后只追这段新 tail。只有保留的终态 <code>room.deleted</code> 可以跨过已清理前缀，因为 deleted room 已无 snapshot；更早历史仍用 <code>beforeMessageId</code> prepend。</li>
+  <li>客户端由 per-room <code>idle / replay / replace / prepend</code> 状态机统一调度。Replay 和 replace recovery 的优先级高于历史分页；实时 event 会让在途 prepend 失效，迟到分页不能重新插入刚删除的消息。删除清空当前窗口但仍有旧历史时，先清理无效 cache，再 replace snapshot。</li>
+  <li><code>CURSOR_EXPIRED</code> 处理 retention 落后。遇到 <code>CURSOR_AHEAD</code> 时同时清除数据库恢复前的旧 <code>desiredHeadSeq</code> 与 gap target，再请求 snapshot；snapshot 进行中收到的新通知会重新抬高水位，随后只追这段新 tail。Deleted stream 对任何旧 cursor 都直接返回最终 <code>room.deleted</code>，因为它已经没有 snapshot；<code>beforeMessageId</code> 不存在时返回 <code>PAGINATION_BOUNDARY_EXPIRED</code> 并 replace window。</li>
   <li>每种 V1 event 都严格验证 required field、类型和允许字段；坏 payload 返回 <code>EVENT_PAYLOAD_INVALID</code>，客户端不推进坏 seq，直接以 canonical snapshot 收敛。</li>
   <li>PG listener 成功 re-LISTEN 后发送本机 <code>room_sync_required</code>；客户端保留 UI，从现有 <code>lastAppliedSeq</code> 反熵。</li>
-  <li>同房间的突发 NOTIFY 会合并为 pending seq range。完整 payload 发出前，每个实例重新用 PostgreSQL 校验本机 room sockets，并先移除已撤权成员；不完整或过大的 range 只发最高 <code>headSeq</code>。</li>
+  <li>同房间的突发 NOTIFY 只合并为固定大小的 pending min/max seq。完整 payload 发出前，每个实例批量解析 Redis socket identity，并一次查询 PostgreSQL membership；明确 unauthorized 才移除，授权 unavailable 时保留 socket、只发最高 <code>headSeq</code>。Durable <code>members.changed</code> 会刷新页面权限，<code>room.deleted</code> / <code>ROOM_ACCESS_DENIED</code> 会真正退出旧页面。</li>
 </ol>
 <ol data-lang="en">
   <li>PostgreSQL collects room/message/agent-turn/media changes in the domain transaction. After the aggregate is complete, a deferred writer appends safe immutable <code>schemaVersion: 1</code> after-images; rollback removes state, events, and sequence advancement. Membership changes append only an empty public <code>members.changed {}</code>; member IDs and roles remain behind the privileged API.</li>
   <li><code>get_room_snapshot</code> uses repeatable read to return a canonical window plus <code>snapshotSeq</code>.</li>
-  <li>PostgreSQL <code>NOTIFY</code> reports only the committed <code>roomId/headSeq</code>. Every app reads the exact immutable event from PostgreSQL and sends <code>room_event_available { headSeq, events? }</code> with <code>io.local</code>, avoiding global Redis-adapter amplification.</li>
-  <li>The event is included when the complete notification fits <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code> (256 KiB by default); read failures or oversized payloads fall back to a head-only hint.</li>
+  <li>PostgreSQL <code>NOTIFY</code> reports only the committed <code>roomId/headSeq</code>. An app first checks for a local room subscriber, then reads the exact immutable event and sends <code>room_event_available { headSeq, events? }</code> with <code>io.local</code>, avoiding needless reads and global Redis-adapter amplification.</li>
+  <li>The event is included when the complete notification fits <code>ROOM_EVENT_FAST_PATH_MAX_BYTES</code> (256 KiB by default); read failures or oversized payloads fall back to a head-only hint. If the first <code>get_room_events</code> item exceeds <code>maxBytes</code>, <code>EVENT_TOO_LARGE</code> sends the client to a snapshot.</li>
   <li>The client directly applies only a contiguous payload starting at <code>lastAppliedSeq + 1</code> and ending at <code>headSeq</code>. Duplicates are ignored; gaps replay with <code>afterSeq=lastAppliedSeq</code>.</li>
   <li>Small gaps replay in pages of 100 events / 256 KiB. A retained gap over 500 events loads a new snapshot and then drains only the post-snapshot tail.</li>
-  <li>A per-room <code>idle / replay / replace / prepend</code> state machine owns scheduling. Replay and replacement recovery outrank history pagination, so prepend cannot cancel recovery; if deletion empties a window that still has older history, the controller replaces the snapshot.</li>
-  <li><code>CURSOR_EXPIRED</code> handles retention lag. On <code>CURSOR_AHEAD</code>, the client clears both the pre-restore <code>desiredHeadSeq</code> and gap target, then requests a snapshot. A notification received while that snapshot is in flight raises a fresh target, so the client follows only that new tail. Only a retained terminal <code>room.deleted</code> may jump a pruned prefix because a deleted room has no snapshot; older history still prepends through <code>beforeMessageId</code>.</li>
+  <li>A per-room <code>idle / replay / replace / prepend</code> state machine owns scheduling. Replay and replacement recovery outrank history pagination; a live event invalidates an in-flight prepend so a late page cannot reinsert a deleted message. If deletion empties a window that still has older history, the controller clears the invalid cache and replaces the snapshot.</li>
+  <li><code>CURSOR_EXPIRED</code> handles retention lag. On <code>CURSOR_AHEAD</code>, the client clears both the pre-restore <code>desiredHeadSeq</code> and gap target, then requests a snapshot. Notifications in flight establish a fresh target. A deleted stream returns its terminal <code>room.deleted</code> for any old cursor because no snapshot exists; a missing <code>beforeMessageId</code> returns <code>PAGINATION_BOUNDARY_EXPIRED</code> and replaces the window.</li>
   <li>Every V1 event strictly validates required fields, types, and allowed keys. A bad payload returns <code>EVENT_PAYLOAD_INVALID</code>; the client does not advance past it and recovers from a canonical snapshot.</li>
   <li>After the PG listener successfully re-LISTENs, the instance sends local <code>room_sync_required</code>; clients retain the UI and perform anti-entropy from the existing <code>lastAppliedSeq</code>.</li>
-  <li>Burst NOTIFY traffic is coalesced into a pending sequence range. Before a complete payload leaves an instance, it rechecks local room sockets against PostgreSQL and removes revoked members; an incomplete or oversized range carries only the highest <code>headSeq</code>.</li>
+  <li>Burst NOTIFY traffic is coalesced into fixed min/max pending state. Before a complete payload leaves an instance, it batch-resolves Redis socket identities and queries PostgreSQL membership once. Only explicit unauthorized results remove sockets; unavailable authorization keeps them joined and emits only <code>headSeq</code>. Durable membership/deletion/denial events drive the same page lifecycle as transient notices.</li>
 </ol>
 
 <div class="diagram" data-lang="zh">客户端(lastAppliedSeq=1041)      App / PostgreSQL
@@ -1972,6 +1994,24 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 </details>
 
 <details data-lang="zh">
+  <summary>实例 B 滚动启动时，为什么不会清掉实例 A 的 presence 和运行任务？</summary>
+  <div class="answer">因为恢复不再以“服务器启动”作为故障证据。A、B 各自有唯一 runtime instance ID，并在 Redis 续租 TTL heartbeat；socket session 还记录 owner instance。B 启动只注册自己，不执行全局清空。周期清理看到某个 owner heartbeat 过期后，才删除那个 owner 名下的 socket、room member socket set 和 browser presence。Running Code Agent turn/sandbox 还受 PostgreSQL fenced room lease 保护，AI streaming placeholder 受 stream-owner lease 保护；未过期的 owner 一律不恢复。Recovery 与 retention 都先抢 PostgreSQL advisory lock，同一轮只有一个实例执行。也就是说，startup 只是加入集群，lease expiry 才是 ownership 丢失的证据。</div>
+</details>
+<details data-lang="en">
+  <summary>Why doesn't rolling instance B clear instance A's presence and running work?</summary>
+  <div class="answer">Startup is no longer treated as evidence that existing work failed. A and B have unique runtime instance IDs and renew Redis TTL heartbeats; every socket session records its owner instance. B registers itself but performs no global reset. Periodic cleanup removes socket, room-member socket sets, and browser presence only after that owner's heartbeat expires. Running Code Agent turns and sandboxes are protected by PostgreSQL fenced room leases, while streaming AI placeholders use stream-owner leases; unexpired owners are never recovered. Recovery and retention also acquire PostgreSQL advisory locks, so one instance performs each pass. Startup merely joins the cluster; lease expiry is the evidence that ownership was lost.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>权限数据库暂时不可用时，会不会把用户误判成被移除？</summary>
+  <div class="answer">不会。Fast-path authorization 是三态而不是 boolean：authorized、明确 unauthorized、unavailable。只有 PostgreSQL 明确查到不在成员集合中，socket 才收到 <code>room_removed</code> 并离开。Redis identity 或 PostgreSQL membership 查询失败属于 unavailable；服务端保留连接、不发完整 payload，只发 head-only hint 并记录 metric。客户端之后调用 <code>get_room_events</code> / snapshot 时再次鉴权；请求层同样返回 <code>ROOM_AUTH_UNAVAILABLE</code>，不会把基础设施故障翻译成 <code>ROOM_ACCESS_DENIED</code>。</div>
+</details>
+<details data-lang="en">
+  <summary>Can an authorization database outage falsely remove a user?</summary>
+  <div class="answer">No. Fast-path authorization is tri-state: authorized, explicitly unauthorized, or unavailable. A socket receives <code>room_removed</code> only when PostgreSQL explicitly excludes that client from the member set. Redis identity or PostgreSQL membership failure is unavailable: the connection stays joined, no complete payload is sent, a head-only hint and metric are produced, and the later GET authorizes again. Request handlers likewise return <code>ROOM_AUTH_UNAVAILABLE</code> instead of translating infrastructure failure into <code>ROOM_ACCESS_DENIED</code>.</div>
+</details>
+
+<details data-lang="zh">
   <summary>PG listener 断线时 NOTIFY 丢了怎么办？</summary>
   <div class="answer"><code>NOTIFY</code> 不是队列。Listener 必须先成功重新执行 <code>LISTEN</code>，然后本实例才向 local sockets 发 <code>room_sync_required { reason: "postgres_listener_reconnected" }</code>。客户端不清空 UI，而是从当前 <code>lastAppliedSeq</code> 调 <code>get_room_events</code>；gap replay，cursor expired 或超过 500 events 则 snapshot。先 LISTEN 再反熵，才能覆盖刚才的断线窗口和反熵过程中新到的提交。</div>
 </details>
@@ -1991,11 +2031,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>一条 AI message 从发送到完成经历什么？</summary>
-  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；若它早于 placeholder 通知到达，客户端先按 <code>messageId</code> 有界暂存。Placeholder event 到达后按序 drain；如果同一 replay page 已含 final after-image，则 final 是事实源，旧 chunk 不再追加。Placeholder 已存在时，transient reducer 分别更新 canonical 与当前 React state，因此用户刚发出的 optimistic message 不会被整组替换掉。成功时先持久化最终 Message，再发 <code>ai_stream_end</code>。失败事件带明确的 <code>persisted</code>：正常失败发送同一条持久错误 Message；如果终态保存失败，客户端会立刻把当前消息 terminalize、保留 error overlay 并启动恢复，不会永远显示 streaming。Durable terminal after-image 到达后仍是最终事实源。</div>
+  <div class="answer">先鉴权并持久化用户消息，deferred event writer 追加包含当时完整 Message after-image 的 room event；再持久化 <code>status=streaming</code> 的 AI placeholder，追加第二个 event。Placeholder 带 per-instance stream owner，服务端持续续租 PostgreSQL owner lease。默认 worker 模式原子写 <code>assistant_run + outbox_event</code>，Worker claim 后调用 Provider。生成过程中的 <code>ai_chunk</code> 直接 Socket 推送，不写事件日志；若它早于 placeholder 通知到达，客户端先按 <code>messageId</code> 有界暂存。Placeholder event 到达后按序 drain；如果同一 replay page 已含 final after-image，则 final 是事实源，旧 chunk 不再追加。Placeholder 已存在时，transient reducer 分别更新 canonical 与当前 React state，因此用户刚发出的 optimistic message 不会被整组替换掉。成功时先持久化最终 Message，再发 <code>ai_stream_end</code>。失败事件带明确的 <code>persisted</code>：正常失败发送同一条持久错误 Message；如果即时终态保存失败，客户端会立刻 terminalize 并保留 error overlay，服务端则把同一终态 Message 放进指数退避 reconciler。数据库几秒后恢复也能在不重启进程的情况下产生 terminal room event；只有 owner lease 过期后，其他实例才会接管 orphan。Durable terminal after-image 到达后仍是最终事实源。</div>
 </details>
 <details data-lang="en">
   <summary>What happens during one AI-message lifecycle?</summary>
-  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder, appending another event. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. If it beats the placeholder notification, the client buffers it by <code>messageId</code>. The placeholder drains buffered data in order; if the same replay page already contains the final after-image, that durable final state wins and old chunks are discarded. Transient reducers update canonical and current React arrays separately, so a new optimistic message is not replaced. On success, the server persists the final Message before emitting <code>ai_stream_end</code>. Failure events declare <code>persisted</code>: the normal path carries the same persisted error Message, while a failed terminal write immediately terminalizes the local message, preserves an error overlay, and starts recovery. A later durable terminal after-image remains authoritative.</div>
+  <div class="answer">The server authorizes and persists the user message, and the deferred event writer appends a room event containing that complete Message after-image. It then persists an AI <code>status=streaming</code> placeholder with a per-instance stream owner and renews that owner's PostgreSQL lease. In default worker mode it atomically records <code>assistant_run + outbox_event</code>; a worker claims the job and calls the Provider. Generated <code>ai_chunk</code> data is pushed directly over Socket.IO and is not logged as room events. If it beats the placeholder notification, the client buffers it by <code>messageId</code>. The placeholder drains buffered data in order; if the same replay page already contains the final after-image, that durable final state wins and old chunks are discarded. Transient reducers update canonical and current React arrays separately, so a new optimistic message is not replaced. On success, the server persists the final Message before emitting <code>ai_stream_end</code>. Failure events declare <code>persisted</code>: the normal path carries the same persisted error Message, while a failed immediate terminal write terminalizes the local message and queues that same terminal Message in an exponential reconciler. A database that recovers seconds later produces the terminal room event without a process restart; another instance waits for owner expiry before orphan recovery. The durable terminal after-image remains authoritative.</div>
 </details>
 
 <details data-lang="zh">
@@ -2218,11 +2258,22 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <div class="card" data-lang="zh">
   <h4>4. Release 守门</h4>
-  <p>Compose 对 PostgreSQL/S3 credential fail-fast，容器 healthcheck、loopback/public status 与真实边界 smoke 共同决定发布成功；Source push 与生产部署是两种状态。</p>
+  <p>Compose 对 PostgreSQL/S3 credential fail-fast，容器 healthcheck、loopback/public status 与真实边界 smoke 共同决定发布成功；Source push 与生产部署是两种状态。这里的 healthcheck 不是只验证端口：App readiness 会真正读取 RoomTalk 的 PostgreSQL schema、执行 Redis <code>PING</code>、探测对象存储 bucket，并确认 Socket adapter 已初始化。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>4. Release Guardrails</h4>
-  <p>Compose fails fast on missing PostgreSQL/S3 credentials, while container health checks, loopback/public status, and boundary smokes define release success. Source push and production deployment are separate states.</p>
+  <p>Compose fails fast on missing PostgreSQL/S3 credentials, while container health checks, loopback/public status, and boundary smokes define release success. Source push and production deployment are separate states. The App health check does more than open a port: readiness reads the RoomTalk PostgreSQL schema, executes Redis <code>PING</code>, probes the object-storage bucket, and confirms that the Socket adapter exists.</p>
+</div>
+
+<div class="card" data-lang="zh">
+  <h4>为什么要分 liveness、readiness 和 degraded？</h4>
+  <p><strong>Liveness</strong> 只回答“这个 Node 进程还能不能处理 HTTP”。如果 PostgreSQL 短暂不可用，不应该让 Kubernetes 反复重启一个本来正常的 App 进程，因此 <code>/api/health/live</code> 不访问下游。<strong>Readiness</strong> 回答“现在把用户流量送进来是否安全”，所以 <code>/api/health/ready</code> 与 <code>/api/status</code> 必须检查所有关键依赖；失败时返回 HTTP 503 和 <code>status: "degraded"</code>。</p>
+  <p>最重要的是保留领域含义：<code>rooms: 0</code> 表示数据库查询成功，而且确实没有房间；数据库查询失败则是 <code>rooms: null</code>，并把 <code>dependencies.database</code> 标为 <code>unavailable</code>。不能为了让 status 看起来“在线”而把 infrastructure error 转换成合法业务值。Compose 用 readiness 判断 App 健康；迁移 AWS 后，load balancer/readiness 停止导流，liveness 只在进程自身失效时触发重启。</p>
+</div>
+<div class="card" data-lang="en">
+  <h4>Why separate liveness, readiness, and degraded?</h4>
+  <p><strong>Liveness</strong> asks only whether the Node process can still handle HTTP. A temporary PostgreSQL outage should not make Kubernetes restart an otherwise healthy App process, so <code>/api/health/live</code> has no downstream checks. <strong>Readiness</strong> asks whether it is safe to send user traffic now. Therefore <code>/api/health/ready</code> and <code>/api/status</code> check every required dependency and return HTTP 503 with <code>status: "degraded"</code> when one fails.</p>
+  <p>The domain distinction matters: <code>rooms: 0</code> means the query succeeded and the database really contains no rooms. A failed query produces <code>rooms: null</code> and <code>dependencies.database: "unavailable"</code>. Infrastructure errors must not be converted into valid business values merely to keep a status page green. Compose consumes readiness; on AWS, readiness removes a replica from traffic while liveness restarts it only when the process itself has failed.</p>
 </div>
 
 <div class="card" data-lang="zh">

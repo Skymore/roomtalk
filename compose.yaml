@@ -29,6 +29,9 @@ services:
       ROOM_EVENT_MAX_PER_ROOM: ${ROOM_EVENT_MAX_PER_ROOM:-10000}
       ROOM_EVENT_PRUNE_INTERVAL_MS: ${ROOM_EVENT_PRUNE_INTERVAL_MS:-3600000}
       ROOM_EVENT_FAST_PATH_MAX_BYTES: ${ROOM_EVENT_FAST_PATH_MAX_BYTES:-262144}
+      ROOMTALK_INSTANCE_LEASE_TTL_MS: ${ROOMTALK_INSTANCE_LEASE_TTL_MS:-30000}
+      ROOMTALK_INSTANCE_HEARTBEAT_MS: ${ROOMTALK_INSTANCE_HEARTBEAT_MS:-10000}
+      ROOMTALK_RECOVERY_INTERVAL_MS: ${ROOMTALK_RECOVERY_INTERVAL_MS:-5000}
       MEDIA_STORAGE_MODE: s3
       MEDIA_BUCKET_NAME: ${MEDIA_BUCKET_NAME:-roomtalk-media}
       MEDIA_STORAGE_REGION: ${MEDIA_STORAGE_REGION:-us-east-1}
@@ -50,7 +53,7 @@ services:
       object-storage:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3012/api/status"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3012/api/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 12

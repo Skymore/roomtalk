@@ -19,6 +19,7 @@ type RoomEmit = {
 
 class FakeSocket {
   id = 'socket-1';
+  data: Record<string, unknown> = {};
   rooms = new Set<string>([this.id]);
   handlers = new Map<string, (...args: any[]) => unknown>();
   emitted: SocketEmit[] = [];
@@ -389,6 +390,7 @@ describe('room socket handlers', () => {
     });
 
     assert.equal(store.clientId, 'client-1');
+    assert.equal(socket.data.roomtalkClientId, 'client-1');
     assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
     assert.deepEqual(socket.emitted, []);

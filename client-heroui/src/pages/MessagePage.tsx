@@ -807,6 +807,50 @@ export const MessagePage: React.FC = () => {
     };
   }, [currentRoomId, roomIdFromUrl]);
 
+  const handleRoomPermissionsInvalidated = useCallback((roomId: string) => {
+    if (currentRoomRef.current?.id === roomId) {
+      refreshRoomPermissions(roomId);
+    }
+  }, [refreshRoomPermissions]);
+
+  const applyRoomRemoval = useCallback((roomId: string) => {
+    setRooms((previous) => previous.filter(room => room.id !== roomId));
+    setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
+    void invalidatePersistentRoomCache(roomId);
+
+    const currentRoomAtRemoval = currentRoomRef.current;
+    const removedPendingTarget = roomSessionController.getSnapshot().roomId === roomId;
+    if (currentRoomAtRemoval?.id !== roomId && !removedPendingTarget) {
+      return;
+    }
+
+    leaveRoom(roomId);
+    commitRoomPermissions(null);
+    clearRoomUrlParam();
+    setError(translationRef.current("roomAccessRemoved"));
+
+    if (removedPendingTarget && currentRoomAtRemoval && currentRoomAtRemoval.id !== roomId) {
+      // The controller owns the canonical target. Selecting the previous room
+      // makes that rollback the final serialized membership mutation.
+      void ensureActiveRoomSession({
+        roomId: currentRoomAtRemoval.id,
+        fallbackRoom: currentRoomAtRemoval,
+        source: "online",
+      }).then((restoredRoom) => {
+        if (restoredRoom?.id === currentRoomAtRemoval.id && currentRoomRef.current?.id === currentRoomAtRemoval.id) {
+          setError(translationRef.current("roomAccessRemoved"));
+        }
+      });
+      return;
+    }
+
+    currentRoomRef.current = null;
+    setCurrentRoom(null);
+    setMemberCount(null);
+    setView("rooms");
+    saveCurrentRoom(null);
+  }, [clearRoomUrlParam, commitRoomPermissions, ensureActiveRoomSession]);
+
   // 列表请求返回初始快照，之后靠增量事件维护。快照在途时仍可能收到
   // broadcast，所以记录并重放请求开始后的 delta，避免迟到快照覆盖新状态。
   useEffect(() => {
@@ -839,47 +883,9 @@ export const MessagePage: React.FC = () => {
         commitRoomPermissions(permissions);
       }
     };
-    const handleRoomPermissionsInvalidated = (roomId: string) => {
-      if (currentRoomRef.current?.id === roomId) {
-        refreshRoomPermissions(roomId);
-      }
-    };
     const handleRoomRemoved = (roomId: string) => {
       recordDelta({ kind: 'room-removed', roomId });
-      setRooms((previous) => previous.filter(room => room.id !== roomId));
-      setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
-      void invalidatePersistentRoomCache(roomId);
-      const currentRoomAtRemoval = currentRoomRef.current;
-      const removedPendingTarget = roomSessionController.getSnapshot().roomId === roomId;
-      if (currentRoomAtRemoval?.id !== roomId && !removedPendingTarget) {
-        return;
-      }
-
-      leaveRoom(roomId);
-      commitRoomPermissions(null);
-      clearRoomUrlParam();
-      setError(translationRef.current("roomAccessRemoved"));
-
-      if (removedPendingTarget && currentRoomAtRemoval && currentRoomAtRemoval.id !== roomId) {
-        // The controller owns the canonical target. Selecting the previous room
-        // makes that rollback the final serialized membership mutation.
-        void ensureActiveRoomSession({
-          roomId: currentRoomAtRemoval.id,
-          fallbackRoom: currentRoomAtRemoval,
-          source: "online",
-        }).then((restoredRoom) => {
-          if (restoredRoom?.id === currentRoomAtRemoval.id && currentRoomRef.current?.id === currentRoomAtRemoval.id) {
-            setError(translationRef.current("roomAccessRemoved"));
-          }
-        });
-        return;
-      }
-
-      currentRoomRef.current = null;
-      setCurrentRoom(null);
-      setMemberCount(null);
-      setView("rooms");
-      saveCurrentRoom(null);
+      applyRoomRemoval(roomId);
     };
 
     const refreshRoomLists = () => {
@@ -953,7 +959,7 @@ export const MessagePage: React.FC = () => {
       socket.off("connect", handleSocketConnect);
       unsubscribe();
     };
-  }, [applyServerRoom, clearRoomUrlParam, commitRoomPermissions, ensureActiveRoomSession, refreshRoomPermissions]);
+  }, [applyRoomRemoval, applyServerRoom, commitRoomPermissions, handleRoomPermissionsInvalidated]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
@@ -1376,6 +1382,9 @@ export const MessagePage: React.FC = () => {
               handleDeleteRoom={handleDeleteRoom}
               handleRenameRoom={handleRenameRoom}
               roomPermissions={roomPermissions}
+              onMembersChanged={handleRoomPermissionsInvalidated}
+              onRoomDeleted={applyRoomRemoval}
+              onRoomAccessDenied={applyRoomRemoval}
             />
           );
         }
@@ -1405,6 +1414,9 @@ export const MessagePage: React.FC = () => {
             handleDeleteRoom={handleDeleteRoom}
             handleRenameRoom={handleRenameRoom}
             roomPermissions={roomPermissions}
+            onMembersChanged={handleRoomPermissionsInvalidated}
+            onRoomDeleted={applyRoomRemoval}
+            onRoomAccessDenied={applyRoomRemoval}
           />
         );
       }

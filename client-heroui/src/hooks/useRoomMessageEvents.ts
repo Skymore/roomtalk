@@ -55,6 +55,9 @@ interface UseRoomMessageEventsArgs {
   messageToEditId?: string;
   onAIStreamSettled?: () => void;
   onRoomUpdated?: (room: Room) => void;
+  onMembersChanged?: (roomId: string) => void;
+  onRoomDeleted?: (roomId: string) => void;
+  onRoomAccessDenied?: (roomId: string) => void;
   requestHistoryRef: MutableRefObject<RoomMessageHistoryRequest | null>;
 }
 
@@ -83,6 +86,7 @@ const reduceRoomEvents = (
   let roomDeleted = false;
   let updatedRoom: Room | undefined;
   let roomMediaCacheInvalidated = false;
+  let membersChanged = false;
 
   events.forEach(event => {
     switch (event.type) {
@@ -127,6 +131,7 @@ const reduceRoomEvents = (
         // The public room stream deliberately contains no member IDs or roles.
         // Privileged member projections are loaded through their separately
         // authorized API instead of being reconstructed here.
+        membersChanged = true;
         break;
     }
   });
@@ -138,6 +143,7 @@ const reduceRoomEvents = (
     roomDeleted,
     updatedRoom,
     roomMediaCacheInvalidated,
+    membersChanged,
   };
 };
 
@@ -164,6 +170,9 @@ export const useRoomMessageEvents = ({
   messageToEditId,
   onAIStreamSettled,
   onRoomUpdated,
+  onMembersChanged,
+  onRoomDeleted,
+  onRoomAccessDenied,
   requestHistoryRef,
 }: UseRoomMessageEventsArgs) => {
   const messageToDeleteIdRef = useRef(messageToDeleteId);
@@ -398,6 +407,13 @@ export const useRoomMessageEvents = ({
         applySnapshot(snapshot);
         return true;
       } catch (error) {
+        if (error instanceof SocketRequestError && error.code === 'PAGINATION_BOUNDARY_EXPIRED') {
+          return loadSnapshot({ reason: 'pagination-boundary-expired' });
+        }
+        if (error instanceof SocketRequestError && error.code === 'ROOM_ACCESS_DENIED') {
+          onRoomAccessDenied?.(roomId);
+          return false;
+        }
         if (!cancelled) {
           setIsLoading(false);
           setIsLoadingMore(false);
@@ -460,6 +476,7 @@ export const useRoomMessageEvents = ({
         void clearCachedMediaForRoom(roomId);
       }
       if (reduced.updatedRoom) onRoomUpdated?.(reduced.updatedRoom);
+      if (reduced.membersChanged) onMembersChanged?.(roomId);
       updateMessages(canonicalMessages);
       setAgentTurns(reduced.turns);
       setCursor(nextSeq);
@@ -472,13 +489,18 @@ export const useRoomMessageEvents = ({
           setHasMore(false);
         }
       }
-      cacheWindow(canonicalMessages, reduced.turns, nextSeq);
+      if (syncState.needsHistorySnapshot) {
+        void clearCachedRoomMessageWindow(roomId);
+      } else {
+        cacheWindow(canonicalMessages, reduced.turns, nextSeq);
+      }
 
       const deletedIds = new Set(accepted
         .filter(event => event.type === 'messages.deleted')
         .flatMap(event => event.payload.messageIds || []));
       if (messageToDeleteIdRef.current && deletedIds.has(messageToDeleteIdRef.current)) closeDeleteModal();
       if (messageToEditIdRef.current && deletedIds.has(messageToEditIdRef.current)) closeEditModal();
+      if (reduced.roomDeleted) onRoomDeleted?.(roomId);
       return true;
     };
 
@@ -556,14 +578,24 @@ export const useRoomMessageEvents = ({
                 && (
                   error.code === 'CURSOR_EXPIRED'
                   || error.code === 'EVENT_PAYLOAD_INVALID'
+                  || error.code === 'EVENT_TOO_LARGE'
                 )
               ) {
                 const loaded = await loadSnapshot({
-                  reason: error.code === 'EVENT_PAYLOAD_INVALID' ? 'event-payload-invalid' : 'cursor-reset',
+                  reason: error.code === 'EVENT_PAYLOAD_INVALID'
+                    ? 'event-payload-invalid'
+                    : error.code === 'EVENT_TOO_LARGE'
+                      ? 'event-too-large'
+                      : 'cursor-reset',
                 });
                 if (!loaded) return;
                 keepReading = true;
                 continue;
+              }
+              if (error instanceof SocketRequestError && error.code === 'ROOM_ACCESS_DENIED') {
+                onRoomAccessDenied?.(roomId);
+                keepReading = false;
+                break;
               }
               logRoomMessageDiagnostic('event-request-failed', {
                 requestId,
@@ -653,6 +685,7 @@ export const useRoomMessageEvents = ({
       const fastPathEvents = Array.isArray(event.events) ? event.events : [];
       const fastPathEndsAtHead = fastPathEvents.length > 0
         && fastPathEvents[fastPathEvents.length - 1].seq === event.headSeq;
+      if (hasBaseline && fastPathEndsAtHead) syncState.beginRealtimeMutation();
       if (hasBaseline && fastPathEndsAtHead && !applyEventPage(fastPathEvents)) {
         logRoomMessageDiagnostic('event-fast-path-gap', {
           roomId,
@@ -830,6 +863,9 @@ export const useRoomMessageEvents = ({
     closeEditModal,
     onAIStreamSettled,
     onRoomUpdated,
+    onMembersChanged,
+    onRoomDeleted,
+    onRoomAccessDenied,
     requestHistoryRef,
   ]);
 

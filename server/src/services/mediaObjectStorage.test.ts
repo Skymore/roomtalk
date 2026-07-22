@@ -32,6 +32,34 @@ const withTestAwsCredentials = async (callback: () => Promise<void>) => {
 };
 
 describe('S3MediaObjectStorage', () => {
+  it('checks bucket readiness through the private S3 endpoint', async () => {
+    await withTestAwsCredentials(async () => {
+      let request: { method?: string; url?: string } = {};
+      const server = createServer((incoming, response) => {
+        request = { method: incoming.method, url: incoming.url };
+        response.statusCode = 200;
+        response.end();
+      });
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+      const storage = new S3MediaObjectStorage({
+        bucket: 'media-bucket',
+        region: 'us-east-1',
+        endpoint: `http://127.0.0.1:${port}`,
+        forcePathStyle: true,
+        maxAttempts: 1,
+      }, new Logger('S3MediaObjectStorageTest'));
+
+      try {
+        await storage.checkHealth();
+        assert.equal(request.method, 'HEAD');
+        assert.equal(request.url, '/media-bucket/');
+      } finally {
+        await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      }
+    });
+  });
+
   it('creates browser-compatible upload URLs without signed content length or SDK checksums', async () => {
     await withTestAwsCredentials(async () => {
       const storage = new S3MediaObjectStorage({
@@ -114,6 +142,7 @@ describe('LocalMediaObjectStorage', () => {
 
     try {
       const storage = new LocalMediaObjectStorage(rootDir, new Logger('LocalMediaObjectStorageTest'));
+      await storage.checkHealth();
       await storage.putMediaObject({
         objectKey: 'rooms/room-1/media/image/asset-1',
         body: Buffer.from('image-bytes'),

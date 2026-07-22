@@ -4,7 +4,14 @@ import { MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { createPostgresPool } from './postgresPool';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { PostgresPool, PostgresStore } from './postgresStore';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from './store';
+import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
+import {
+  RoomEventCursorAheadError,
+  RoomEventCursorExpiredError,
+  RoomEventPayloadInvalidError,
+  RoomEventTooLargeError,
+  RoomPaginationBoundaryExpiredError,
+} from './store';
 
 const logger = {
   debug() {},
@@ -540,6 +547,127 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.ok(tombstone);
     assert.equal(tombstone.payload.roomId, roomId);
     assert.deepEqual(page.events.map(event => event.type), ['room.deleted']);
+  });
+
+  it('jumps directly to the final tombstone for a deleted stream with hundreds of earlier events', async () => {
+    const roomId = 'event-deleted-large-stream';
+    assert.ok(await store.saveRoom(room(roomId)));
+    await pool.query(
+      `INSERT INTO room_events (room_id, seq, event_type, schema_version, payload, created_at)
+      SELECT $1, seq, 'members.changed', 1, '{}'::jsonb, clock_timestamp()
+      FROM generate_series(3, 600) AS seq`,
+      [roomId],
+    );
+    await pool.query(
+      'UPDATE room_event_streams SET head_seq = 600 WHERE room_id = $1',
+      [roomId],
+    );
+    assert.equal(await store.deleteRoom(roomId, 'event-test-owner'), true);
+
+    const page = await store.readRoomEvents(roomId, { afterSeq: 0, limit: 100 });
+
+    assert.equal(page.headSeq, 601);
+    assert.equal(page.hasMore, false);
+    assert.deepEqual(page.events.map(event => [event.seq, event.type]), [[601, 'room.deleted']]);
+  });
+
+  it('rejects a first event that exceeds the caller byte budget', async () => {
+    const roomId = 'event-too-large-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const beforeMessage = await store.readRoomEventHead(roomId);
+    assert.ok(await store.appendMessage(message(roomId, 'oversized-message', {
+      content: 'x'.repeat(32 * 1024),
+    })));
+
+    await assert.rejects(
+      store.readRoomEvents(roomId, { afterSeq: beforeMessage, limit: 10, maxBytes: 16 * 1024 }),
+      (error: unknown) => error instanceof RoomEventTooLargeError
+        && error.roomId === roomId
+        && error.seq === beforeMessage + 1,
+    );
+  });
+
+  it('reports an expired message pagination boundary explicitly', async () => {
+    const roomId = 'pagination-boundary-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    assert.ok(await store.appendMessage(message(roomId, 'visible-message')));
+
+    await assert.rejects(
+      store.readRoomSnapshot(roomId, { beforeMessageId: 'deleted-message' }),
+      (error: unknown) => error instanceof RoomPaginationBoundaryExpiredError
+        && error.roomId === roomId
+        && error.beforeMessageId === 'deleted-message',
+    );
+  });
+
+  it('does not recover another live instance turn or sandbox until its lease expires', async () => {
+    const roomId = 'leased-code-agent-room';
+    const runningTurn = turn(roomId, 'running', '2026-07-21T00:00:00.000Z');
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'running',
+      sandboxStatus: 'ready',
+    }));
+    assert.ok(await store.upsertRoomAgentTurn(runningTurn));
+    assert.ok(await store.acquireCodeAgentRoomLease(
+      roomId,
+      runningTurn.id,
+      'instance-a',
+      '2026-07-21T00:00:00.000Z',
+      30_000,
+    ));
+
+    assert.equal(await store.failInterruptedRoomAgentTurns('2026-07-21T00:00:10.000Z'), 0);
+    assert.deepEqual(await store.findInterruptedCodeAgentRooms('2026-07-21T00:00:10.000Z'), []);
+
+    assert.equal(await store.failInterruptedRoomAgentTurns('2026-07-21T00:00:31.000Z'), 1);
+    assert.deepEqual(
+      (await store.findInterruptedCodeAgentRooms('2026-07-21T00:00:31.000Z')).map(room => room.id),
+      [roomId],
+    );
+  });
+
+  it('recovers streaming placeholders only after their owner lease expires', async () => {
+    const roomId = 'leased-ai-stream-room';
+    const ownerId = 'stream-owner-a';
+    assert.ok(await store.saveRoom(room(roomId)));
+    assert.ok(await store.upsertMessage(withAIStreamRecoveryMetadata(message(roomId, 'streaming-message', {
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+    }), ownerId)));
+    await store.heartbeatAIStreamOwner(ownerId, 'instance-a', '2026-07-21T00:00:00.000Z', 30_000);
+
+    assert.equal(await store.failOrphanedStreamingMessages('Response interrupted.', '2026-07-21T00:00:10.000Z'), 0);
+    assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'streaming');
+
+    assert.equal(await store.failOrphanedStreamingMessages('Response interrupted.', '2026-07-21T00:00:31.000Z'), 1);
+    assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'error');
+  });
+
+  it('allows only one app instance to run singleton maintenance at a time', async () => {
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => {
+      markFirstStarted = resolve;
+    });
+    const firstGate = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+
+    const first = store.withMaintenanceLock('roomtalk-integration-maintenance', async () => {
+      markFirstStarted();
+      await firstGate;
+      return 'first';
+    });
+    await firstStarted;
+
+    const second = await store.withMaintenanceLock('roomtalk-integration-maintenance', async () => 'second');
+    assert.deepEqual(second, { acquired: false });
+
+    releaseFirst();
+    assert.deepEqual(await first, { acquired: true, result: 'first' });
   });
 
   it('cuts over legacy replay rows atomically while preserving deleted-room authorization', async () => {

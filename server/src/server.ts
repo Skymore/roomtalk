@@ -77,6 +77,9 @@ import { resolveGitHubConnectionConfig } from './services/githubConnectionConfig
 import { PostgresGitHubConnectionStore, RedisGitHubConnectionStore } from './services/githubConnectionStore';
 import { emitRoomEventLocally, emitRoomSyncRequiredLocally, RoomEventBroadcaster } from './services/roomEventBroadcaster';
 import { RoomEventNotifier } from './services/roomEventNotifier';
+import { resolveRuntimeInstanceId } from './services/runtimeInstance';
+import { AITerminalPersistReconciler } from './services/aiTerminalPersistReconciler';
+import { enforceRoomEventAuthorizationBarrier } from './services/roomEventAuthorizationBarrier';
 
 dotenv.config();
 
@@ -98,7 +101,8 @@ const publishedStaticSiteService = createPublishedStaticSiteServiceFromEnv({
   logger: staticPublishLogger,
 });
 const codeWorkspaceAssetAccess = createCodeWorkspaceAssetAccessFromEnv();
-const aiStreamOwnerId = resolveAIStreamOwnerId();
+const runtimeInstanceId = resolveRuntimeInstanceId();
+const aiStreamOwnerId = resolveAIStreamOwnerId(process.env, runtimeInstanceId);
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
@@ -160,7 +164,7 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const redisClient: RedisClientType = createClient({
   url: REDIS_URL
 });
-const redisStore = new RedisStore(redisClient, redisLogger);
+const redisStore = new RedisStore(redisClient, redisLogger, undefined, undefined, runtimeInstanceId);
 
 const PERSISTENCE_STORE = (process.env.PERSISTENCE_STORE || 'postgres').toLowerCase();
 if (PERSISTENCE_STORE !== 'postgres') {
@@ -294,34 +298,41 @@ const io = new Server(server, {
   pingTimeout: 60000, // 60秒超时
   pingInterval: 25000 // 25秒ping一次
 });
+const aiTerminalPersistReconciler = new AITerminalPersistReconciler(store, openaiLogger, {
+  onPersisted: message => {
+    io.local.to(message.roomId).emit('room_sync_required', { reason: 'ai_terminal_reconciled' });
+  },
+});
 const roomEventBroadcaster = new RoomEventBroadcaster({
   store,
   logger: postgresLogger,
   maxPayloadBytes: parsePositiveIntegerEnv('ROOM_EVENT_FAST_PATH_MAX_BYTES', 256 * 1024),
+  hasLocalSubscribers: async roomId => (await io.local.in(roomId).allSockets()).size > 0,
   authorizeLocalRoom: async roomId => {
     const localSocketIds = await io.local.in(roomId).allSockets();
-    await Promise.all(Array.from(localSocketIds, async socketId => {
-      const localSocket = io.sockets.sockets.get(socketId);
-      if (!localSocket) return;
-      const clientId = await store.getClientId(socketId);
-      if (clientId && await store.isRoomMember(roomId, clientId)) return;
-
-      // PostgreSQL membership is authoritative. Remove the local subscription
-      // before any committed after-image is emitted, even if Redis presence
-      // cleanup from the original member-removal request is still running.
-      localSocket.emit('room_removed', roomId);
-      localSocket.emit('room_permissions_invalidated', roomId);
-      await localSocket.leave(roomId);
-    }));
+    return enforceRoomEventAuthorizationBarrier({
+      roomId,
+      socketIds: Array.from(localSocketIds),
+      getLocalSocket: socketId => io.sockets.sockets.get(socketId),
+      readStoredClientIds: socketIds => store.getClientIds!(socketIds),
+      readAuthorizedClientIds: clientIds => store.readRoomMemberClientIds!(roomId, clientIds),
+      onUnavailable: context => postgresLogger.warn('Room fast-path authorization unavailable', {
+        ...context,
+        roomId,
+        socketCount: localSocketIds.size,
+      }),
+    });
   },
   emit: event => emitRoomEventLocally(io, event),
 });
 const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, event => {
-  void roomEventBroadcaster.handle(event);
+  roomEventBroadcaster.handle(event);
 }, () => {
   emitRoomSyncRequiredLocally(io, { reason: 'postgres_listener_reconnected' });
 });
 let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
+let runtimeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let recoveryReconcileTimer: ReturnType<typeof setInterval> | null = null;
 
 const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
   apiKey: process.env.E2B_API_KEY,
@@ -453,6 +464,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     observability: observabilityRecorder,
     mediaObjectStorage,
     aiStreamOwnerId,
+    aiTerminalPersistReconciler,
   }
 );
 
@@ -471,19 +483,76 @@ const infrastructureReady = (async () => {
 
     await postgresStore.initializeSchema();
     await roomEventNotifier.start();
-    const retentionDays = parsePositiveIntegerEnv('OBSERVABILITY_EVENT_RETENTION_DAYS', 60);
-    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    const deletedCount = await (observabilityRecorder as PostgresObservabilityEventRecorder).deleteEventsBefore(cutoff);
-    if (deletedCount > 0) {
-      serverLogger.info('Deleted old observability events', { deletedCount, retentionDays, cutoff });
-    }
+    const instanceLeaseTtlMs = parsePositiveIntegerEnv('ROOMTALK_INSTANCE_LEASE_TTL_MS', 30_000);
+    const instanceHeartbeatMs = Math.min(
+      Math.max(1_000, parsePositiveIntegerEnv('ROOMTALK_INSTANCE_HEARTBEAT_MS', 10_000)),
+      Math.max(1_000, Math.floor(instanceLeaseTtlMs / 2)),
+    );
+    const heartbeatRuntime = async () => {
+      const now = new Date().toISOString();
+      await Promise.all([
+        store.heartbeatRealtimeInstance?.(runtimeInstanceId, instanceLeaseTtlMs),
+        store.heartbeatAIStreamOwner?.(aiStreamOwnerId, runtimeInstanceId, now, instanceLeaseTtlMs),
+      ]);
+    };
+    await heartbeatRuntime();
+    runtimeHeartbeatTimer = setInterval(() => {
+      void heartbeatRuntime().catch(error => serverLogger.error('Failed to heartbeat runtime instance leases', {
+        error,
+        runtimeInstanceId,
+      }));
+    }, instanceHeartbeatMs);
+    runtimeHeartbeatTimer.unref?.();
+
+    const runRecoveryReconciler = async () => {
+      const maintenance = await postgresStore.withMaintenanceLock('roomtalk_recovery_reconciler', async () => {
+        const now = new Date().toISOString();
+        const [cleanedPresence, recoveredStreams, recoveredTurns, recoveredSandboxes] = await Promise.all([
+          store.cleanupExpiredRealtimeInstances?.(runtimeInstanceId) || Promise.resolve(0),
+          store.failOrphanedStreamingMessages?.('Response interrupted.', now) || Promise.resolve(0),
+          store.failInterruptedRoomAgentTurns?.(now) || Promise.resolve(0),
+          codeAgentSandboxLifecycle.recoverInterruptedSandboxes(),
+        ]);
+        if (cleanedPresence || recoveredStreams || recoveredTurns || recoveredSandboxes) {
+          serverLogger.warn('Recovered expired runtime ownership', {
+            cleanedPresence,
+            recoveredStreams,
+            recoveredTurns,
+            recoveredSandboxes,
+          });
+        }
+      });
+      if (!maintenance.acquired) {
+        serverLogger.debug('Skipped recovery reconciliation because another instance owns maintenance');
+      }
+    };
+    await runRecoveryReconciler();
+    recoveryReconcileTimer = setInterval(() => {
+      void runRecoveryReconciler().catch(error => serverLogger.error('Runtime recovery reconciliation failed', { error }));
+    }, parsePositiveIntegerEnv('ROOMTALK_RECOVERY_INTERVAL_MS', 5_000));
+    recoveryReconcileTimer.unref?.();
+
     const pruneRoomEvents = async () => {
-      const roomEventRetentionDays = parsePositiveIntegerEnv('ROOM_EVENT_RETENTION_DAYS', 7);
-      const maxEventsPerRoom = parsePositiveIntegerEnv('ROOM_EVENT_MAX_PER_ROOM', 10_000);
-      const olderThan = new Date(Date.now() - roomEventRetentionDays * 24 * 60 * 60 * 1000).toISOString();
-      const prunedCount = await postgresStore.pruneRoomEvents({ olderThan, maxEventsPerRoom });
-      if (prunedCount > 0) {
-        serverLogger.info('Pruned retained room events', { prunedCount, roomEventRetentionDays, maxEventsPerRoom });
+      const maintenance = await postgresStore.withMaintenanceLock('roomtalk_retention_maintenance', async () => {
+        const retentionDays = parsePositiveIntegerEnv('OBSERVABILITY_EVENT_RETENTION_DAYS', 60);
+        const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+        const deletedCount = await (observabilityRecorder as PostgresObservabilityEventRecorder).deleteEventsBefore(cutoff);
+        const roomEventRetentionDays = parsePositiveIntegerEnv('ROOM_EVENT_RETENTION_DAYS', 7);
+        const maxEventsPerRoom = parsePositiveIntegerEnv('ROOM_EVENT_MAX_PER_ROOM', 10_000);
+        const olderThan = new Date(Date.now() - roomEventRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+        const prunedCount = await postgresStore.pruneRoomEvents({ olderThan, maxEventsPerRoom });
+        if (deletedCount > 0 || prunedCount > 0) {
+          serverLogger.info('Completed singleton retention maintenance', {
+            deletedCount,
+            retentionDays,
+            prunedCount,
+            roomEventRetentionDays,
+            maxEventsPerRoom,
+          });
+        }
+      });
+      if (!maintenance.acquired) {
+        serverLogger.debug('Skipped retention maintenance because another instance owns it');
       }
       serverLogger.info('Room event delivery metrics', roomEventBroadcaster.getMetrics());
     };
@@ -498,10 +567,6 @@ const infrastructureReady = (async () => {
       await store.resetAllDataForTests?.();
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
     }
-    await store.clearRealtimeRoomMembers?.();
-    await store.failInterruptedStreamingMessages?.('Response interrupted.', { aiStreamOwnerId });
-    await store.failInterruptedRoomAgentTurns?.();
-    await codeAgentSandboxLifecycle.recoverInterruptedSandboxes();
     await codeAgentSessionService.resumeQueuedTurns();
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
@@ -530,6 +595,7 @@ registerSocketHandlers({
   normalizeAIModel,
   getAIClientForModel,
   aiStreamOwnerId,
+  aiTerminalPersistReconciler,
   assemblyAIApiKey,
   codeAgentSessionService,
   codeAgentAccess,
@@ -555,6 +621,7 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
         normalizeAIModel,
         getAIClientForModel,
         aiStreamOwnerId,
+        aiTerminalPersistReconciler,
         assemblyAIApiKey,
         codeAgentSessionService,
         codeAgentAccess,
@@ -690,10 +757,20 @@ const shutdown = () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   outboxWorker?.stop();
+  aiTerminalPersistReconciler.stop();
   if (roomEventPruneTimer) {
     clearInterval(roomEventPruneTimer);
     roomEventPruneTimer = null;
   }
+  if (runtimeHeartbeatTimer) {
+    clearInterval(runtimeHeartbeatTimer);
+    runtimeHeartbeatTimer = null;
+  }
+  if (recoveryReconcileTimer) {
+    clearInterval(recoveryReconcileTimer);
+    recoveryReconcileTimer = null;
+  }
+  void store.releaseAIStreamOwner?.(aiStreamOwnerId);
   void roomEventNotifier.stop();
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 10_000);

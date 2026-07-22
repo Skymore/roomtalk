@@ -241,6 +241,14 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_code_agent_room_leases_expiry
     ON code_agent_room_leases (expires_at)`,
+  `CREATE TABLE IF NOT EXISTS ai_stream_owner_leases (
+    owner_id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL,
+    last_heartbeat_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_stream_owner_leases_expiry
+    ON ai_stream_owner_leases (expires_at)`,
   `CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -1218,6 +1226,23 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         RETURN next_seq;
       END;
       $$ LANGUAGE plpgsql;
+    `,
+  },
+  {
+    // Streaming ownership is a lease, not a hostname convention. A replacement
+    // process can recover placeholders only after the previous owner's lease
+    // expires, without touching streams still owned by another live instance.
+    id: '0006_ai_stream_owner_leases',
+    sql: `
+      CREATE TABLE IF NOT EXISTS ai_stream_owner_leases (
+        owner_id TEXT PRIMARY KEY,
+        instance_id TEXT NOT NULL,
+        last_heartbeat_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_stream_owner_leases_expiry
+        ON ai_stream_owner_leases (expires_at);
     `,
   },
 ];

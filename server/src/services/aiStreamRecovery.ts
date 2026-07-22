@@ -9,12 +9,13 @@ export type AIStreamTrackedMessage = Message & {
   aiStreamOwnerId?: string;
 };
 
-export const resolveAIStreamOwnerId = (env: NodeJS.ProcessEnv = process.env): string => {
-  const rawOwnerId = env.AI_STREAM_OWNER_ID
-    || env.ROOMTALK_STREAM_OWNER_ID
+export const resolveAIStreamOwnerId = (env: NodeJS.ProcessEnv = process.env, runtimeInstanceId?: string): string => {
+  const ownerNamespace = env.AI_STREAM_OWNER_ID || env.ROOMTALK_STREAM_OWNER_ID || 'roomtalk-ai-stream';
+  const instanceIdentity = runtimeInstanceId
     || env.FLY_MACHINE_ID
     || env.HOSTNAME
     || `process:${process.pid}`;
+  const rawOwnerId = `${ownerNamespace}:${instanceIdentity}`;
 
   return createHash('sha256').update(rawOwnerId).digest('hex').slice(0, 32);
 };

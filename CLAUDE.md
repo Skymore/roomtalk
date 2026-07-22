@@ -52,12 +52,14 @@ The `CompositeRoomStore` delegates every method to the right sub-store and handl
 Room synchronization follows these invariants:
 
 - Commit each safe, schema-versioned room-event after-image in the same PostgreSQL transaction as its canonical mutation.
-- Treat `LISTEN/NOTIFY` as a hint. Each app coalesces same-room watermarks, reads a committed event range, reauthorizes local room sockets before complete payloads, and emits with `io.local`; incomplete or oversized payloads use one head-only notification.
-- Apply only contiguous client prefixes. A per-room `idle/replay/replace/prepend` controller gives recovery priority over pagination. Replay small gaps, snapshot retained gaps above 500 events, and clear stale target/gap watermarks before handling `CURSOR_AHEAD` so a restored database cannot cause an empty-page loop.
+- Treat `LISTEN/NOTIFY` as a hint. Each app coalesces same-room watermarks in bounded per-room state, skips rooms without local subscribers, batch-reauthorizes local room sockets before complete payloads, and emits with `io.local`; incomplete or oversized payloads use one head-only notification. Authorization dependency failure is unavailable, not unauthorized: keep sockets joined and send no complete payload.
+- Apply only contiguous client prefixes. A per-room `idle/replay/replace/prepend` controller gives live replay and replacement priority over pagination. Replay small gaps, snapshot retained gaps above 500 events or individually oversized events, return a deleted stream's final tombstone directly, and clear stale target/gap watermarks before handling `CURSOR_AHEAD` so a restored database cannot cause an empty-page loop. A stale `beforeMessageId` causes a replacement snapshot.
 - Stop on `EVENT_PAYLOAD_INVALID`; do not advance past a malformed event. Public membership events remain empty `members.changed` signals.
 - Do not hydrate old events from current rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`.
 - Keep typing, presence, AI chunks, voice, and WebRTC outside the durable sequence. Buffer early AI transient events by `messageId` within the 60-second, 64-ID, 512-event, 512-KiB limits.
-- Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if terminal persistence fails, use `persisted: false` so the client terminalizes the local placeholder and schedules recovery.
+- Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if terminal persistence fails, use `persisted: false` so the client terminalizes the local placeholder while the in-process reconciler retries the same terminal after-image with exponential backoff. PostgreSQL stream-owner leases allow takeover only after the original owner expires.
+- Own Redis presence by a unique runtime instance ID with TTL heartbeats. Cleanup removes only expired instance sockets. Recover Code Agent turns/sandboxes only after their fenced leases expire, and run recovery/retention under PostgreSQL advisory locks instead of destructive all-instance startup cleanup.
+- Keep liveness separate from readiness. `/api/health/live` proves only that the Node process can answer; `/api/status` and `/api/health/ready` execute a real PostgreSQL table query, Redis `PING`, S3-compatible bucket probe, and Socket adapter check. Dependency failure is `503 degraded` with `rooms: null`, never a fabricated business value such as zero rooms.
 - Keep a message ID bound to its original room. PostgreSQL rejects cross-room upserts; a future move operation must be an explicit source delete plus target upsert.
 - Update the canonical message array and React `previous` state separately so transient handlers preserve pending and failed optimistic sends.
 
@@ -78,7 +80,7 @@ All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` con
 
 - `aiModels.ts` — model registry, normalization, model options from env
 - `aiClients.ts` — OpenRouter/direct API client factory
-- `aiStreamRecovery.ts` — marks interrupted streaming messages as failed on startup
+- `aiStreamRecovery.ts` + `aiTerminalPersistReconciler.ts` — lease streaming owners, retry terminal persistence in-process, and recover only expired owners
 - `mediaObjectStorage.ts` — S3-compatible object storage (SeaweedFS in current production; Tigris retained for rollback), presigned URLs
 - `clientAuth.ts` — password hashing, token-based auth
 - `googleAuth.ts` — Google OAuth credential verification

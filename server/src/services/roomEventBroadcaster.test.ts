@@ -25,6 +25,14 @@ const roomEvent = (seq: number, content = 'hello'): RoomEvent => ({
   createdAt: '2026-07-20T00:00:00.000Z',
 });
 
+const waitUntil = async (predicate: () => boolean, timeoutMs = 1_000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for broadcaster to drain');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+};
+
 describe('RoomEventBroadcaster', () => {
   it('reads the exact immutable committed event and includes it in the Socket fast path', async () => {
     const emitted: RoomEventBroadcast[] = [];
@@ -42,7 +50,8 @@ describe('RoomEventBroadcaster', () => {
       emit: event => emitted.push(event),
     });
 
-    await broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => emitted.length === 1);
 
     assert.deepEqual(requests, [{ roomId: 'room-1', seq: 42 }]);
     assert.equal(emitted.length, 1);
@@ -62,7 +71,8 @@ describe('RoomEventBroadcaster', () => {
       emit: event => emitted.push(event),
     });
 
-    await broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => emitted.length === 1);
 
     assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
   });
@@ -81,7 +91,8 @@ describe('RoomEventBroadcaster', () => {
       emit: event => emitted.push(event),
     });
 
-    await broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => emitted.length === 1);
 
     assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
   });
@@ -107,12 +118,12 @@ describe('RoomEventBroadcaster', () => {
       emit: event => emitted.push(event.headSeq),
     });
 
-    const first = broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
-    const second = broadcaster.handle({ roomId: 'room-1', headSeq: 43 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 43 });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(reads, [42]);
     releaseFirst?.();
-    await Promise.all([first, second]);
+    await waitUntil(() => emitted.length === 2);
 
     assert.deepEqual(reads, [42, 43]);
     assert.deepEqual(emitted, [42, 43]);
@@ -145,13 +156,13 @@ describe('RoomEventBroadcaster', () => {
       emit: event => emitted.push(event),
     });
 
-    const requests = [broadcaster.handle({ roomId: 'room-1', headSeq: 42 })];
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
     await new Promise(resolve => setImmediate(resolve));
     for (let seq = 43; seq <= 1042; seq++) {
-      requests.push(broadcaster.handle({ roomId: 'room-1', headSeq: seq }));
+      broadcaster.handle({ roomId: 'room-1', headSeq: seq });
     }
     releaseFirst?.();
-    await Promise.all(requests);
+    await waitUntil(() => emitted.length === 2);
 
     assert.deepEqual(reads, [
       { afterSeq: 41, limit: 1 },
@@ -175,13 +186,55 @@ describe('RoomEventBroadcaster', () => {
       store,
       logger: new Logger('RoomEventBroadcasterTest'),
       maxPayloadBytes: 256 * 1024,
-      authorizeLocalRoom: async () => { order.push('authorize'); },
+      authorizeLocalRoom: async () => { order.push('authorize'); return true; },
       emit: () => { order.push('emit'); },
     });
 
-    await broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => order.includes('emit'));
 
     assert.deepEqual(order, ['read', 'authorize', 'emit']);
+  });
+
+  it('keeps local subscriptions and emits only a head hint when authorization is unavailable', async () => {
+    const emitted: RoomEventBroadcast[] = [];
+    const broadcaster = new RoomEventBroadcaster({
+      store: { readRoomEvent: async () => roomEvent(42) } as unknown as RoomStore,
+      logger: new Logger('RoomEventBroadcasterTest'),
+      maxPayloadBytes: 256 * 1024,
+      authorizeLocalRoom: async () => false,
+      emit: event => emitted.push(event),
+    });
+
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => emitted.length === 1);
+
+    assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
+    assert.equal(broadcaster.getMetrics().authorizationUnavailable, 1);
+  });
+
+  it('does not read PostgreSQL payloads when this instance has no local subscribers', async () => {
+    let reads = 0;
+    const emitted: RoomEventBroadcast[] = [];
+    const broadcaster = new RoomEventBroadcaster({
+      store: {
+        readRoomEvent: async () => {
+          reads++;
+          return roomEvent(42);
+        },
+      } as unknown as RoomStore,
+      logger: new Logger('RoomEventBroadcasterTest'),
+      maxPayloadBytes: 256 * 1024,
+      hasLocalSubscribers: async () => false,
+      emit: event => emitted.push(event),
+    });
+
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => broadcaster.getMetrics().noLocalSubscriberSkips === 1);
+
+    assert.equal(reads, 0);
+    assert.deepEqual(emitted, []);
+    assert.equal(broadcaster.getMetrics().noLocalSubscriberSkips, 1);
   });
 
   it('uses local-only fan-out so three LISTEN instances deliver once to each local client', () => {

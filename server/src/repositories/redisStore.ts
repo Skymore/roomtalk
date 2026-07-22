@@ -44,6 +44,10 @@ const getClientAuthTokensKey = (clientId: string) => `client:${clientId}:auth_to
 const CLIENT_ACCOUNTS_KEY = 'client:accounts';
 const CLIENT_ACCOUNT_LINKS_KEY = 'client:account_links';
 const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
+const REALTIME_INSTANCES_KEY = 'realtime:instances';
+const SOCKET_INSTANCES_KEY = 'socket:instances';
+const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
+const getRealtimeInstanceSocketsKey = (instanceId: string) => `realtime:instance:${instanceId}:sockets`;
 
 interface RoomMessagesCachePayload {
   eventSeq: number;
@@ -1078,7 +1082,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     private readonly redisClient: RedisClientType,
     private readonly logger: Logger,
     private readonly roomMessagesCacheTtlSeconds = resolveRoomMessagesCacheTtlSeconds(),
-    private readonly roomMessagesCacheMaxBytes = resolveRoomMessagesCacheMaxBytes()
+    private readonly roomMessagesCacheMaxBytes = resolveRoomMessagesCacheMaxBytes(),
+    private readonly realtimeInstanceId = 'legacy-instance',
   ) {}
 
   getRoomMessagesCacheKey(roomId: string): string {
@@ -3181,9 +3186,78 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async heartbeatRealtimeInstance(instanceId: string, ttlMs: number): Promise<void> {
+    await Promise.all([
+      this.redisClient.sAdd(REALTIME_INSTANCES_KEY, instanceId),
+      this.redisClient.set(getRealtimeInstanceHeartbeatKey(instanceId), '1', { PX: ttlMs }),
+    ]);
+  }
+
+  async cleanupExpiredRealtimeInstances(activeInstanceId: string): Promise<number> {
+    const instanceIds = await this.redisClient.sMembers(REALTIME_INSTANCES_KEY);
+    let cleanedSockets = 0;
+    for (const instanceId of instanceIds) {
+      if (instanceId === activeInstanceId) continue;
+      const heartbeat = await this.redisClient.get(getRealtimeInstanceHeartbeatKey(instanceId));
+      if (heartbeat) continue;
+
+      const socketIds = await this.redisClient.sMembers(getRealtimeInstanceSocketsKey(instanceId));
+      for (const socketId of socketIds) {
+        const [clientId, browserInstanceId, roomIdsJson] = await Promise.all([
+          this.redisClient.hGet('socket:clients', socketId),
+          this.redisClient.hGet('socket:browser_instances', socketId),
+          this.redisClient.hGet('socket:rooms', socketId),
+        ]);
+        let roomIds: string[] = [];
+        try {
+          const parsed = roomIdsJson ? JSON.parse(roomIdsJson) : [];
+          if (Array.isArray(parsed)) roomIds = parsed.filter(roomId => typeof roomId === 'string');
+        } catch {
+          roomIds = [];
+        }
+        for (const roomId of roomIds) {
+          if (clientId) {
+            await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
+              keys: [`room:${roomId}:members`, `room:${roomId}:member_sockets:${clientId}`],
+              arguments: [clientId, socketId, '0'],
+            });
+          }
+          if (browserInstanceId) {
+            await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
+              keys: [getRoomActiveBrowserInstancesKey(roomId), getRoomBrowserInstanceSocketsKey(roomId, browserInstanceId)],
+              arguments: [browserInstanceId, socketId, '0'],
+            });
+          }
+        }
+        await Promise.all([
+          this.redisClient.hDel('socket:clients', socketId),
+          this.redisClient.hDel('socket:browser_instances', socketId),
+          this.redisClient.hDel('socket:rooms', socketId),
+          this.redisClient.hDel(SOCKET_INSTANCES_KEY, socketId),
+        ]);
+        cleanedSockets++;
+      }
+      await Promise.all([
+        this.redisClient.del(getRealtimeInstanceSocketsKey(instanceId)),
+        this.redisClient.del(getRealtimeInstanceHeartbeatKey(instanceId)),
+        this.redisClient.sRem(REALTIME_INSTANCES_KEY, instanceId),
+      ]);
+    }
+    if (cleanedSockets > 0) {
+      this.logger.info('Cleaned expired realtime instance presence', { activeInstanceId, cleanedSockets });
+    }
+    return cleanedSockets;
+  }
+
   async storeClientSession(socketId: string, userId: string, browserInstanceId?: string): Promise<void> {
     try {
+      const previousInstanceId = await this.redisClient.hGet(SOCKET_INSTANCES_KEY, socketId);
+      if (previousInstanceId && previousInstanceId !== this.realtimeInstanceId) {
+        await this.redisClient.sRem(getRealtimeInstanceSocketsKey(previousInstanceId), socketId);
+      }
       await this.redisClient.hSet('socket:clients', socketId, userId);
+      await this.redisClient.hSet(SOCKET_INSTANCES_KEY, socketId, this.realtimeInstanceId);
+      await this.redisClient.sAdd(getRealtimeInstanceSocketsKey(this.realtimeInstanceId), socketId);
       if (browserInstanceId) {
         await this.redisClient.hSet('socket:browser_instances', socketId, browserInstanceId);
       } else {
@@ -3204,6 +3278,13 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async getClientIds(socketIds: string[]): Promise<Map<string, string>> {
+    const entries = await Promise.all(socketIds.map(async socketId => (
+      [socketId, await this.redisClient.hGet('socket:clients', socketId)] as const
+    )));
+    return new Map(entries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+  }
+
   async getBrowserInstanceId(socketId: string): Promise<string | null> {
     try {
       const browserInstanceId = await this.redisClient.hGet('socket:browser_instances', socketId);
@@ -3216,9 +3297,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async removeClientSession(socketId: string): Promise<void> {
     try {
+      const instanceId = await this.redisClient.hGet(SOCKET_INSTANCES_KEY, socketId);
       await Promise.all([
         this.redisClient.hDel('socket:clients', socketId),
         this.redisClient.hDel('socket:browser_instances', socketId),
+        this.redisClient.hDel(SOCKET_INSTANCES_KEY, socketId),
+        ...(instanceId ? [this.redisClient.sRem(getRealtimeInstanceSocketsKey(instanceId), socketId)] : []),
       ]);
     } catch (error) {
       this.logger.error('Error removing client session', { error, socketId });

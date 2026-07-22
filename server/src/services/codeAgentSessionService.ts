@@ -104,6 +104,7 @@ export interface CodeAgentSessionServiceOptions {
   observability?: ObservabilityEventRecorder;
   mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
   aiStreamOwnerId?: string;
+  aiTerminalPersistReconciler?: { enqueue(message: Message, context: { reason: string }): void };
   leaseOwnerId?: string;
   roomLeaseTtlMs?: number;
   now?: () => Date;
@@ -2227,6 +2228,9 @@ export class CodeAgentSessionService {
       this.logger.error('Failed to persist code-agent AI error state', { error: saveError, roomId, messageId: aiMessage.id });
       return null;
     });
+    if (!updatedRoom) {
+      this.options.aiTerminalPersistReconciler?.enqueue(errorMessage, { reason: 'code-agent-terminal-error' });
+    }
     const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
     if (errorRoom) {
       this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);

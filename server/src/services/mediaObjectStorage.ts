@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
@@ -9,6 +9,7 @@ import { Logger } from '../logger';
 
 export interface MediaObjectStorage {
   isConfigured(): boolean;
+  checkHealth(): Promise<void>;
   putMediaObject(input: {
     objectKey: string;
     body: Buffer;
@@ -37,6 +38,10 @@ export interface MediaObjectStorage {
 export class MissingMediaObjectStorage implements MediaObjectStorage {
   isConfigured() {
     return false;
+  }
+
+  async checkHealth(): Promise<void> {
+    throw new Error('Media object storage is not configured');
   }
 
   async putMediaObject(): Promise<void> {
@@ -128,6 +133,11 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
 
   isConfigured() {
     return true;
+  }
+
+  async checkHealth(): Promise<void> {
+    await fs.mkdir(this.rootDir, { recursive: true });
+    await fs.access(this.rootDir, fs.constants.R_OK | fs.constants.W_OK);
   }
 
   hasSignedUrls() {
@@ -339,6 +349,12 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
 
   isConfigured() {
     return true;
+  }
+
+  async checkHealth(): Promise<void> {
+    await this.runOperation('health', '', () => this.client.send(new HeadBucketCommand({
+      Bucket: this.config.bucket,
+    })).then(() => undefined));
   }
 
   async putMediaObject(input: {

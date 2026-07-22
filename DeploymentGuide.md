@@ -52,6 +52,8 @@ The application image and the pinned E2B artifact are separate releases. A norma
    curl -fsS https://room.ruit.me/api/status
    ```
 
+   `/api/health/live` is process liveness and intentionally ignores downstream failures. Compose and Kubernetes readiness use `/api/health/ready`: it verifies that PostgreSQL can read the RoomTalk schema, Redis answers `PING`, object storage accepts a bucket probe, and the Socket adapter exists. A dependency failure returns `503 degraded` with `rooms: null`; do not interpret it as an empty installation. After a detached `up`, `local-production.mjs` waits for the four stateful/App services plus Cloudflare Tunnel, checks loopback and public readiness, and reports host free space plus allocated `Docker.raw` space. `ROOMTALK_MIN_HOST_FREE_GB` and `ROOMTALK_DOCKER_RAW_WARN_GB` override the 20 GiB and 50 GiB warning thresholds.
+
 6. Run a risk-based user smoke. Room-event, media, OAuth/connection, and E2B changes require checks at those actual boundaries.
 
 Documentation-only commits do not require a production rebuild.
@@ -74,7 +76,9 @@ The full operator-facing variable inventory is in [docs/configuration.md](docs/c
 
 PostgreSQL owns canonical rooms, messages, members, turns, auth/account data, media metadata, `room_event_streams`, `room_events`, and `outbox_events`. Redis may be flushed and warmed again without losing business state.
 
-`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, the app reads the exact immutable event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; an oversized event or read failure falls back to a head-only hint. Clients replay smaller gaps and switch gaps above 500 events to a repeatable-read snapshot. On `CURSOR_AHEAD`, the browser clears the stale target head before resnapshotting but keeps notifications that arrive during the request. `outbox_events` remains a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+`room_events` is a bounded per-room replay changelog used by every authorized client. It is not full event sourcing and it is not a worker queue. After commit, an app with local subscribers reads the exact immutable event from PostgreSQL and pushes it directly when the complete Socket payload is at most 256 KiB; an oversized event or read failure falls back to a head-only hint. Clients replay smaller gaps and switch an individually oversized event or a gap above 500 events to a repeatable-read snapshot. Deleted streams return their final tombstone directly. Live replay invalidates older pagination, and stale `beforeMessageId` boundaries rebuild the window. `outbox_events` remains a separate claim/lease/retry mechanism for one worker. The defaults retain seven days and at most 10,000 events per room, with singleton hourly prefix pruning; see [Room Event Sync and Portable Deployment](docs/room-event-sync-portable-deployment.md).
+
+Every app process owns only its Redis presence through a unique runtime ID and TTL heartbeat. Periodic recovery cleans expired owners, excludes Code Agent work protected by a live fenced lease, and recovers AI placeholders only after their PostgreSQL stream-owner lease expires. Immediate AI terminal-write failures are retried in process with exponential backoff. Recovery and retention use PostgreSQL advisory locks. Introducing migration `0006` still requires a maintenance cutover because a pre-`0006` process does not write the new owner heartbeat and would look dead to a new process. Once all replicas understand the lease contract, later compatible releases may roll without one startup clearing another replica's state. Incompatible event or lease protocols still require a maintenance window or two-phase migration.
 
 AI text chunks remain transient. An AI error is persisted as a complete Message before `ai_stream_error` carries that same Message as a fast path. This keeps Socket-first, room-event-first, and error-before-placeholder delivery deterministic.
 
@@ -117,7 +121,7 @@ See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 ### Control plane
 
 - All five Compose services report healthy/running.
-- Loopback and public `/api/status` return `status: "online"`, `persistenceStore: "postgres"`, connected Redis, configured media, and a ready socket adapter.
+- Loopback and public `/api/status` return `status: "online"`, `ready: true`, `persistenceStore: "postgres"`, ready PostgreSQL/Redis/media dependencies, and a ready socket adapter.
 - `room.ruit.me` and `roomtalk.ruit.me` serve the intended application; the object hostname accepts only signed object operations.
 - No startup errors appear for PostgreSQL schema/event listeners, Redis, object storage, workers, or Socket.IO.
 

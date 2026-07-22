@@ -60,6 +60,29 @@ export class RoomEventPayloadInvalidError extends Error {
   }
 }
 
+export class RoomEventTooLargeError extends Error {
+  readonly code = 'EVENT_TOO_LARGE';
+
+  constructor(
+    readonly roomId: string,
+    readonly seq: number,
+    readonly eventBytes: number,
+    readonly maxBytes: number,
+  ) {
+    super(`Room event ${roomId}:${seq} is ${eventBytes} bytes and exceeds the ${maxBytes} byte page limit`);
+    this.name = 'RoomEventTooLargeError';
+  }
+}
+
+export class RoomPaginationBoundaryExpiredError extends Error {
+  readonly code = 'PAGINATION_BOUNDARY_EXPIRED';
+
+  constructor(readonly roomId: string, readonly beforeMessageId: string) {
+    super(`Message pagination boundary ${beforeMessageId} no longer exists in room ${roomId}`);
+    this.name = 'RoomPaginationBoundaryExpiredError';
+  }
+}
+
 export interface MessageUpdateResult {
   room: Room;
   found: boolean;
@@ -344,6 +367,7 @@ export interface DurableRoomStore {
   readRoomEvent?(roomId: string, seq: number): Promise<RoomEvent | null>;
   readRoomEventHead?(roomId: string): Promise<number>;
   canReadRoomEvents?(roomId: string, clientId: string): Promise<boolean>;
+  readRoomMemberClientIds?(roomId: string, clientIds: string[]): Promise<Set<string>>;
   pruneRoomEvents?(options: RoomEventRetentionOptions): Promise<number>;
   upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
   readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
@@ -408,7 +432,7 @@ export interface DurableRoomStore {
   countRooms(): Promise<number>;
   compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
   replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement): Promise<Room | null>;
-  findInterruptedCodeAgentRooms(): Promise<Room[]>;
+  findInterruptedCodeAgentRooms(now?: string): Promise<Room[]>;
   findDanglingToolCalls(): Promise<Message[]>;
   // Durable client profile data. Nicknames live in the durable store so they
   // survive Redis flushes; presence (who is online) stays in the realtime store.
@@ -416,6 +440,10 @@ export interface DurableRoomStore {
   getClientNicknames(clientIds: string[]): Promise<Record<string, string>>;
   resetAllDataForTests?(): Promise<void>;
   failInterruptedStreamingMessages?(content: string, options?: InterruptedStreamingMessageRecoveryOptions): Promise<number>;
+  heartbeatAIStreamOwner?(ownerId: string, instanceId: string, now: string, ttlMs: number): Promise<void>;
+  releaseAIStreamOwner?(ownerId: string): Promise<void>;
+  failOrphanedStreamingMessages?(content: string, now?: string): Promise<number>;
+  withMaintenanceLock?<T>(lockName: string, operation: () => Promise<T>): Promise<{ acquired: boolean; result?: T }>;
 }
 
 export interface RealtimeRoomStore {
@@ -426,6 +454,9 @@ export interface RealtimeRoomStore {
   getRoomOnlineMemberIds(roomId: string): Promise<string[]>;
   getRoomActiveBrowserInstanceIds(roomId: string): Promise<string[]>;
   clearRealtimeRoomMembers?(): Promise<void>;
+  heartbeatRealtimeInstance?(instanceId: string, ttlMs: number): Promise<void>;
+  cleanupExpiredRealtimeInstances?(activeInstanceId: string): Promise<number>;
+  getClientIds?(socketIds: string[]): Promise<Map<string, string>>;
   storeClientSession(socketId: string, userId: string, browserInstanceId?: string): Promise<void>;
   getClientId(socketId: string): Promise<string | null>;
   getBrowserInstanceId(socketId: string): Promise<string | null>;
@@ -682,6 +713,10 @@ export class CompositeRoomStore implements RoomStore {
       return this.durableStore.canReadRoomEvents(roomId, clientId);
     }
     return this.durableStore.getRoomMember(roomId, clientId).then(member => Boolean(member));
+  }
+
+  readRoomMemberClientIds(roomId: string, clientIds: string[]) {
+    return this.durableStore.readRoomMemberClientIds?.(roomId, clientIds) || Promise.resolve(new Set<string>());
   }
 
   pruneRoomEvents(options: RoomEventRetentionOptions) {
@@ -946,8 +981,8 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.replaceRoomSandbox(roomId, expectedSandboxId, next);
   }
 
-  findInterruptedCodeAgentRooms() {
-    return this.durableStore.findInterruptedCodeAgentRooms();
+  findInterruptedCodeAgentRooms(now?: string) {
+    return this.durableStore.findInterruptedCodeAgentRooms(now);
   }
 
   findDanglingToolCalls() {
@@ -979,6 +1014,29 @@ export class CompositeRoomStore implements RoomStore {
       await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateAllRoomMessagesCaches());
     }
     return updatedCount;
+  }
+
+  heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string, ttlMs: number) {
+    return this.durableStore.heartbeatAIStreamOwner?.(ownerId, instanceId, now, ttlMs) || Promise.resolve();
+  }
+
+  releaseAIStreamOwner(ownerId: string) {
+    return this.durableStore.releaseAIStreamOwner?.(ownerId) || Promise.resolve();
+  }
+
+  async failOrphanedStreamingMessages(content: string, now?: string) {
+    const updatedCount = await (this.durableStore.failOrphanedStreamingMessages?.(content, now) || Promise.resolve(0));
+    if (updatedCount > 0 && this.messageCacheStore) {
+      await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateAllRoomMessagesCaches());
+    }
+    return updatedCount;
+  }
+
+  withMaintenanceLock<T>(lockName: string, operation: () => Promise<T>) {
+    if (this.durableStore.withMaintenanceLock) {
+      return this.durableStore.withMaintenanceLock(lockName, operation);
+    }
+    return operation().then(result => ({ acquired: true, result }));
   }
 
   updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean) {
@@ -1017,6 +1075,20 @@ export class CompositeRoomStore implements RoomStore {
 
   clearRealtimeRoomMembers() {
     return this.realtimeStore.clearRealtimeRoomMembers?.() || Promise.resolve();
+  }
+
+  heartbeatRealtimeInstance(instanceId: string, ttlMs: number) {
+    return this.realtimeStore.heartbeatRealtimeInstance?.(instanceId, ttlMs) || Promise.resolve();
+  }
+
+  cleanupExpiredRealtimeInstances(activeInstanceId: string) {
+    return this.realtimeStore.cleanupExpiredRealtimeInstances?.(activeInstanceId) || Promise.resolve(0);
+  }
+
+  getClientIds(socketIds: string[]) {
+    if (this.realtimeStore.getClientIds) return this.realtimeStore.getClientIds(socketIds);
+    return Promise.all(socketIds.map(async socketId => [socketId, await this.realtimeStore.getClientId(socketId)] as const))
+      .then(entries => new Map(entries.filter((entry): entry is readonly [string, string] => Boolean(entry[1]))));
   }
 
   storeClientSession(socketId: string, userId: string, browserInstanceId?: string) {

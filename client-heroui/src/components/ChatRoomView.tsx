@@ -36,6 +36,9 @@ interface ChatRoomViewProps {
   handleRenameRoom: RoomRenameHandler;
   roomPermissions: RoomPermissions | null;
   onRoomUpdated: (room: Room) => void;
+  onMembersChanged?: (roomId: string) => void;
+  onRoomDeleted?: (roomId: string) => void;
+  onRoomAccessDenied?: (roomId: string) => void;
 }
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
@@ -62,6 +65,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   handleRenameRoom,
   roomPermissions,
   onRoomUpdated,
+  onMembersChanged,
+  onRoomDeleted,
+  onRoomAccessDenied,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -141,6 +147,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             ensureRoomSessionReady={ensureRoomSessionReady}
             messageSyncRequestId={messageSyncRequestId}
             onRoomUpdated={onRoomUpdated}
+            onMembersChanged={onMembersChanged}
+            onRoomDeleted={onRoomDeleted}
+            onRoomAccessDenied={onRoomAccessDenied}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />

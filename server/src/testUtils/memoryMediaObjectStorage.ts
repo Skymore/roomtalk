@@ -14,9 +14,16 @@ export class MemoryMediaObjectStorage implements MediaObjectStorage {
   deleted = this.deletedObjectKeys;
   readUrlRequests: Array<{ objectKey: string; expiresInSeconds?: number }> = [];
   failUpload = false;
+  failHealthCheck = false;
 
   isConfigured() {
     return true;
+  }
+
+  async checkHealth() {
+    if (this.failHealthCheck) {
+      throw new Error('storage unavailable');
+    }
   }
 
   async putMediaObject(input: { objectKey: string; body: Buffer; mimeType: string; byteSize: number }) {

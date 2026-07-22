@@ -27,6 +27,28 @@ describe('RoomMessageSyncStateMachine', () => {
     expect(state.isSnapshotCurrent(replace!)).toBe(true);
   });
 
+  it('invalidates an in-flight prepend as soon as replay is requested', () => {
+    const state = new RoomMessageSyncStateMachine();
+    const prepend = state.beginSnapshot('prepend');
+    expect(prepend).not.toBeNull();
+
+    expect(state.requestReplay()).toBe(true);
+
+    expect(state.isSnapshotCurrent(prepend!)).toBe(false);
+    expect(state.phase).toBe('replay');
+  });
+
+  it('invalidates an in-flight prepend before applying a contiguous fast path', () => {
+    const state = new RoomMessageSyncStateMachine();
+    const prepend = state.beginSnapshot('prepend');
+    expect(prepend).not.toBeNull();
+
+    state.beginRealtimeMutation();
+
+    expect(state.isSnapshotCurrent(prepend!)).toBe(false);
+    expect(state.phase).toBe('idle');
+  });
+
   it('drops restored-database watermarks and gap targets together', () => {
     const state = new RoomMessageSyncStateMachine();
     state.applyCursor(20);

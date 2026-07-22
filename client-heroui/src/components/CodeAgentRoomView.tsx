@@ -72,6 +72,9 @@ interface CodeAgentRoomViewProps {
   handleRenameRoom: RoomRenameHandler;
   roomPermissions: RoomPermissions | null;
   onRoomUpdated: (room: Room) => void;
+  onMembersChanged?: (roomId: string) => void;
+  onRoomDeleted?: (roomId: string) => void;
+  onRoomAccessDenied?: (roomId: string) => void;
 }
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
@@ -139,6 +142,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   handleRenameRoom,
   roomPermissions,
   onRoomUpdated,
+  onMembersChanged,
+  onRoomDeleted,
+  onRoomAccessDenied,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -573,6 +579,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               ensureRoomSessionReady={ensureRoomSessionReady}
               messageSyncRequestId={messageSyncRequestId}
               onRoomUpdated={onRoomUpdated}
+              onMembersChanged={onMembersChanged}
+              onRoomDeleted={onRoomDeleted}
+              onRoomAccessDenied={onRoomAccessDenied}
               bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
               onScrollButtonVisibilityChange={setShowScrollButton}
             />

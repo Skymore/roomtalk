@@ -139,6 +139,9 @@ interface MessageListProps {
   ensureRoomSessionReady?: EnsureRoomSessionReady;
   messageSyncRequestId?: number;
   onRoomUpdated?: (room: Room) => void;
+  onMembersChanged?: (roomId: string) => void;
+  onRoomDeleted?: (roomId: string) => void;
+  onRoomAccessDenied?: (roomId: string) => void;
 }
 
 export interface MessageListHandle {
@@ -174,6 +177,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   ensureRoomSessionReady,
   messageSyncRequestId = 0,
   onRoomUpdated,
+  onMembersChanged,
+  onRoomDeleted,
+  onRoomAccessDenied,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -967,6 +973,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     messageToEditId: messageToEdit?.id,
     onAIStreamSettled: presentation === 'code-agent' ? handleCodeAgentTurnSettled : undefined,
     onRoomUpdated,
+    onMembersChanged,
+    onRoomDeleted,
+    onRoomAccessDenied,
     requestHistoryRef,
   });
 

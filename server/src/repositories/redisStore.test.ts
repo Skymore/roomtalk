@@ -1423,6 +1423,37 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getUserRooms('socket-1'), []);
   });
 
+  it('preserves a live instance while cleaning only expired instance-owned presence', async () => {
+    const redis = new MemoryRedis();
+    const firstStore = new RedisStore(redis as any, logger as any, undefined, undefined, 'instance-a');
+    const secondStore = new RedisStore(redis as any, logger as any, undefined, undefined, 'instance-b');
+
+    await firstStore.heartbeatRealtimeInstance('instance-a', 30_000);
+    await secondStore.heartbeatRealtimeInstance('instance-b', 30_000);
+
+    await firstStore.storeClientSession('socket-a', 'client-a', 'browser-a');
+    await firstStore.updateRoomMemberCount('room-1', 'client-a', 'socket-a', true);
+    await firstStore.updateRoomBrowserPresence('room-1', 'browser-a', 'socket-a', true);
+    await firstStore.storeUserRooms('socket-a', ['room-1']);
+
+    await secondStore.storeClientSession('socket-b', 'client-b', 'browser-b');
+    await secondStore.updateRoomMemberCount('room-1', 'client-b', 'socket-b', true);
+    await secondStore.updateRoomBrowserPresence('room-1', 'browser-b', 'socket-b', true);
+    await secondStore.storeUserRooms('socket-b', ['room-1']);
+
+    assert.equal(await secondStore.cleanupExpiredRealtimeInstances('instance-b'), 0);
+    assert.equal(await secondStore.getRoomMemberCount('room-1'), 2);
+
+    redis.strings.delete('realtime:instance:instance-a:heartbeat');
+    assert.equal(await secondStore.cleanupExpiredRealtimeInstances('instance-b'), 1);
+
+    assert.equal(await secondStore.getClientId('socket-a'), null);
+    assert.equal(await secondStore.getClientId('socket-b'), 'client-b');
+    assert.equal(await secondStore.getRoomMemberCount('room-1'), 1);
+    assert.deepEqual(await secondStore.getRoomActiveBrowserInstanceIds('room-1'), ['browser-b']);
+    assert.deepEqual(await redis.sMembers('realtime:instances'), ['instance-b']);
+  });
+
   it('updates per-socket room membership without non-atomic socket count reads', async () => {
     const redis = new FailingMemberSocketCountRedis();
     const store = new RedisStore(redis as any, logger as any);

@@ -115,15 +115,21 @@ flowchart LR
   Redis <-.->|"仅 transient/global"| B
 ```
 
-`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的规范行”回填。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 合并同房间水位、读取已提交的连续 range，再用 `io.local` 通知本机 socket，避免多个 listener 经 Redis adapter 把同一通知放大。完整 payload 发出前会重新用 PostgreSQL 校验本机成员身份并移除无权 socket。连续 payload 直接应用；payload 缺失或超限则从 `lastAppliedSeq` replay；cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。Per-room 的 `idle/replay/replace/prepend` 状态机保证历史分页不会取消恢复，并会在删除清空当前窗口但仍有旧历史时重新 snapshot。数据库恢复返回 `CURSOR_AHEAD` 时会同时清除旧目标水位与 gap target，同时保留 snapshot 期间的新通知。PG listener 以显式 generation 替换旧连接，成功后发送 local `room_sync_required` 做反熵。V1 payload 使用严格解码：数据库事件无效时返回 `EVENT_PAYLOAD_INVALID`，客户端不确认坏 seq，直接取规范快照。公共成员事件只有 `members.changed {}`；成员 ID 与角色仍由特权成员接口保护。
+`room_events` 保存带 schema version 的安全 after-image，不再只存实体 ID、读取时再用“今天的规范行”回填。PostgreSQL `NOTIFY` 只是 commit 后唤醒 hint：每个 app 用固定的 per-room min/max state 合并水位；本机无订阅者时跳过 payload 读取，有订阅者才读取已提交的连续 range，再用 `io.local` 通知本机 socket。完整 payload 发出前会从 Redis 或认证后由服务端保存的 `socket.data` 解析身份，并一次查询 PostgreSQL membership。明确 unauthorized 才移除连接；身份无法解析、身份冲突或授权依赖 unavailable 时保留 socket，只发 head-only hint。
 
-这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 会声明终态是否已经持久化：`{ persisted: true, message }` 携带同一条安全错误 after-image；`{ persisted: false }` 会立刻终止本地 placeholder 并触发恢复。PostgreSQL 同时禁止同一 message ID 更换房间，避免跨房间 ghost projection。
+连续 payload 直接应用；缺失 payload 从 `lastAppliedSeq` replay；单条 event 超限、cursor 过期或保留窗口内差距超过 500 events 时取 repeatable-read snapshot。Deleted stream 直接返回最终 tombstone，不会逐页追向一个已经不存在的 snapshot。Per-room 的 `idle/replay/replace/prepend` 状态机让实时 replay 优先于分页；实时 mutation 会使在途 prepend 失效，过期 `beforeMessageId` 会 replace window。数据库恢复返回 `CURSOR_AHEAD` 时同时清除旧目标水位与 gap target，并保留 snapshot 期间的新通知。V1 payload 严格解码，坏事件返回 `EVENT_PAYLOAD_INVALID`。公共成员事件只有 `members.changed {}`，但 durable replay 会刷新页面权限；`room.deleted` / `ROOM_ACCESS_DENIED` 会真正退出旧页面。
+
+这是一份有界状态传输 changelog，不是 Event Sourcing；规范表仍是事实源，旧事件前缀可清理。系统不需要 realtime delivery outbox，也不需要 `messageVersion`：可重试 AI 副作用使用独立 Worker outbox；typing、presence、`ai_chunk`、voice level 与 WebRTC signalling 保持瞬时，不进入 durable room seq。如果 AI 临时事件抢在 durable placeholder 前到达，客户端按 `messageId` 用 TTL/数量/字节上限暂存，placeholder 到达后按序排空。`ai_stream_error` 会声明终态是否已经持久化：`{ persisted: true, message }` 携带同一条安全错误 after-image；`{ persisted: false }` 会立刻终止本地 placeholder，服务端用指数退避持续补写同一终态。PostgreSQL stream-owner lease 只有在原 owner 过期后才允许其他实例接管。
+
+横向进程 ownership 也已经收敛。每个 app 用唯一 runtime instance ID 与 TTL heartbeat 只拥有自己的 Redis presence；滚动启动不会清空其他活实例。Code Agent turn/sandbox 只在 fenced lease 过期后恢复，recovery/retention 通过 PostgreSQL advisory lock 保证每轮 singleton。这些边界已有两实例 presence test 和真实 PostgreSQL 17 lease/advisory-lock tests。首次引入 AI owner lease 时必须先停止所有 pre-`0006` App，因为旧 binary 不会为新表续租；跨过该边界后，ECS/EKS 才能滚动发布后续协议兼容版本。不兼容 room-event 或 lease schema 仍需维护窗口或两阶段协议。
+
+运行健康也有明确的失败语义。`/api/health/live` 只证明 Node 进程还能响应；`/api/status` 与 `/api/health/ready` 会执行真实的 `rooms` 表查询、Redis `PING`、对象存储 bucket 探测和 Socket adapter 检查。任一依赖不可用时返回 HTTP 503、`status: "degraded"` 与 `rooms: null`，基础设施故障不会再伪装成“房间数为 0”。
 
 ### 关键难点是怎么工作的
 
 - **Code Agent turn** 会先授权并持久化，再用 durable fenced room lease 串行执行，随后把 turn-scoped model/context/publish capability 和用户自有 connection 交给可复用 sandbox daemon。文本、工具、审批、usage 和 lifecycle 事件经同一有序协议返回，先持久化再广播。
 - **顺序由源头拥有。** Coco/Codex adapter 保留原生文本/工具边界；RoomTalk 分配单调 message position，并按 durable turn 分组。浏览器只展示这个顺序，不用 timestamp 猜执行过程。
-- **恢复跨越多个进程边界。** PostgreSQL 保存 durable turn/message 与重放 cursor，Redis 协调实时客户端，E2B 拥有可变 workspace，Node 进程只保留可替换 live handle。启动恢复会显式结束中断工作、修复 stale sandbox state，并重新获取 fenced lease。
+- **恢复跨越多个进程边界。** PostgreSQL 保存 durable turn/message、owner lease 与重放 cursor，Redis 协调 instance-owned 实时客户端，E2B 拥有可变 workspace，Node 进程只保留可替换 live handle。周期 singleton reconciliation 只恢复已过期 owner/lease，不会在新实例启动时把其他活进程的任务当成中断。
 - **发布产物不依赖执行生命周期。** 静态文件在 sandbox 内校验，通过预签名 URL 直传对象存储，最终写入不可变版本和 manifest；源 sandbox 暂停或替换后仍由 RoomTalk 服务。
 
 完整 lifecycle 和验证证据见[房间事件同步与可迁移部署](docs/room-event-sync-portable-deployment.zh.md)和 [Code Agent 运行时架构](docs/code-agent-runtime-architecture.md)。

@@ -533,6 +533,7 @@ export const executeQueuedAssistantRun = async (
     openaiLogger,
     normalizeAIModel,
     getAIClientForModel,
+    aiTerminalPersistReconciler,
   }: SocketHandlerDeps,
 ) => {
   if (!isQueuedAssistantRunPayload(payload)) {
@@ -610,14 +611,15 @@ export const executeQueuedAssistantRun = async (
       }
     }
 
-    openaiLogger.error('Failed to persist worker AI error state after retries; streaming message may need startup recovery', {
+    aiTerminalPersistReconciler?.enqueue(message, { reason: `worker-${logLabel}` });
+    openaiLogger.error('Failed to persist worker AI error state after retries; queued durable reconciliation', {
       messageId: aiMessageId,
       roomId,
       attempts: ERROR_STATE_SAVE_ATTEMPTS,
     });
     io.to(roomId).emit('ai_persistence_error', {
       messageId: aiMessageId,
-      error: 'AI response status could not be saved. It will be recovered if the server restarts.',
+      error: 'AI response status could not be saved yet. Durable reconciliation is retrying it.',
       roomId,
     });
     return false;
@@ -950,6 +952,7 @@ export function registerAIHandlers({
   normalizeAIModel,
   getAIClientForModel,
   aiStreamOwnerId,
+  aiTerminalPersistReconciler,
   codeAgentSessionService,
 }: SocketConnectionContext) {
   const notifyMessageHistoryInvalidated = (roomId: string, reason: string) => {
@@ -1238,7 +1241,8 @@ export function registerAIHandlers({
         }
       }
 
-      openaiLogger.error('Failed to persist AI error state after retries; streaming message may need startup recovery', {
+      aiTerminalPersistReconciler?.enqueue(message, { reason: logLabel });
+      openaiLogger.error('Failed to persist AI error state after retries; queued durable reconciliation', {
         messageId: message.id,
         roomId,
         status: message.status,
@@ -1246,7 +1250,7 @@ export function registerAIHandlers({
       });
       io.to(roomId).emit('ai_persistence_error', {
         messageId: message.id,
-        error: 'AI response status could not be saved. It will be recovered if the server restarts.',
+        error: 'AI response status could not be saved yet. Durable reconciliation is retrying it.',
         roomId,
       });
       return false;

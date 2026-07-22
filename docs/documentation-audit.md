@@ -37,14 +37,16 @@ Subsystem references, retrospectives, completed plans, and review reports stay i
 ### Room synchronization and AI delivery
 
 - PostgreSQL canonical tables and the bounded per-room `room_events` log are the only durable synchronization boundary. Each event stores a strict immutable V1 after-image in the same business transaction; replay never hydrates an old sequence from a current row.
-- PostgreSQL `NOTIFY` is a committed wake-up hint. Every listening app coalesces same-room watermarks, reads a committed range, reauthorizes local sockets before complete payloads, and uses `io.local` for its attached clients. Redis adapter fan-out remains for genuinely single-origin transient or global events.
-- A contiguous Socket payload is a latency fast path. Missing or oversized payloads replay from PostgreSQL; gaps over 500 events or an expired cursor use a repeatable-read snapshot. A deleted-room tombstone is the exception because a deleted room has no snapshot.
-- The per-room `idle/replay/replace/prepend` state machine gives recovery priority over pagination. `CURSOR_AHEAD` clears stale pre-restore head and gap targets before loading a snapshot; notifications received in flight establish a fresh target.
+- PostgreSQL `NOTIFY` is a committed wake-up hint. Every listening app coalesces same-room watermarks in fixed state, skips payload reads without local subscribers, batch-reauthorizes local sockets before complete payloads, and uses `io.local` for its attached clients. Authorization unavailability degrades to head-only without falsely removing users.
+- A contiguous Socket payload is a latency fast path. Missing payloads replay from PostgreSQL; an individually oversized event, a gap over 500 events, or an expired cursor uses a repeatable-read snapshot. A deleted stream returns its final tombstone directly because it has no snapshot.
+- The per-room `idle/replay/replace/prepend` state machine gives recovery priority over pagination and invalidates prepend on live mutation. `CURSOR_AHEAD` clears stale pre-restore head and gap targets; a stale `beforeMessageId` causes a replacement snapshot.
 - Public membership events reveal only `members.changed`. IDs and roles remain behind `get_room_role_members`. Strict payload validation stops cursor advancement on malformed stored data.
 - `ai_chunk` and A2UI updates are bounded transient fast paths. Early events wait by `messageId` for the durable placeholder, and their reducers update canonical and visible React state separately so optimistic messages survive.
-- `ai_stream_error` declares `persisted`. The normal path carries the exact persisted safe Message; a failed terminal write uses `persisted: false`, terminalizes the local placeholder, and schedules recovery without leaving it streaming.
+- `ai_stream_error` declares `persisted`. The normal path carries the exact persisted safe Message; a failed immediate write uses `persisted: false`, terminalizes the local placeholder, and enters in-process exponential retry. PostgreSQL owner leases allow takeover only after the live stream owner expires.
+- Redis presence is owned by a unique runtime instance with TTL heartbeats; Code Agent recovery respects unexpired fenced leases; recovery and retention use PostgreSQL advisory locks. Rolling startup no longer clears another live instance's users or tasks.
+- Health has three explicit meanings: process liveness, dependency-backed readiness, and degraded. Readiness performs real PostgreSQL, Redis, object-storage, and Socket-adapter checks; a failed database reports `rooms: null`, never `rooms: 0`.
 - PostgreSQL rejects a message ID changing rooms, event retention uses wall-clock materialization timestamps, and deletion clears room media cache even for assets outside the loaded window.
-- GitHub CI provisions PostgreSQL 17 and forces the real room-event trigger/transaction suite to run instead of silently skipping.
+- GitHub CI uses Node 24.18, provisions PostgreSQL 17, and forces the real trigger/transaction/lease/advisory-lock suite to run instead of silently skipping.
 
 ### Deployment and portability
 

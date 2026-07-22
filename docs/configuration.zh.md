@@ -143,4 +143,6 @@ Scoped capability：
 - `server/.env` 保持 ignored 且只在本地使用。
 - 生产 E2B 必须同时对齐 template、artifact version、source ref、runner dependency 和 smoke 证据。
 - 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效，随后验证 Compose health、loopback 与公网 `/api/status`。
+- `/api/health/live` 只用于进程 liveness；`/api/health/ready` 与 `/api/status` 会验证 PostgreSQL schema 读取、Redis `PING`、对象存储 bucket 和 Socket adapter。依赖不可用时返回 `503 degraded` 与 `rooms: null`。
+- `local-production.mjs` 会在 detached startup 后自动验证五个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH` 与 `ROOMTALK_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
 - 旧 Fly GitHub Actions workflow 已手工禁用，只保留为回滚历史，不再拥有当前部署。

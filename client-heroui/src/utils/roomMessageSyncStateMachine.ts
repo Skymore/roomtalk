@@ -32,10 +32,15 @@ export class RoomMessageSyncStateMachine {
   }
 
   requestReplay(): boolean {
+    this.invalidatePrepend();
     this.replayRequested = true;
     if (this.replayRunning) return false;
     this.replayRunning = true;
     return true;
+  }
+
+  beginRealtimeMutation(): void {
+    this.invalidatePrepend();
   }
 
   consumeReplayRequest(): boolean {
@@ -128,5 +133,11 @@ export class RoomMessageSyncStateMachine {
 
   get needsReplay(): boolean {
     return this.lastAppliedSeq < this.desiredHeadSeq || this.historyInvalidated;
+  }
+
+  private invalidatePrepend(): void {
+    if (this.activePrependGeneration === null) return;
+    this.prependGeneration += 1;
+    this.activePrependGeneration = null;
   }
 }

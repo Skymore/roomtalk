@@ -9,6 +9,7 @@ import type { CodeAgentSandboxService } from '../services/codeAgentSandboxServic
 import type { CodeAgentSessionService } from '../services/codeAgentSessionService';
 import type { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import type { PublishedStaticSiteService } from '../services/publishedStaticSite';
+import type { AITerminalPersistReconciler } from '../services/aiTerminalPersistReconciler';
 
 export interface SocketHandlerDeps {
   io: Server;
@@ -18,6 +19,7 @@ export interface SocketHandlerDeps {
   normalizeAIModel: (requestedModel?: string) => AIModelOption;
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
   aiStreamOwnerId?: string;
+  aiTerminalPersistReconciler?: Pick<AITerminalPersistReconciler, 'enqueue'>;
   assemblyAIApiKey?: string;
   codeAgentSessionService?: CodeAgentSessionService;
   codeAgentAccess?: CodeAgentAccessControl;

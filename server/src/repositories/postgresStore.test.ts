@@ -247,6 +247,20 @@ describe('PostgresStore', () => {
     assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
   });
 
+  it('propagates room count failures instead of reporting an empty database', async () => {
+    const store = new PostgresStore(new ScriptedPool([{ error: new Error('database unavailable') }]), logger as any);
+
+    await assert.rejects(store.countRooms(), /database unavailable/);
+  });
+
+  it('propagates recovery query failures so maintenance retries instead of reporting no work', async () => {
+    const turnStore = new PostgresStore(new ScriptedPool([{ error: new Error('turn query unavailable') }]), logger as any);
+    const sandboxStore = new PostgresStore(new ScriptedPool([{ error: new Error('sandbox query unavailable') }]), logger as any);
+
+    await assert.rejects(turnStore.failInterruptedRoomAgentTurns(), /turn query unavailable/);
+    await assert.rejects(sandboxStore.findInterruptedCodeAgentRooms(), /sandbox query unavailable/);
+  });
+
   it('saves code-agent room fields without letting legacy room saves clear them', async () => {
     const codeAgentRoom = room({
       type: 'codeAgent',

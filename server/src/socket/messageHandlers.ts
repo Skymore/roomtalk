@@ -8,7 +8,7 @@ import {
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
 import { A2UIActionEvent, Message, RoomEventPage, RoomSnapshot } from '../types';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from '../repositories/store';
+import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError, RoomEventTooLargeError, RoomPaginationBoundaryExpiredError } from '../repositories/store';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
@@ -133,7 +133,22 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
-    if (!roomId || !(await hasRoomAccess(store, roomId, userId))) {
+    let canReadSnapshot = false;
+    try {
+      canReadSnapshot = store.readRoomMemberClientIds
+        ? (await store.readRoomMemberClientIds(roomId, [userId])).has(userId)
+        : await hasRoomAccess(store, roomId, userId);
+    } catch (error) {
+      socketLogger.warn('Room snapshot authorization is temporarily unavailable', {
+        socketId: socket.id,
+        userId,
+        roomId,
+        error,
+      });
+      callback?.({ success: false, code: 'ROOM_AUTH_UNAVAILABLE', error: 'Room authorization is temporarily unavailable' });
+      return;
+    }
+    if (!roomId || !canReadSnapshot) {
       socket.emit('error', { message: 'You are not authorized to access this room' });
       callback?.({ success: false, code: 'ROOM_ACCESS_DENIED', error: 'You are not authorized to access this room' });
       return;
@@ -154,6 +169,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
         },
       });
     } catch (error) {
+      if (error instanceof RoomPaginationBoundaryExpiredError) {
+        callback?.({ success: false, code: error.code, error: 'The message pagination boundary no longer exists' });
+        return;
+      }
       socketLogger.error('Failed to load room snapshot', { socketId: socket.id, userId, roomId, error });
       callback?.({ success: false, code: 'SNAPSHOT_READ_FAILED', error: 'Failed to load room snapshot' });
       return;
@@ -197,9 +216,21 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
       return;
     }
-    const canReadEvents = store.canReadRoomEvents
-      ? await store.canReadRoomEvents(request.roomId, userId)
-      : await hasRoomAccess(store, request.roomId, userId);
+    let canReadEvents = false;
+    try {
+      canReadEvents = store.canReadRoomEvents
+        ? await store.canReadRoomEvents(request.roomId, userId)
+        : await hasRoomAccess(store, request.roomId, userId);
+    } catch (error) {
+      socketLogger.warn('Room event authorization is temporarily unavailable', {
+        socketId: socket.id,
+        userId,
+        roomId: request.roomId,
+        error,
+      });
+      callback?.({ success: false, code: 'ROOM_AUTH_UNAVAILABLE', error: 'Room authorization is temporarily unavailable' });
+      return;
+    }
     if (!canReadEvents) {
       callback?.({ success: false, code: 'ROOM_ACCESS_DENIED', error: 'You are not authorized to access this room' });
       return;
@@ -246,6 +277,14 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
           success: false,
           code: error.code,
           error: 'A stored room event is invalid; reload from a canonical snapshot',
+        });
+        return;
+      }
+      if (error instanceof RoomEventTooLargeError) {
+        callback?.({
+          success: false,
+          code: error.code,
+          error: 'The next room event exceeds the replay byte limit; load a canonical snapshot',
         });
         return;
       }

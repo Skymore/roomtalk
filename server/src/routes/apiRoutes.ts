@@ -1511,46 +1511,75 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.json(room);
   });
 
-  app.get('/api/status', async (req: Request, res: Response) => {
-    try {
-      const redisStatus = redisClient.isOpen ? 'connected' : 'disconnected';
-      const roomCount = await store.countRooms();
+  const handleReadiness = async (req: Request, res: Response) => {
+    const checks = await Promise.allSettled([
+      Promise.resolve().then(() => store.countRooms()),
+      Promise.resolve().then(() => redisClient.ping()),
+      Promise.resolve().then(() => mediaObjectStorage.checkHealth()),
+    ]);
+    const [databaseCheck, redisCheck, mediaStorageCheck] = checks;
+    const ready = checks.every(check => check.status === 'fulfilled') && Boolean(io.of('/').adapter);
+    const roomCount = databaseCheck.status === 'fulfilled' ? databaseCheck.value : null;
+    const dependencies = {
+      database: databaseCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
+      redis: redisCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
+      mediaStorage: mediaStorageCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
+      socketAdapter: io.of('/').adapter ? 'ready' : 'unavailable',
+    } as const;
 
-      routeLogger.info('System status requested', { endpoint: '/api/status', ip: req.ip });
+    if (!ready) {
+      routeLogger.error('System readiness check failed', {
+        endpoint: req.path,
+        ip: req.ip,
+        dependencies,
+        databaseError: databaseCheck.status === 'rejected' ? databaseCheck.reason : undefined,
+        redisError: redisCheck.status === 'rejected' ? redisCheck.reason : undefined,
+        mediaStorageError: mediaStorageCheck.status === 'rejected' ? mediaStorageCheck.reason : undefined,
+      });
+    } else {
+      routeLogger.info('System readiness requested', { endpoint: req.path, ip: req.ip });
+    }
 
-      return res.json({
-        status: 'online',
-        persistenceStore,
-        redis: redisStatus,
-        mediaStorage: mediaObjectStorage.isConfigured() ? 'configured' : 'missing',
-        socketAdapterReady: io.of('/').adapter ? true : false,
-        features: {
-          codeAgent: {
-            enabled: codeAgentAccess.enabled,
-            rollout: !codeAgentAccess.enabled ? 'disabled' : codeAgentAccess.hasAllowlist ? 'allowlist' : 'all',
-            mode: codeAgentMode,
-            availableModes: codeAgentAvailableModes,
-            defaultMode: codeAgentDefaultMode,
-          },
-          codex: {
-            connections: {
-              enabled: codexConnections.enabled,
-            },
-          },
-          github: {
-            connections: {
-              enabled: githubConnections.enabled,
-            },
+    return res.status(ready ? 200 : 503).json({
+      status: ready ? 'online' : 'degraded',
+      ready,
+      persistenceStore,
+      redis: dependencies.redis === 'ready' ? 'connected' : 'disconnected',
+      mediaStorage: dependencies.mediaStorage === 'ready' ? 'connected' : 'unavailable',
+      socketAdapterReady: dependencies.socketAdapter === 'ready',
+      dependencies,
+      features: {
+        codeAgent: {
+          enabled: codeAgentAccess.enabled,
+          rollout: !codeAgentAccess.enabled ? 'disabled' : codeAgentAccess.hasAllowlist ? 'allowlist' : 'all',
+          mode: codeAgentMode,
+          availableModes: codeAgentAvailableModes,
+          defaultMode: codeAgentDefaultMode,
+        },
+        codex: {
+          connections: {
+            enabled: codexConnections.enabled,
           },
         },
-        rooms: roomCount,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      routeLogger.error('Error getting system status', { error, ip: req.ip });
-      return res.status(500).json({ error: 'Error getting system status' });
-    }
-  });
+        github: {
+          connections: {
+            enabled: githubConnections.enabled,
+          },
+        },
+      },
+      rooms: roomCount,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  app.get('/api/status', handleReadiness);
+
+  app.get('/api/health/live', (_req: Request, res: Response) => res.json({
+    status: 'alive',
+    timestamp: new Date().toISOString(),
+  }));
+
+  app.get('/api/health/ready', handleReadiness);
 
   if (process.env.E2E_TEST_MODE === 'true') {
     app.post('/api/e2e/reset', async (_req: Request, res: Response) => {

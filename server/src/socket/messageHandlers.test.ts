@@ -6,7 +6,13 @@ import path from 'path';
 import { registerMessageHandlers } from './messageHandlers';
 import { loadStickerCatalog } from '../stickers/catalog';
 import { Message, Room, RoomAICostTotal } from '../types';
-import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError } from '../repositories/store';
+import {
+  RoomEventCursorAheadError,
+  RoomEventCursorExpiredError,
+  RoomEventPayloadInvalidError,
+  RoomEventTooLargeError,
+  RoomPaginationBoundaryExpiredError,
+} from '../repositories/store';
 
 type SocketEmit = {
   event: string;
@@ -390,6 +396,50 @@ describe('message socket handlers', () => {
     assert.deepEqual(socket.emitted, []);
   });
 
+  it('does not misclassify unavailable snapshot authorization as membership removal', async () => {
+    const { socket, store } = createHarness();
+    (store as any).readRoomMemberClientIds = async () => {
+      throw new Error('database unavailable');
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-auth-unavailable',
+      roomId: 'room-1',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'ROOM_AUTH_UNAVAILABLE',
+      error: 'Room authorization is temporarily unavailable',
+    });
+    assert.deepEqual(socket.emitted, []);
+  });
+
+  it('returns PAGINATION_BOUNDARY_EXPIRED for a stale history boundary', async () => {
+    const { socket, store } = createHarness();
+    store.readRoomSnapshot = async () => {
+      throw new RoomPaginationBoundaryExpiredError('room-1', 'deleted-message');
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_snapshot', {
+      requestId: 'snapshot-stale-boundary',
+      roomId: 'room-1',
+      beforeMessageId: 'deleted-message',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'PAGINATION_BOUNDARY_EXPIRED',
+      error: 'The message pagination boundary no longer exists',
+    });
+  });
+
   it('returns ordered room events after a cursor', async () => {
     const { socket } = createHarness();
     let response: any;
@@ -474,6 +524,50 @@ describe('message socket handlers', () => {
       success: false,
       code: 'EVENT_PAYLOAD_INVALID',
       error: 'A stored room event is invalid; reload from a canonical snapshot',
+    });
+  });
+
+  it('returns EVENT_TOO_LARGE instead of exceeding the requested replay budget', async () => {
+    const { socket, store } = createHarness();
+    store.readRoomEvents = async () => {
+      throw new RoomEventTooLargeError('room-1', 6, 512 * 1024, 256 * 1024);
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-too-large',
+      roomId: 'room-1',
+      afterSeq: 5,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'EVENT_TOO_LARGE',
+      error: 'The next room event exceeds the replay byte limit; load a canonical snapshot',
+    });
+  });
+
+  it('does not misclassify unavailable event authorization as membership removal', async () => {
+    const { socket, store } = createHarness();
+    (store as any).canReadRoomEvents = async () => {
+      throw new Error('database unavailable');
+    };
+    let response: unknown;
+
+    await socket.invoke('get_room_events', {
+      requestId: 'events-auth-unavailable',
+      roomId: 'room-1',
+      afterSeq: 5,
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      code: 'ROOM_AUTH_UNAVAILABLE',
+      error: 'Room authorization is temporarily unavailable',
     });
   });
 

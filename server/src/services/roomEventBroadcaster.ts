@@ -26,14 +26,14 @@ interface RoomEventBroadcasterOptions {
   store: RoomStore;
   logger: Logger;
   maxPayloadBytes: number;
-  authorizeLocalRoom?: (roomId: string) => Promise<void>;
+  hasLocalSubscribers?: (roomId: string) => Promise<boolean>;
+  authorizeLocalRoom?: (roomId: string) => Promise<boolean>;
   emit: (event: RoomEventBroadcast) => void;
 }
 
 interface PendingRoomBroadcast {
   minSeq: number;
   maxSeq: number;
-  waiters: Array<() => void>;
 }
 
 export interface RoomEventBroadcasterMetrics {
@@ -45,6 +45,8 @@ export interface RoomEventBroadcasterMetrics {
   fastPathBytes: number;
   headOnlyBroadcasts: number;
   maxPendingSequenceSpan: number;
+  noLocalSubscriberSkips: number;
+  authorizationUnavailable: number;
 }
 
 export class RoomEventBroadcaster {
@@ -57,35 +59,33 @@ export class RoomEventBroadcaster {
     fastPathBytes: 0,
     headOnlyBroadcasts: 0,
     maxPendingSequenceSpan: 0,
+    noLocalSubscriberSkips: 0,
+    authorizationUnavailable: 0,
   };
 
   constructor(private readonly options: RoomEventBroadcasterOptions) {}
 
-  handle(event: RoomEventAvailable): Promise<void> {
-    return new Promise(resolve => {
-      const pending = this.pendingRooms.get(event.roomId);
-      if (pending) {
-        pending.minSeq = Math.min(pending.minSeq, event.headSeq);
-        pending.maxSeq = Math.max(pending.maxSeq, event.headSeq);
-        pending.waiters.push(resolve);
-        this.metrics.coalescedNotifications += 1;
-        this.metrics.maxPendingSequenceSpan = Math.max(
-          this.metrics.maxPendingSequenceSpan,
-          pending.maxSeq - pending.minSeq + 1,
-        );
-      } else {
-        this.pendingRooms.set(event.roomId, {
-          minSeq: event.headSeq,
-          maxSeq: event.headSeq,
-          waiters: [resolve],
-        });
-      }
+  handle(event: RoomEventAvailable): void {
+    const pending = this.pendingRooms.get(event.roomId);
+    if (pending) {
+      pending.minSeq = Math.min(pending.minSeq, event.headSeq);
+      pending.maxSeq = Math.max(pending.maxSeq, event.headSeq);
+      this.metrics.coalescedNotifications += 1;
+      this.metrics.maxPendingSequenceSpan = Math.max(
+        this.metrics.maxPendingSequenceSpan,
+        pending.maxSeq - pending.minSeq + 1,
+      );
+    } else {
+      this.pendingRooms.set(event.roomId, {
+        minSeq: event.headSeq,
+        maxSeq: event.headSeq,
+      });
+    }
 
-      if (!this.activeRooms.has(event.roomId)) {
-        this.activeRooms.add(event.roomId);
-        void this.drainRoom(event.roomId);
-      }
-    });
+    if (!this.activeRooms.has(event.roomId)) {
+      this.activeRooms.add(event.roomId);
+      void this.drainRoom(event.roomId);
+    }
   }
 
   getMetrics(): RoomEventBroadcasterMetrics {
@@ -113,8 +113,6 @@ export class RoomEventBroadcaster {
             headSeq: pending.maxSeq,
           });
           this.emitHeadOnly({ roomId, headSeq: pending.maxSeq });
-        } finally {
-          pending.waiters.forEach(resolve => resolve());
         }
       }
     } finally {
@@ -137,6 +135,10 @@ export class RoomEventBroadcaster {
 
   private async broadcastRange(roomId: string, minSeq: number, headSeq: number): Promise<void> {
     const event = { roomId, headSeq };
+    if (this.options.hasLocalSubscribers && !(await this.options.hasLocalSubscribers(roomId))) {
+      this.metrics.noLocalSubscriberSkips += 1;
+      return;
+    }
     if (!this.options.store.readRoomEvent && !this.options.store.readRoomEvents) {
       this.emitHeadOnly(event);
       return;
@@ -169,7 +171,11 @@ export class RoomEventBroadcaster {
       return;
     }
 
-    await this.options.authorizeLocalRoom?.(roomId);
+    if (this.options.authorizeLocalRoom && !(await this.options.authorizeLocalRoom(roomId))) {
+      this.metrics.authorizationUnavailable += 1;
+      this.emitHeadOnly(event);
+      return;
+    }
     this.metrics.fastPathEvents += committedEvents.length;
     this.metrics.fastPathBytes += payloadBytes;
     this.options.emit(fastPath);

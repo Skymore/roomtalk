@@ -93,6 +93,7 @@ type TestServer = {
   };
   redisClient: {
     isOpen: boolean;
+    ping: () => Promise<string>;
   };
   deletedMediaObjects: string[];
   audioTranscriptionJobs: AudioTranscriptionJob[];
@@ -519,6 +520,9 @@ async function createTestServer(overrides: {
 
   const redisClient = {
     isOpen: true,
+    async ping() {
+      return 'PONG';
+    },
   };
 
   const defaultMediaObjectStorage = new MemoryMediaObjectStorage({
@@ -621,10 +625,12 @@ describe('API routes', () => {
     assert.equal(statusResponse.status, 200);
     const status = await statusResponse.json() as {
       status: string;
+      ready: boolean;
       persistenceStore: string;
       redis: string;
       mediaStorage: string;
       rooms: number;
+      dependencies: Record<string, string>;
       features: {
         codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
         codex: { connections: { enabled: boolean } };
@@ -632,9 +638,16 @@ describe('API routes', () => {
       };
     };
     assert.equal(status.status, 'online');
+    assert.equal(status.ready, true);
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
-    assert.equal(status.mediaStorage, 'configured');
+    assert.equal(status.mediaStorage, 'connected');
+    assert.deepEqual(status.dependencies, {
+      database: 'ready',
+      redis: 'ready',
+      mediaStorage: 'ready',
+      socketAdapter: 'ready',
+    });
     assert.equal(status.rooms, 1);
     assert.deepEqual(status.features.codeAgent, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
@@ -2143,13 +2156,54 @@ describe('API routes', () => {
     assert.deepEqual(await unauthorizedResponse.json(), { error: 'Room not found' });
   });
 
-  it('returns a status error when store status lookup fails', async () => {
+  it('reports degraded readiness without disguising a database failure as zero rooms', async () => {
     server.store.countRooms = async () => {
       throw new Error('store failed');
     };
 
     const response = await fetch(`${server.baseUrl}/api/status`);
-    assert.equal(response.status, 500);
-    assert.deepEqual(await response.json(), { error: 'Error getting system status' });
+    assert.equal(response.status, 503);
+    const payload = await response.json() as any;
+    assert.equal(payload.status, 'degraded');
+    assert.equal(payload.ready, false);
+    assert.equal(payload.rooms, null);
+    assert.equal(payload.dependencies.database, 'unavailable');
+    assert.equal(payload.dependencies.redis, 'ready');
+    assert.equal(payload.dependencies.mediaStorage, 'ready');
+  });
+
+  it('reports degraded readiness when Redis or object storage is unavailable', async () => {
+    server.redisClient.ping = () => {
+      throw new Error('redis failed');
+    };
+    const storage = new MemoryMediaObjectStorage();
+    storage.failHealthCheck = true;
+    const objectFailureServer = await createTestServer({ mediaObjectStorage: storage });
+
+    try {
+      const [redisResponse, storageResponse] = await Promise.all([
+        fetch(`${server.baseUrl}/api/health/ready`),
+        fetch(`${objectFailureServer.baseUrl}/api/status`),
+      ]);
+      assert.equal(redisResponse.status, 503);
+      assert.equal((await redisResponse.json() as any).dependencies.redis, 'unavailable');
+      assert.equal(storageResponse.status, 503);
+      assert.equal((await storageResponse.json() as any).dependencies.mediaStorage, 'unavailable');
+    } finally {
+      await objectFailureServer.close();
+    }
+  });
+
+  it('keeps liveness independent from downstream readiness', async () => {
+    server.store.countRooms = async () => {
+      throw new Error('store failed');
+    };
+    server.redisClient.ping = async () => {
+      throw new Error('redis failed');
+    };
+
+    const response = await fetch(`${server.baseUrl}/api/health/live`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as any).status, 'alive');
   });
 });
