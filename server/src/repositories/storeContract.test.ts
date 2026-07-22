@@ -1,6 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
+import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
 import { PostgresClient, PostgresPool, PostgresQueryResult, PostgresStore } from './postgresStore';
 import { RedisStore } from './redisStore';
 import { DurableRoomStore } from './store';
@@ -2214,7 +2215,7 @@ describe('PostgresStore media object cleanup', () => {
     const result = await store.deleteMessageById('room-1', 'media-1');
 
     assert.equal(result?.deleted, true);
-    assert.deepEqual(deleted, [objectKey]);
+    assert.deepEqual(deleted, [objectKey, getMediaThumbnailObjectKey(objectKey)]);
     assert.equal(await store.getMediaAsset('asset-1'), null);
   });
 
@@ -2237,7 +2238,7 @@ describe('PostgresStore media object cleanup', () => {
 
     await store.clearRoomMessages('room-1');
 
-    assert.deepEqual(deleted, [objectKey]);
+    assert.deepEqual(deleted, [objectKey, getMediaThumbnailObjectKey(objectKey)]);
   });
 
   it('deletes every room media object when the room is deleted by its owner', async () => {
@@ -2246,7 +2247,7 @@ describe('PostgresStore media object cleanup', () => {
     const objectKey = await seedMediaMessage(store, 'media-1', 'asset-1');
 
     assert.equal(await store.deleteRoom('room-1', 'client-1'), true);
-    assert.deepEqual(deleted, [objectKey]);
+    assert.deepEqual(deleted, [objectKey, getMediaThumbnailObjectKey(objectKey)]);
   });
 
   it('leaves storage untouched when a non-owner attempts room deletion', async () => {

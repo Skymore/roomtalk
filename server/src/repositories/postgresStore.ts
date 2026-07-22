@@ -6,6 +6,7 @@ import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecove
 import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
+import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
 import { orderMessageBatches } from '../services/messageDomain';
 import { validateStoredRoomEventPayload } from './roomEventPayload';
 import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
@@ -952,10 +953,12 @@ export class PostgresStore implements DurableRoomStore {
     }
 
     for (const objectKey of objectKeys) {
-      try {
-        await this.mediaObjectStorage.deleteMediaObject(objectKey);
-      } catch (error) {
-        this.logger.error('Failed to delete orphaned media object', { error, objectKey });
+      for (const derivedObjectKey of [objectKey, getMediaThumbnailObjectKey(objectKey)]) {
+        try {
+          await this.mediaObjectStorage.deleteMediaObject(derivedObjectKey);
+        } catch (error) {
+          this.logger.error('Failed to delete orphaned media object', { error, objectKey: derivedObjectKey });
+        }
       }
     }
   }

@@ -189,6 +189,7 @@ const writeLargeHistoryBaseline = async (payload: {
 
 async function createTestServer(overrides: {
   mediaObjectStorage?: unknown;
+  mediaThumbnailService?: Parameters<typeof registerApiRoutes>[1]['mediaThumbnailService'];
   mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'];
   audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
@@ -569,6 +570,7 @@ async function createTestServer(overrides: {
       return { name: 'Review Expert', systemPrompt: 'Review implementation decisions carefully.' };
     },
     mediaObjectStorage: mediaObjectStorage as any,
+    mediaThumbnailService: overrides.mediaThumbnailService,
     audioTranscriptionRunner,
     googleClientIds: overrides.googleClientIds,
     verifyGoogleCredential: overrides.verifyGoogleCredential,
@@ -2043,6 +2045,38 @@ describe('API routes', () => {
 
     assert.equal(response.status, 403);
     assert.deepEqual(await response.json(), { error: 'Not authorized to access this room' });
+  });
+
+  it('creates an authorized signed thumbnail URL without exposing the original object', async () => {
+    await server.close();
+    const resolvedAssetIds: string[] = [];
+    server = await createTestServer({
+      mediaThumbnailService: {
+        async ensureThumbnail(asset: MediaAsset) {
+          resolvedAssetIds.push(asset.id);
+          return `${asset.objectKey}.thumbnail-v1.webp`;
+        },
+      },
+    });
+    server.store.members.add('room-1:client-2');
+    server.store.mediaAssets.set('thumbnail-asset', {
+      id: 'thumbnail-asset',
+      roomId: 'room-1',
+      messageId: 'thumbnail-message',
+      objectKey: 'rooms/room-1/media/image/thumbnail-asset',
+      kind: 'image',
+      mimeType: 'image/jpeg',
+      byteSize: 9_000_000,
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/media/thumbnail-asset/thumbnail-url?roomId=room-1&clientId=client-2`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      url: 'https://download.example/rooms%2Froom-1%2Fmedia%2Fimage%2Fthumbnail-asset.thumbnail-v1.webp',
+      expiresAt: '2026-05-03T00:15:00.000Z',
+    });
+    assert.deepEqual(resolvedAssetIds, ['thumbnail-asset']);
   });
 
   it('does not use separate media asset and message writes when completing media uploads', async () => {

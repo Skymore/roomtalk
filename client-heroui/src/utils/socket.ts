@@ -1763,6 +1763,27 @@ export const getMediaDownloadUrl = async (params: {
   };
 };
 
+export const getMediaThumbnailUrl = async (params: {
+  roomId: string;
+  assetId: string;
+}): Promise<{ url: string; expiresAt?: string }> => {
+  const query = new URLSearchParams({ roomId: params.roomId });
+  const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/thumbnail-url?${query.toString()}`), {
+    headers: clientAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to get media thumbnail URL'));
+  }
+  const payload = await response.json();
+  if (!payload?.url) {
+    throw new Error('Server did not return a media thumbnail URL');
+  }
+  return {
+    url: typeof payload.url === 'string' ? apiPath(payload.url) : payload.url,
+    expiresAt: payload.expiresAt,
+  };
+};
+
 export const getRoomMessagesForExport = async (roomId: string): Promise<Message[]> => {
   const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/messages`), {
     cache: 'no-store',

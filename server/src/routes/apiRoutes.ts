@@ -32,6 +32,11 @@ import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSessio
 import { registerCodexConnectionRoutes } from './codexConnectionRoutes';
 import { GitHubConnectionService } from '../services/githubConnection';
 import { registerGitHubConnectionRoutes } from './githubConnectionRoutes';
+import {
+  MediaThumbnailBusyError,
+  MediaThumbnailResolver,
+  MediaThumbnailService,
+} from '../services/mediaThumbnail';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -44,6 +49,7 @@ interface ApiRouteOptions {
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
   mediaObjectStorage: MediaObjectStorage;
+  mediaThumbnailService?: MediaThumbnailResolver;
   audioTranscriptionRunner?: AudioTranscriptionRunner;
   googleClientIds?: string[];
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
@@ -318,6 +324,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
   const codexConnections = options.codexConnections || { enabled: false };
   const githubConnections = options.githubConnections || { enabled: false };
+  const mediaThumbnailService = options.mediaThumbnailService
+    || new MediaThumbnailService(mediaObjectStorage, routeLogger);
 
   // AI role drafts are a global per-client feature, not room-gated. Abuse (burning
   // OpenRouter credits) is bounded purely by source IP — keyed by IP so rotating the
@@ -1325,6 +1333,15 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     await store.deletePendingMediaUpload(assetId);
     io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
     notifyRoomMessageBestEffort({ store, room: appendResult.room, message: appendResult.message, logger: routeLogger });
+    if (asset.kind === 'image') {
+      void mediaThumbnailService.ensureThumbnail(asset).catch(error => {
+        routeLogger.warn('Failed to pre-generate media thumbnail', {
+          error,
+          roomId,
+          assetId,
+        });
+      });
+    }
     return res.status(201).json(appendResult.message);
   });
 
@@ -1363,6 +1380,63 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         : undefined,
     });
     return res.json(signedDownload);
+  });
+
+  app.get('/api/media/:assetId/thumbnail-url', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(503).json({ error: 'Media object storage is not configured' });
+    }
+
+    const { assetId } = req.params;
+    const roomId = typeof req.query.roomId === 'string' ? req.query.roomId : '';
+    const clientId = getQueryClientId(req);
+    if (!assetId || !roomId || !clientId) {
+      return res.status(400).json({ error: 'assetId, roomId, and clientId are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/media/:assetId/thumbnail-url'))) {
+      return;
+    }
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized media thumbnail URL request', {
+        endpoint: 'GET /api/media/:assetId/thumbnail-url',
+        clientId,
+        roomId,
+        assetId,
+        ip: req.ip,
+      });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    const asset = await store.getMediaAsset(assetId);
+    if (!asset || asset.roomId !== roomId || asset.kind !== 'image') {
+      return res.status(404).json({ error: 'Image media asset not found' });
+    }
+
+    try {
+      const thumbnailObjectKey = await mediaThumbnailService.ensureThumbnail(asset);
+      if (!thumbnailObjectKey) {
+        return res.status(503).json({ error: 'Media thumbnail is unavailable' });
+      }
+      const signedThumbnail = await mediaObjectStorage.createReadUrl({
+        objectKey: thumbnailObjectKey,
+        expiresInSeconds: 60 * 60,
+        responseCacheControl: 'private, max-age=3600',
+      });
+      return res.json(signedThumbnail);
+    } catch (error) {
+      if (error instanceof MediaThumbnailBusyError) {
+        res.set('Retry-After', '2');
+        return res.status(503).json({ error: 'Media thumbnail generation is busy' });
+      }
+      routeLogger.error('Failed to prepare media thumbnail', {
+        error,
+        endpoint: 'GET /api/media/:assetId/thumbnail-url',
+        roomId,
+        assetId,
+        ip: req.ip,
+      });
+      return res.status(500).json({ error: 'Failed to prepare media thumbnail' });
+    }
   });
 
   app.get('/api/ai-models', (_req: Request, res: Response) => {

@@ -4,7 +4,7 @@ import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from "@
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useCachedMedia } from "../hooks/useCachedMedia";
-import { getRoomMediaHistory } from "../utils/socket";
+import { getMediaThumbnailUrl, getRoomMediaHistory } from "../utils/socket";
 import { getCachedMediaBlob } from "../utils/mediaCache";
 import { RoomMediaHistoryItem, RoomMediaHistoryKindFilter } from "../utils/types";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
@@ -114,6 +114,8 @@ const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
+const MEDIA_CAROUSEL_RENDER_RADIUS = 1;
+const MEDIA_GRID_ROOT_MARGIN = "160px 0px";
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
   filter === "all"
@@ -261,39 +263,88 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   openMediaLabel,
   onSelect,
 }) => {
+  const itemRef = React.useRef<HTMLButtonElement | null>(null);
+  const mountedRef = React.useRef(true);
+  const requestedThumbnailRef = React.useRef<string | null>(null);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
-  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(item.url);
-  const { mediaUrl, posterUrl } = useCachedMedia({
-    assetId: item.assetId,
-    url: item.url,
-    kind: item.kind,
-    mimeType: item.mimeType,
-    byteSize: item.byteSize,
-    cacheBodyFetchKey,
-    roomId,
-  });
-  const displayUrl = mediaUrl || item.url;
+  const [isNearViewport, setIsNearViewport] = React.useState(() => (
+    typeof IntersectionObserver === "undefined"
+  ));
+  const [thumbnailUrl, setThumbnailUrl] = React.useState<string | null>(null);
+  const [thumbnailError, setThumbnailError] = React.useState(false);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    setThumbnailUrl(null);
+    setThumbnailError(false);
+    requestedThumbnailRef.current = null;
+  }, [item.assetId]);
+
+  React.useEffect(() => {
+    const element = itemRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      setIsNearViewport(Boolean(entry?.isIntersecting));
+    }, { rootMargin: MEDIA_GRID_ROOT_MARGIN });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    if (item.kind !== "image" || !isNearViewport || requestedThumbnailRef.current === item.assetId) {
+      return;
+    }
+    requestedThumbnailRef.current = item.assetId;
+    void getMediaThumbnailUrl({ roomId, assetId: item.assetId })
+      .then(result => {
+        if (!mountedRef.current) return;
+        setThumbnailUrl(result.url);
+        setThumbnailError(false);
+      })
+      .catch(error => {
+        if (!mountedRef.current) return;
+        console.warn("Failed to load media thumbnail:", error);
+        setThumbnailError(true);
+      });
+  }, [isNearViewport, item.assetId, item.kind, roomId]);
 
   React.useEffect(() => {
     setVideoPreviewError(false);
-  }, [displayUrl, item.kind]);
+  }, [item.assetId, item.kind]);
 
   return (
     <button
+      ref={itemRef}
       type="button"
       aria-label={openMediaLabel}
       className={`relative aspect-square cursor-pointer overflow-hidden bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 ${isActive ? "ring-2 ring-[#d97757]" : ""}`}
       onClick={() => onSelect(item)}
     >
-      {item.kind === "image" ? (
+      {!isNearViewport ? (
+        <span className="block h-full w-full bg-white/[0.04]" aria-hidden="true" />
+      ) : item.kind === "image" && thumbnailUrl ? (
         <img
-          src={displayUrl}
+          src={thumbnailUrl}
           alt={sharedImageLabel}
           crossOrigin="anonymous"
           className="h-full w-full object-cover"
           loading="lazy"
-          onLoad={markMediaLoadedForCache}
+          decoding="async"
+          onError={() => {
+            setThumbnailUrl(null);
+            setThumbnailError(true);
+          }}
         />
+      ) : item.kind === "image" ? (
+        <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-white/45">
+          <Icon icon={thumbnailError ? "lucide:image-off" : "lucide:loader-circle"} className={`h-6 w-6 ${thumbnailError ? "" : "animate-spin"}`} />
+        </div>
       ) : videoPreviewError ? (
         <div className="flex h-full w-full items-center justify-center bg-black/50 text-white/80">
           <Icon icon="lucide:video-off" className="h-7 w-7" />
@@ -301,14 +352,12 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
       ) : (
         <>
           <video
-            src={getVideoPreviewUrl(displayUrl)}
-            poster={posterUrl || undefined}
+            src={getVideoPreviewUrl(item.url)}
             crossOrigin="anonymous"
             className="h-full w-full object-cover"
             preload="metadata"
             muted
             playsInline
-            onLoadedData={markMediaLoadedForCache}
             onError={() => setVideoPreviewError(true)}
           />
           <span className="absolute inset-0 flex items-center justify-center bg-black/20">
@@ -1238,6 +1287,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       >
         {trackItems.map((item, index) => {
           const isActive = index === safeActiveIndex;
+          const shouldRenderMedia = Math.abs(index - safeActiveIndex) <= MEDIA_CAROUSEL_RENDER_RADIUS;
           return (
             <div
               key={getMediaKey(item)}
@@ -1245,14 +1295,16 @@ const MediaStage: React.FC<MediaStageProps> = ({
               className="flex h-full min-w-full items-center justify-center px-1.5 sm:px-2"
               aria-hidden={!isActive}
             >
-              <MediaStageItem
-                item={item}
-                alt={alt}
-                isActive={isActive}
-                imageZoom={isActive ? imageZoom : MIN_IMAGE_ZOOM}
-                imagePan={isActive ? imagePan : ZERO_IMAGE_PAN}
-                videoGestureHandlers={isActive ? videoGestureHandlers : undefined}
-              />
+              {shouldRenderMedia ? (
+                <MediaStageItem
+                  item={item}
+                  alt={alt}
+                  isActive={isActive}
+                  imageZoom={isActive ? imageZoom : MIN_IMAGE_ZOOM}
+                  imagePan={isActive ? imagePan : ZERO_IMAGE_PAN}
+                  videoGestureHandlers={isActive ? videoGestureHandlers : undefined}
+                />
+              ) : null}
             </div>
           );
         })}

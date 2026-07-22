@@ -8,6 +8,7 @@ import { MediaViewerModal } from './MediaViewerModal';
 import { MessageItem } from './MessageItem';
 
 const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
+const getMediaThumbnailUrlMock = vi.hoisted(() => vi.fn());
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const getAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const requestAudioTranscriptionMock = vi.hoisted(() => vi.fn());
@@ -20,6 +21,7 @@ vi.mock('../utils/socket', () => ({
   clientId: 'viewer',
   getAudioTranscription: getAudioTranscriptionMock,
   getMediaDownloadUrl: getMediaDownloadUrlMock,
+  getMediaThumbnailUrl: getMediaThumbnailUrlMock,
   getRoomMediaHistory: getRoomMediaHistoryMock,
   requestAudioTranscription: requestAudioTranscriptionMock,
   sendA2UIAction: sendA2UIActionMock,
@@ -103,6 +105,10 @@ describe('MessageItem replies', () => {
       nextCursor: null,
       windowMonths: 6,
     });
+    getMediaThumbnailUrlMock.mockImplementation(({ assetId }: { assetId: string }) => Promise.resolve({
+      url: `https://thumbnail.example/${assetId}.webp`,
+      expiresAt: '2026-05-03T11:15:00.000Z',
+    }));
     getAudioTranscriptionMock.mockResolvedValue({
       assetId: 'audio-1',
       roomId: 'room-1',
@@ -116,6 +122,7 @@ describe('MessageItem replies', () => {
     vi.useRealTimers();
     document.getElementById('roomtalk-pierre-file-icon-sprite')?.remove();
     getMediaDownloadUrlMock.mockReset();
+    getMediaThumbnailUrlMock.mockReset();
     getRoomMediaHistoryMock.mockReset();
     getAudioTranscriptionMock.mockReset();
     requestAudioTranscriptionMock.mockReset();
@@ -1789,11 +1796,121 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       const images = Array.from(document.body.querySelectorAll('[aria-label="openMediaItem"] img'));
       expect(images.map(image => image.getAttribute('src'))).toEqual([
-        'https://signed.example/rooms/room-1/asset-old.webp',
-        'https://signed.example/rooms/room-1/asset-middle.webp',
-        'https://signed.example/rooms/room-1/asset-new.webp',
+        'https://thumbnail.example/asset-old.webp',
+        'https://thumbnail.example/asset-middle.webp',
+        'https://thumbnail.example/asset-new.webp',
       ]);
     });
+  });
+
+  it('requests thumbnails only for media grid cells near the viewport', async () => {
+    const observed = new Map<Element, IntersectionObserverCallback>();
+    class TestIntersectionObserver {
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe = (element: Element) => { observed.set(element, this.callback); };
+      unobserve = (element: Element) => { observed.delete(element); };
+      disconnect = () => {};
+      takeRecords = () => [];
+      root = null;
+      rootMargin = '160px 0px';
+      thresholds = [0];
+    }
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/current.webp' });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: Array.from({ length: 8 }, (_, index) => ({
+        assetId: `viewport-asset-${index}`,
+        messageId: `viewport-message-${index}`,
+        kind: 'image' as const,
+        mimeType: 'image/webp',
+        byteSize: 1024,
+        createdAt: new Date(Date.UTC(2026, 5, 1, 0, 0, index)).toISOString(),
+        url: `https://signed.example/viewport-${index}.webp`,
+      })),
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'viewport-current-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'viewport-current', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText('openMediaViewer'));
+    fireEvent.click(screen.getByLabelText('openMediaHistory'));
+    const cells = await screen.findAllByLabelText('openMediaItem');
+    expect(getMediaThumbnailUrlMock).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const cell of cells.slice(0, 2)) {
+        observed.get(cell)?.(
+          [{ isIntersecting: true, target: cell } as unknown as IntersectionObserverEntry],
+          {} as IntersectionObserver,
+        );
+      }
+    });
+
+    await waitFor(() => expect(getMediaThumbnailUrlMock).toHaveBeenCalledTimes(2));
+    expect(getMediaThumbnailUrlMock.mock.calls.map(([params]) => params.assetId)).toEqual([
+      'viewport-asset-0',
+      'viewport-asset-1',
+    ]);
+    expect(document.body.querySelectorAll('[aria-label="openMediaItem"] img')).toHaveLength(2);
+  });
+
+  it('mounts only the active and adjacent full-size carousel media', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/bounded-current.webp' });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: Array.from({ length: 12 }, (_, index) => ({
+        assetId: `bounded-asset-${index}`,
+        messageId: `bounded-message-${index}`,
+        kind: 'image' as const,
+        mimeType: 'image/webp',
+        byteSize: 1024,
+        createdAt: new Date(Date.UTC(2026, 4, 1, 0, 0, index)).toISOString(),
+        url: `https://signed.example/bounded-${index}.webp`,
+      })),
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'bounded-current-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'bounded-current', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText('openMediaViewer'));
+    await waitFor(() => expect(getRoomMediaHistoryMock).toHaveBeenCalled());
+    const stage = screen.getByTestId('media-viewer-stage');
+    await waitFor(() => expect(stage.querySelectorAll('[data-active-media]').length).toBe(1));
+    expect(stage.querySelectorAll('[data-testid="media-carousel-track"] > div')).toHaveLength(13);
+    expect(stage.querySelectorAll('img').length).toBeLessThanOrEqual(3);
   });
 
   it('filters media history by video in the viewer', async () => {

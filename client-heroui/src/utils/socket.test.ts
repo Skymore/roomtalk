@@ -90,6 +90,7 @@ const {
   getClientAccountStatus,
   getClientAuthStatus,
   getMediaDownloadUrl,
+  getMediaThumbnailUrl,
   getRoomMediaHistory,
   getRoomMemberCount,
   getRoomMembers,
@@ -691,6 +692,21 @@ describe('socket message acknowledgement helpers', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1', { headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' } });
+  });
+
+  it('returns authenticated thumbnail URLs from the media API', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      url: 'https://signed.example/thumbnail.webp',
+      expiresAt: '2026-05-03T11:15:00.000Z',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(getMediaThumbnailUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
+      url: 'https://signed.example/thumbnail.webp',
+      expiresAt: '2026-05-03T11:15:00.000Z',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/thumbnail-url?roomId=room-1', {
+      headers: { 'X-Client-Id': 'client-uuid' },
+    });
   });
 
   it('loads, sets, and logs in with User ID password auth', async () => {
