@@ -36,6 +36,7 @@ Implementation started from local `master` at `d94d2cd0`.
 | 11 | `CURSOR_AHEAD` stale-watermark reset and deterministic persisted AI error fast path | `fbfd908b` |
 | 12 | Per-room sync state machine, authorization barrier, coalesced broadcaster, immutable message room, mandatory PostgreSQL CI | `b607ad7a` |
 | 13 | AI and outbox fencing, converged Socket identity, atomic Redis leases, strict readiness | `a3b90e0c` |
+| 14 | Transactionally serialized PostgreSQL schema initialization for multi-instance DDL safety | `81b2b74e` |
 
 The scheduled Fly workflow remains disabled and Fly machines remain at zero. Supabase, Tigris, and Upstash are rollback sources, not live writers. `ai-chat.wenlin.dev` is still an allowed origin whose DNS is managed separately.
 
@@ -107,10 +108,12 @@ An authenticated `socket.data.roomtalkClientId` is authoritative for that live S
 
 The release respected the stop-the-world compatibility boundary: the old app was stopped before the image containing the new fence/lease protocol started, with no mixed rolling window. Compose built from `a3b90e0c`; startup logs confirmed both new migrations, the PostgreSQL listener, and the Redis Socket.IO adapter.
 
+The first GitHub CI run then reproduced a remaining base-DDL race: two initializers could both drop one check constraint and concurrently add it, causing the second PostgreSQL session to fail with `42710 duplicate constraint`. Commit `81b2b74e` fixes the model rather than that single constraint by putting all always-rerun DDL, migration effects, and migration-ledger writes behind one transaction-scoped advisory lock. The same guarantee now covers every DROP/ADD constraint and trigger-replacement sequence. The real PostgreSQL concurrent-initialization case passed 10 consecutive runs, and the full Server suite passed all 820 tests with only the disposable database URL injected. Production then rebuilt from `81b2b74e`; schema initialization, the listener, and the Redis adapter all became ready normally.
+
 | Check | Result |
 | --- | --- |
 | Full Client suite | 1,020 passed in 96 files |
-| Full Server suite | 795 passed in 105 suites |
+| Full Server suite including PostgreSQL integration | 820 passed in 105 suites |
 | PostgreSQL 17 upgrade-path integration | 25 passed |
 | PostgreSQL 17 fresh-schema integration | 25 passed |
 | Server and Client production builds | Passed |
