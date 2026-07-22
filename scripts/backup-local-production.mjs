@@ -30,7 +30,11 @@ try {
   ])
   backupSucceeded = true
 } finally {
-  run(['--profile', 'edge', 'up', '-d', 'object-storage', 'app', 'cloudflared'], true)
+  // Restore the exact containers that were running before the maintenance
+  // window. `compose up` may reconcile a newer Compose file against the old
+  // application image (for example, a newly added migration command that the
+  // old image does not contain), turning a backup into an accidental deploy.
+  run(['--profile', 'edge', 'start', 'object-storage', 'app', 'cloudflared'], true)
 }
 
 if (!backupSucceeded) {

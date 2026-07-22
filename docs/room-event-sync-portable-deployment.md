@@ -158,7 +158,7 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 `--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. Local S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. SeaweedFS and its S3 port bind only to the private Compose network and loopback. `MEDIA_STORAGE_ENDPOINT` keeps server traffic on the Compose network while `MEDIA_STORAGE_PUBLIC_ENDPOINT` signs browser uploads/downloads for the edge hostname.
 
-Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before restarting the stack. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
+Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before starting those exact stopped containers again. The recovery path deliberately uses `compose start`, not `compose up`, so a backup cannot reconcile a newer Compose definition against an older image and become an accidental deployment. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
 Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, outbox, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr.
 

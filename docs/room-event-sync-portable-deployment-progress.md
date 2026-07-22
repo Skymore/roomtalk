@@ -37,6 +37,7 @@ Implementation started from local `master` at `d94d2cd0`.
 | 12 | Per-room sync state machine, authorization barrier, coalesced broadcaster, immutable message room, mandatory PostgreSQL CI | `b607ad7a` |
 | 13 | AI and outbox fencing, converged Socket identity, atomic Redis leases, strict readiness | `a3b90e0c` |
 | 14 | Transactionally serialized PostgreSQL schema initialization for multi-instance DDL safety | `81b2b74e` |
+| 15 | Recoverable AI startup, atomic run start, one-at-a-time claims, isolated invalid sockets, migrate/verify schema lifecycle | `f389bdce` |
 
 The scheduled Fly workflow remains disabled and Fly machines remain at zero. Supabase, Tigris, and Upstash are rollback sources, not live writers. `ai-chat.wenlin.dev` is still an allowed origin whose DNS is managed separately.
 
@@ -123,6 +124,27 @@ The first GitHub CI run then reproduced a remaining base-DDL race: two initializ
 | Dependency status | PostgreSQL, Redis, media storage, and Socket adapter all ready |
 
 Post-release logs contained no fatal, panic, uncaught, unhandled, or error entries. The deployment worktree retained no production env/runtime symlinks after cleanup; production data remains in the original Compose volumes and `runtime/` directory.
+
+### Durable-AI and schema-lifecycle hardening, 2026-07-22
+
+Commit `f389bdce` closed the two active worker-mode restart windows found after the ownership release. Startup recovery now preserves a streaming placeholder while its `assistant_run` and `ai.run_requested` outbox row still describe recoverable queued/running work. Worker-mode start creates the placeholder, run, and outbox row in one PostgreSQL transaction. The serial worker defaults to `claim one, execute one`, so no waiting claim can expire behind a long Provider call. Lease timestamps come from PostgreSQL wall-clock time. Local authenticated Socket identity is the only authority; an invalid/conflicting socket is individually asked to register and removed, while verified peers keep the complete fast path.
+
+Schema changes no longer run inside every App cold start. A one-shot Compose `migrate` service applies only missing immutable migrations under the advisory transaction lock and records SHA-256 checksums; App startup performs read-only `verifySchema()` and refuses to serve an unknown schema. The same boundary maps to a Kubernetes/AWS pre-deploy Job and a DML-only runtime role. Production adopted checksums for all nine ledger rows, including the frozen `0000_roomtalk_schema` bootstrap, before the App listener and worker started.
+
+The release created the paired backup `roomtalk-20260722T101006Z.dump` and `roomtalk-object-storage-20260722T101006Z.tar.gz`. The backup exposed one operational edge: its recovery path used `compose up`, which could reconcile a new Compose command against the previous application image before the real build. The script now uses `compose start` to restore the exact stopped containers; backup is no longer an implicit deployment step.
+
+| Check | Result |
+| --- | --- |
+| Full Server suite | 799 passed in 105 suites |
+| Real PostgreSQL 17 room-event integration | 26 passed, no skip |
+| Authorization/broadcaster/identity focused tests | 22 passed |
+| Server and Client production builds | Passed |
+| Migration ledger | 9/9 rows checksummed; `0000` through `0008` verified |
+| Durable AI invariants | 0 streaming messages, 0 active runs/outbox rows, 0 orphan runs after deploy |
+| Compose health | App, PostgreSQL, Redis, SeaweedFS, and Cloudflare Tunnel running; stateful services healthy |
+| Loopback and `room.ruit.me` | `online`, `ready=true`, 99 rooms |
+
+This is a safer intermediate worker model, not the final AI aggregate. Durable terminal truth is still split across `assistant_runs`, messages, the AI-specific outbox, usage projection, owner leases, and the process-local terminal reconciler. The next architectural phase is still to make `assistant_runs` the sole durable execution aggregate, add run generation/chunk sequence to transient events, persist terminal payload and usage idempotently in one transaction, and then retire the AI-specific outbox and in-memory terminal retry. The stable `room_events` client changefeed does not need to change for that work.
 
 ## Rollback and ongoing operations
 

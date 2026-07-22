@@ -158,7 +158,7 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。本地 S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。SeaweedFS 与 S3 端口只对 Compose 私网和 loopback 开放；`MEDIA_STORAGE_ENDPOINT` 让服务端流量留在 Compose 网络，`MEDIA_STORAGE_PUBLIC_ENDPOINT` 为 edge hostname 生成浏览器上传/下载签名。
 
-运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后恢复服务。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
+运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后原样启动刚才停下的容器。恢复路径刻意使用 `compose start`，而不是 `compose up`，避免新 Compose 定义在旧镜像上被提前 reconcile，让备份意外变成部署。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
 长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、outbox 与 turn 记录仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。
 
