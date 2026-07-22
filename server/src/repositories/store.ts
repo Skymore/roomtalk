@@ -298,6 +298,13 @@ export interface OutboxEventRecord {
   updatedAt: string;
 }
 
+export interface AssistantRunStartResult {
+  room: Room;
+  message: Message;
+  run: AssistantRunRecord;
+  event: OutboxEventRecord;
+}
+
 export interface OutboxClaimOptions {
   workerId: string;
   eventTypes?: string[];
@@ -427,6 +434,7 @@ export interface DurableRoomStore {
   updateAssistantRun?(runId: string, updates: AssistantRunUpdate): Promise<AssistantRunRecord | null>;
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
   createAssistantRunWithOutbox?(run: AssistantRunRecord, event: OutboxEventRecord): Promise<{ run: AssistantRunRecord; event: OutboxEventRecord } | null>;
+  createAssistantRunWithMessageAndOutbox?(message: Message, run: AssistantRunRecord, event: OutboxEventRecord): Promise<AssistantRunStartResult | null>;
   claimOutboxEvents?(options: OutboxClaimOptions): Promise<OutboxEventRecord[]>;
   renewOutboxEventLease?(eventId: string, claim: OutboxClaimToken, now?: string): Promise<boolean>;
   markOutboxEventProcessed?(eventId: string, claim: OutboxClaimToken, processedAt?: string): Promise<OutboxEventRecord | null>;
@@ -472,7 +480,7 @@ export interface DurableRoomStore {
   getClientNicknames(clientIds: string[]): Promise<Record<string, string>>;
   resetAllDataForTests?(): Promise<void>;
   failInterruptedStreamingMessages?(content: string, options?: InterruptedStreamingMessageRecoveryOptions): Promise<number>;
-  heartbeatAIStreamOwner?(ownerId: string, instanceId: string, now: string, ttlMs: number): Promise<void>;
+  heartbeatAIStreamOwner?(ownerId: string, instanceId: string, now: string | undefined, ttlMs: number): Promise<void>;
   releaseAIStreamOwner?(ownerId: string): Promise<void>;
   failOrphanedStreamingMessages?(content: string, now?: string): Promise<number>;
   withMaintenanceLock?<T>(lockName: string, operation: () => Promise<T>): Promise<{ acquired: boolean; result?: T }>;
@@ -883,6 +891,14 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.createAssistantRunWithOutbox?.(run, event) || Promise.resolve(null);
   }
 
+  async createAssistantRunWithMessageAndOutbox(message: Message, run: AssistantRunRecord, event: OutboxEventRecord) {
+    const result = await this.durableStore.createAssistantRunWithMessageAndOutbox?.(message, run, event) || null;
+    if (result) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
+  }
+
   claimOutboxEvents(options: OutboxClaimOptions) {
     return this.durableStore.claimOutboxEvents?.(options) || Promise.resolve([]);
   }
@@ -1068,7 +1084,7 @@ export class CompositeRoomStore implements RoomStore {
     return updatedCount;
   }
 
-  heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string, ttlMs: number) {
+  heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string | undefined, ttlMs: number) {
     return this.durableStore.heartbeatAIStreamOwner?.(ownerId, instanceId, now, ttlMs) || Promise.resolve();
   }
 

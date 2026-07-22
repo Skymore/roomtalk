@@ -124,7 +124,7 @@ fly secrets set POSTGRES_SSL_CA_BASE64="..."
 fly secrets set ROOM_MESSAGES_CACHE_TTL_SECONDS="30"
 ```
 
-其他平台在对应 secret manager 设置相同变量。Application startup 会运行 additive PostgreSQL schema，所以 runtime credential 应使用专用 application role，不用 owner/superuser。
+其他平台在对应 secret manager 设置相同变量。替换 App 前用 `MIGRATION_DATABASE_URL` 执行 `npm run migrate:schema`；Compose 通过一次性 `migrate` service 完成，Kubernetes/AWS 应使用 pre-deploy Job。App 的 `DATABASE_URL` 使用专用 DML role，启动时只做 checksum 校验。
 
 ## 验证
 

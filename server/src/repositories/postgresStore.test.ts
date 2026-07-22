@@ -121,24 +121,27 @@ const cost = (totalUsd: number): AICost => ({
 });
 
 describe('PostgresStore', () => {
-  it('serializes idempotent DDL and migration checks in one transaction', async () => {
-    const client = new ScriptedClient([
+  it('serializes schema migration checks without rerunning applied DDL', async () => {
+    const requiredMigrationCount = POSTGRES_MIGRATIONS.length + 1;
+    const clientResults: ScriptedResult[] = [
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /roomtalk_schema_initialization/) },
-      ...POSTGRES_SCHEMA_SQL.map(() => ({ rowCount: 0 })),
       { rowCount: 0 }, // CREATE TABLE schema_migrations
-      ...POSTGRES_MIGRATIONS.map(() => ({ rows: [{ ok: 1 }] })), // each existence check -> applied
-      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
-    ]);
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /ADD COLUMN IF NOT EXISTS checksum/) },
+    ];
+    for (let i = 0; i < requiredMigrationCount; i++) {
+      clientResults.push({ rows: [{ checksum: null }], assertCall: call => assert.match(call.sql, /SELECT checksum FROM schema_migrations/) });
+      clientResults.push({ rowCount: 1, assertCall: call => assert.match(call.sql, /UPDATE schema_migrations SET checksum/) });
+    }
+    clientResults.push({ rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') });
+    const client = new ScriptedClient(clientResults);
     const pool = new ScriptedPool([], client);
     const store = new PostgresStore(pool, logger as any);
 
     await store.initializeSchema();
 
-    // BEGIN + advisory lock, DDL, migrations table/checks, then COMMIT.
-    assert.equal(client.calls.length, POSTGRES_SCHEMA_SQL.length + POSTGRES_MIGRATIONS.length + 4);
-    assert.equal(client.calls[2].sql, POSTGRES_SCHEMA_SQL[0]);
-    assert.match(client.calls[POSTGRES_SCHEMA_SQL.length + 2].sql, /CREATE TABLE IF NOT EXISTS schema_migrations/);
+    assert.equal(client.calls.filter(call => call.sql === POSTGRES_SCHEMA_SQL[0]).length, 0);
+    assert.equal(client.calls.filter(call => /UPDATE schema_migrations SET checksum/.test(call.sql)).length, requiredMigrationCount);
     assert.equal(pool.connectCalls, 1);
     assert.equal(client.released, true);
     // The one-time backfill no longer lives in the always-rerun DDL.
@@ -161,11 +164,14 @@ describe('PostgresStore', () => {
     const clientResults: ScriptedResult[] = [
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /roomtalk_schema_initialization/) },
-      ...POSTGRES_SCHEMA_SQL.map(() => ({ rowCount: 0 })),
       { rowCount: 0, assertCall: call => assert.match(call.sql, /CREATE TABLE IF NOT EXISTS schema_migrations/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /ADD COLUMN IF NOT EXISTS checksum/) },
+      { rows: [], assertCall: call => assert.match(call.sql, /SELECT checksum FROM schema_migrations/) },
+      ...POSTGRES_SCHEMA_SQL.map(() => ({ rowCount: 0 })),
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /INSERT INTO schema_migrations/) },
     ];
     for (let i = 0; i < migrationCount; i++) {
-      clientResults.push({ rows: [], assertCall: call => assert.match(call.sql, /SELECT 1 FROM schema_migrations/) });
+      clientResults.push({ rows: [], assertCall: call => assert.match(call.sql, /SELECT checksum FROM schema_migrations/) });
       clientResults.push({ rowCount: 0 }); // the migration SQL itself
       clientResults.push({ rowCount: 0, assertCall: call => assert.match(call.sql, /INSERT INTO schema_migrations/) });
     }
@@ -177,7 +183,7 @@ describe('PostgresStore', () => {
     await store.initializeSchema();
 
     assert.equal(pool.connectCalls, 1);
-    assert.equal(client.calls.filter(call => /INSERT INTO schema_migrations/.test(call.sql)).length, migrationCount);
+    assert.equal(client.calls.filter(call => /INSERT INTO schema_migrations/.test(call.sql)).length, migrationCount + 1);
     // The backfill migration runs through the transaction client, not the pool.
     assert.equal(client.calls.filter(call => /INSERT INTO room_members/.test(call.sql)).length, 1);
   });

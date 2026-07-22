@@ -92,7 +92,10 @@ export class OutboxWorker {
     return this.options.store.claimOutboxEvents({
       workerId: this.options.workerId,
       eventTypes: this.options.eventTypes,
-      limit: this.options.batchSize ?? 10,
+      // A claimed event starts ageing immediately. Until the worker supports
+      // bounded parallel execution with lease renewal for every queued item,
+      // claim only the event that is about to execute.
+      limit: this.options.batchSize ?? 1,
       lockMs: this.options.lockMs ?? 60_000,
     });
   }
@@ -177,7 +180,7 @@ export const createOutboxWorkerFromEnv = (options: Omit<OutboxWorkerOptions, 'po
   new OutboxWorker({
     ...options,
     pollIntervalMs: parsePositiveInt(process.env.OUTBOX_WORKER_POLL_INTERVAL_MS, 1000),
-    batchSize: parsePositiveInt(process.env.OUTBOX_WORKER_BATCH_SIZE, 10),
+    batchSize: parsePositiveInt(process.env.OUTBOX_WORKER_BATCH_SIZE, 1),
     lockMs: parsePositiveInt(process.env.OUTBOX_WORKER_LOCK_MS, 60_000),
     retryDelayMs: parsePositiveInt(process.env.OUTBOX_WORKER_RETRY_DELAY_MS, 30_000),
     maxAttempts: parsePositiveInt(process.env.OUTBOX_WORKER_MAX_ATTEMPTS, 10),

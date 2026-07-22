@@ -103,6 +103,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     pool = createPostgresPool(databaseUrl!, logger as any);
     store = new PostgresStore(pool, logger as any);
     await store.initializeSchema();
+    await store.verifySchema();
   });
 
   beforeEach(async () => {
@@ -644,6 +645,141 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
 
     assert.equal(await store.failOrphanedStreamingMessages('Response interrupted.', '2026-07-21T00:00:31.000Z'), 1);
     assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'error');
+  });
+
+  it('creates the AI placeholder, assistant run, and outbox event in one transaction', async () => {
+    const roomId = 'atomic-ai-run-start-room';
+    const messageId = 'atomic-ai-message';
+    const runId = 'atomic-ai-run';
+    const eventId = 'atomic-ai-event';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, messageId, {
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+    }), 'request-owner');
+    const result = await store.createAssistantRunWithMessageAndOutbox(placeholder, {
+      id: runId,
+      roomId,
+      requestedByClientId: 'event-test-owner',
+      aiMessageId: messageId,
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt,
+      queuedAt: createdAt,
+      updatedAt: createdAt,
+    }, {
+      id: eventId,
+      eventType: 'ai.run_requested',
+      aggregateType: 'assistant_run',
+      aggregateId: runId,
+      roomId,
+      payload: { runId, roomId, aiMessageId: messageId },
+      status: 'pending',
+      attempts: 0,
+      availableAt: createdAt,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    assert.ok(result);
+    assert.equal((await store.readMessagesByRoom(roomId))[0]?.id, messageId);
+    assert.equal((await store.getAssistantRun(runId))?.status, 'queued');
+    assert.equal((await pool.query('SELECT status FROM outbox_events WHERE id = $1', [eventId])).rows[0]?.status, 'pending');
+
+    const invalid = await store.createAssistantRunWithMessageAndOutbox(
+      message(roomId, 'wrong-message', { messageType: 'ai', status: 'streaming' }),
+      {
+        ...result.run,
+        id: 'wrong-run',
+        aiMessageId: 'different-message',
+      },
+      {
+        ...result.event,
+        id: 'wrong-event',
+        aggregateId: 'wrong-run',
+      },
+    ).catch(error => error);
+    assert.ok(invalid instanceof Error);
+    assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'wrong-message'), false);
+
+    const rolledBack = await store.createAssistantRunWithMessageAndOutbox(
+      message(roomId, 'rolled-back-message', { messageType: 'ai', content: '', status: 'streaming' }),
+      {
+        ...result.run,
+        id: 'rolled-back-run',
+        aiMessageId: 'rolled-back-message',
+        provider: 'invalid-provider' as any,
+      },
+      {
+        ...result.event,
+        id: 'rolled-back-event',
+        aggregateId: 'rolled-back-run',
+        payload: { runId: 'rolled-back-run', roomId, aiMessageId: 'rolled-back-message' },
+      },
+    );
+    assert.equal(rolledBack, null);
+    assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'rolled-back-message'), false);
+    assert.equal((await store.getAssistantRun('rolled-back-run')), null);
+    assert.equal((await pool.query('SELECT 1 FROM outbox_events WHERE id = $1', ['rolled-back-event'])).rows.length, 0);
+  });
+
+  it('does not fail an expired-owner placeholder while its durable AI job is recoverable', async () => {
+    const roomId = 'recoverable-ai-job-room';
+    const messageId = 'recoverable-ai-message';
+    const runId = 'recoverable-ai-run';
+    const now = '2026-07-21T00:00:31.000Z';
+    assert.ok(await store.saveRoom(room(roomId)));
+    assert.ok(await store.appendMessage(withAIStreamRecoveryMetadata(message(roomId, messageId, {
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+    }), 'expired-request-owner')));
+    const created = await store.createAssistantRunWithOutbox({
+      id: runId,
+      roomId,
+      requestedByClientId: 'event-test-owner',
+      aiMessageId: messageId,
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt: now,
+      queuedAt: now,
+      updatedAt: now,
+    }, {
+      id: 'recoverable-ai-event',
+      eventType: 'ai.run_requested',
+      aggregateType: 'assistant_run',
+      aggregateId: runId,
+      roomId,
+      payload: { runId, roomId, aiMessageId: messageId },
+      status: 'pending',
+      attempts: 0,
+      availableAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    assert.ok(created);
+
+    assert.equal(await store.failOrphanedStreamingMessages('Response interrupted.', now), 0);
+    assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'streaming');
+
+    const claimed = await store.claimOutboxEvents({ workerId: 'dead-worker', limit: 1, now, lockMs: 1_000 });
+    assert.equal(claimed.length, 1);
+    assert.ok(await store.markOutboxEventFailed(
+      claimed[0].id,
+      'terminal failure',
+      { workerId: 'dead-worker', attempt: claimed[0].attempts },
+      { maxAttempts: 1, now },
+    ));
+    assert.ok(await store.updateAssistantRun(runId, { status: 'error', completedAt: now, updatedAt: now }));
+
+    assert.equal(await store.failOrphanedStreamingMessages('Response interrupted.', now), 1);
+    const recovered = (await store.readMessagesByRoom(roomId))[0];
+    assert.equal(recovered?.status, 'error');
+    assert.equal(recovered?.isError, true);
   });
 
   it('fences AI worker ownership and never resurrects a deleted placeholder', async () => {

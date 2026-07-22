@@ -26,6 +26,7 @@
 | `REDIS_URL` | 可重建实时与 cache 状态所需的 Redis。 |
 | `PERSISTENCE_STORE` | 必须为 `postgres`；其他值会启动失败。 |
 | `DATABASE_URL` | 必需的 PostgreSQL durable-store URL。 |
+| `MIGRATION_DATABASE_URL` | 仅供 `migrate:schema` 使用的可选 owner/DDL URL；本地 Compose 默认回退 `DATABASE_URL`。 |
 | `POSTGRES_SSL` | 启用 PostgreSQL TLS。 |
 | `POSTGRES_SSL_REJECT_UNAUTHORIZED` | 默认保持证书校验。 |
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | 可选托管服务 CA；secret manager 中优先 base64。 |
@@ -134,7 +135,15 @@ Scoped capability：
 
 ## Worker 与 Observability
 
-`OUTBOX_WORKER_ENABLED` 选择 durable AI-run outbox 路径。Batch size、poll interval、lock duration、retry delay 和 maximum attempts 由对应 `OUTBOX_WORKER_*` 变量控制。`LOG_FILE_ENABLED` 控制可选文件日志；生产日志应保持结构化且不含 secret。
+`OUTBOX_WORKER_ENABLED` 选择 durable AI-run outbox 路径。`OUTBOX_WORKER_BATCH_SIZE` 默认是 `1`：当前 executor 串行运行，而且只有正在执行的任务续租；提前 claim 更大的 batch 会让排队中的 claim 过期并可能重复执行。未来要提高并发，必须从 claim 时刻起为每条已占有任务续租。Poll interval、lock duration、retry delay 和 maximum attempts 由其他 `OUTBOX_WORKER_*` 变量控制。`LOG_FILE_ENABLED` 控制可选文件日志；生产日志应保持结构化且不含 secret。
+
+## PostgreSQL Schema 生命周期
+
+- `npm run migrate:schema` 是唯一受支持的 schema writer；容器内编译命令是 `npm run migrate:schema:compiled`。
+- Compose 在 `app` 前运行一次性 `migrate` service；Kubernetes/AWS 应映射为 pre-deploy Job，而不是让每个 App 启动时改表。
+- `schema_migrations` 为每个 immutable migration 保存 SHA-256 checksum；缺失或改写都会让部署失败。
+- `POSTGRES_SCHEMA_SQL` 冻结为 `0000` bootstrap；以后只能新增 `POSTGRES_MIGRATIONS`，不能编辑已应用项。
+- App 启动只执行只读 `verifySchema()`；漏跑 migration job 时拒绝 readiness。
 
 ## 生产配置规则
 
@@ -142,7 +151,7 @@ Scoped capability：
 - 非 secret Compose interpolation 放在 ignored `.env.compose`；真实 PostgreSQL、S3、provider、OAuth、E2B、Codex 与 GitHub credential 都不能提交。
 - `server/.env` 保持 ignored 且只在本地使用。
 - 生产 E2B 必须同时对齐 template、artifact version、source ref、runner dependency 和 smoke 证据。
-- 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效，随后验证 Compose health、loopback 与公网 `/api/status`。
+- 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效。该命令先运行 migration job，再替换 App；随后验证 Compose health、loopback 与公网 `/api/status`。
 - `/api/health/live` 只用于进程 liveness；`/api/health/ready` 与 `/api/status` 会验证 PostgreSQL schema 读取、Redis `PING`、对象存储 bucket 和 Socket adapter。依赖不可用时返回 `503 degraded` 与 `rooms: null`。
 - `local-production.mjs` 会在 detached startup 后自动验证五个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH` 与 `ROOMTALK_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
 - 旧 Fly GitHub Actions workflow 已手工禁用，只保留为回滚历史，不再拥有当前部署。

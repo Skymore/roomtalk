@@ -124,7 +124,7 @@ fly secrets set ROOM_MESSAGES_CACHE_TTL_SECONDS="30"
 
 For non-Fly deployments, set the same environment variables in the platform secret manager.
 
-The app initializes additive PostgreSQL schema on startup, but production credentials should use the dedicated application role rather than an owner/superuser account.
+Run `npm run migrate:schema` with `MIGRATION_DATABASE_URL` before replacing the App. Compose does this through its one-shot `migrate` service; Kubernetes/AWS should use a pre-deploy Job. The App's `DATABASE_URL` should use the dedicated DML role and startup performs only checksum verification.
 
 ## Verification
 

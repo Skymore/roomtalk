@@ -1,4 +1,5 @@
 import { customAlphabet } from 'nanoid';
+import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
@@ -9,6 +10,23 @@ import { orderMessageBatches } from '../services/messageDomain';
 import { validateStoredRoomEventPayload } from './roomEventPayload';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
+
+const checksumStatements = (statements: string[]) => createHash('sha256')
+  .update(statements.join('\u0000'))
+  .digest('hex');
+
+const REQUIRED_POSTGRES_MIGRATIONS = [
+  {
+    id: '0000_roomtalk_schema',
+    statements: POSTGRES_SCHEMA_SQL,
+    checksum: checksumStatements(POSTGRES_SCHEMA_SQL),
+  },
+  ...POSTGRES_MIGRATIONS.map(migration => ({
+    id: migration.id,
+    statements: [migration.sql],
+    checksum: checksumStatements([migration.sql]),
+  })),
+];
 
 export interface PostgresQueryResult<T = any> {
   rows: T[];
@@ -843,23 +861,38 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async initializeSchema(): Promise<void> {
-    // The always-rerun DDL contains a few replace-style operations (for
-    // example DROP + ADD CONSTRAINT). PostgreSQL's IF EXISTS guards do not
-    // make a sequence of separate statements safe when two app instances
-    // initialize concurrently. Serialize and commit the complete schema
-    // reconciliation as one unit so a second initializer only observes the
-    // finished schema.
+    await this.migrateSchema();
+  }
+
+  async migrateSchema(): Promise<void> {
     const appliedMigrations = await this.transaction(async client => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('roomtalk_schema_initialization'))");
-      for (const sql of POSTGRES_SCHEMA_SQL) {
-        await client.query(sql);
-      }
       return this.runMigrations(client);
     });
     for (const id of appliedMigrations) {
       this.logger.info('Applied PostgreSQL migration', { id });
     }
-    this.logger.info('PostgreSQL schema initialized');
+    this.logger.info('PostgreSQL schema migrations complete');
+  }
+
+  async verifySchema(): Promise<void> {
+    const ledger = await this.pool.query<{ id: string; checksum: string | null }>(
+      `SELECT id, checksum
+      FROM schema_migrations
+      WHERE id = ANY($1::text[])`,
+      [REQUIRED_POSTGRES_MIGRATIONS.map(migration => migration.id)],
+    );
+    const applied = new Map(ledger.rows.map(row => [row.id, row.checksum]));
+    for (const migration of REQUIRED_POSTGRES_MIGRATIONS) {
+      const checksum = applied.get(migration.id);
+      if (!checksum) {
+        throw new Error(`PostgreSQL schema migration ${migration.id} is missing; run npm run migrate:schema before starting the app`);
+      }
+      if (checksum !== migration.checksum) {
+        throw new Error(`PostgreSQL schema migration checksum mismatch for ${migration.id}`);
+      }
+    }
+    this.logger.info('PostgreSQL schema verified', { migrations: REQUIRED_POSTGRES_MIGRATIONS.length });
   }
 
   private async runMigrations(client: PostgresQueryable): Promise<string[]> {
@@ -867,26 +900,32 @@ export class PostgresStore implements DurableRoomStore {
     await client.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
         id TEXT PRIMARY KEY,
+        checksum TEXT,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`
     );
+    await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
 
-    for (const migration of POSTGRES_MIGRATIONS) {
-      const applied = await client.query(
-        'SELECT 1 FROM schema_migrations WHERE id = $1 LIMIT 1',
+    for (const migration of REQUIRED_POSTGRES_MIGRATIONS) {
+      const applied = await client.query<{ checksum: string | null }>(
+        'SELECT checksum FROM schema_migrations WHERE id = $1 LIMIT 1',
         [migration.id]
       );
       if (applied.rows.length > 0) {
+        const checksum = applied.rows[0].checksum;
+        if (checksum && checksum !== migration.checksum) {
+          throw new Error(`PostgreSQL schema migration checksum mismatch for ${migration.id}`);
+        }
+        if (!checksum) {
+          await client.query('UPDATE schema_migrations SET checksum = $2 WHERE id = $1', [migration.id, migration.checksum]);
+        }
         continue;
       }
 
-      // initializeSchema owns one transaction and one advisory lock for the
-      // complete DDL + migration pass, so the migration effect and ledger row
-      // are atomic without a second lock or a nested transaction.
-      await client.query(migration.sql);
+      for (const sql of migration.statements) await client.query(sql);
       await client.query(
-        'INSERT INTO schema_migrations (id) VALUES ($1)',
-        [migration.id]
+        'INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)',
+        [migration.id, migration.checksum]
       );
       appliedMigrations.push(migration.id);
     }
@@ -2504,8 +2543,66 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async createAssistantRunWithMessageAndOutbox(
+    message: Message,
+    run: AssistantRunRecord,
+    event: OutboxEventRecord,
+  ) {
+    if (message.roomId !== run.roomId || run.roomId !== event.roomId || message.id !== run.aiMessageId) {
+      throw new Error('Assistant run start records must identify the same room and AI message');
+    }
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [message.roomId],
+        );
+        if (!room.rows[0]) return null;
+
+        const nextPosition = await client.query<{ position: number | string }>(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+          [message.roomId],
+        );
+        const position = Number(nextPosition.rows[0]?.position || 0);
+        await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
+
+        const runResult = await client.query<AssistantRunRow>(INSERT_ASSISTANT_RUN_SQL, assistantRunParams(run));
+        const eventResult = await client.query<OutboxEventRow>(INSERT_OUTBOX_EVENT_SQL, outboxEventParams(event));
+        if (!runResult.rows[0] || !eventResult.rows[0]) {
+          throw new Error('Failed to create assistant run or outbox event');
+        }
+
+        const updatedRoom = await client.query<RoomRow>(
+          `UPDATE rooms
+          SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+            updated_at = clock_timestamp()
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
+          [message.roomId, message.timestamp],
+        );
+        if (!updatedRoom.rows[0]) throw new Error('Failed to update room for assistant run start');
+
+        return {
+          room: mapRoom(updatedRoom.rows[0]),
+          message,
+          run: mapAssistantRun(runResult.rows[0]),
+          event: mapOutboxEvent(eventResult.rows[0]),
+        };
+      });
+    } catch (error) {
+      this.logger.error('Error creating PostgreSQL AI placeholder with assistant run and outbox event', {
+        error,
+        runId: run.id,
+        eventId: event.id,
+        messageId: message.id,
+        roomId: message.roomId,
+      });
+      return null;
+    }
+  }
+
   async claimOutboxEvents(options: OutboxClaimOptions): Promise<OutboxEventRecord[]> {
-    const now = options.now || new Date().toISOString();
+    const now = options.now || null;
     const lockMs = Math.max(1000, options.lockMs || 60_000);
     const limit = Math.min(100, Math.max(1, Math.floor(options.limit || 10)));
     const eventTypes = options.eventTypes?.filter(Boolean);
@@ -2521,17 +2618,19 @@ export class PostgresStore implements DurableRoomStore {
         }
 
         return client.query<OutboxEventRow>(
-          `WITH candidates AS (
-            SELECT id
-            FROM outbox_events
+          `WITH runtime_clock AS (
+            SELECT COALESCE($1::timestamptz, clock_timestamp()) AS now
+          ), candidates AS (
+            SELECT outbox_events.id
+            FROM outbox_events, runtime_clock
             WHERE (
               status = 'pending'
               OR (
                 status = 'processing'
-                AND locked_at < ($1::timestamptz - (($4::int || ' milliseconds')::interval))
+                AND locked_at < (runtime_clock.now - (($4::int || ' milliseconds')::interval))
               )
             )
-            AND available_at <= $1::timestamptz
+            AND available_at <= runtime_clock.now
             ${eventTypeClause}
             ORDER BY created_at ASC
             LIMIT $3
@@ -2540,10 +2639,10 @@ export class PostgresStore implements DurableRoomStore {
           UPDATE outbox_events e
           SET status = 'processing',
             attempts = e.attempts + 1,
-            locked_at = $1::timestamptz,
+            locked_at = runtime_clock.now,
             locked_by = $2,
-            updated_at = $1::timestamptz
-          FROM candidates
+            updated_at = runtime_clock.now
+          FROM candidates, runtime_clock
           WHERE e.id = candidates.id
           RETURNING ${CLAIMED_OUTBOX_EVENT_COLUMNS}`,
           params
@@ -2559,12 +2658,12 @@ export class PostgresStore implements DurableRoomStore {
   async renewOutboxEventLease(
     eventId: string,
     claim: OutboxClaimToken,
-    now = new Date().toISOString(),
+    now?: string,
   ): Promise<boolean> {
     const result = await this.pool.query(
       `UPDATE outbox_events
-      SET locked_at = $4::timestamptz,
-        updated_at = $4::timestamptz
+      SET locked_at = COALESCE($4::timestamptz, clock_timestamp()),
+        updated_at = COALESCE($4::timestamptz, clock_timestamp())
       WHERE id = $1
         AND status = 'processing'
         AND locked_by = $2
@@ -2577,17 +2676,17 @@ export class PostgresStore implements DurableRoomStore {
   async markOutboxEventProcessed(
     eventId: string,
     claim: OutboxClaimToken,
-    processedAt = new Date().toISOString(),
+    processedAt?: string,
   ): Promise<OutboxEventRecord | null> {
     try {
       const result = await this.pool.query<OutboxEventRow>(
         `UPDATE outbox_events
         SET status = 'processed',
-          processed_at = $2::timestamptz,
+          processed_at = COALESCE($2::timestamptz, clock_timestamp()),
           locked_at = NULL,
           locked_by = NULL,
           last_error = NULL,
-          updated_at = $2::timestamptz
+          updated_at = COALESCE($2::timestamptz, clock_timestamp())
         WHERE id = $1
           AND status = 'processing'
           AND locked_by = $3
@@ -2608,7 +2707,7 @@ export class PostgresStore implements DurableRoomStore {
     claim: OutboxClaimToken,
     options: OutboxFailOptions = {},
   ): Promise<OutboxEventRecord | null> {
-    const now = options.now || new Date().toISOString();
+    const now = options.now || null;
     const retryDelayMs = Math.max(0, options.retryDelayMs || 30_000);
     const maxAttempts = Math.max(1, options.maxAttempts || 10);
 
@@ -2616,11 +2715,11 @@ export class PostgresStore implements DurableRoomStore {
       const result = await this.pool.query<OutboxEventRow>(
         `UPDATE outbox_events
         SET status = CASE WHEN attempts >= $5 THEN 'failed' ELSE 'pending' END,
-          available_at = CASE WHEN attempts >= $5 THEN available_at ELSE ($2::timestamptz + (($4::int || ' milliseconds')::interval)) END,
+          available_at = CASE WHEN attempts >= $5 THEN available_at ELSE (COALESCE($2::timestamptz, clock_timestamp()) + (($4::int || ' milliseconds')::interval)) END,
           locked_at = NULL,
           locked_by = NULL,
           last_error = $3,
-          updated_at = $2::timestamptz
+          updated_at = COALESCE($2::timestamptz, clock_timestamp())
         WHERE id = $1
           AND status = 'processing'
           AND locked_by = $6
@@ -3500,10 +3599,15 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string, ttlMs: number): Promise<void> {
+  async heartbeatAIStreamOwner(ownerId: string, instanceId: string, now: string | undefined, ttlMs: number): Promise<void> {
     await this.pool.query(
       `INSERT INTO ai_stream_owner_leases (owner_id, instance_id, last_heartbeat_at, expires_at)
-      VALUES ($1, $2, $3::timestamptz, $3::timestamptz + ($4::bigint * interval '1 millisecond'))
+      VALUES (
+        $1,
+        $2,
+        COALESCE($3::timestamptz, clock_timestamp()),
+        COALESCE($3::timestamptz, clock_timestamp()) + ($4::bigint * interval '1 millisecond')
+      )
       ON CONFLICT (owner_id) DO UPDATE SET
         instance_id = EXCLUDED.instance_id,
         last_heartbeat_at = EXCLUDED.last_heartbeat_at,
@@ -3516,20 +3620,51 @@ export class PostgresStore implements DurableRoomStore {
     await this.pool.query('DELETE FROM ai_stream_owner_leases WHERE owner_id = $1', [ownerId]);
   }
 
-  async failOrphanedStreamingMessages(content: string, now = new Date().toISOString()): Promise<number> {
+  async failOrphanedStreamingMessages(content: string, now?: string): Promise<number> {
     const result = await this.pool.query(
-      `UPDATE room_messages AS message
-      SET status = 'error', content = $1, timestamp = $2::timestamptz
+      `WITH recovery_clock AS (
+        SELECT COALESCE($2::timestamptz, clock_timestamp()) AS now
+      )
+      UPDATE room_messages AS message
+      SET status = 'error',
+        content = $1,
+        timestamp = recovery_clock.now,
+        updated_at = recovery_clock.now,
+        is_error = TRUE,
+        ai_stream_owner_id = NULL
+      FROM recovery_clock
       WHERE message.status = 'streaming'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM assistant_runs AS run
+          JOIN outbox_events AS event
+            ON event.aggregate_type = 'assistant_run'
+            AND event.aggregate_id = run.id
+            AND event.event_type = 'ai.run_requested'
+          WHERE run.room_id = message.room_id
+            AND run.ai_message_id = message.id
+            AND run.status IN ('queued', 'running')
+            AND event.status IN ('pending', 'processing')
+        )
         AND (
           message.ai_stream_owner_id IS NULL
           OR NOT EXISTS (
             SELECT 1 FROM ai_stream_owner_leases AS owner
             WHERE owner.owner_id = message.ai_stream_owner_id
-              AND owner.expires_at > $2::timestamptz
+              AND owner.expires_at > recovery_clock.now
           )
         )`,
       [content, now],
+    );
+    await this.pool.query(
+      `DELETE FROM ai_stream_owner_leases
+      WHERE expires_at <= COALESCE($1::timestamptz, clock_timestamp())
+        AND NOT EXISTS (
+          SELECT 1 FROM room_messages
+          WHERE room_messages.ai_stream_owner_id = ai_stream_owner_leases.owner_id
+            AND room_messages.status = 'streaming'
+        )`,
+      [now],
     );
     return result.rowCount || 0;
   }

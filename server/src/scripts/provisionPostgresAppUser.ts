@@ -99,18 +99,14 @@ async function main() {
 
   await client.connect();
   try {
-    const dbResult = await client.query<{ current_database: string; current_user: string }>('SELECT current_database(), current_user');
+    const dbResult = await client.query<{ current_database: string }>('SELECT current_database()');
     const databaseName = dbResult.rows[0].current_database;
-    const currentUser = dbResult.rows[0].current_user;
     const role = quoteIdent(appUser);
     const schema = quoteIdent(schemaName);
 
     await createOrUpdateRole(client, appUser, appPassword);
-    if (currentUser !== appUser) {
-      await client.query(`GRANT ${role} TO ${quoteIdent(currentUser)}`);
-    }
     await client.query(`GRANT CONNECT ON DATABASE ${quoteIdent(databaseName)} TO ${role}`);
-    await client.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
+    await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
 
     for (const tableName of ROOMTALK_TABLES) {
       if (!(await relationExists(client, schemaName, tableName))) {
@@ -118,7 +114,6 @@ async function main() {
       }
 
       const table = `${schema}.${quoteIdent(tableName)}`;
-      await client.query(`ALTER TABLE ${table} OWNER TO ${role}`);
       await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${table} TO ${role}`);
     }
 

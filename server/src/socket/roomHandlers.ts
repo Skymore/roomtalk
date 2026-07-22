@@ -319,8 +319,8 @@ export function registerRoomHandlers({
         return;
       }
 
-      const previousUserId = await store.getClientId(socket.id)
-        || (typeof socket.data.roomtalkClientId === 'string' ? socket.data.roomtalkClientId : null);
+      const previousUserId = (typeof socket.data.roomtalkClientId === 'string' ? socket.data.roomtalkClientId : null)
+        || await store.getClientId(socket.id);
       const isSwitchingUser = Boolean(previousUserId && previousUserId !== userId);
       if (isSwitchingUser && previousUserId) {
         const [previousRooms, previousBrowserInstanceId] = await Promise.all([

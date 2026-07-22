@@ -7,6 +7,24 @@ x-default-logging: &default-logging
     max-file: "5"
 
 services:
+  migrate:
+    image: roomtalk-local:dev
+    restart: "no"
+    logging: *default-logging
+    env_file:
+      - ${ROOMTALK_APP_ENV_FILE:-.env.compose}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}@postgres:5432/${POSTGRES_DB:-message_system}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+      POSTGRES_SSL: "false"
+    command: ["npm", "run", "migrate:schema:compiled"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - roomtalk
+
   app:
     build:
       context: .
@@ -32,6 +50,7 @@ services:
       ROOMTALK_INSTANCE_LEASE_TTL_MS: ${ROOMTALK_INSTANCE_LEASE_TTL_MS:-30000}
       ROOMTALK_INSTANCE_HEARTBEAT_MS: ${ROOMTALK_INSTANCE_HEARTBEAT_MS:-10000}
       ROOMTALK_RECOVERY_INTERVAL_MS: ${ROOMTALK_RECOVERY_INTERVAL_MS:-5000}
+      OUTBOX_WORKER_BATCH_SIZE: ${OUTBOX_WORKER_BATCH_SIZE:-1}
       MEDIA_STORAGE_MODE: s3
       MEDIA_BUCKET_NAME: ${MEDIA_BUCKET_NAME:-roomtalk-media}
       MEDIA_STORAGE_REGION: ${MEDIA_STORAGE_REGION:-us-east-1}
@@ -46,6 +65,8 @@ services:
     ports:
       - 127.0.0.1:${ROOMTALK_PORT:-3012}:3012
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

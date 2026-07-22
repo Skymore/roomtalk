@@ -30,7 +30,7 @@ describe('room event authorization barrier', () => {
     assert.deepEqual(localSocket.emitted, []);
   });
 
-  it('treats an unresolved identity as unavailable without removing the socket', async () => {
+  it('removes only a socket without local authenticated identity', async () => {
     const localSocket = socket();
     const unavailable: unknown[] = [];
     const result = await enforceRoomEventAuthorizationBarrier({
@@ -42,13 +42,16 @@ describe('room event authorization barrier', () => {
       onUnavailable: context => unavailable.push(context),
     });
 
-    assert.equal(result, false);
+    assert.equal(result, true);
     assert.equal(unavailable.length, 1);
-    assert.deepEqual(localSocket.emitted, []);
-    assert.deepEqual(localSocket.left, []);
+    assert.deepEqual(localSocket.emitted, [{
+      event: 'registration_required',
+      payload: { reason: 'missing_authenticated_identity' },
+    }]);
+    assert.deepEqual(localSocket.left, ['room-1']);
   });
 
-  it('treats conflicting Redis and local identities as unavailable', async () => {
+  it('removes only a socket whose Redis and local identities conflict', async () => {
     const localSocket = socket('client-local');
     const result = await enforceRoomEventAuthorizationBarrier({
       roomId: 'room-1',
@@ -59,9 +62,32 @@ describe('room event authorization barrier', () => {
       onUnavailable: () => undefined,
     });
 
-    assert.equal(result, false);
-    assert.deepEqual(localSocket.emitted, []);
-    assert.deepEqual(localSocket.left, []);
+    assert.equal(result, true);
+    assert.deepEqual(localSocket.emitted, [{
+      event: 'registration_required',
+      payload: { reason: 'identity_conflict' },
+    }]);
+    assert.deepEqual(localSocket.left, ['room-1']);
+  });
+
+  it('keeps the fast path available for verified sockets while removing an unresolved peer', async () => {
+    const verified = socket('client-1');
+    const unresolved = socket();
+    const sockets = new Map([['socket-1', verified], ['socket-2', unresolved]]);
+    const result = await enforceRoomEventAuthorizationBarrier({
+      roomId: 'room-1',
+      socketIds: [...sockets.keys()],
+      getLocalSocket: socketId => sockets.get(socketId) as any,
+      readStoredClientIds: async () => new Map(),
+      readAuthorizedClientIds: async clientIds => new Set(clientIds),
+      onUnavailable: () => undefined,
+    });
+
+    assert.equal(result, true);
+    assert.deepEqual(verified.emitted, []);
+    assert.deepEqual(verified.left, []);
+    assert.deepEqual(unresolved.emitted.map(item => item.event), ['registration_required']);
+    assert.deepEqual(unresolved.left, ['room-1']);
   });
 
   it('falls back to local identity when Redis throws and removes only explicit non-members', async () => {

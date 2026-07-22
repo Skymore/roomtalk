@@ -12,11 +12,12 @@ interface RoomEventAuthorizationBarrierOptions {
 }
 
 /**
- * Complete payloads are allowed only when every local socket has a verified
- * server-side identity and PostgreSQL membership was read successfully.
- * Missing Redis identity is unknown, not unauthorized: socket.data survives a
- * Redis flush and is a safe fallback because the server writes it only after a
- * successful authenticated registration.
+ * Complete payloads are allowed only after every remaining local socket has a
+ * verified server-side identity and PostgreSQL membership was read
+ * successfully. Missing Redis identity is repairable because socket.data
+ * survives a Redis flush. A missing or conflicting local identity is not
+ * repairable from Redis: remove only that socket from the room and require it
+ * to register again, rather than degrading every verified subscriber.
  */
 export const enforceRoomEventAuthorizationBarrier = async (
   options: RoomEventAuthorizationBarrierOptions,
@@ -31,7 +32,10 @@ export const enforceRoomEventAuthorizationBarrier = async (
   }
 
   const clientIdsBySocket = new Map<string, string>();
-  const unresolvedSocketIds: string[] = [];
+  const unresolvedSockets: Array<{
+    socketId: string;
+    reason: 'identity_conflict' | 'missing_authenticated_identity';
+  }> = [];
   for (const socketId of options.socketIds) {
     const localSocket = options.getLocalSocket(socketId);
     if (!localSocket) continue;
@@ -39,22 +43,31 @@ export const enforceRoomEventAuthorizationBarrier = async (
     const localClientId = typeof localSocket.data?.roomtalkClientId === 'string'
       ? localSocket.data.roomtalkClientId
       : undefined;
-    if (storedClientId && localClientId && storedClientId !== localClientId) {
-      unresolvedSocketIds.push(socketId);
+    if (!localClientId) {
+      unresolvedSockets.push({ socketId, reason: 'missing_authenticated_identity' });
       continue;
     }
-    const clientId = storedClientId || localClientId;
-    if (!clientId) {
-      unresolvedSocketIds.push(socketId);
+    if (storedClientId && storedClientId !== localClientId) {
+      unresolvedSockets.push({ socketId, reason: 'identity_conflict' });
       continue;
     }
-    clientIdsBySocket.set(socketId, clientId);
+    clientIdsBySocket.set(socketId, localClientId);
   }
 
-  if (unresolvedSocketIds.length > 0) {
-    options.onUnavailable({ stage: 'identity', unresolvedSocketIds });
-    return false;
+  if (unresolvedSockets.length > 0) {
+    options.onUnavailable({
+      stage: 'identity',
+      unresolvedSocketIds: unresolvedSockets.map(item => item.socketId),
+    });
+    await Promise.all(unresolvedSockets.map(async ({ socketId, reason }) => {
+      const localSocket = options.getLocalSocket(socketId);
+      if (!localSocket) return;
+      localSocket.emit('registration_required', { reason });
+      await localSocket.leave(options.roomId);
+    }));
   }
+
+  if (clientIdsBySocket.size === 0) return true;
 
   let authorizedClientIds: Set<string>;
   try {

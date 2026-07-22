@@ -26,6 +26,7 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 | `REDIS_URL` | Required Redis connection for rebuildable realtime and cache state. |
 | `PERSISTENCE_STORE` | Must be `postgres`; other values fail startup. |
 | `DATABASE_URL` | Required PostgreSQL durable-store URL. |
+| `MIGRATION_DATABASE_URL` | Optional owner/DDL URL used only by `migrate:schema`; defaults to `DATABASE_URL` for local Compose. |
 | `POSTGRES_SSL` | Enables PostgreSQL TLS. |
 | `POSTGRES_SSL_REJECT_UNAUTHORIZED` | Keeps certificate validation enabled by default. |
 | `POSTGRES_SSL_CA_BASE64` / `POSTGRES_SSL_CA` | Optional managed-provider CA. Prefer base64 in secret managers. |
@@ -139,7 +140,15 @@ Do not add new product behavior to the deprecated Codex CLI path. `codex-app-ser
 
 ## Workers and Observability
 
-`OUTBOX_WORKER_ENABLED` selects the durable AI-run outbox path. Batch size, poll interval, lock duration, retry delay, and maximum attempts are controlled by the corresponding `OUTBOX_WORKER_*` variables. `LOG_FILE_ENABLED` controls optional file logging; production logs should remain structured and secret-safe.
+`OUTBOX_WORKER_ENABLED` selects the durable AI-run outbox path. `OUTBOX_WORKER_BATCH_SIZE` defaults to `1`: the executor is serial and only the task currently executing renews its lease, so pre-claiming a larger batch could let queued claims expire and be executed twice. Future concurrency must renew every claimed item from claim time. Poll interval, lock duration, retry delay, and maximum attempts use the remaining `OUTBOX_WORKER_*` variables. `LOG_FILE_ENABLED` controls optional file logging; production logs should remain structured and secret-safe.
+
+## PostgreSQL Schema Lifecycle
+
+- `npm run migrate:schema` is the only supported schema writer. The compiled container command is `npm run migrate:schema:compiled`.
+- Compose runs the one-shot `migrate` service before `app`; Kubernetes/AWS should map it to a pre-deploy Job rather than an App init path.
+- `schema_migrations` records every immutable migration with a SHA-256 checksum. A missing or changed migration fails the deployment.
+- `POSTGRES_SCHEMA_SQL` is the frozen `0000` bootstrap. Add later changes as new `POSTGRES_MIGRATIONS` entries; never edit an applied entry.
+- App startup calls read-only `verifySchema()` and refuses readiness when the migration job was skipped.
 
 ## Production Configuration Rules
 
@@ -147,7 +156,7 @@ Do not add new product behavior to the deprecated Codex CLI path. `codex-app-ser
 - Keep non-secret Compose interpolation in ignored `.env.compose`; never commit real PostgreSQL, S3, provider, OAuth, E2B, Codex, or GitHub credentials.
 - Keep `server/.env` ignored and local.
 - Production E2B must use matching template, artifact version, source ref, runner dependencies, and smoke evidence.
-- Apply application/configuration changes with `node scripts/local-production.mjs --profile edge up -d --build`, then verify Compose health and both the loopback and public `/api/status` endpoints.
+- Apply application/configuration changes with `node scripts/local-production.mjs --profile edge up -d --build`. This runs the migration job before replacing the App; then verify Compose health and both the loopback and public `/api/status` endpoints.
 - Use `/api/health/live` only for process liveness. `/api/health/ready` and `/api/status` verify PostgreSQL schema reads, Redis `PING`, object-storage bucket access, and the Socket adapter; they return `503 degraded` with `rooms: null` when a dependency is unavailable.
 - `local-production.mjs` automatically verifies all five production services after detached startup and reports host/Docker disk use. `ROOMTALK_MIN_HOST_FREE_GB`, `ROOMTALK_DOCKER_RAW_WARN_GB`, `ROOMTALK_DOCKER_RAW_PATH`, and `ROOMTALK_PUBLIC_STATUS_URL` tune that local operator check.
 - The former Fly GitHub Actions workflow is manually disabled. It is rollback history, not the current deployment owner.

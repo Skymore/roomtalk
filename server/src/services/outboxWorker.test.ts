@@ -23,8 +23,9 @@ describe('OutboxWorker', () => {
     const calls: string[] = [];
     const claimed = [event()];
     const store = {
-      claimOutboxEvents: async () => {
+      claimOutboxEvents: async (options: { limit: number }) => {
         calls.push('claim');
+        assert.equal(options.limit, 1);
         return claimed;
       },
       renewOutboxEventLease: async () => true,

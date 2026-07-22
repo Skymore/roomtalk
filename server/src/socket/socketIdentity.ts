@@ -74,7 +74,15 @@ export const resolveAuthenticatedSocketIdentity = async ({
     });
   }
 
-  if (storedClientId && localClientId && storedClientId !== localClientId) {
+  if (!localClientId) {
+    if (storedClientId && !socket.data.roomtalkIdentityConflictNotified) {
+      socket.data.roomtalkIdentityConflictNotified = true;
+      socket.emit('registration_required', { reason: 'missing_authenticated_identity' });
+    }
+    return null;
+  }
+
+  if (storedClientId && storedClientId !== localClientId) {
     logger.warn('Rejected socket operation because Redis and local identities conflict', {
       socketId: socket.id,
       storedClientId,
@@ -87,12 +95,6 @@ export const resolveAuthenticatedSocketIdentity = async ({
     return null;
   }
 
-  if (storedClientId) {
-    if (!localClientId) socket.data.roomtalkClientId = storedClientId;
-    return storedClientId;
-  }
-  if (!localClientId) return null;
-
-  scheduleRealtimeIdentityRepair(socket, store, logger, localClientId);
+  if (!storedClientId) scheduleRealtimeIdentityRepair(socket, store, logger, localClientId);
   return localClientId;
 };

@@ -47,6 +47,32 @@ describe('resolveAuthenticatedSocketIdentity', () => {
     assert.deepEqual(socket.emitted, [['registration_required', { reason: 'identity_conflict' }]]);
   });
 
+  it('never restores authentication from Redis when the local Socket identity is missing', async () => {
+    const socket = createSocket({ data: {} });
+    const store = { async getClientId() { return 'redis-only-client'; } };
+
+    assert.equal(await resolveAuthenticatedSocketIdentity({ socket: socket as any, store: store as any, logger: console as any }), null);
+    assert.deepEqual(socket.data, { roomtalkIdentityConflictNotified: true });
+    assert.deepEqual(socket.emitted, [['registration_required', { reason: 'missing_authenticated_identity' }]]);
+  });
+
+  it('distinguishes a Redis lookup failure from a missing index and still uses local authentication', async () => {
+    const calls: string[] = [];
+    const socket = createSocket();
+    const store = {
+      async getClientId() { throw new Error('redis unavailable'); },
+      async isRoomMember() { return true; },
+      async storeClientSession() { calls.push('repair'); },
+      async storeUserRooms() {},
+      async updateRoomMemberCount() {},
+      async updateRoomBrowserPresence() {},
+    };
+
+    assert.equal(await resolveAuthenticatedSocketIdentity({ socket: socket as any, store: store as any, logger: console as any }), 'client-1');
+    await flushMicrotasks();
+    assert.deepEqual(calls, ['repair']);
+  });
+
   it('does not rebuild derived presence after the Socket has disconnected', async () => {
     const calls: string[] = [];
     const socket = createSocket({ connected: false });

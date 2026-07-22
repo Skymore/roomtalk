@@ -1062,7 +1062,11 @@ export function registerAIHandlers({
     const maxContextMessages = normalizeAIContextMessageLimit(data.maxContextMessages, MAX_CONTEXT_MESSAGES);
 
     const runnerMode = resolveAIRunnerMode();
-    const recordAssistantRunStart = async (mode: AIRunnerMode, queuedPayload?: QueuedAssistantRunPayload): Promise<boolean> => {
+    const recordAssistantRunStart = async (
+      mode: AIRunnerMode,
+      queuedPayload?: QueuedAssistantRunPayload,
+      placeholder?: Message,
+    ): Promise<boolean> => {
       const now = new Date().toISOString();
       const isWorkerMode = mode === 'worker';
       const run = {
@@ -1109,6 +1113,29 @@ export function registerAIHandlers({
         createdAt: now,
         updatedAt: now,
       };
+      if (isWorkerMode) {
+        if (!placeholder || !store.createAssistantRunWithMessageAndOutbox) {
+          openaiLogger.error('Atomic assistant run start is unavailable on store', {
+            runId: aiRunId,
+            messageId: aiMessageId,
+            roomId,
+          });
+          return false;
+        }
+        const recorded = await store.createAssistantRunWithMessageAndOutbox(placeholder, run, event);
+        assistantRunRecorded = Boolean(recorded);
+        if (recorded) {
+          io.to(recorded.room.creatorId).emit('room_updated', recorded.room);
+        } else {
+          openaiLogger.warn('Failed to atomically record AI placeholder and queued assistant run', {
+            runId: aiRunId,
+            messageId: aiMessageId,
+            roomId,
+          });
+        }
+        return Boolean(recorded);
+      }
+
       if (!store.createAssistantRunWithOutbox) {
         openaiLogger.debug('Assistant run recording unavailable on store', { runId: aiRunId, messageId: aiMessageId, roomId, runnerMode: mode });
         return false;
@@ -1345,17 +1372,6 @@ export function registerAIHandlers({
       return true;
     };
 
-    const placeholderSaved = await saveAIMessage(persistedInitialAiMessage, 'streaming placeholder');
-    if (placeholderSaved !== 'saved') {
-      io.to(roomId).emit('ai_stream_error', {
-        messageId: aiMessageId,
-        error: 'Sorry, unable to start a durable AI response.',
-        roomId,
-        persisted: false,
-      });
-      callback?.({ success: false, error: 'Unable to start a durable AI response' });
-      return;
-    }
     const queuedPayload: QueuedAssistantRunPayload | undefined = runnerMode === 'worker'
       ? {
         runId: aiRunId,
@@ -1373,33 +1389,37 @@ export function registerAIHandlers({
         historyUsedForContext,
       }
       : undefined;
-    const runRecorded = await recordAssistantRunStart(runnerMode, queuedPayload);
-    if (runnerMode === 'worker' && !runRecorded) {
-      const errorNotice = 'Sorry, unable to queue the AI response.';
-      const errorAiMessage: Message = {
-        ...initialAiMessage,
-        status: 'error',
-        content: errorNotice,
-        timestamp: new Date().toISOString(),
-      };
-      const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'queue error');
-      if (await stopObsoleteRun(errorSaveOutcome)) return;
-      const errorSaved = errorSaveOutcome === 'saved';
-      io.to(roomId).emit('ai_stream_error', {
-        messageId: aiMessageId,
-        error: errorNotice,
-        roomId,
-        persisted: errorSaved,
-        ...(errorSaved ? { message: errorAiMessage } : {}),
-      });
-      callback?.({ success: false, error: 'Unable to queue AI response' });
-      return;
-    }
-    callback?.({ success: true, messageId: aiMessageId });
     if (runnerMode === 'worker') {
+      const runRecorded = await recordAssistantRunStart(runnerMode, queuedPayload, persistedInitialAiMessage);
+      if (!runRecorded) {
+        const errorNotice = 'Sorry, unable to queue the AI response.';
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: errorNotice,
+          roomId,
+          persisted: false,
+        });
+        callback?.({ success: false, error: 'Unable to queue AI response' });
+        return;
+      }
+      callback?.({ success: true, messageId: aiMessageId });
       openaiLogger.info('Queued AI run for outbox worker', { runId: aiRunId, messageId: aiMessageId, roomId, model: selectedModel.id });
       return;
     }
+
+    const placeholderSaved = await saveAIMessage(persistedInitialAiMessage, 'streaming placeholder');
+    if (placeholderSaved !== 'saved') {
+      io.to(roomId).emit('ai_stream_error', {
+        messageId: aiMessageId,
+        error: 'Sorry, unable to start a durable AI response.',
+        roomId,
+        persisted: false,
+      });
+      callback?.({ success: false, error: 'Unable to start a durable AI response' });
+      return;
+    }
+    await recordAssistantRunStart(runnerMode);
+    callback?.({ success: true, messageId: aiMessageId });
 
     let streamedTextContent = '';
     let streamedA2UIPayload: Message['uiPayload'];

@@ -3474,7 +3474,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return clientId || null;
     } catch (error) {
       this.logger.error('Error getting client ID', { error, socketId });
-      return null;
+      throw error;
     }
   }
 

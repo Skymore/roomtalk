@@ -92,15 +92,17 @@ Fast path 只改变延迟，不改变正确性边界。PostgreSQL 把 hint fan-o
 
 滚动发布除了 room-event 投递，还需要明确 runtime ownership。RoomTalk 现在为每个进程生成唯一 runtime instance ID。Redis 保存实例 TTL heartbeat、该实例拥有的 socket ID，以及每个 socket 的 room/browser presence。启动时不再清空全局 presence；singleton reconciliation 只移除 heartbeat 已过期实例名下的记录，因此启动实例 B 不会抹掉仍由实例 A 服务的在线用户。
 
-运行任务遵循同一规则。只有不存在匹配的未过期 fenced room lease 时，Code Agent turn 与 sandbox 才能进入恢复。AI placeholder 带有 per-instance stream owner，其 PostgreSQL lease 会随 runtime heartbeat 续租。若数据库故障几秒但进程仍在，terminal reconciler 不依赖重启，持续重试终态写入；若进程死亡，其他实例必须等 owner 过期后才能写 recovery error after-image。
+运行任务遵循同一规则。只有不存在匹配的未过期 fenced room lease 时，Code Agent turn 与 sandbox 才能进入恢复。AI placeholder 带有 per-instance stream owner，其 PostgreSQL lease 会随 runtime heartbeat 续租。Recovery 还会检查是否存在 `queued/running` assistant run 和 `pending/processing` outbox；只要 durable job 仍可恢复，即使请求实例 owner 已过期，也不能在 worker 恢复前把 placeholder 判为失败。只有既无 live owner、又无可恢复 durable job 的 placeholder 才会规范化为 error，同时清理不再被 streaming message 引用的过期 owner lease。
 
-Recovery 与 retention loop 在每个副本中都存在，但执行前获取命名 PostgreSQL advisory lock；一轮只有一个实例做维护，其余实例跳过。Event broadcaster 也只为每个房间保存固定大小的 min/max pending state，不再给每条通知保存 waiter。配合无本地订阅短路，这同时限制了多实例重复读取与突发内存。验收覆盖共享同一 Redis model 的两个 RedisStore 实例、真实 PostgreSQL 17 上活跃/过期的 Code Agent 与 AI lease，以及 advisory-lock 排他性。
+Recovery 与 retention loop 在每个副本中都存在，但执行前获取命名 PostgreSQL advisory lock；一轮只有一个实例做维护，其余实例跳过。Event broadcaster 也只为每个房间保存固定大小的 min/max pending state，不再给每条通知保存 waiter。配合无本地订阅短路，这同时限制了多实例重复读取与突发内存。生产路径未显式传入测试时间时，AI owner 与 outbox lease 都以 PostgreSQL `clock_timestamp()` 为时钟权威，避免多节点 wall-clock 偏差。
 
 Lease schema 自己也有 cutover 边界。Pre-`0006` App 不会为 `ai_stream_owner_leases` heartbeat，因此不能与第一个理解 `0006` 的进程重叠：新进程可能恢复旧进程仍在生成的 placeholder。首次引入 `0006` 时必须停止所有旧 App。所有副本都使用 lease protocol 后，后续兼容 image 才可滚动；未来若再次改变 lease protocol，也需要维护窗口或两阶段 migration。
 
 ## 一次性不可变事件边界
 
-Migration `0003_room_events_immutable_after_images` 持有表锁，保证替换 writer 与清理旧 ID-only events 之间不会夹入业务写。多个 app 同时启动由 transaction-scoped advisory lock 和 migration record 二次检查串行化。Migration 保留每条 stream 的 `head_seq`，清除不可确定历史，并把 active stream 的 `min_available_seq` 设为 `head_seq + 1`；旧 cursor 只需 snapshot 一次，不重置 sequence。
+Migration `0003_room_events_immutable_after_images` 持有表锁，保证替换 writer 与清理旧 ID-only events 之间不会夹入业务写。Schema 变更不再属于 App 冷启动：独立 Compose migrate service（Kubernetes 中对应 pre-deploy Job）在 transaction advisory lock 下只执行缺失的 immutable migration。`schema_migrations` 保存 SHA-256 checksum；已经记账的 SQL 被改写会直接失败。`POSTGRES_SCHEMA_SQL` 冻结为新库的 `0000` bootstrap，之后每次变更都必须新增 migration ID。App 启动只读校验 ID/checksum；漏跑 migrate job 时拒绝 readiness，而不是现场修改 schema。
+
+Room-event migration 保留每条 stream 的 `head_seq`，清除不可确定历史，并把 active stream 的 `min_available_seq` 设为 `head_seq + 1`；旧 cursor 只需 snapshot 一次，不重置 sequence。
 
 Migration `0004_public_member_change_events` 修复了曾运行 pre-production V1 member after-image writer 的数据库：保留的 `members.upserted` / `members.deleted` 已原地改为 `members.changed {}`，公共 type constraint 随后收紧，之后的成员变化也只写空 signal。生产环境已在 2026-07-21 维护窗口执行这次一次性隐私修复。
 
@@ -127,7 +129,9 @@ Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新
 | 目的 | 恢复可见状态 | 可靠执行一次副作用 |
 | 清理 | retention 连续前缀 | processed/failed 策略 |
 
-例如“发送并询问 AI”可以在一个事务里提交用户消息、room event、assistant run 与 AI job outbox；Worker 完成后再提交最终 AI 消息并生成下一条 room event。
+Worker 模式会在一个 PostgreSQL 事务里提交 AI placeholder、assistant run 与 AI job outbox；placeholder room event 也由这次提交产生，因此 Worker 不可能只看见一半启动状态。Outbox 默认一次只 claim 1 条，因为 claim lease 会立刻计时，而当前 executor 是串行的；如果调大 batch 却不从 claim 时起为每条任务续租，后续任务会在排队时过期，重新打开重复 Provider 调用窗口。Worker 完成后再条件提交最终 AI 消息，并生成下一条 room event。
+
+这是更安全的过渡模型，不是最终 AI execution architecture。下一步应让 `assistant_runs` 成为唯一 durable job，直接拥有 generation、数据库 lease、request/terminal payload 与幂等 usage ledger；随后退役 AI 专用 outbox 和进程内 terminal reconciler。这个演进不需要改动已经收敛的 `room_events` 客户端 changefeed。
 
 因此 Socket delivery 本身不需要 durable outbox：room data 已能通过 cursor 恢复，每个授权客户端都是 fan-out reader，不是 competing worker；重试 Socket 通知只是在重复事件日志已经解决的工作。`messageVersion` 同样没有必要，因为 room seq 已经同时表达顺序和精确缺失区间。
 

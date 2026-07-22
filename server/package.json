@@ -9,6 +9,8 @@
     "start": "node dist/src/server.js",
     "dev": "ts-node-dev --respawn src/server.ts",
     "start:e2e": "ts-node src/server.ts",
+    "migrate:schema": "ts-node src/scripts/migratePostgresSchema.ts",
+    "migrate:schema:compiled": "node dist/src/scripts/migratePostgresSchema.js",
     "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
     "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
     "migrate:s3-to-s3": "ts-node src/scripts/migrateS3Objects.ts",

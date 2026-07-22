@@ -9,7 +9,7 @@ export interface RoomEventBroadcast extends RoomEventAvailable {
 }
 
 export interface RoomSyncRequired {
-  reason: 'postgres_listener_reconnected';
+  reason: 'postgres_listener_reconnected' | 'ai_terminal_reconciled';
 }
 
 export const emitRoomEventLocally = (

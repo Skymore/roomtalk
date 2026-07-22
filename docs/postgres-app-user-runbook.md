@@ -3,18 +3,15 @@
 [中文](postgres-app-user-runbook.zh.md)
 
 Status: Current PostgreSQL role-hardening runbook
-Updated: 2026-07-20
+Updated: 2026-07-22
 
-RoomTalk currently calls `PostgresStore.initializeSchema()` on startup in
-PostgreSQL mode. The runtime database role therefore needs enough ownership and
-schema privileges to run the idempotent startup DDL in
-`server/src/repositories/postgresSchema.ts`.
+RoomTalk now separates schema mutation from serving. A one-shot migration job
+uses `MIGRATION_DATABASE_URL` (or `DATABASE_URL` as a local fallback), while the
+App calls read-only `PostgresStore.verifySchema()` before becoming ready.
 
-This runbook replaces a broad owner/runtime role with a dedicated
-`roomtalk_app` role while keeping the current startup flow compatible. The
-bundled Compose database uses the configured `POSTGRES_USER` as its startup
-owner by default; apply this runbook deliberately when hardening that host or
-when moving to managed PostgreSQL/RDS.
+This runbook replaces a broad runtime owner with a DML-only `roomtalk_app`
+role. The bundled single-host Compose database may continue using one owner
+credential; managed PostgreSQL/RDS should use a separate migrator credential.
 
 ## Create Or Update The Role
 
@@ -38,8 +35,7 @@ The script:
 
 - creates or updates `roomtalk_app` with `NOSUPERUSER`, `NOCREATEDB`, and
   `NOCREATEROLE`;
-- grants database connect and `public` schema usage/create privileges;
-- transfers known RoomTalk table ownership to `roomtalk_app`;
+- grants database connect and schema usage, but not schema creation;
 - grants table and sequence access required by the application.
 
 It only targets the known RoomTalk tables listed in the script. It does not
@@ -76,15 +72,15 @@ npm run smoke:persistence
 
 ## Switch Production
 
-Only switch after the role has been verified. Update the production Keychain
-environment with the application-role database values without printing the
-JSON, then reconcile only the app first:
+Only switch after the role has been verified. Keep the owner/DDL URL as
+`MIGRATION_DATABASE_URL`, set `DATABASE_URL` to the application role, and run
+the normal deployment so migration completes before the App is replaced:
 
 ```bash
-node scripts/local-production.mjs --profile edge up -d app
+node scripts/local-production.mjs --profile edge up -d --build
 ```
 
-Verify startup schema initialization, room-event listener registration, and
+Verify migration completion, read-only schema verification, room-event listener registration, and
 public health immediately:
 
 ```bash
@@ -97,12 +93,13 @@ Rollback is the previous known-good Keychain database values, followed by the
 same app reconcile and verification. Keep the admin-capable role as a separate
 emergency/migration credential; never expose it to the browser or sandbox.
 
-## Future Hardening
+## Role Boundary
 
-The stricter end state is two roles:
+The supported managed-database boundary is two roles:
 
 - `roomtalk_migrator`: used by deployment to run schema migrations.
 - `roomtalk_app`: used at runtime with only DML privileges.
 
-That requires changing startup so production does not automatically run
-`initializeSchema()` on every boot.
+The migration job records checksums in `schema_migrations`; the App needs only
+`SELECT` there. Do not restore schema ownership or `CREATE` merely to make a
+missed migration pass—fix the deployment ordering instead.

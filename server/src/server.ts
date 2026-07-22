@@ -521,7 +521,7 @@ const infrastructureReady = (async () => {
     io.adapter(createAdapter(pubClient, subClient));
     socketAdapterInstalled = true;
 
-    await postgresStore.initializeSchema();
+    await postgresStore.verifySchema();
     await roomEventNotifier.start();
     const instanceLeaseTtlMs = parsePositiveIntegerEnv('ROOMTALK_INSTANCE_LEASE_TTL_MS', 30_000);
     const instanceHeartbeatMs = Math.min(
@@ -529,10 +529,9 @@ const infrastructureReady = (async () => {
       Math.max(1_000, Math.floor(instanceLeaseTtlMs / 2)),
     );
     const heartbeatRuntime = async () => {
-      const now = new Date().toISOString();
       const [realtimeLease] = await Promise.all([
         store.heartbeatRealtimeInstance?.(runtimeInstanceId, instanceLeaseTtlMs),
-        store.heartbeatAIStreamOwner?.(aiStreamOwnerId, runtimeInstanceId, now, instanceLeaseTtlMs),
+        store.heartbeatAIStreamOwner?.(aiStreamOwnerId, runtimeInstanceId, undefined, instanceLeaseTtlMs),
       ]);
       if (realtimeLeaseEstablished && realtimeLease?.reacquired) {
         realtimeRehydrateRequired = true;
@@ -557,7 +556,7 @@ const infrastructureReady = (async () => {
         const now = new Date().toISOString();
         const [cleanedPresence, recoveredStreams, recoveredTurns, recoveredSandboxes] = await Promise.all([
           store.cleanupExpiredRealtimeInstances?.(runtimeInstanceId) || Promise.resolve(0),
-          store.failOrphanedStreamingMessages?.('Response interrupted.', now) || Promise.resolve(0),
+          store.failOrphanedStreamingMessages?.('Response interrupted.') || Promise.resolve(0),
           store.failInterruptedRoomAgentTurns?.(now) || Promise.resolve(0),
           codeAgentSandboxLifecycle.recoverInterruptedSandboxes(),
         ]);

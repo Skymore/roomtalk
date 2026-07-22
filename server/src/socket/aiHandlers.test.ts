@@ -336,6 +336,16 @@ const createHarness = (options: {
       this.outboxEvents.push(event);
       return { run, event };
     },
+    async createAssistantRunWithMessageAndOutbox(message: Message, run: any, event: any) {
+      this.upsertedMessages.push(message);
+      if (options.rejectSaves || options.rejectSaveNumbers?.includes(this.upsertedMessages.length)) {
+        return null;
+      }
+      this.messages.push(message);
+      this.assistantRuns.push(run);
+      this.outboxEvents.push(event);
+      return { room: room({ lastActivityAt: message.timestamp }), message, run, event };
+    },
     async updateAssistantRun(runId: string, updates: any) {
       const runIndex = this.assistantRuns.findIndex(run => run.id === runId);
       if (runIndex === -1) {

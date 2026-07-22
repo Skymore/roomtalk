@@ -544,12 +544,10 @@ export const POSTGRES_SCHEMA_SQL = [
     ON github_connections (status, updated_at DESC)`,
 ];
 
-// One-time data migrations, applied at most once and recorded in the
-// schema_migrations table. Unlike POSTGRES_SCHEMA_SQL (idempotent DDL that is
-// safe to re-run every boot), these scan/rewrite rows, so re-running them on
-// every cold start is pure wasted memory/IO on a busy database. Append new
-// migrations with a fresh, never-reused id; never edit an applied migration in
-// place (change its effect with a new migration instead).
+// Immutable migrations are applied only by the dedicated schema migration
+// command and recorded with a checksum. POSTGRES_SCHEMA_SQL is the frozen
+// 0000 bootstrap for a fresh database; do not append or edit it after checksum
+// adoption. Every later schema or data change belongs in a fresh migration ID.
 export interface PostgresMigration {
   id: string;
   sql: string;

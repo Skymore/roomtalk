@@ -12,7 +12,7 @@
 | Migration line | 状态 | 当前证据 |
 | --- | --- | --- |
 | Redis durable 到 PostgreSQL durable | 生产已用历史 room/message/cost 范围切换；可复用命令已覆盖当前完整 `R` durable model | `migrateRedisToPostgres.ts`、focused test、PostgreSQL rollout runbook |
-| PostgreSQL schema migration | Startup DDL + versioned one-time migration | `postgresSchema.ts`、`PostgresStore.initializeSchema()` 和 schema migration test |
+| PostgreSQL schema migration | 独立 migrate job + immutable checksum ledger + App 只读启动校验 | `migratePostgresSchema.ts`、`PostgresStore.migrateSchema()/verifySchema()`、Compose migrate 与 PostgreSQL integration test |
 | PostgreSQL application role | 已实现 | provisioning script 与 app-user runbook |
 | Legacy base64 image 到 object storage | 已实现 | media migration script/test/runbook |
 | Code Agent room/sandbox migration | 已合并 | lifecycle/archive migration、artifact metadata 和 E2B verification |
