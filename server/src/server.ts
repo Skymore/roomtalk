@@ -13,7 +13,7 @@ import dotenv from 'dotenv';
 import { RedisStore } from './repositories/redisStore';
 import { createPostgresPool } from './repositories/postgresPool';
 import { PostgresPool, PostgresStore } from './repositories/postgresStore';
-import { CompositeRoomStore, RoomStore } from './repositories/store';
+import { CompositeRoomStore } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
@@ -22,14 +22,14 @@ import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContex
 import { registerCodeAgentCodexAuthRoutes } from './routes/codeAgentCodexAuthRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
-import { executeQueuedAssistantRun } from './socket/aiHandlers';
+import { executeAssistantRun } from './socket/aiHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
-import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker';
+import { createAssistantRunWorkerFromEnv } from './services/assistantRunWorker';
 import { createCodeAgentAccessControl } from './services/codeAgentAccessControl';
 import { createCodeAgentRunner } from './services/codeAgentRunner';
 import {
@@ -90,7 +90,7 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
-const outboxLogger = new Logger('OutboxWorker');
+const assistantRunLogger = new Logger('AssistantRunWorker');
 const codeAgentLogger = new Logger('CodeAgent');
 const codexLogger = new Logger('Codex');
 const mediaStorageLogger = new Logger('MediaStorage');
@@ -177,7 +177,7 @@ if (!databaseUrl) {
 const activePersistenceStore = 'postgres';
 const postgresPool: PostgresPool = createPostgresPool(databaseUrl, postgresLogger);
 const postgresStore = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage);
-const store: RoomStore = new CompositeRoomStore(postgresStore, redisStore, redisStore);
+const store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
 
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
@@ -634,6 +634,19 @@ const audioTranscriptionRunner = createAssemblyAIAudioTranscriptionRunner({
   logger: routeLogger,
 });
 
+const assistantRunWorker = createAssistantRunWorkerFromEnv({
+  store,
+  logger: assistantRunLogger,
+  workerId: `assistant-run:${runtimeInstanceId}:${process.pid}`,
+  execute: (claim, execution) => executeAssistantRun(claim, {
+    io,
+    store,
+    socketLogger,
+    openaiLogger,
+    getAIClientForModel,
+  }, execution),
+});
+
 registerSocketHandlers({
   io,
   store,
@@ -643,6 +656,7 @@ registerSocketHandlers({
   getAIClientForModel,
   aiStreamOwnerId,
   aiTerminalPersistReconciler,
+  onAssistantRunQueued: () => assistantRunWorker.wake(),
   assemblyAIApiKey,
   codeAgentSessionService,
   codeAgentAccess,
@@ -652,37 +666,11 @@ registerSocketHandlers({
   publishedStaticSiteService,
 });
 
-let outboxWorker: OutboxWorker | null = null;
-if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
-  outboxWorker = createOutboxWorkerFromEnv({
-    store,
-    logger: outboxLogger,
-    workerId: `server-${process.pid}-${aiStreamOwnerId || 'default'}`,
-    eventTypes: ['ai.run_requested'],
-    handlers: {
-      'ai.run_requested': (event, execution) => executeQueuedAssistantRun(event.payload, {
-        io,
-        store,
-        socketLogger,
-        openaiLogger,
-        normalizeAIModel,
-        getAIClientForModel,
-        aiStreamOwnerId,
-        aiTerminalPersistReconciler,
-        assemblyAIApiKey,
-        codeAgentSessionService,
-        codeAgentAccess,
-      }, execution),
-    },
+infrastructureReady
+  .then(() => assistantRunWorker.start())
+  .catch(error => {
+    assistantRunLogger.error('Assistant run worker did not start because infrastructure initialization failed', { error });
   });
-  infrastructureReady
-    .then(() => outboxWorker?.start())
-    .catch(error => {
-      outboxLogger.error('Outbox worker did not start because infrastructure initialization failed', { error });
-    });
-} else {
-  outboxLogger.info('Outbox worker disabled', { enabled: false });
-}
 
 loadStickerCatalog();
 
@@ -804,7 +792,6 @@ let shutdownStarted = false;
 const shutdown = () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  outboxWorker?.stop();
   aiTerminalPersistReconciler.stop();
   if (roomEventPruneTimer) {
     clearInterval(roomEventPruneTimer);
@@ -818,12 +805,15 @@ const shutdown = () => {
     clearInterval(recoveryReconcileTimer);
     recoveryReconcileTimer = null;
   }
-  void store.releaseAIStreamOwner?.(aiStreamOwnerId);
-  void roomEventNotifier.stop();
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();
-  void (codeAgentDaemonRegistry?.shutdownAll() || Promise.resolve()).finally(() => {
+  void Promise.allSettled([
+    assistantRunWorker.stop(),
+    Promise.resolve(store.releaseAIStreamOwner?.(aiStreamOwnerId)),
+    roomEventNotifier.stop(),
+    codeAgentDaemonRegistry?.shutdownAll() || Promise.resolve(),
+  ]).finally(() => {
     clearTimeout(forceExit);
     process.exit(0);
   });

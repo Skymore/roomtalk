@@ -14,7 +14,7 @@ import {
   RoomEventAvailable,
   RoomSnapshotPayload,
 } from '../utils/types';
-import { appendA2UIPayload, appendAIChunk, completeAIMessage, failAIMessage, upsertMessage } from '../utils/messageState';
+import { appendA2UIPayload, appendAIChunk, completeAIMessage, failAIMessage, resetStreamingAIMessage, upsertMessage } from '../utils/messageState';
 import {
   clearCachedRoomMessageWindow,
   readCachedRoomMessageWindow,
@@ -25,6 +25,7 @@ import { clearCachedMediaAsset, clearCachedMediaForRoom } from '../utils/mediaCa
 import { logRoomMessageDiagnostic } from '../utils/roomDiagnostics';
 import { PendingAIEventBuffer, type PendingAITransientEvent } from '../utils/pendingAIEventBuffer';
 import { RoomMessageSyncStateMachine } from '../utils/roomMessageSyncStateMachine';
+import { AITransientStreamGate } from '../utils/aiTransientStreamGate';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 const ROOM_EVENT_PAGE_LIMIT = 100;
@@ -202,6 +203,7 @@ export const useRoomMessageEvents = ({
     let canonicalMessages: Message[] = [];
     let canonicalTurns: RoomAgentTurn[] = [];
     const pendingAIEvents = new PendingAIEventBuffer();
+    const transientStreamGate = new AITransientStreamGate();
     const unpersistedAIErrorByMessageId = new Map<string, string>();
     const syncState = new RoomMessageSyncStateMachine();
 
@@ -274,6 +276,20 @@ export const useRoomMessageEvents = ({
       });
     };
 
+    const acceptTransientAIEvent = (event: PendingAITransientEvent) => {
+      const decision = transientStreamGate.accept(event.data.messageId, event.data);
+      if (!decision.accepted && decision.conflict) {
+        logRoomMessageDiagnostic('ai-transient-run-conflict', {
+          roomId,
+          messageId: event.data.messageId,
+          runId: event.data.runId,
+          generation: event.data.generation,
+        });
+        void syncFromCursor();
+      }
+      return decision;
+    };
+
     const applyUnpersistedAIErrorOverlays = (messages: Message[]) => {
       let nextMessages = messages;
       unpersistedAIErrorByMessageId.forEach((error, messageId) => {
@@ -286,6 +302,7 @@ export const useRoomMessageEvents = ({
       messages.forEach(message => {
         if (message.status === 'complete' || message.status === 'error') {
           unpersistedAIErrorByMessageId.delete(message.id);
+          transientStreamGate.settle(message.id);
         }
       });
     };
@@ -311,6 +328,11 @@ export const useRoomMessageEvents = ({
           return;
         }
         pending.forEach(event => {
+          const decision = acceptTransientAIEvent(event);
+          if (!decision.accepted) return;
+          if (decision.resetMessage) {
+            nextMessages = resetStreamingAIMessage(nextMessages, event.data.messageId);
+          }
           switch (event.type) {
             case 'ai_chunk':
               nextMessages = appendAIChunk(nextMessages, event.data.messageId, event.data.chunk);
@@ -477,6 +499,7 @@ export const useRoomMessageEvents = ({
         } else if (event.type === 'messages.deleted') {
           (event.payload.messageIds || []).forEach(messageId => {
             unpersistedAIErrorByMessageId.delete(messageId);
+            transientStreamGate.settle(messageId);
           });
         }
       });
@@ -495,6 +518,7 @@ export const useRoomMessageEvents = ({
       if (reduced.roomMediaCacheInvalidated) void clearCachedMediaForRoom(roomId);
       if (reduced.roomDeleted) {
         pendingAIEvents.clear();
+        transientStreamGate.clear();
         unpersistedAIErrorByMessageId.clear();
         void clearCachedRoomMessageWindow(roomId);
         void clearCachedMediaForRoom(roomId);
@@ -740,12 +764,19 @@ export const useRoomMessageEvents = ({
 
     const handleAIChunk = (data: AIChunkEvent) => {
       if (data.roomId !== roomId) return;
-      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+      const target = canonicalMessages.find(message => message.id === data.messageId);
+      if (!target) {
         queuePendingAIEvent({ type: 'ai_chunk', data });
         return;
       }
-      canonicalMessages = appendAIChunk(canonicalMessages, data.messageId, data.chunk);
-      updateMessages(previous => appendAIChunk(previous, data.messageId, data.chunk));
+      if (target.status === 'complete' || target.status === 'error') return;
+      const decision = acceptTransientAIEvent({ type: 'ai_chunk', data });
+      if (!decision.accepted) return;
+      const prepare = (messages: Message[]) => decision.resetMessage
+        ? resetStreamingAIMessage(messages, data.messageId)
+        : messages;
+      canonicalMessages = appendAIChunk(prepare(canonicalMessages), data.messageId, data.chunk);
+      updateMessages(previous => appendAIChunk(prepare(previous), data.messageId, data.chunk));
       const container = containerRef.current;
       if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) {
         scheduleScroll('smooth', 50);
@@ -753,28 +784,45 @@ export const useRoomMessageEvents = ({
     };
     const handleA2UIUpdate = (data: A2UIUpdateEvent) => {
       if (data.roomId !== roomId) return;
-      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+      const target = canonicalMessages.find(message => message.id === data.messageId);
+      if (!target) {
         queuePendingAIEvent({ type: 'a2ui_update', data });
         return;
       }
-      canonicalMessages = appendA2UIPayload(canonicalMessages, data.messageId, data.uiPayload);
-      updateMessages(previous => appendA2UIPayload(previous, data.messageId, data.uiPayload));
+      if (target.status === 'complete' || target.status === 'error') return;
+      const decision = acceptTransientAIEvent({ type: 'a2ui_update', data });
+      if (!decision.accepted) return;
+      const prepare = (messages: Message[]) => decision.resetMessage
+        ? resetStreamingAIMessage(messages, data.messageId)
+        : messages;
+      canonicalMessages = appendA2UIPayload(prepare(canonicalMessages), data.messageId, data.uiPayload);
+      updateMessages(previous => appendA2UIPayload(prepare(previous), data.messageId, data.uiPayload));
     };
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
       unpersistedAIErrorByMessageId.delete(data.messageId);
-      if (!canonicalMessages.some(message => message.id === data.messageId)) {
+      const target = canonicalMessages.find(message => message.id === data.messageId);
+      if (!target) {
         queuePendingAIEvent({ type: 'ai_stream_end', data });
         return;
       }
-      canonicalMessages = completeAIMessage(canonicalMessages, data.messageId, {
+      if (target.status === 'complete' || target.status === 'error') {
+        if (data.sessionCost) setSessionCostUsd(data.sessionCost.totalUsd);
+        return;
+      }
+      const decision = acceptTransientAIEvent({ type: 'ai_stream_end', data });
+      if (!decision.accepted) return;
+      const prepare = (messages: Message[]) => decision.resetMessage
+        ? resetStreamingAIMessage(messages, data.messageId)
+        : messages;
+      canonicalMessages = completeAIMessage(prepare(canonicalMessages), data.messageId, {
         content: data.content,
         uiPayload: data.uiPayload,
         aiModel: data.aiModel,
         usage: data.usage,
         cost: data.cost,
       });
-      updateMessages(previous => completeAIMessage(previous, data.messageId, {
+      updateMessages(previous => completeAIMessage(prepare(previous), data.messageId, {
         content: data.content,
         uiPayload: data.uiPayload,
         aiModel: data.aiModel,
@@ -800,6 +848,17 @@ export const useRoomMessageEvents = ({
     const handleAIStreamError = (data: AIStreamErrorEvent) => {
       if (data.roomId !== roomId) return;
       const errorMessage = data.message;
+      const target = canonicalMessages.find(message => message.id === data.messageId);
+      if (!target) {
+        queuePendingAIEvent({ type: 'ai_stream_error', data });
+        return;
+      }
+      if (target.status === 'complete' || target.status === 'error') return;
+      const decision = acceptTransientAIEvent({ type: 'ai_stream_error', data });
+      if (!decision.accepted) return;
+      const prepare = (messages: Message[]) => decision.resetMessage
+        ? resetStreamingAIMessage(messages, data.messageId)
+        : messages;
       if (
         data.persisted
         && errorMessage
@@ -808,12 +867,8 @@ export const useRoomMessageEvents = ({
         && errorMessage.roomId === roomId
       ) {
         unpersistedAIErrorByMessageId.delete(data.messageId);
-        if (!canonicalMessages.some(message => message.id === data.messageId)) {
-          queuePendingAIEvent({ type: 'ai_stream_error', data });
-          return;
-        }
-        canonicalMessages = upsertMessage(canonicalMessages, errorMessage);
-        updateMessages(previous => upsertMessage(previous, errorMessage));
+        canonicalMessages = upsertMessage(prepare(canonicalMessages), errorMessage);
+        updateMessages(previous => upsertMessage(prepare(previous), errorMessage));
         cacheWindow(canonicalMessages);
       } else {
         if (data.persisted) {
@@ -822,19 +877,10 @@ export const useRoomMessageEvents = ({
             messageId: data.messageId,
           });
         }
-        const recoveryEvent: AIStreamErrorEvent = {
-          ...data,
-          persisted: false,
-          message: undefined,
-        };
         unpersistedAIErrorByMessageId.set(data.messageId, data.error);
-        if (!canonicalMessages.some(message => message.id === data.messageId)) {
-          queuePendingAIEvent({ type: 'ai_stream_error', data: recoveryEvent });
-        } else {
-          canonicalMessages = failAIMessage(canonicalMessages, data.messageId, data.error);
-          updateMessages(previous => failAIMessage(previous, data.messageId, data.error));
-          cacheWindow(canonicalMessages);
-        }
+        canonicalMessages = failAIMessage(prepare(canonicalMessages), data.messageId, data.error);
+        updateMessages(previous => failAIMessage(prepare(previous), data.messageId, data.error));
+        cacheWindow(canonicalMessages);
         void syncFromCursor();
       }
       onAIStreamSettled?.();
@@ -861,6 +907,7 @@ export const useRoomMessageEvents = ({
       if (scrollTimer) clearTimeout(scrollTimer);
       if (replayRetryTimer) clearTimeout(replayRetryTimer);
       pendingAIEvents.clear();
+      transientStreamGate.clear();
       if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
       socket.off('room_event_available', handleRoomEventAvailable);
       socket.off('room_sync_required', handleRoomSyncRequired);

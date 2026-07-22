@@ -4,7 +4,7 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -22,7 +22,6 @@ const getRoomMediaAssetsTimelineKey = (roomId: string) => `room:${roomId}:media_
 const PENDING_MEDIA_UPLOADS_KEY = 'pending_media_uploads';
 const PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY = 'pending_media_uploads_by_expiry';
 const AUDIO_TRANSCRIPTIONS_KEY = 'audio_transcriptions';
-const ASSISTANT_RUNS_KEY = 'assistant_runs';
 const ROOM_AGENT_TURN_ROOMS_KEY = 'room_agent_turn_rooms';
 const getRoomAgentTurnsKey = (roomId: string) => `room:${roomId}:agent_turns`;
 const getCodeAgentRoomLeaseKey = (roomId: string) => `room:${roomId}:agent_lease`;
@@ -2414,59 +2413,6 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async createAssistantRun(run: AssistantRunRecord): Promise<AssistantRunRecord | null> {
-    try {
-      await this.redisClient.hSet(ASSISTANT_RUNS_KEY, run.id, JSON.stringify(run));
-      return run;
-    } catch (error) {
-      this.logger.error('Error creating Redis assistant run', { error, runId: run.id, roomId: run.roomId });
-      return null;
-    }
-  }
-
-  async getAssistantRun(runId: string): Promise<AssistantRunRecord | null> {
-    try {
-      const raw = await this.redisClient.hGet(ASSISTANT_RUNS_KEY, runId);
-      return raw ? JSON.parse(raw) as AssistantRunRecord : null;
-    } catch (error) {
-      this.logger.error('Error reading Redis assistant run', { error, runId });
-      return null;
-    }
-  }
-
-  async updateAssistantRun(runId: string, updates: AssistantRunUpdate): Promise<AssistantRunRecord | null> {
-    const current = await this.getAssistantRun(runId);
-    if (!current) {
-      return null;
-    }
-
-    const next: AssistantRunRecord = {
-      ...current,
-      updatedAt: updates.updatedAt || new Date().toISOString(),
-    };
-    if (updates.status !== undefined) {
-      next.status = updates.status;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'error')) {
-      if (updates.error === null || updates.error === undefined) delete next.error;
-      else next.error = updates.error;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'startedAt')) {
-      if (updates.startedAt === null || updates.startedAt === undefined) delete next.startedAt;
-      else next.startedAt = updates.startedAt;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'completedAt')) {
-      if (updates.completedAt === null || updates.completedAt === undefined) delete next.completedAt;
-      else next.completedAt = updates.completedAt;
-    }
-    if (Object.prototype.hasOwnProperty.call(updates, 'metadata')) {
-      if (updates.metadata === null || updates.metadata === undefined) delete next.metadata;
-      else next.metadata = updates.metadata;
-    }
-
-    return this.createAssistantRun(next);
-  }
-
   async createOutboxEvent(event: OutboxEventRecord): Promise<OutboxEventRecord | null> {
     try {
       await this.redisClient.hSet(OUTBOX_EVENTS_KEY, event.id, JSON.stringify(event));
@@ -2479,18 +2425,6 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       this.logger.error('Error creating Redis outbox event', { error, eventId: event.id, eventType: event.eventType });
       return null;
     }
-  }
-
-  async createAssistantRunWithOutbox(run: AssistantRunRecord, event: OutboxEventRecord): Promise<{ run: AssistantRunRecord; event: OutboxEventRecord } | null> {
-    const savedRun = await this.createAssistantRun(run);
-    if (!savedRun) {
-      return null;
-    }
-    const savedEvent = await this.createOutboxEvent(event);
-    if (!savedEvent) {
-      return null;
-    }
-    return { run: savedRun, event: savedEvent };
   }
 
   async claimOutboxEvents(options: OutboxClaimOptions): Promise<OutboxEventRecord[]> {

@@ -1000,6 +1000,50 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.seq).toBe('5');
   });
 
+  it('resets on a replacement generation and ignores late chunks from the stale worker', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({
+        id: 'ai-1',
+        clientId: 'ai_assistant',
+        messageType: 'ai',
+        content: 'cached stale partial',
+        status: 'streaming',
+      })],
+      lastAppliedSeq: 5,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-1', runId: 'run-1', generation: 1, chunkSeq: 1, chunk: 'old-1',
+    }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('old-1');
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-1', runId: 'run-1', generation: 1, chunkSeq: 1, chunk: 'duplicate',
+    }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('old-1');
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-1', runId: 'run-1', generation: 2, chunkSeq: 1, chunk: 'replacement',
+    }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('replacement');
+
+    act(() => socketMock.trigger('ai_chunk', {
+      roomId: 'room-1', messageId: 'ai-1', runId: 'run-1', generation: 1, chunkSeq: 2, chunk: 'late-old',
+    }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('replacement');
+
+    act(() => socketMock.trigger('ai_stream_end', {
+      roomId: 'room-1', messageId: 'ai-1', runId: 'run-1', generation: 2, chunkSeq: 2, content: 'final',
+    }));
+    expect(screen.getByTestId('state').dataset.contents).toBe('final');
+    expect(screen.getByTestId('state').dataset.statuses).toBe('complete');
+  });
+
   it('preserves a dynamically added optimistic message across AI transient updates', async () => {
     cacheMock.memory = {
       roomId: 'room-1',

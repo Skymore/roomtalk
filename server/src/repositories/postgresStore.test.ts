@@ -262,6 +262,28 @@ describe('PostgresStore', () => {
     await assert.rejects(store.countRooms(), /database unavailable/);
   });
 
+  it('does not disguise AI accounting and run query failures as zero or missing data', async () => {
+    const readCostStore = new PostgresStore(
+      new ScriptedPool([{ error: new Error('cost read unavailable') }]),
+      logger as any,
+    );
+    const incrementCostStore = new PostgresStore(
+      new ScriptedPool([{ error: new Error('cost write unavailable') }]),
+      logger as any,
+    );
+    const readRunStore = new PostgresStore(
+      new ScriptedPool([{ error: new Error('run read unavailable') }]),
+      logger as any,
+    );
+
+    await assert.rejects(readCostStore.readRoomAICost('room-1'), /cost read unavailable/);
+    await assert.rejects(
+      incrementCostStore.incrementRoomAICost('room-1', cost(0.25)),
+      /cost write unavailable/,
+    );
+    await assert.rejects(readRunStore.getAssistantRun('run-1'), /run read unavailable/);
+  });
+
   it('propagates recovery query failures so maintenance retries instead of reporting no work', async () => {
     const turnStore = new PostgresStore(new ScriptedPool([{ error: new Error('turn query unavailable') }]), logger as any);
     const sandboxStore = new PostgresStore(new ScriptedPool([{ error: new Error('sandbox query unavailable') }]), logger as any);

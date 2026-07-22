@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { executeQueuedAssistantRun, registerAIHandlers } from './aiHandlers';
+import { executeAssistantRun, registerAIHandlers } from './aiHandlers';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 
@@ -153,6 +153,36 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.0001,
 });
 
+const claimedAssistantRun = (overrides: Record<string, unknown> = {}) => ({
+  id: 'run-1',
+  roomId: 'room-1',
+  requestedByClientId: 'client-1',
+  aiMessageId: 'queued-ai-message',
+  status: 'running' as const,
+  modelId: selectedModel.id,
+  apiModel: selectedModel.apiModel,
+  provider: selectedModel.provider,
+  roleName: 'Assistant',
+  systemPrompt: 'You are helpful.',
+  maxContextMessages: 100,
+  createdAt: '2026-05-03T00:00:00.000Z',
+  queuedAt: '2026-05-03T00:00:00.000Z',
+  updatedAt: '2026-05-03T00:00:00.000Z',
+  requestPayload: {
+    schemaVersion: 1 as const,
+    model: selectedModel,
+    roleName: 'Assistant',
+    systemPrompt: 'You are helpful.',
+    contextMessages: [message()],
+  },
+  generation: 1,
+  attempt: 1,
+  availableAt: '2026-05-03T00:00:00.000Z',
+  leaseOwner: 'worker-1',
+  leaseExpiresAt: '2026-05-03T00:01:00.000Z',
+  ...overrides,
+});
+
 const roomActivityForMessages = (messages: Message[]) => room({
   lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
 });
@@ -161,6 +191,7 @@ const createHarness = (options: {
   rejectSaves?: boolean;
   rejectSaveNumbers?: number[];
   rejectAppend?: boolean;
+  autoRun?: boolean;
   clientId?: string | null;
   aiStreamOwnerId?: string;
   model?: AIModelOption;
@@ -186,6 +217,7 @@ const createHarness = (options: {
     savedHistories: [] as Message[][],
     assistantRuns: [] as any[],
     outboxEvents: [] as any[],
+    projectionAttempts: 0,
     normalizeAIModelCalls: [] as unknown[],
     truncateBeforeCalls: [] as Array<{ roomId: string; messageId: string }>,
     truncateAfterCalls: [] as Array<{ roomId: string; messageId: string }>,
@@ -331,37 +363,68 @@ const createHarness = (options: {
     async incrementRoomAICost(roomId: string) {
       return roomCost(roomId);
     },
-    async createAssistantRunWithOutbox(run: any, event: any) {
-      this.assistantRuns.push(run);
-      this.outboxEvents.push(event);
-      return { run, event };
-    },
-    async createAssistantRunWithMessageAndOutbox(message: Message, run: any, event: any) {
+    async createAssistantRunWithMessage(message: Message, run: any) {
       this.upsertedMessages.push(message);
-      if (options.rejectSaves || options.rejectSaveNumbers?.includes(this.upsertedMessages.length)) {
-        return null;
-      }
+      if (options.rejectSaves) return null;
       this.messages.push(message);
       this.assistantRuns.push(run);
-      this.outboxEvents.push(event);
-      return { room: room({ lastActivityAt: message.timestamp }), message, run, event };
+      return { room: room({ lastActivityAt: message.timestamp }), message, run };
     },
-    async updateAssistantRun(runId: string, updates: any) {
-      const runIndex = this.assistantRuns.findIndex(run => run.id === runId);
-      if (runIndex === -1) {
-        return null;
+    async stageAssistantRunTerminal(runId: string, claim: { workerId: string; generation: number }, terminal: any) {
+      const index = this.assistantRuns.findIndex(run => run.id === runId);
+      const current = this.assistantRuns[index];
+      if (
+        !current
+        || current.status !== 'running'
+        || current.leaseOwner !== claim.workerId
+        || current.generation !== claim.generation
+      ) return null;
+      const staged = { ...current, status: 'finalizing', terminalPayload: terminal };
+      this.assistantRuns[index] = staged;
+      return staged;
+    },
+    async projectAssistantRunTerminal(runId: string, claim: { workerId: string; generation: number }) {
+      this.projectionAttempts += 1;
+      const index = this.assistantRuns.findIndex(run => run.id === runId);
+      const current = this.assistantRuns[index];
+      if (
+        !current
+        || current.status !== 'finalizing'
+        || current.leaseOwner !== claim.workerId
+        || current.generation !== claim.generation
+      ) return { outcome: 'stale' as const };
+      const terminalMessage = current.terminalPayload.message as Message;
+      const messageIndex = this.messages.findIndex(item => item.id === terminalMessage.id && item.status === 'streaming');
+      if (messageIndex === -1) {
+        const cancelled = { ...current, status: 'cancelled', leaseOwner: undefined, leaseExpiresAt: undefined };
+        this.assistantRuns[index] = cancelled;
+        return { outcome: 'obsolete' as const, run: cancelled };
       }
-      this.assistantRuns[runIndex] = {
-        ...this.assistantRuns[runIndex],
-        ...updates,
+      if (options.rejectSaveNumbers?.includes(this.projectionAttempts)) {
+        throw new Error('persistent store unavailable');
+      }
+      this.upsertedMessages.push(terminalMessage);
+      this.messages[messageIndex] = terminalMessage;
+      const completed = {
+        ...current,
+        status: current.terminalPayload.outcome,
+        error: current.terminalPayload.error,
+        leaseOwner: undefined,
+        leaseExpiresAt: undefined,
       };
-      return this.assistantRuns[runIndex];
+      this.assistantRuns[index] = completed;
+      return {
+        outcome: 'applied' as const,
+        room: room({ lastActivityAt: terminalMessage.timestamp }),
+        message: terminalMessage,
+        run: completed,
+        roomCostTotal: roomCost(terminalMessage.roomId),
+      };
     },
   };
 
-  registerAIHandlers({
+  const handlerDeps = {
     io: io as any,
-    socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
     openaiLogger: logger as any,
@@ -375,7 +438,34 @@ const createHarness = (options: {
       }
       throw new Error('E2E fake AI should not request a real client');
     },
-    aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
+  };
+  const executeNextRun = async () => {
+    const runIndex = store.assistantRuns.findIndex(run => run.status === 'queued');
+    if (runIndex === -1) return;
+    const claimed = {
+      ...store.assistantRuns[runIndex],
+      status: 'running',
+      generation: store.assistantRuns[runIndex].generation + 1,
+      attempt: store.assistantRuns[runIndex].attempt + 1,
+      leaseOwner: 'test-worker',
+      leaseExpiresAt: '2026-05-03T00:01:00.000Z',
+    };
+    store.assistantRuns[runIndex] = claimed;
+    await executeAssistantRun(
+      {
+        run: claimed,
+        token: { workerId: 'test-worker', generation: claimed.generation },
+        phase: 'execute',
+      },
+      handlerDeps,
+      { signal: new AbortController().signal, maxAttempts: 10 },
+    );
+  };
+
+  registerAIHandlers({
+    ...handlerDeps,
+    socket: socket as any,
+    onAssistantRunQueued: options.autoRun === false ? undefined : executeNextRun,
     codeAgentSessionService: options.codeAgentSessionService as any,
     resolveClientId: () => store.getClientId(),
   });
@@ -387,7 +477,6 @@ describe('AI socket handlers', () => {
   const previousEnv = {
     e2eMode: process.env.E2E_TEST_MODE,
     fakeAI: process.env.E2E_FAKE_AI,
-    aiRunnerMode: process.env.AI_RUNNER_MODE,
   };
 
   beforeEach(() => {
@@ -408,11 +497,6 @@ describe('AI socket handlers', () => {
       process.env.E2E_FAKE_AI = previousEnv.fakeAI;
     }
 
-    if (previousEnv.aiRunnerMode === undefined) {
-      delete process.env.AI_RUNNER_MODE;
-    } else {
-      process.env.AI_RUNNER_MODE = previousEnv.aiRunnerMode;
-    }
   });
 
   it('persists a streaming placeholder before completing an AI response', async () => {
@@ -428,7 +512,7 @@ describe('AI socket handlers', () => {
     assert.equal(streamingMessage.clientId, 'ai_assistant');
     assert.equal(streamingMessage.status, 'streaming');
     assert.equal(streamingMessage.content, '');
-    assert.equal((streamingMessage as any).aiStreamOwnerId, 'test-stream-owner');
+    assert.equal((streamingMessage as any).aiStreamOwnerId, undefined);
 
     const finalMessage = store.upsertedMessages[1];
     assert.equal(finalMessage.id, streamingMessage.id);
@@ -449,6 +533,8 @@ describe('AI socket handlers', () => {
       'The text stream is still moving while the UI surface updates. ',
       'The card below includes live status, checklist items, and an action.',
     ]);
+    assert.deepEqual(aiChunkEvents.map(event => (event.args[0] as any).generation), [1, 1, 1, 1]);
+    assert.deepEqual(aiChunkEvents.map(event => (event.args[0] as any).chunkSeq), [2, 4, 6, 8]);
     const a2uiUpdateEvents = io.roomEmits.filter(event => event.event === 'a2ui_update');
     const streamEndIndex = io.roomEmits.findIndex(event => event.event === 'ai_stream_end');
     const lastA2UIUpdateIndex = io.roomEmits.map(event => event.event).lastIndexOf('a2ui_update');
@@ -459,8 +545,7 @@ describe('AI socket handlers', () => {
     assert.equal((a2uiUpdateEvents[0].args[0] as any).uiPayload.messages[0].createSurface.catalogId, 'https://a2ui.org/specification/v0_9/basic_catalog.json');
   });
 
-  it('queues AI runs for the outbox worker without calling the provider in worker mode', async () => {
-    process.env.AI_RUNNER_MODE = 'worker';
+  it('atomically queues an assistant run without creating an AI outbox event', async () => {
     process.env.E2E_FAKE_AI = 'false';
     const openAIClient = {
       chat: {
@@ -473,6 +558,7 @@ describe('AI socket handlers', () => {
     };
     const { io, socket, store } = createHarness({
       aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+      autoRun: false,
     });
 
     let response: unknown;
@@ -489,13 +575,8 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages[0].status, 'streaming');
     assert.equal(store.assistantRuns.length, 1);
     assert.equal(store.assistantRuns[0].status, 'queued');
-    assert.equal(store.assistantRuns[0].metadata.runnerMode, 'worker');
-    assert.equal(store.outboxEvents.length, 1);
-    assert.equal(store.outboxEvents[0].eventType, 'ai.run_requested');
-    assert.equal(store.outboxEvents[0].status, 'pending');
-    assert.equal(store.outboxEvents[0].attempts, 0);
-    assert.equal(store.outboxEvents[0].payload.runId, store.assistantRuns[0].id);
-    assert.equal(store.outboxEvents[0].payload.aiMessageId, store.upsertedMessages[0].id);
+    assert.deepEqual(store.assistantRuns[0].requestPayload.contextMessages.map((item: Message) => item.id), ['message-1']);
+    assert.equal(store.outboxEvents.length, 0);
     assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
@@ -684,100 +765,142 @@ describe('AI socket handlers', () => {
     assert.equal(store.assistantRuns.length, 0);
   });
 
-  it('executes a queued AI run from the outbox worker path', async () => {
-    const { io, store } = createHarness({
-      messages: [
-        message(),
-        withAIStreamRecoveryMetadata(message({
-          id: 'queued-ai-message',
-          clientId: 'ai_assistant',
-          content: '',
-          messageType: 'ai',
-          status: 'streaming',
-        }), 'inline-owner'),
-      ],
-    });
-    store.assistantRuns.push({
-      id: 'run-1',
-      status: 'queued',
-      metadata: { runnerMode: 'worker' },
-    });
-
-    await executeQueuedAssistantRun(
-      {
-        runId: 'run-1',
-        roomId: 'room-1',
-        requestedByClientId: 'client-1',
-        aiMessageId: 'queued-ai-message',
-        roleName: 'Assistant',
-        systemPrompt: 'You are helpful.',
-        model: selectedModel.id,
-        maxContextMessages: 100,
-        contextMessages: [message()],
-        historyUsedForContext: [message()],
-      },
-      {
-        io: io as any,
-        store: store as any,
-        socketLogger: logger as any,
-        openaiLogger: logger as any,
-        normalizeAIModel: () => selectedModel,
-        getAIClientForModel: () => {
-          throw new Error('E2E fake worker should not request a real client');
-        },
-        aiStreamOwnerId: 'test-stream-owner',
-      },
-      { claim: { workerId: 'worker-1', attempt: 1 }, signal: new AbortController().signal },
-    );
-
-    assert.equal(store.upsertedMessages.at(-1)?.id, 'queued-ai-message');
-    assert.equal(store.upsertedMessages.at(-1)?.status, 'complete');
-    assert.equal(store.assistantRuns[0].status, 'complete');
-    assert.equal(store.assistantRuns[0].metadata.runnerMode, 'worker');
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), true);
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
-  });
-
-  it('does not let an obsolete worker cancel the replacement assistant run', async () => {
-    const replacementPlaceholder = withAIStreamRecoveryMetadata(message({
+  it('executes a claimed durable assistant run and projects one terminal transaction', async () => {
+    const placeholder = message({
       id: 'queued-ai-message',
       clientId: 'ai_assistant',
       content: '',
       messageType: 'ai',
       status: 'streaming',
-    }), 'replacement-worker', 2);
-    const { io, store } = createHarness({ messages: [message(), replacementPlaceholder] });
-    store.assistantRuns.push({ id: 'run-1', status: 'running', metadata: { runnerMode: 'worker' } });
+    });
+    const { io, store } = createHarness({ messages: [message(), placeholder], autoRun: false });
+    const run = claimedAssistantRun();
+    store.assistantRuns.push(run);
 
-    await executeQueuedAssistantRun(
+    await executeAssistantRun(
       {
-        runId: 'run-1',
-        roomId: 'room-1',
-        requestedByClientId: 'client-1',
-        aiMessageId: 'queued-ai-message',
-        roleName: 'Assistant',
-        systemPrompt: 'You are helpful.',
-        model: selectedModel.id,
-        maxContextMessages: 100,
-        contextMessages: [message()],
-        historyUsedForContext: [message()],
+        run: run as any,
+        token: { workerId: 'worker-1', generation: 1 },
+        phase: 'execute',
       },
       {
         io: io as any,
         store: store as any,
         socketLogger: logger as any,
         openaiLogger: logger as any,
-        normalizeAIModel: () => selectedModel,
-        getAIClientForModel: () => { throw new Error('obsolete worker must not call provider'); },
-        aiStreamOwnerId: 'stale-worker',
+        getAIClientForModel: () => {
+          throw new Error('E2E fake worker should not request a real client');
+        },
       },
-      { claim: { workerId: 'stale-worker', attempt: 1 }, signal: new AbortController().signal },
+      { signal: new AbortController().signal, maxAttempts: 10 },
+    );
+
+    assert.equal(store.upsertedMessages.at(-1)?.id, 'queued-ai-message');
+    assert.equal(store.upsertedMessages.at(-1)?.status, 'complete');
+    assert.equal(store.assistantRuns[0].status, 'complete');
+    assert.equal(store.projectionAttempts, 1);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
+  });
+
+  it('executes and prices a queued run from its durable model snapshot', async () => {
+    const durableModel: AIModelOption = {
+      id: 'retired-model',
+      apiModel: 'provider/retired-model',
+      provider: 'openrouter',
+      label: 'Retired Model',
+      description: 'Model configuration captured when the run was queued',
+      pricing: {
+        currency: 'USD',
+        inputPerMillion: 7,
+        outputPerMillion: 11,
+      },
+    };
+    const placeholder = message({
+      id: 'queued-ai-message',
+      clientId: 'ai_assistant',
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    });
+    const { io, store } = createHarness({ messages: [message(), placeholder], autoRun: false });
+    const run = claimedAssistantRun({
+      modelId: durableModel.id,
+      apiModel: durableModel.apiModel,
+      provider: durableModel.provider,
+      requestPayload: {
+        schemaVersion: 1,
+        model: durableModel,
+        roleName: 'Archived Assistant',
+        systemPrompt: 'Use the queued instructions.',
+        contextMessages: [message()],
+      },
+    });
+    store.assistantRuns.push(run);
+
+    await executeAssistantRun(
+      {
+        run: run as any,
+        token: { workerId: 'worker-1', generation: 1 },
+        phase: 'execute',
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        getAIClientForModel: () => {
+          throw new Error('E2E fake worker should not request a real client');
+        },
+      },
+      { signal: new AbortController().signal, maxAttempts: 10 },
+    );
+
+    const terminal = store.upsertedMessages.at(-1);
+    assert.equal(terminal?.username, 'Archived Assistant');
+    assert.equal(terminal?.aiModel?.id, durableModel.id);
+    assert.equal(terminal?.cost?.inputPerMillion, 7);
+    assert.equal(terminal?.cost?.outputPerMillion, 11);
+  });
+
+  it('rejects a stale generation at terminal staging without overwriting the replacement run', async () => {
+    const placeholder = message({
+      id: 'queued-ai-message',
+      clientId: 'ai_assistant',
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    });
+    const { io, store } = createHarness({ messages: [message(), placeholder], autoRun: false });
+    const replacement = claimedAssistantRun({ generation: 2, leaseOwner: 'replacement-worker' });
+    store.assistantRuns.push(replacement);
+
+    await executeAssistantRun(
+      {
+        run: claimedAssistantRun({ generation: 1, leaseOwner: 'stale-worker' }) as any,
+        token: { workerId: 'stale-worker', generation: 1 },
+        phase: 'execute',
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        getAIClientForModel: () => {
+          throw new Error('E2E fake worker should not request a real client');
+        },
+      },
+      { signal: new AbortController().signal, maxAttempts: 10 },
     );
 
     assert.equal(store.assistantRuns[0].status, 'running');
+    assert.equal(store.assistantRuns[0].generation, 2);
     assert.equal(store.upsertedMessages.length, 0);
-    assert.equal(io.roomEmits.length, 0);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
+    assert.ok(io.roomEmits
+      .filter(event => event.event === 'ai_chunk')
+      .every(event => (event.args[0] as any).generation === 1));
   });
 
   it('uses only the current message when the room AI context limit is zero', async () => {
@@ -1069,84 +1192,36 @@ describe('AI socket handlers', () => {
     assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
   });
 
-  it('preserves reported usage in the outbox worker when a stream closes prematurely after the usage chunk', async () => {
+  it('persists partial provider-error usage and updates the room cost projection', async () => {
     process.env.E2E_FAKE_AI = 'false';
     const openAIClient = {
       chat: {
         completions: {
           create: () => ({
             async *[Symbol.asyncIterator]() {
-              yield { choices: [{ delta: { content: 'worker response' } }] };
-              yield {
-                choices: [],
-                usage: {
-                  prompt_tokens: 50,
-                  completion_tokens: 5,
-                  total_tokens: 55,
-                  prompt_cache_hit_tokens: 40,
-                  prompt_cache_miss_tokens: 10,
-                },
-              };
-              throw new Error('Premature close');
+              yield { choices: [{ delta: { content: 'partially generated answer' } }] };
+              throw new Error('provider stream reset');
             },
           }),
         },
       },
     };
-    const { io, store } = createHarness({
-      messages: [
-        message(),
-        withAIStreamRecoveryMetadata(message({
-          id: 'queued-ai-message',
-          clientId: 'ai_assistant',
-          content: '',
-          messageType: 'ai',
-          status: 'streaming',
-        }), 'inline-owner'),
-      ],
-    });
-    store.assistantRuns.push({
-      id: 'run-reported-usage',
-      status: 'queued',
-      metadata: { runnerMode: 'worker' },
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
     });
 
-    await executeQueuedAssistantRun(
-      {
-        runId: 'run-reported-usage',
-        roomId: 'room-1',
-        requestedByClientId: 'client-1',
-        aiMessageId: 'queued-ai-message',
-        roleName: 'Assistant',
-        systemPrompt: 'You are helpful.',
-        model: selectedModel.id,
-        maxContextMessages: 100,
-        contextMessages: [message()],
-        historyUsedForContext: [message()],
-      },
-      {
-        io: io as any,
-        store: store as any,
-        socketLogger: logger as any,
-        openaiLogger: logger as any,
-        normalizeAIModel: () => selectedModel,
-        getAIClientForModel: () => ({ provider: 'deepseek', client: openAIClient as any }),
-        aiStreamOwnerId: 'test-stream-owner',
-      },
-      { claim: { workerId: 'worker-1', attempt: 1 }, signal: new AbortController().signal },
-    );
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
 
-    const finalMessage = store.upsertedMessages.at(-1);
-    assert.equal(finalMessage?.status, 'complete');
-    assert.equal(finalMessage?.usage?.source, 'reported');
-    assert.equal(finalMessage?.usage?.cacheHitRate, 0.8);
-    assert.equal(finalMessage?.cost?.estimated, false);
-    assert.equal(store.assistantRuns[0].status, 'complete');
-    assert.equal(store.assistantRuns[0].metadata.usage.source, 'reported');
-    const streamEnd = io.roomEmits.find(event => event.event === 'ai_stream_end');
-    assert.ok(streamEnd);
-    assert.equal((streamEnd.args[0] as any).usage.source, 'reported');
-    assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
+    const finalMessage = store.upsertedMessages[1];
+    assert.equal(finalMessage.status, 'error');
+    assert.match(finalMessage.content, /partially generated answer/);
+    assert.equal(finalMessage.usage?.source, 'estimated');
+    assert.ok((finalMessage.cost?.totalUsd || 0) > 0);
+    const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
+    assert.ok(streamError);
+    assert.equal((streamError.args[0] as any).persisted, true);
+    assert.equal((streamError.args[0] as any).message.cost.totalUsd, finalMessage.cost?.totalUsd);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_cost_total'), true);
   });
 
   it('rejects AI requests from clients without room access', async () => {
@@ -1179,47 +1254,68 @@ describe('AI socket handlers', () => {
       event: 'ai_stream_error',
       args: [{
         messageId: store.upsertedMessages[0].id,
-        error: 'Sorry, unable to start a durable AI response.',
+        error: 'Sorry, unable to queue the AI response.',
         roomId: 'room-1',
         persisted: false,
       }],
     }]);
-    assert.deepEqual(response, { success: false, error: 'Unable to start a durable AI response' });
+    assert.deepEqual(response, { success: false, error: 'Unable to queue AI response' });
   });
 
-  it('emits an error and marks the durable placeholder failed when final persistence fails', async () => {
-    const { io, socket, store } = createHarness({ rejectSaveNumbers: [2] });
+  it('retries a staged terminal projection without calling the AI provider twice', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    let providerCalls = 0;
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: () => {
+            providerCalls += 1;
+            return asyncIterable([
+              { choices: [{ delta: { content: 'durable answer' } }] },
+              { choices: [{ delta: {}, finish_reason: 'stop' }] },
+            ]);
+          },
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+      rejectSaveNumbers: [1],
+    });
 
     await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
 
-    assert.equal(store.upsertedMessages.length, 3);
-    assert.equal(store.upsertedMessages[0].status, 'streaming');
-    assert.equal(store.upsertedMessages[1].status, 'complete');
-    assert.equal(store.upsertedMessages[2].status, 'error');
-    assert.equal(store.messages.length, 2);
-    assert.equal(store.messages[1].status, 'error');
-    assert.equal(store.messages[1].content, 'Sorry, unable to save the AI response.');
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
-    const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
-    assert.ok(streamError);
-    assert.equal((streamError.args[0] as any).persisted, true);
-    assert.deepEqual((streamError.args[0] as any).message, store.messages[1]);
-  });
-
-  it('emits a persistence error when the final-save fallback cannot mark the placeholder failed', async () => {
-    const { io, socket, store } = createHarness({ rejectSaveNumbers: [2, 3, 4, 5] });
-
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
-
-    assert.equal(store.upsertedMessages.length, 5);
-    assert.equal(store.upsertedMessages[0].status, 'streaming');
-    assert.equal(store.upsertedMessages[1].status, 'complete');
-    assert.equal(store.upsertedMessages.slice(2).every(message => message.status === 'error'), true);
+    assert.equal(providerCalls, 1);
+    assert.equal(store.assistantRuns[0].status, 'finalizing');
+    assert.equal(store.assistantRuns[0].terminalPayload.message.content, 'durable answer');
     assert.equal(store.messages[1].status, 'streaming');
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
-    assert.equal(io.roomEmits.some(event => event.event === 'ai_persistence_error'), true);
-    const streamError = io.roomEmits.find(event => event.event === 'ai_stream_error');
-    assert.equal((streamError?.args[0] as any).persisted, false);
+
+    const staged = store.assistantRuns[0];
+    await executeAssistantRun(
+      {
+        run: staged,
+        token: { workerId: staged.leaseOwner, generation: staged.generation },
+        phase: 'project',
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        getAIClientForModel: () => {
+          providerCalls += 1;
+          throw new Error('projection retry must not call the provider');
+        },
+      },
+      { signal: new AbortController().signal, maxAttempts: 10 },
+    );
+
+    assert.equal(providerCalls, 1);
+    assert.equal(store.assistantRuns[0].status, 'complete');
+    assert.equal(store.messages[1].status, 'complete');
+    assert.equal(store.messages[1].content, 'durable answer');
+    assert.equal(io.roomEmits.filter(event => event.event === 'ai_stream_end').length, 1);
   });
 
   it('truncates retry history before upserting the replacement AI message', async () => {
@@ -1569,7 +1665,7 @@ describe('AI socket handlers', () => {
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {
-    const { io, socket, store } = createHarness({ rejectSaveNumbers: [1] });
+    const { io, socket, store } = createHarness({ rejectSaves: true });
 
     let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
     await socket.invoke('send_message_and_ask_ai', {
@@ -1587,7 +1683,7 @@ describe('AI socket handlers', () => {
     assert.equal(response?.userMessage, store.appendedMessages[0]);
     assert.equal(response?.aiStarted, false);
     assert.equal(response?.aiMessageId, undefined);
-    assert.equal(response?.aiError, 'Unable to start a durable AI response');
+    assert.equal(response?.aiError, 'Unable to queue AI response');
     assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });

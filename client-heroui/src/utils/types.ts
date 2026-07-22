@@ -327,13 +327,19 @@ export interface RoomClientLookup {
   displayId?: string;
   memberRole?: RoomMemberRole | null;
 }
-export interface AIChunkEvent {
+export interface AITransientStreamIdentity {
+  runId?: string;
+  generation?: number;
+  chunkSeq?: number;
+}
+
+export interface AIChunkEvent extends AITransientStreamIdentity {
   messageId: string;
   chunk: string;
   roomId: string;
 }
 
-export interface AIStreamEndEvent {
+export interface AIStreamEndEvent extends AITransientStreamIdentity {
   messageId: string;
   roomId: string;
   content: string;
@@ -350,13 +356,13 @@ export interface AIUsageUpdateEvent {
   usage: AIUsage;
 }
 
-export interface A2UIUpdateEvent {
+export interface A2UIUpdateEvent extends AITransientStreamIdentity {
   messageId: string;
   roomId: string;
   uiPayload: Message['uiPayload'];
 }
 
-export interface AIStreamErrorEvent {
+export interface AIStreamErrorEvent extends AITransientStreamIdentity {
   messageId: string;
   error: string;
   roomId: string;

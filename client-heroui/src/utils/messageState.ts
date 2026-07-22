@@ -191,6 +191,21 @@ export const appendAIChunk = (messages: Message[], messageId: string, chunk: str
   );
 };
 
+export const resetStreamingAIMessage = (messages: Message[], messageId: string) => (
+  messages.map(message => {
+    if (message.id !== messageId || message.messageType !== 'ai' || message.status !== 'streaming') {
+      return message;
+    }
+    const {
+      uiPayload: _uiPayload,
+      usage: _usage,
+      cost: _cost,
+      ...baseline
+    } = message;
+    return { ...baseline, content: '' };
+  })
+);
+
 const mergeA2UIPayloads = (current: A2UIPayload | undefined, incoming: A2UIPayload): A2UIPayload => {
   if (!current || current.format !== incoming.format || current.version !== incoming.version) {
     return incoming;

@@ -20,6 +20,7 @@ export interface SocketHandlerDeps {
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
   aiStreamOwnerId?: string;
   aiTerminalPersistReconciler?: Pick<AITerminalPersistReconciler, 'enqueue'>;
+  onAssistantRunQueued?: () => void | Promise<void>;
   assemblyAIApiKey?: string;
   codeAgentSessionService?: CodeAgentSessionService;
   codeAgentAccess?: CodeAgentAccessControl;

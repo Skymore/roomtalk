@@ -1313,4 +1313,245 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $$ LANGUAGE plpgsql;
     `,
   },
+  {
+    // Ordinary chat AI runs are durable jobs in their own right. The run row
+    // owns its request snapshot, execution generation, lease and staged
+    // terminal result; the generic outbox is no longer a second job ledger.
+    id: '0009_assistant_run_execution_aggregate',
+    sql: `
+      ALTER TABLE assistant_runs
+        ADD COLUMN IF NOT EXISTS request_payload JSONB,
+        ADD COLUMN IF NOT EXISTS terminal_payload JSONB,
+        ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS lease_owner TEXT,
+        ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+
+      UPDATE assistant_runs
+      SET available_at = COALESCE(available_at, queued_at, created_at, clock_timestamp())
+      WHERE available_at IS NULL;
+
+      ALTER TABLE assistant_runs
+        ALTER COLUMN available_at SET DEFAULT clock_timestamp(),
+        ALTER COLUMN available_at SET NOT NULL;
+
+      WITH legacy_requests AS (
+        SELECT DISTINCT ON (aggregate_id)
+          aggregate_id AS run_id,
+          payload
+        FROM outbox_events
+        WHERE event_type = 'ai.run_requested'
+          AND aggregate_type = 'assistant_run'
+          AND jsonb_typeof(payload -> 'contextMessages') = 'array'
+        ORDER BY aggregate_id, created_at DESC
+      )
+      UPDATE assistant_runs AS run
+      SET request_payload = jsonb_build_object(
+        'schemaVersion', 1,
+        'model', jsonb_build_object(
+          'id', run.model_id,
+          'apiModel', run.api_model,
+          'provider', run.provider,
+          'label', run.model_id,
+          'description', 'Model snapshot recovered from the legacy assistant run'
+        ),
+        'roleName', COALESCE(NULLIF(run.role_name, ''), 'AI Assistant'),
+        'systemPrompt', COALESCE(
+          run.system_prompt,
+          'You are a helpful, creative, friendly assistant. Respond concisely and clearly.'
+        ),
+        'contextMessages', legacy.payload -> 'contextMessages'
+      )
+      FROM legacy_requests AS legacy
+      WHERE run.id = legacy.run_id
+        AND run.request_payload IS NULL
+        AND run.status IN ('queued', 'running');
+
+      WITH cancelled AS (
+        UPDATE assistant_runs
+        SET status = 'cancelled',
+          error = CASE
+            WHEN request_payload IS NULL
+              THEN 'Legacy assistant run has no recoverable request snapshot'
+            ELSE 'Legacy assistant run has no matching streaming AI placeholder'
+          END,
+          completed_at = clock_timestamp(),
+          updated_at = clock_timestamp(),
+          lease_owner = NULL,
+          lease_expires_at = NULL
+        WHERE status IN ('queued', 'running')
+          AND (
+            request_payload IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM room_messages AS message
+              WHERE message.id = assistant_runs.ai_message_id
+                AND message.room_id = assistant_runs.room_id
+                AND message.message_type = 'ai'
+                AND message.status = 'streaming'
+            )
+          )
+        RETURNING room_id, ai_message_id
+      )
+      UPDATE room_messages AS message
+      SET status = 'error',
+        content = 'Response interrupted during the assistant worker upgrade.',
+        timestamp = clock_timestamp(),
+        updated_at = clock_timestamp(),
+        is_error = TRUE,
+        ai_stream_owner_id = NULL
+      FROM cancelled
+      WHERE message.room_id = cancelled.room_id
+        AND message.id = cancelled.ai_message_id
+        AND message.status = 'streaming';
+
+      -- The old outbox worker represented an in-flight claim only in its own
+      -- row. Once old processes are stopped, every recoverable legacy run must
+      -- re-enter the new state machine through a fresh generation claim.
+      UPDATE assistant_runs
+      SET status = 'queued',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        available_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+      WHERE status = 'running';
+
+      -- The run itself is the durable execution and usage record. Preserve a
+      -- versioned terminal after-image for legacy completed runs before the
+      -- message foreign key is removed, so deleting chat history does not erase
+      -- the provider result or its cost audit.
+      UPDATE assistant_runs AS run
+      SET terminal_payload = jsonb_strip_nulls(jsonb_build_object(
+          'schemaVersion', 1,
+          'outcome', run.status,
+          'error', CASE WHEN run.status = 'error'
+            THEN COALESCE(run.error, 'Legacy assistant run failed')
+            ELSE NULL
+          END,
+          'metadata', COALESCE(run.metadata, '{}'::jsonb),
+          'message', jsonb_strip_nulls(jsonb_build_object(
+            'id', message.id,
+            'clientId', message.client_id,
+            'content', message.content,
+            'roomId', message.room_id,
+            'timestamp', message.timestamp,
+            'updatedAt', message.updated_at,
+            'messageType', message.message_type,
+            'username', message.username,
+            'avatar', message.avatar,
+            'mimeType', message.mime_type,
+            'status', run.status,
+            'isError', CASE WHEN run.status = 'error' THEN TRUE ELSE message.is_error END,
+            'aiModel', message.ai_model,
+            'usage', message.usage,
+            'cost', message.cost,
+            'replyTo', message.reply_to,
+            'uiPayload', message.ui_payload
+          ))
+        )),
+        updated_at = clock_timestamp()
+      FROM room_messages AS message
+      WHERE run.ai_message_id = message.id
+        AND run.room_id = message.room_id
+        AND run.status IN ('complete', 'error')
+        AND run.terminal_payload IS NULL;
+
+      UPDATE outbox_events
+      SET status = 'processed',
+        processed_at = clock_timestamp(),
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = 'Execution ownership migrated to assistant_runs by migration 0009',
+        updated_at = clock_timestamp()
+      WHERE event_type = 'ai.run_requested'
+        AND aggregate_type = 'assistant_run'
+        AND status IN ('pending', 'processing');
+
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_status_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_status_check
+        CHECK (status IN ('queued', 'running', 'finalizing', 'complete', 'error', 'cancelled'));
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_generation_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_generation_check
+        CHECK (generation >= 0 AND attempt >= 0);
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_active_payload_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_active_payload_check
+        CHECK (status NOT IN ('queued', 'running', 'finalizing') OR request_payload IS NOT NULL);
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_terminal_stage_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_terminal_stage_check
+        CHECK (status NOT IN ('finalizing', 'complete', 'error') OR terminal_payload IS NOT NULL);
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_lease_pair_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_lease_pair_check
+        CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL));
+      ALTER TABLE assistant_runs DROP CONSTRAINT IF EXISTS assistant_runs_execution_state_check;
+      ALTER TABLE assistant_runs ADD CONSTRAINT assistant_runs_execution_state_check CHECK (
+        (status = 'queued'
+          AND lease_owner IS NULL
+          AND terminal_payload IS NULL)
+        OR (status = 'running'
+          AND lease_owner IS NOT NULL
+          AND terminal_payload IS NULL)
+        OR (status = 'finalizing'
+          AND terminal_payload IS NOT NULL)
+        OR (status IN ('complete', 'error', 'cancelled')
+          AND lease_owner IS NULL)
+      );
+
+      -- A message is a user-visible projection and may be deleted. The run is
+      -- the execution and usage audit fact and must survive that delete.
+      ALTER TABLE assistant_runs
+        DROP CONSTRAINT IF EXISTS assistant_runs_ai_message_id_fkey;
+
+      CREATE OR REPLACE FUNCTION validate_assistant_run_message_identity()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.status IN ('queued', 'running', 'finalizing') AND NOT EXISTS (
+          SELECT 1
+          FROM room_messages AS message
+          WHERE message.id = NEW.ai_message_id
+            AND message.room_id = NEW.room_id
+            AND message.message_type = 'ai'
+            AND message.status = 'streaming'
+        ) THEN
+          RAISE EXCEPTION 'active assistant run % must reference a streaming AI message in room %', NEW.id, NEW.room_id
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS assistant_runs_validate_message_identity ON assistant_runs;
+      CREATE TRIGGER assistant_runs_validate_message_identity
+        BEFORE INSERT OR UPDATE OF room_id, ai_message_id, status ON assistant_runs
+        FOR EACH ROW EXECUTE FUNCTION validate_assistant_run_message_identity();
+
+      CREATE OR REPLACE FUNCTION cancel_assistant_run_for_deleted_message()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        UPDATE assistant_runs
+        SET status = 'cancelled',
+          error = 'AI placeholder was deleted before the assistant run completed',
+          completed_at = clock_timestamp(),
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = clock_timestamp()
+        WHERE room_id = OLD.room_id
+          AND ai_message_id = OLD.id
+          AND status IN ('queued', 'running', 'finalizing');
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS room_messages_cancel_assistant_run ON room_messages;
+      CREATE TRIGGER room_messages_cancel_assistant_run
+        AFTER DELETE ON room_messages
+        FOR EACH ROW EXECUTE FUNCTION cancel_assistant_run_for_deleted_message();
+
+      DROP INDEX IF EXISTS idx_assistant_runs_claim;
+      CREATE INDEX idx_assistant_runs_claim
+        ON assistant_runs (available_at, lease_expires_at, created_at)
+        WHERE status IN ('queued', 'running', 'finalizing');
+
+    `,
+  },
 ];

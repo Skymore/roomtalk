@@ -3,11 +3,12 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
 import { validateStoredRoomEventPayload } from './roomEventPayload';
+import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -210,6 +211,13 @@ type AssistantRunRow = {
   started_at: string | Date | null;
   completed_at: string | Date | null;
   updated_at: string | Date;
+  request_payload: unknown;
+  terminal_payload: unknown;
+  generation: number | string;
+  attempt: number | string;
+  available_at: string | Date;
+  lease_owner: string | null;
+  lease_expires_at: string | Date | null;
 };
 
 type RoomAgentTurnRow = {
@@ -276,7 +284,11 @@ const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
-const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at';
+const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at, request_payload, terminal_payload, generation, attempt, available_at, lease_owner, lease_expires_at';
+const CLAIMED_ASSISTANT_RUN_COLUMNS = ASSISTANT_RUN_COLUMNS
+  .split(', ')
+  .map(column => `run.${column}`)
+  .join(', ');
 const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at';
 const OUTBOX_EVENT_COLUMNS = 'id, event_type, aggregate_type, aggregate_id, room_id, payload, status, attempts, available_at, locked_at, locked_by, processed_at, last_error, created_at, updated_at';
 const CLAIMED_OUTBOX_EVENT_COLUMNS = 'e.id, e.event_type, e.aggregate_type, e.aggregate_id, e.room_id, e.payload, e.status, e.attempts, e.available_at, e.locked_at, e.locked_by, e.processed_at, e.last_error, e.created_at, e.updated_at';
@@ -461,6 +473,48 @@ const mapAudioTranscription = (row: AudioTranscriptionRow): AudioTranscriptionRe
   return record;
 };
 
+const decodeAssistantRunRequestRow = (row: AssistantRunRow) => (
+  decodeAssistantRunRequestPayload(row.request_payload, {
+    roomId: row.room_id,
+    modelId: row.model_id,
+    apiModel: row.api_model,
+    provider: row.provider,
+  })
+);
+
+const decodeAssistantRunTerminalRow = (
+  row: AssistantRunRow,
+  value: unknown,
+): AssistantRunTerminalPayloadV1 | null => {
+  const request = decodeAssistantRunRequestRow(row);
+  if (request) {
+    return decodeAssistantRunTerminalPayload(value, {
+      roomId: row.room_id,
+      messageId: row.ai_message_id,
+      model: request.model,
+    });
+  }
+
+  const recovery = decodeAssistantRunTerminalPayload(value, {
+    roomId: row.room_id,
+    messageId: row.ai_message_id,
+  });
+  if (
+    (row.status === 'complete' || row.status === 'error')
+    && recovery?.outcome === row.status
+  ) return recovery;
+  if (
+    recovery?.outcome !== 'error'
+    || recovery.metadata?.invalidRequestPayload !== true
+    || recovery.message.usage !== undefined
+    || recovery.message.cost !== undefined
+    || recovery.message.aiModel?.id !== row.model_id
+    || recovery.message.aiModel.apiModel !== row.api_model
+    || recovery.message.aiModel.provider !== row.provider
+  ) return null;
+  return recovery;
+};
+
 const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
   const run: AssistantRunRecord = {
     id: row.id,
@@ -474,6 +528,9 @@ const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
     createdAt: toIsoString(row.created_at),
     queuedAt: toIsoString(row.queued_at),
     updatedAt: toIsoString(row.updated_at),
+    generation: Number(row.generation) || 0,
+    attempt: Number(row.attempt) || 0,
+    availableAt: toIsoString(row.available_at),
   };
 
   if (row.user_message_id) run.userMessageId = row.user_message_id;
@@ -488,6 +545,12 @@ const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
   if (row.completed_at) run.completedAt = toIsoString(row.completed_at);
   const metadata = parseJsonValue<Record<string, unknown>>(row.metadata);
   if (metadata) run.metadata = metadata;
+  const requestPayload = decodeAssistantRunRequestRow(row);
+  if (requestPayload) run.requestPayload = requestPayload;
+  const terminalPayload = decodeAssistantRunTerminalRow(row, row.terminal_payload);
+  if (terminalPayload) run.terminalPayload = terminalPayload;
+  if (row.lease_owner) run.leaseOwner = row.lease_owner;
+  if (row.lease_expires_at) run.leaseExpiresAt = toIsoString(row.lease_expires_at);
   return run;
 };
 
@@ -681,6 +744,13 @@ const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
   run.startedAt || null,
   run.completedAt || null,
   run.updatedAt,
+  toJsonb(run.requestPayload),
+  toJsonb(run.terminalPayload),
+  run.generation ?? 0,
+  run.attempt ?? 0,
+  run.availableAt || run.queuedAt,
+  run.leaseOwner || null,
+  run.leaseExpiresAt || null,
 ];
 
 const outboxEventParams = (event: OutboxEventRecord): unknown[] => [
@@ -701,7 +771,7 @@ const outboxEventParams = (event: OutboxEventRecord): unknown[] => [
   event.updatedAt,
 ];
 
-const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
+const INSERT_MESSAGE_ROW_SQL = `INSERT INTO room_messages (
   id,
   room_id,
   client_id,
@@ -738,7 +808,9 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   client_batch_index
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30, $31, $32, $33, $34
-) ON CONFLICT (id) DO UPDATE SET
+)`;
+
+const UPSERT_MESSAGE_SQL = `${INSERT_MESSAGE_ROW_SQL} ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
   content = EXCLUDED.content,
@@ -794,16 +866,18 @@ const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
   queued_at,
   started_at,
   completed_at,
-  updated_at
+  updated_at,
+  request_payload,
+  terminal_payload,
+  generation,
+  attempt,
+  available_at,
+  lease_owner,
+  lease_expires_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21
-) ON CONFLICT (id) DO UPDATE SET
-  status = EXCLUDED.status,
-  error = EXCLUDED.error,
-  metadata = EXCLUDED.metadata,
-  started_at = EXCLUDED.started_at,
-  completed_at = EXCLUDED.completed_at,
-  updated_at = EXCLUDED.updated_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21,
+  $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28
+) ON CONFLICT (id) DO NOTHING
 RETURNING ${ASSISTANT_RUN_COLUMNS}`;
 
 const INSERT_OUTBOX_EVENT_SQL = `INSERT INTO outbox_events (
@@ -999,7 +1073,7 @@ export class PostgresStore implements DurableRoomStore {
           [message.roomId]
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
+        await client.query(UPSERT_MESSAGE_SQL, messageParams(message, position));
 
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
@@ -1051,7 +1125,7 @@ export class PostgresStore implements DurableRoomStore {
           [mediaMessage.roomId]
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(INSERT_MESSAGE_SQL, messageParams(mediaMessage, position));
+        await client.query(UPSERT_MESSAGE_SQL, messageParams(mediaMessage, position));
 
         const savedAsset = await this.saveMediaAssetWithClient(client, mediaAsset);
         if (!savedAsset) {
@@ -1098,7 +1172,7 @@ export class PostgresStore implements DurableRoomStore {
           [message.roomId]
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
+        await client.query(UPSERT_MESSAGE_SQL, messageParams(message, position));
 
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
@@ -1664,7 +1738,7 @@ export class PostgresStore implements DurableRoomStore {
 
         await client.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
         for (const [index, message] of messages.entries()) {
-          await client.query(INSERT_MESSAGE_SQL, messageParams({ ...message, roomId }, index));
+          await client.query(UPSERT_MESSAGE_SQL, messageParams({ ...message, roomId }, index));
         }
 
         const lastActivityAt = getLatestMessageTimestamp(messages) || toIsoString(room.rows[0].created_at);
@@ -2394,7 +2468,7 @@ export class PostgresStore implements DurableRoomStore {
       };
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room AI cost total', { error, roomId });
-      return { roomId, currency: 'USD', totalUsd: 0 };
+      throw error;
     }
   }
 
@@ -2421,7 +2495,7 @@ export class PostgresStore implements DurableRoomStore {
       };
     } catch (error) {
       this.logger.error('Error incrementing PostgreSQL room AI cost total', { error, roomId, cost });
-      return this.readRoomAICost(roomId);
+      throw error;
     }
   }
 
@@ -2431,6 +2505,7 @@ export class PostgresStore implements DurableRoomStore {
         await this.pool.query('DELETE FROM room_ai_cost_totals WHERE room_id = $1', [roomId]);
       } catch (error) {
         this.logger.error('Error clearing PostgreSQL room AI cost total', { error, roomId, totalUsd });
+        throw error;
       }
       return { roomId, currency: 'USD', totalUsd: 0 };
     }
@@ -2453,17 +2528,7 @@ export class PostgresStore implements DurableRoomStore {
       };
     } catch (error) {
       this.logger.error('Error setting PostgreSQL room AI cost total', { error, roomId, totalUsd });
-      return this.readRoomAICost(roomId);
-    }
-  }
-
-  async createAssistantRun(run: AssistantRunRecord): Promise<AssistantRunRecord | null> {
-    try {
-      const result = await this.pool.query<AssistantRunRow>(INSERT_ASSISTANT_RUN_SQL, assistantRunParams(run));
-      return result.rows[0] ? mapAssistantRun(result.rows[0]) : null;
-    } catch (error) {
-      this.logger.error('Error creating PostgreSQL assistant run', { error, runId: run.id, roomId: run.roomId });
-      return null;
+      throw error;
     }
   }
 
@@ -2476,41 +2541,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapAssistantRun(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error reading PostgreSQL assistant run', { error, runId });
-      return null;
-    }
-  }
-
-  async updateAssistantRun(runId: string, updates: AssistantRunUpdate): Promise<AssistantRunRecord | null> {
-    const now = updates.updatedAt || new Date().toISOString();
-    try {
-      const result = await this.pool.query<AssistantRunRow>(
-        `UPDATE assistant_runs
-        SET status = COALESCE($2, status),
-          error = CASE WHEN $3::boolean THEN $4 ELSE error END,
-          started_at = CASE WHEN $5::boolean THEN $6::timestamptz ELSE started_at END,
-          completed_at = CASE WHEN $7::boolean THEN $8::timestamptz ELSE completed_at END,
-          metadata = CASE WHEN $9::boolean THEN $10::jsonb ELSE metadata END,
-          updated_at = $11::timestamptz
-        WHERE id = $1
-        RETURNING ${ASSISTANT_RUN_COLUMNS}`,
-        [
-          runId,
-          updates.status || null,
-          Object.prototype.hasOwnProperty.call(updates, 'error'),
-          updates.error ?? null,
-          Object.prototype.hasOwnProperty.call(updates, 'startedAt'),
-          updates.startedAt ?? null,
-          Object.prototype.hasOwnProperty.call(updates, 'completedAt'),
-          updates.completedAt ?? null,
-          Object.prototype.hasOwnProperty.call(updates, 'metadata'),
-          toJsonb(updates.metadata ?? null),
-          now,
-        ]
-      );
-      return result.rows[0] ? mapAssistantRun(result.rows[0]) : null;
-    } catch (error) {
-      this.logger.error('Error updating PostgreSQL assistant run', { error, runId, updates });
-      return null;
+      throw error;
     }
   }
 
@@ -2524,33 +2555,24 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async createAssistantRunWithOutbox(run: AssistantRunRecord, event: OutboxEventRecord): Promise<{ run: AssistantRunRecord; event: OutboxEventRecord } | null> {
-    try {
-      return await this.transaction(async client => {
-        const runResult = await client.query<AssistantRunRow>(INSERT_ASSISTANT_RUN_SQL, assistantRunParams(run));
-        const eventResult = await client.query<OutboxEventRow>(INSERT_OUTBOX_EVENT_SQL, outboxEventParams(event));
-        if (!runResult.rows[0] || !eventResult.rows[0]) {
-          return null;
-        }
-        return {
-          run: mapAssistantRun(runResult.rows[0]),
-          event: mapOutboxEvent(eventResult.rows[0]),
-        };
-      });
-    } catch (error) {
-      this.logger.error('Error creating PostgreSQL assistant run with outbox event', { error, runId: run.id, eventId: event.id });
-      return null;
+  async createAssistantRunWithMessage(message: Message, run: AssistantRunRecord) {
+    if (
+      message.roomId !== run.roomId
+      || message.id !== run.aiMessageId
+      || message.messageType !== 'ai'
+      || message.clientId !== 'ai_assistant'
+      || message.status !== 'streaming'
+      || run.status !== 'queued'
+      || !decodeAssistantRunRequestPayload(run.requestPayload, {
+        roomId: run.roomId,
+        modelId: run.modelId,
+        apiModel: run.apiModel,
+        provider: run.provider,
+      })
+    ) {
+      throw new Error('Assistant run creation requires one queued run and its streaming placeholder');
     }
-  }
 
-  async createAssistantRunWithMessageAndOutbox(
-    message: Message,
-    run: AssistantRunRecord,
-    event: OutboxEventRecord,
-  ) {
-    if (message.roomId !== run.roomId || run.roomId !== event.roomId || message.id !== run.aiMessageId) {
-      throw new Error('Assistant run start records must identify the same room and AI message');
-    }
     try {
       return await this.transaction(async client => {
         const room = await client.query<RoomRow>(
@@ -2564,12 +2586,13 @@ export class PostgresStore implements DurableRoomStore {
           [message.roomId],
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
-
+        const insertedMessage = await client.query<MessageRow>(
+          `${INSERT_MESSAGE_ROW_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+          messageParams(message, position),
+        );
         const runResult = await client.query<AssistantRunRow>(INSERT_ASSISTANT_RUN_SQL, assistantRunParams(run));
-        const eventResult = await client.query<OutboxEventRow>(INSERT_OUTBOX_EVENT_SQL, outboxEventParams(event));
-        if (!runResult.rows[0] || !eventResult.rows[0]) {
-          throw new Error('Failed to create assistant run or outbox event');
+        if (!insertedMessage.rows[0] || !runResult.rows[0]) {
+          throw new Error('Failed to create assistant run and placeholder');
         }
 
         const updatedRoom = await client.query<RoomRow>(
@@ -2580,25 +2603,301 @@ export class PostgresStore implements DurableRoomStore {
           RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp],
         );
-        if (!updatedRoom.rows[0]) throw new Error('Failed to update room for assistant run start');
+        if (!updatedRoom.rows[0]) throw new Error('Failed to update room for assistant run creation');
 
         return {
           room: mapRoom(updatedRoom.rows[0]),
-          message,
+          message: mapMessage(insertedMessage.rows[0]),
           run: mapAssistantRun(runResult.rows[0]),
-          event: mapOutboxEvent(eventResult.rows[0]),
         };
       });
     } catch (error) {
-      this.logger.error('Error creating PostgreSQL AI placeholder with assistant run and outbox event', {
+      this.logger.error('Error creating PostgreSQL assistant run with placeholder', {
         error,
         runId: run.id,
-        eventId: event.id,
         messageId: message.id,
         roomId: message.roomId,
       });
       return null;
     }
+  }
+
+  async claimAssistantRun(options: AssistantRunClaimOptions): Promise<AssistantRunClaim | null> {
+    const lockMs = Math.max(1_000, options.leaseMs || 60_000);
+    try {
+      const result = await this.transaction(async client => client.query<AssistantRunRow & { claimed_status: AssistantRunRecord['status'] }>(
+        `WITH runtime_clock AS (
+          SELECT COALESCE($1::timestamptz, clock_timestamp()) AS now
+        ), candidate AS (
+          SELECT id, status AS claimed_status
+          FROM assistant_runs, runtime_clock
+          WHERE (
+            (status = 'queued' AND available_at <= runtime_clock.now)
+            OR (
+              status IN ('running', 'finalizing')
+              AND available_at <= runtime_clock.now
+              AND (lease_expires_at IS NULL OR lease_expires_at <= runtime_clock.now)
+            )
+          )
+          ORDER BY CASE WHEN status = 'finalizing' THEN 0 ELSE 1 END,
+            available_at ASC,
+            created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
+        )
+        UPDATE assistant_runs AS run
+        SET status = CASE WHEN candidate.claimed_status = 'finalizing' THEN 'finalizing' ELSE 'running' END,
+          generation = run.generation + 1,
+          attempt = run.attempt + CASE WHEN candidate.claimed_status = 'finalizing' THEN 0 ELSE 1 END,
+          started_at = COALESCE(run.started_at, runtime_clock.now),
+          lease_owner = $2,
+          lease_expires_at = runtime_clock.now + ($3::bigint * interval '1 millisecond'),
+          error = CASE WHEN candidate.claimed_status = 'finalizing' THEN run.error ELSE NULL END,
+          updated_at = runtime_clock.now
+        FROM candidate, runtime_clock
+        WHERE run.id = candidate.id
+        RETURNING ${CLAIMED_ASSISTANT_RUN_COLUMNS}, candidate.claimed_status`,
+        [options.now || null, options.workerId, lockMs],
+      ));
+      const row = result.rows[0];
+      if (!row) return null;
+      const run = mapAssistantRun(row);
+      return {
+        run,
+        token: { workerId: options.workerId, generation: run.generation },
+        phase: row.claimed_status === 'finalizing' ? 'project' : 'execute',
+      };
+    } catch (error) {
+      this.logger.error('Error claiming PostgreSQL assistant run', { error, options });
+      throw error;
+    }
+  }
+
+  async renewAssistantRunLease(
+    runId: string,
+    claim: AssistantRunClaimToken,
+    leaseMs: number,
+    now?: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE assistant_runs
+      SET lease_expires_at = COALESCE($4::timestamptz, clock_timestamp()) + ($5::bigint * interval '1 millisecond'),
+        updated_at = COALESCE($4::timestamptz, clock_timestamp())
+      WHERE id = $1
+        AND status IN ('running', 'finalizing')
+        AND lease_owner = $2
+        AND generation = $3`,
+      [runId, claim.workerId, claim.generation, now || null, Math.max(1_000, leaseMs)],
+    );
+    return (result.rowCount || 0) === 1;
+  }
+
+  async stageAssistantRunTerminal(
+    runId: string,
+    claim: AssistantRunClaimToken,
+    terminal: AssistantRunTerminalPayloadV1,
+  ): Promise<AssistantRunRecord | null> {
+    return this.transaction(async client => {
+      const locked = await client.query<AssistantRunRow>(
+        `SELECT ${ASSISTANT_RUN_COLUMNS}
+        FROM assistant_runs
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_owner = $2
+          AND generation = $3
+        FOR UPDATE`,
+        [runId, claim.workerId, claim.generation],
+      );
+      const runRow = locked.rows[0];
+      if (!runRow) return null;
+
+      if (!decodeAssistantRunTerminalRow(runRow, terminal)) {
+        throw new Error(`Assistant run ${runId} produced an invalid terminal payload`);
+      }
+
+      const result = await client.query<AssistantRunRow>(
+        `UPDATE assistant_runs
+        SET status = 'finalizing',
+          terminal_payload = $4::jsonb,
+          error = $5,
+          available_at = clock_timestamp(),
+          updated_at = clock_timestamp()
+        WHERE id = $1
+          AND status = 'running'
+          AND lease_owner = $2
+          AND generation = $3
+        RETURNING ${ASSISTANT_RUN_COLUMNS}`,
+        [runId, claim.workerId, claim.generation, toJsonb(terminal), terminal.error || null],
+      );
+      if (!result.rows[0]) throw new Error(`Assistant run ${runId} lost its terminal staging fence`);
+      return mapAssistantRun(result.rows[0]);
+    });
+  }
+
+  async projectAssistantRunTerminal(
+    runId: string,
+    claim: AssistantRunClaimToken,
+  ): Promise<AssistantRunProjectionResult> {
+    return this.transaction(async client => {
+      const locked = await client.query<AssistantRunRow>(
+        `SELECT ${ASSISTANT_RUN_COLUMNS}
+        FROM assistant_runs
+        WHERE id = $1
+        FOR UPDATE`,
+        [runId],
+      );
+      const runRow = locked.rows[0];
+      if (
+        !runRow
+        || runRow.status !== 'finalizing'
+        || runRow.lease_owner !== claim.workerId
+        || Number(runRow.generation) !== claim.generation
+      ) {
+        return { outcome: 'stale' as const };
+      }
+
+      const terminal = decodeAssistantRunTerminalRow(runRow, runRow.terminal_payload);
+      if (!terminal) throw new Error(`Assistant run ${runId} has an invalid staged terminal payload`);
+
+      const message = terminal.message;
+      const updatedMessage = await client.query<MessageRow>(
+        `UPDATE room_messages
+        SET content = $3,
+          timestamp = $4::timestamptz,
+          updated_at = COALESCE($5::timestamptz, $4::timestamptz),
+          status = $6,
+          is_error = $7,
+          ai_model = $8::jsonb,
+          usage = $9::jsonb,
+          cost = $10::jsonb,
+          ui_payload = $11::jsonb,
+          model_step_id = $12,
+          model_step_sequence = $13,
+          ai_stream_owner_id = NULL
+        WHERE id = $1
+          AND room_id = $2
+          AND status = 'streaming'
+        RETURNING ${MESSAGE_COLUMNS}`,
+        [
+          message.id,
+          message.roomId,
+          message.content,
+          message.timestamp,
+          message.updatedAt || null,
+          message.status,
+          message.isError ?? (message.status === 'error'),
+          toJsonb(message.aiModel),
+          toJsonb(message.usage),
+          toJsonb(message.cost),
+          toJsonb(message.uiPayload),
+          message.modelStepId || null,
+          message.modelStepSequence ?? null,
+        ],
+      );
+
+      if (!updatedMessage.rows[0]) {
+        const cancelled = await client.query<AssistantRunRow>(
+          `UPDATE assistant_runs
+          SET status = 'cancelled',
+            error = 'AI placeholder was deleted or superseded before terminal projection',
+            completed_at = clock_timestamp(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = clock_timestamp()
+          WHERE id = $1
+            AND status = 'finalizing'
+            AND lease_owner = $2
+            AND generation = $3
+          RETURNING ${ASSISTANT_RUN_COLUMNS}`,
+          [runId, claim.workerId, claim.generation],
+        );
+        if (!cancelled.rows[0]) return { outcome: 'stale' as const };
+        return { outcome: 'obsolete' as const, run: mapAssistantRun(cancelled.rows[0]) };
+      }
+
+      const totalUsd = Number.isFinite(message.cost?.totalUsd) && Number(message.cost?.totalUsd) > 0
+        ? Number(message.cost!.totalUsd)
+        : 0;
+      if (totalUsd > 0) {
+        await client.query(
+          `INSERT INTO room_ai_cost_totals (room_id, total_usd, updated_at)
+          VALUES ($1, $2, clock_timestamp())
+          ON CONFLICT (room_id) DO UPDATE SET
+            total_usd = room_ai_cost_totals.total_usd + EXCLUDED.total_usd,
+            updated_at = clock_timestamp()`,
+          [message.roomId, totalUsd],
+        );
+      }
+
+      const costTotal = await client.query<{ total_usd: number | string }>(
+        'SELECT total_usd FROM room_ai_cost_totals WHERE room_id = $1',
+        [message.roomId],
+      );
+      const parsedTotal = Number.parseFloat(String(costTotal.rows[0]?.total_usd || '0'));
+
+      const room = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+          updated_at = clock_timestamp()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [message.roomId, message.timestamp],
+      );
+      if (!room.rows[0]) throw new Error(`Assistant run projection lost room ${message.roomId}`);
+
+      const completed = await client.query<AssistantRunRow>(
+        `UPDATE assistant_runs
+        SET status = $4,
+          error = $5,
+          completed_at = clock_timestamp(),
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = clock_timestamp()
+        WHERE id = $1
+          AND status = 'finalizing'
+          AND lease_owner = $2
+          AND generation = $3
+        RETURNING ${ASSISTANT_RUN_COLUMNS}`,
+        [runId, claim.workerId, claim.generation, terminal.outcome, terminal.error || null],
+      );
+      if (!completed.rows[0]) throw new Error(`Assistant run ${runId} lost its terminal projection fence`);
+
+      return {
+        outcome: 'applied' as const,
+        room: mapRoom(room.rows[0]),
+        message: mapMessage(updatedMessage.rows[0]),
+        run: mapAssistantRun(completed.rows[0]),
+        roomCostTotal: {
+          roomId: message.roomId,
+          currency: 'USD' as const,
+          totalUsd: Number.isFinite(parsedTotal) ? parsedTotal : 0,
+        },
+      };
+    });
+  }
+
+  async releaseAssistantRunClaim(
+    runId: string,
+    claim: AssistantRunClaimToken,
+    errorMessage: string,
+    retryDelayMs: number,
+    now?: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE assistant_runs
+      SET status = CASE WHEN status = 'running' THEN 'queued' ELSE status END,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        available_at = COALESCE($4::timestamptz, clock_timestamp()) + ($5::bigint * interval '1 millisecond'),
+        error = $6,
+        updated_at = COALESCE($4::timestamptz, clock_timestamp())
+      WHERE id = $1
+        AND status IN ('running', 'finalizing')
+        AND lease_owner = $2
+        AND generation = $3`,
+      [runId, claim.workerId, claim.generation, now || null, Math.max(0, retryDelayMs), errorMessage],
+    );
+    return (result.rowCount || 0) === 1;
   }
 
   async claimOutboxEvents(options: OutboxClaimOptions): Promise<OutboxEventRecord[]> {
@@ -3637,14 +3936,9 @@ export class PostgresStore implements DurableRoomStore {
         AND NOT EXISTS (
           SELECT 1
           FROM assistant_runs AS run
-          JOIN outbox_events AS event
-            ON event.aggregate_type = 'assistant_run'
-            AND event.aggregate_id = run.id
-            AND event.event_type = 'ai.run_requested'
           WHERE run.room_id = message.room_id
             AND run.ai_message_id = message.id
-            AND run.status IN ('queued', 'running')
-            AND event.status IN ('pending', 'processing')
+            AND run.status IN ('queued', 'running', 'finalizing')
         )
         AND (
           message.ai_stream_owner_id IS NULL

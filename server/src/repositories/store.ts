@@ -1,4 +1,4 @@
-import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -243,7 +243,23 @@ export interface SavePushSubscriptionInput {
   userAgent?: string;
 }
 
-export type AssistantRunStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+export type AssistantRunStatus = 'queued' | 'running' | 'finalizing' | 'complete' | 'error' | 'cancelled';
+
+export interface AssistantRunRequestPayloadV1 {
+  schemaVersion: 1;
+  model: AIModelOption;
+  roleName: string;
+  systemPrompt: string;
+  contextMessages: Message[];
+}
+
+export interface AssistantRunTerminalPayloadV1 {
+  schemaVersion: 1;
+  outcome: 'complete' | 'error';
+  message: Message;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
 
 export interface AssistantRunRecord {
   id: string;
@@ -267,16 +283,53 @@ export interface AssistantRunRecord {
   completedAt?: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+  requestPayload?: AssistantRunRequestPayloadV1;
+  terminalPayload?: AssistantRunTerminalPayloadV1;
+  generation: number;
+  attempt: number;
+  availableAt: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
 }
 
-export interface AssistantRunUpdate {
-  status?: AssistantRunStatus;
-  error?: string | null;
-  startedAt?: string | null;
-  completedAt?: string | null;
-  updatedAt?: string;
-  metadata?: Record<string, unknown> | null;
+export interface AssistantRunClaimToken {
+  workerId: string;
+  generation: number;
 }
+
+export interface AssistantRunClaim {
+  run: AssistantRunRecord;
+  token: AssistantRunClaimToken;
+  phase: 'execute' | 'project';
+}
+
+export interface AssistantRunClaimOptions {
+  workerId: string;
+  leaseMs?: number;
+  now?: string;
+}
+
+export interface AssistantRunCreationResult {
+  room: Room;
+  message: Message;
+  run: AssistantRunRecord;
+}
+
+export type AssistantRunProjectionResult =
+  | {
+      outcome: 'applied';
+      room: Room;
+      message: Message;
+      run: AssistantRunRecord;
+      roomCostTotal: RoomAICostTotal;
+    }
+  | {
+      outcome: 'obsolete';
+      run: AssistantRunRecord;
+    }
+  | {
+      outcome: 'stale';
+    };
 
 export type OutboxEventStatus = 'pending' | 'processing' | 'processed' | 'failed';
 
@@ -296,13 +349,6 @@ export interface OutboxEventRecord {
   lastError?: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface AssistantRunStartResult {
-  room: Room;
-  message: Message;
-  run: AssistantRunRecord;
-  event: OutboxEventRecord;
 }
 
 export interface OutboxClaimOptions {
@@ -429,12 +475,14 @@ export interface DurableRoomStore {
   updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate): Promise<AudioTranscriptionRecord | null>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
-  createAssistantRun?(run: AssistantRunRecord): Promise<AssistantRunRecord | null>;
   getAssistantRun?(runId: string): Promise<AssistantRunRecord | null>;
-  updateAssistantRun?(runId: string, updates: AssistantRunUpdate): Promise<AssistantRunRecord | null>;
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
-  createAssistantRunWithOutbox?(run: AssistantRunRecord, event: OutboxEventRecord): Promise<{ run: AssistantRunRecord; event: OutboxEventRecord } | null>;
-  createAssistantRunWithMessageAndOutbox?(message: Message, run: AssistantRunRecord, event: OutboxEventRecord): Promise<AssistantRunStartResult | null>;
+  createAssistantRunWithMessage?(message: Message, run: AssistantRunRecord): Promise<AssistantRunCreationResult | null>;
+  claimAssistantRun?(options: AssistantRunClaimOptions): Promise<AssistantRunClaim | null>;
+  renewAssistantRunLease?(runId: string, claim: AssistantRunClaimToken, leaseMs: number, now?: string): Promise<boolean>;
+  stageAssistantRunTerminal?(runId: string, claim: AssistantRunClaimToken, terminal: AssistantRunTerminalPayloadV1): Promise<AssistantRunRecord | null>;
+  projectAssistantRunTerminal?(runId: string, claim: AssistantRunClaimToken): Promise<AssistantRunProjectionResult>;
+  releaseAssistantRunClaim?(runId: string, claim: AssistantRunClaimToken, error: string, retryDelayMs: number, now?: string): Promise<boolean>;
   claimOutboxEvents?(options: OutboxClaimOptions): Promise<OutboxEventRecord[]>;
   renewOutboxEventLease?(eventId: string, claim: OutboxClaimToken, now?: string): Promise<boolean>;
   markOutboxEventProcessed?(eventId: string, claim: OutboxClaimToken, processedAt?: string): Promise<OutboxEventRecord | null>;
@@ -871,32 +919,44 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.incrementRoomAICost(roomId, cost);
   }
 
-  createAssistantRun(run: AssistantRunRecord) {
-    return this.durableStore.createAssistantRun?.(run) || Promise.resolve(null);
-  }
-
   getAssistantRun(runId: string) {
     return this.durableStore.getAssistantRun?.(runId) || Promise.resolve(null);
-  }
-
-  updateAssistantRun(runId: string, updates: AssistantRunUpdate) {
-    return this.durableStore.updateAssistantRun?.(runId, updates) || Promise.resolve(null);
   }
 
   createOutboxEvent(event: OutboxEventRecord) {
     return this.durableStore.createOutboxEvent?.(event) || Promise.resolve(null);
   }
 
-  createAssistantRunWithOutbox(run: AssistantRunRecord, event: OutboxEventRecord) {
-    return this.durableStore.createAssistantRunWithOutbox?.(run, event) || Promise.resolve(null);
-  }
-
-  async createAssistantRunWithMessageAndOutbox(message: Message, run: AssistantRunRecord, event: OutboxEventRecord) {
-    const result = await this.durableStore.createAssistantRunWithMessageAndOutbox?.(message, run, event) || null;
+  async createAssistantRunWithMessage(message: Message, run: AssistantRunRecord) {
+    const result = await this.durableStore.createAssistantRunWithMessage?.(message, run) || null;
     if (result) {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
     return result;
+  }
+
+  claimAssistantRun(options: AssistantRunClaimOptions) {
+    return this.durableStore.claimAssistantRun?.(options) || Promise.resolve(null);
+  }
+
+  renewAssistantRunLease(runId: string, claim: AssistantRunClaimToken, leaseMs: number, now?: string) {
+    return this.durableStore.renewAssistantRunLease?.(runId, claim, leaseMs, now) || Promise.resolve(false);
+  }
+
+  stageAssistantRunTerminal(runId: string, claim: AssistantRunClaimToken, terminal: AssistantRunTerminalPayloadV1) {
+    return this.durableStore.stageAssistantRunTerminal?.(runId, claim, terminal) || Promise.resolve(null);
+  }
+
+  async projectAssistantRunTerminal(runId: string, claim: AssistantRunClaimToken) {
+    const result = await this.durableStore.projectAssistantRunTerminal?.(runId, claim) || { outcome: 'stale' as const };
+    if (result.outcome === 'applied') {
+      await this.invalidateRoomMessagesCache(result.message.roomId);
+    }
+    return result;
+  }
+
+  releaseAssistantRunClaim(runId: string, claim: AssistantRunClaimToken, error: string, retryDelayMs: number, now?: string) {
+    return this.durableStore.releaseAssistantRunClaim?.(runId, claim, error, retryDelayMs, now) || Promise.resolve(false);
   }
 
   claimOutboxEvents(options: OutboxClaimOptions) {

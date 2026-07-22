@@ -3,6 +3,7 @@ import { createClient, RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool, PostgresStore } from '../repositories/postgresStore';
+import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from '../repositories/assistantRunPayload';
 import {
   AssistantRunRecord,
   AudioTranscriptionRecord,
@@ -12,7 +13,7 @@ import {
   PendingMediaUpload,
   PushSubscriptionRecord,
 } from '../repositories/store';
-import { MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember } from '../types';
+import { AIModelOption, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember } from '../types';
 import { CodexConnectionRecord } from '../services/codexConnection';
 import { PostgresCodexConnectionStore } from '../services/codexConnectionStore';
 import { GitHubConnectionRecord } from '../services/githubConnection';
@@ -556,7 +557,7 @@ export class PostgresMigrationTarget implements RedisToPostgresMigrationTarget {
       counts.audioTranscriptions++;
     }
     for (const run of data.assistantRuns) {
-      await this.upsertAssistantRun(run);
+      await this.upsertAssistantRun(run, data.outboxEvents);
       counts.assistantRuns++;
     }
     for (const event of data.outboxEvents) {
@@ -594,26 +595,199 @@ export class PostgresMigrationTarget implements RedisToPostgresMigrationTarget {
     return counts;
   }
 
-  private async upsertAssistantRun(run: AssistantRunRecord) {
-    await this.pool.query(
-      `INSERT INTO assistant_runs (
-        id, room_id, requested_by_client_id, user_message_id, ai_message_id, status,
-        model_id, api_model, provider, role_name, system_prompt, max_context_messages,
-        retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at,
-        started_at, completed_at, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-      ON CONFLICT (id) DO UPDATE SET
-        status=EXCLUDED.status, error=EXCLUDED.error, metadata=EXCLUDED.metadata,
-        started_at=EXCLUDED.started_at, completed_at=EXCLUDED.completed_at, updated_at=EXCLUDED.updated_at`,
-      [run.id, run.roomId, run.requestedByClientId, run.userMessageId || null, run.aiMessageId, run.status,
-        run.modelId, run.apiModel, run.provider, run.roleName || null, run.systemPrompt || null,
-        run.maxContextMessages || null, run.retryForMessageId || null, run.editedMessageId || null,
-        run.error || null, run.metadata || null, run.createdAt, run.queuedAt, run.startedAt || null,
-        run.completedAt || null, run.updatedAt]
+  private async upsertAssistantRun(run: AssistantRunRecord, outboxEvents: OutboxEventRecord[]) {
+    const expectedRequest = {
+      roomId: run.roomId,
+      modelId: run.modelId,
+      apiModel: run.apiModel,
+      provider: run.provider,
+    };
+    const existingRequest = decodeAssistantRunRequestPayload(run.requestPayload, expectedRequest);
+    const legacyRequestEvent = outboxEvents
+      .filter(event => (
+        event.eventType === 'ai.run_requested'
+        && event.aggregateType === 'assistant_run'
+        && event.aggregateId === run.id
+      ))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    const legacyModel: AIModelOption = {
+      id: run.modelId,
+      apiModel: run.apiModel,
+      provider: run.provider,
+      label: run.modelId,
+      description: 'Model snapshot recovered from the legacy Redis assistant run',
+    };
+    const recoveredRequest = existingRequest || decodeAssistantRunRequestPayload({
+      schemaVersion: 1,
+      model: legacyModel,
+      roleName: run.roleName || 'AI Assistant',
+      systemPrompt: run.systemPrompt
+        ?? 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.',
+      contextMessages: legacyRequestEvent?.payload.contextMessages,
+    }, expectedRequest);
+
+    const messageExists = await this.pool.query<{ id: string }>(
+      `SELECT id FROM room_messages WHERE room_id = $1 AND id = $2`,
+      [run.roomId, run.aiMessageId],
     );
+    let runMessage: Message | undefined;
+    if (messageExists.rows[0]) {
+      runMessage = (await this.store.readMessagesByRoom(run.roomId))
+        .find(message => message.id === run.aiMessageId);
+      if (!runMessage) {
+        throw new Error(`Unable to read imported assistant message ${run.roomId}/${run.aiMessageId}`);
+      }
+    }
+
+    const existingTerminal = decodeAssistantRunTerminalPayload(run.terminalPayload, {
+      roomId: run.roomId,
+      messageId: run.aiMessageId,
+    });
+    const recoveredTerminal = existingTerminal || (
+      (run.status === 'complete' || run.status === 'error') && runMessage?.messageType === 'ai'
+        ? decodeAssistantRunTerminalPayload({
+            schemaVersion: 1,
+            outcome: run.status,
+            ...(run.status === 'error'
+              ? { error: run.error || 'Legacy assistant run failed' }
+              : {}),
+            ...(run.metadata && typeof run.metadata === 'object' && !Array.isArray(run.metadata)
+              ? { metadata: run.metadata }
+              : {}),
+            message: {
+              ...runMessage,
+              status: run.status,
+              isError: run.status === 'error',
+            },
+          }, {
+            roomId: run.roomId,
+            messageId: run.aiMessageId,
+          })
+        : null
+    );
+
+    const sourceWasActive = run.status === 'queued' || run.status === 'running' || run.status === 'finalizing';
+    const hasStreamingPlaceholder = runMessage?.messageType === 'ai' && runMessage.status === 'streaming';
+    let status: AssistantRunRecord['status'];
+    let error = run.error;
+    if (run.status === 'finalizing' && recoveredRequest && recoveredTerminal && hasStreamingPlaceholder) {
+      status = 'finalizing';
+    } else if ((run.status === 'queued' || run.status === 'running') && recoveredRequest && hasStreamingPlaceholder) {
+      status = 'queued';
+      error = undefined;
+    } else if ((run.status === 'complete' || run.status === 'error') && recoveredTerminal) {
+      status = run.status;
+    } else if (run.status === 'cancelled') {
+      status = 'cancelled';
+    } else {
+      status = 'cancelled';
+      error = recoveredRequest
+        ? 'Legacy assistant run has no matching streaming AI placeholder'
+        : 'Legacy assistant run has no recoverable request snapshot';
+    }
+
+    const importedAt = new Date().toISOString();
+    const normalized: AssistantRunRecord = {
+      ...run,
+      status,
+      ...(error ? { error } : { error: undefined }),
+      updatedAt: run.updatedAt || importedAt,
+      ...(status === 'complete' || status === 'error' || status === 'cancelled'
+        ? { completedAt: run.completedAt || importedAt }
+        : { completedAt: undefined }),
+      ...(recoveredRequest ? { requestPayload: recoveredRequest } : { requestPayload: undefined }),
+      ...(recoveredTerminal ? { terminalPayload: recoveredTerminal } : { terminalPayload: undefined }),
+      generation: Number.isSafeInteger(run.generation) && run.generation >= 0 ? run.generation : 0,
+      attempt: Number.isSafeInteger(run.attempt) && run.attempt >= 0 ? run.attempt : 0,
+      availableAt: run.availableAt || run.queuedAt || importedAt,
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
+    };
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO assistant_runs (
+          id, room_id, requested_by_client_id, user_message_id, ai_message_id, status,
+          model_id, api_model, provider, role_name, system_prompt, max_context_messages,
+          retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at,
+          started_at, completed_at, updated_at, request_payload, terminal_payload, generation,
+          attempt, available_at, lease_owner, lease_expires_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20,$21,
+          $22::jsonb,$23::jsonb,$24,$25,$26,$27,$28
+        ) ON CONFLICT (id) DO NOTHING`,
+        [
+          normalized.id,
+          normalized.roomId,
+          normalized.requestedByClientId,
+          normalized.userMessageId || null,
+          normalized.aiMessageId,
+          normalized.status,
+          normalized.modelId,
+          normalized.apiModel,
+          normalized.provider,
+          normalized.roleName || null,
+          normalized.systemPrompt || null,
+          normalized.maxContextMessages ?? null,
+          normalized.retryForMessageId || null,
+          normalized.editedMessageId || null,
+          normalized.error || null,
+          normalized.metadata ? JSON.stringify(normalized.metadata) : null,
+          normalized.createdAt,
+          normalized.queuedAt,
+          normalized.startedAt || null,
+          normalized.completedAt || null,
+          normalized.updatedAt,
+          normalized.requestPayload ? JSON.stringify(normalized.requestPayload) : null,
+          normalized.terminalPayload ? JSON.stringify(normalized.terminalPayload) : null,
+          normalized.generation,
+          normalized.attempt,
+          normalized.availableAt,
+          null,
+          null,
+        ],
+      );
+      if (sourceWasActive && status === 'cancelled' && hasStreamingPlaceholder) {
+        await client.query(
+          `UPDATE room_messages
+          SET status = 'error',
+            content = $3,
+            timestamp = clock_timestamp(),
+            updated_at = clock_timestamp(),
+            is_error = TRUE,
+            ai_stream_owner_id = NULL
+          WHERE room_id = $1
+            AND id = $2
+            AND status = 'streaming'`,
+          [run.roomId, run.aiMessageId, error || 'Legacy assistant run could not be resumed'],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async upsertOutboxEvent(event: OutboxEventRecord) {
+    const retiredAssistantJob = event.eventType === 'ai.run_requested'
+      && event.aggregateType === 'assistant_run';
+    const importedAt = new Date().toISOString();
+    const normalized = retiredAssistantJob
+      ? {
+          ...event,
+          status: 'processed' as const,
+          lockedAt: undefined,
+          lockedBy: undefined,
+          processedAt: event.processedAt || importedAt,
+          lastError: 'Execution ownership migrated to assistant_runs during Redis import',
+          updatedAt: importedAt,
+        }
+      : event;
     await this.pool.query(
       `INSERT INTO outbox_events (
         id,event_type,aggregate_type,aggregate_id,room_id,payload,status,attempts,available_at,
@@ -623,9 +797,10 @@ export class PostgresMigrationTarget implements RedisToPostgresMigrationTarget {
         payload=EXCLUDED.payload,status=EXCLUDED.status,attempts=EXCLUDED.attempts,
         available_at=EXCLUDED.available_at,locked_at=EXCLUDED.locked_at,locked_by=EXCLUDED.locked_by,
         processed_at=EXCLUDED.processed_at,last_error=EXCLUDED.last_error,updated_at=EXCLUDED.updated_at`,
-      [event.id, event.eventType, event.aggregateType, event.aggregateId, event.roomId || null, event.payload,
-        event.status, event.attempts, event.availableAt, event.lockedAt || null, event.lockedBy || null,
-        event.processedAt || null, event.lastError || null, event.createdAt, event.updatedAt]
+      [normalized.id, normalized.eventType, normalized.aggregateType, normalized.aggregateId,
+        normalized.roomId || null, normalized.payload, normalized.status, normalized.attempts,
+        normalized.availableAt, normalized.lockedAt || null, normalized.lockedBy || null,
+        normalized.processedAt || null, normalized.lastError || null, normalized.createdAt, normalized.updatedAt]
     );
   }
 
