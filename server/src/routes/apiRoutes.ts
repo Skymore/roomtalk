@@ -38,6 +38,7 @@ interface ApiRouteOptions {
   io: Server;
   redisClient: RedisClientType;
   socketAdapterReady?: () => boolean;
+  assistantQueueHealth?: () => Promise<void>;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
@@ -1517,18 +1518,33 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       Promise.resolve().then(() => store.countRooms()),
       Promise.resolve().then(() => redisClient.ping()),
       Promise.resolve().then(() => mediaObjectStorage.checkHealth()),
+      Promise.resolve().then(() => store.readTaskDispatchMetrics?.() || {
+        pendingCount: 0,
+        processingCount: 0,
+      }),
+      options.assistantQueueHealth
+        ? Promise.resolve().then(() => options.assistantQueueHealth!())
+        : Promise.resolve(),
     ]);
-    const [databaseCheck, redisCheck, mediaStorageCheck] = checks;
+    const [databaseCheck, redisCheck, mediaStorageCheck, dispatchCheck, assistantQueueCheck] = checks;
     const socketAdapterReady = options.socketAdapterReady
       ? options.socketAdapterReady()
       : Boolean(io.of('/').adapter);
-    const ready = checks.every(check => check.status === 'fulfilled') && socketAdapterReady;
+    const ready = databaseCheck.status === 'fulfilled'
+      && redisCheck.status === 'fulfilled'
+      && mediaStorageCheck.status === 'fulfilled'
+      && dispatchCheck.status === 'fulfilled'
+      && socketAdapterReady;
+    const degraded = !ready || assistantQueueCheck.status === 'rejected';
     const roomCount = databaseCheck.status === 'fulfilled' ? databaseCheck.value : null;
     const dependencies = {
       database: databaseCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
       redis: redisCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
       mediaStorage: mediaStorageCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
       socketAdapter: socketAdapterReady ? 'ready' : 'unavailable',
+      ...(options.assistantQueueHealth ? {
+        assistantQueue: assistantQueueCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
+      } : {}),
     } as const;
 
     if (!ready) {
@@ -1539,19 +1555,28 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         databaseError: databaseCheck.status === 'rejected' ? databaseCheck.reason : undefined,
         redisError: redisCheck.status === 'rejected' ? redisCheck.reason : undefined,
         mediaStorageError: mediaStorageCheck.status === 'rejected' ? mediaStorageCheck.reason : undefined,
+        dispatchError: dispatchCheck.status === 'rejected' ? dispatchCheck.reason : undefined,
+        assistantQueueError: assistantQueueCheck.status === 'rejected' ? assistantQueueCheck.reason : undefined,
       });
     } else {
       routeLogger.info('System readiness requested', { endpoint: req.path, ip: req.ip });
     }
 
     return res.status(ready ? 200 : 503).json({
-      status: ready ? 'online' : 'degraded',
+      status: degraded ? 'degraded' : 'online',
       ready,
       persistenceStore,
       redis: dependencies.redis === 'ready' ? 'connected' : 'disconnected',
       mediaStorage: dependencies.mediaStorage === 'ready' ? 'connected' : 'unavailable',
       socketAdapterReady: dependencies.socketAdapter === 'ready',
       dependencies,
+      assistantQueue: {
+        dispatch: assistantQueueCheck.status === 'fulfilled' ? 'available' : 'deferred',
+        ...(dispatchCheck.status === 'fulfilled' ? dispatchCheck.value : {
+          pendingCount: null,
+          processingCount: null,
+        }),
+      },
       features: {
         codeAgent: {
           enabled: codeAgentAccess.enabled,

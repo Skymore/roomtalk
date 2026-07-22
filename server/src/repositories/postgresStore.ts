@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
@@ -248,6 +248,19 @@ type OutboxEventRow = {
   locked_at: string | Date | null;
   locked_by: string | null;
   processed_at: string | Date | null;
+  last_error: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
+type TaskDispatchRow = {
+  run_id: string;
+  status: TaskDispatchRecord['status'];
+  attempts: number | string;
+  available_at: string | Date;
+  locked_at: string | Date | null;
+  locked_by: string | null;
+  dispatched_at: string | Date | null;
   last_error: string | null;
   created_at: string | Date;
   updated_at: string | Date;
@@ -590,6 +603,19 @@ const mapOutboxEvent = (row: OutboxEventRow): OutboxEventRecord => {
   if (row.last_error) event.lastError = row.last_error;
   return event;
 };
+
+const mapTaskDispatch = (row: TaskDispatchRow): TaskDispatchRecord => ({
+  runId: row.run_id,
+  status: row.status,
+  attempts: Number(row.attempts) || 0,
+  availableAt: toIsoString(row.available_at),
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at),
+  ...(row.locked_at ? { lockedAt: toIsoString(row.locked_at) } : {}),
+  ...(row.locked_by ? { lockedBy: row.locked_by } : {}),
+  ...(row.dispatched_at ? { dispatchedAt: toIsoString(row.dispatched_at) } : {}),
+  ...(row.last_error ? { lastError: row.last_error } : {}),
+});
 
 const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord => ({
   clientId: row.client_id,
@@ -2594,6 +2620,11 @@ export class PostgresStore implements DurableRoomStore {
         if (!insertedMessage.rows[0] || !runResult.rows[0]) {
           throw new Error('Failed to create assistant run and placeholder');
         }
+        await client.query(
+          `INSERT INTO task_dispatch_outbox (run_id, status, available_at)
+          VALUES ($1, 'pending', $2::timestamptz)`,
+          [run.id, run.availableAt],
+        );
 
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
@@ -2669,6 +2700,56 @@ export class PostgresStore implements DurableRoomStore {
       };
     } catch (error) {
       this.logger.error('Error claiming PostgreSQL assistant run', { error, options });
+      throw error;
+    }
+  }
+
+  async claimAssistantRunById(
+    runId: string,
+    options: AssistantRunClaimOptions,
+  ): Promise<AssistantRunClaim | null> {
+    const lockMs = Math.max(1_000, options.leaseMs || 60_000);
+    try {
+      const result = await this.transaction(async client => client.query<AssistantRunRow & { claimed_status: AssistantRunRecord['status'] }>(
+        `WITH runtime_clock AS (
+          SELECT COALESCE($1::timestamptz, clock_timestamp()) AS now
+        ), candidate AS (
+          SELECT id, status AS claimed_status
+          FROM assistant_runs, runtime_clock
+          WHERE id = $2
+            AND (
+              status = 'queued'
+              OR (
+                status IN ('running', 'finalizing')
+                AND (lease_expires_at IS NULL OR lease_expires_at <= runtime_clock.now)
+              )
+            )
+          FOR UPDATE
+        )
+        UPDATE assistant_runs AS run
+        SET status = CASE WHEN candidate.claimed_status = 'finalizing' THEN 'finalizing' ELSE 'running' END,
+          generation = run.generation + 1,
+          attempt = run.attempt + CASE WHEN candidate.claimed_status = 'finalizing' THEN 0 ELSE 1 END,
+          started_at = COALESCE(run.started_at, runtime_clock.now),
+          lease_owner = $3,
+          lease_expires_at = runtime_clock.now + ($4::bigint * interval '1 millisecond'),
+          error = CASE WHEN candidate.claimed_status = 'finalizing' THEN run.error ELSE NULL END,
+          updated_at = runtime_clock.now
+        FROM candidate, runtime_clock
+        WHERE run.id = candidate.id
+        RETURNING ${CLAIMED_ASSISTANT_RUN_COLUMNS}, candidate.claimed_status`,
+        [options.now || null, runId, options.workerId, lockMs],
+      ));
+      const row = result.rows[0];
+      if (!row) return null;
+      const run = mapAssistantRun(row);
+      return {
+        run,
+        token: { workerId: options.workerId, generation: run.generation },
+        phase: row.claimed_status === 'finalizing' ? 'project' : 'execute',
+      };
+    } catch (error) {
+      this.logger.error('Error claiming PostgreSQL assistant run by id', { error, runId, options });
       throw error;
     }
   }
@@ -2898,6 +2979,111 @@ export class PostgresStore implements DurableRoomStore {
       [runId, claim.workerId, claim.generation, now || null, Math.max(0, retryDelayMs), errorMessage],
     );
     return (result.rowCount || 0) === 1;
+  }
+
+  async claimTaskDispatches(options: TaskDispatchClaimOptions): Promise<TaskDispatchRecord[]> {
+    const limit = Math.min(100, Math.max(1, Math.floor(options.limit || 20)));
+    const lockMs = Math.max(1_000, options.lockMs || 60_000);
+    const result = await this.transaction(async client => client.query<TaskDispatchRow>(
+      `WITH runtime_clock AS (
+        SELECT COALESCE($1::timestamptz, clock_timestamp()) AS now
+      ), candidates AS (
+        SELECT dispatch.run_id
+        FROM task_dispatch_outbox AS dispatch
+        JOIN assistant_runs AS run ON run.id = dispatch.run_id
+        CROSS JOIN runtime_clock
+        WHERE run.status IN ('queued', 'running', 'finalizing')
+          AND dispatch.available_at <= runtime_clock.now
+          AND (
+            dispatch.status = 'pending'
+            OR (
+              dispatch.status = 'processing'
+              AND dispatch.locked_at <= runtime_clock.now - ($4::bigint * interval '1 millisecond')
+            )
+          )
+        ORDER BY dispatch.created_at ASC
+        LIMIT $3
+        FOR UPDATE OF dispatch SKIP LOCKED
+      )
+      UPDATE task_dispatch_outbox AS dispatch
+      SET status = 'processing',
+        attempts = dispatch.attempts + 1,
+        locked_at = runtime_clock.now,
+        locked_by = $2,
+        last_error = NULL,
+        updated_at = runtime_clock.now
+      FROM candidates, runtime_clock
+      WHERE dispatch.run_id = candidates.run_id
+      RETURNING dispatch.*`,
+      [options.now || null, options.workerId, limit, lockMs],
+    ));
+    return result.rows.map(mapTaskDispatch);
+  }
+
+  async markTaskDispatchDispatched(
+    runId: string,
+    claim: TaskDispatchClaimToken,
+    now?: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE task_dispatch_outbox
+      SET status = 'dispatched',
+        locked_at = NULL,
+        locked_by = NULL,
+        dispatched_at = COALESCE($4::timestamptz, clock_timestamp()),
+        last_error = NULL,
+        updated_at = COALESCE($4::timestamptz, clock_timestamp())
+      WHERE run_id = $1
+        AND status = 'processing'
+        AND locked_by = $2
+        AND attempts = $3`,
+      [runId, claim.workerId, claim.attempt, now || null],
+    );
+    return (result.rowCount || 0) === 1;
+  }
+
+  async releaseTaskDispatch(
+    runId: string,
+    claim: TaskDispatchClaimToken,
+    errorMessage: string,
+    retryDelayMs: number,
+    now?: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE task_dispatch_outbox
+      SET status = 'pending',
+        available_at = COALESCE($4::timestamptz, clock_timestamp()) + ($5::bigint * interval '1 millisecond'),
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = $6,
+        updated_at = COALESCE($4::timestamptz, clock_timestamp())
+      WHERE run_id = $1
+        AND status = 'processing'
+        AND locked_by = $2
+        AND attempts = $3`,
+      [runId, claim.workerId, claim.attempt, now || null, Math.max(0, retryDelayMs), errorMessage],
+    );
+    return (result.rowCount || 0) === 1;
+  }
+
+  async readTaskDispatchMetrics(): Promise<TaskDispatchMetrics> {
+    const result = await this.pool.query<{
+      pending_count: number | string;
+      processing_count: number | string;
+      oldest_pending_at: string | Date | null;
+    }>(
+      `SELECT
+        COUNT(*) FILTER (WHERE status = 'pending') AS pending_count,
+        COUNT(*) FILTER (WHERE status = 'processing') AS processing_count,
+        MIN(created_at) FILTER (WHERE status IN ('pending', 'processing')) AS oldest_pending_at
+      FROM task_dispatch_outbox`,
+    );
+    const row = result.rows[0];
+    return {
+      pendingCount: Number(row?.pending_count) || 0,
+      processingCount: Number(row?.processing_count) || 0,
+      ...(row?.oldest_pending_at ? { oldestPendingAt: toIsoString(row.oldest_pending_at) } : {}),
+    };
   }
 
   async claimOutboxEvents(options: OutboxClaimOptions): Promise<OutboxEventRecord[]> {

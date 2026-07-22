@@ -1554,4 +1554,76 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
 
     `,
   },
+  {
+    // PostgreSQL and Redis cannot participate in one transaction. This narrow
+    // outbox records only the intent to enqueue an assistant run; BullMQ owns
+    // runtime scheduling while assistant_runs remains the business authority.
+    id: '0010_assistant_run_bullmq_dispatch',
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_dispatch_outbox (
+        run_id TEXT PRIMARY KEY REFERENCES assistant_runs(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'processing', 'dispatched')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        available_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        locked_at TIMESTAMPTZ,
+        locked_by TEXT,
+        dispatched_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT task_dispatch_lock_pair_check
+          CHECK ((locked_at IS NULL) = (locked_by IS NULL)),
+        CONSTRAINT task_dispatch_state_shape_check CHECK (
+          (status = 'pending' AND locked_at IS NULL AND dispatched_at IS NULL)
+          OR (status = 'processing' AND locked_at IS NOT NULL AND dispatched_at IS NULL)
+          OR (status = 'dispatched' AND locked_at IS NULL AND dispatched_at IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_task_dispatch_claim
+        ON task_dispatch_outbox (available_at, created_at)
+        WHERE status IN ('pending', 'processing');
+
+      -- The migration is applied with the old embedded worker stopped. Any
+      -- interrupted provider execution must re-enter through a new generation;
+      -- a staged terminal payload is preserved and will only be projected.
+      UPDATE assistant_runs
+      SET status = CASE WHEN status = 'running' THEN 'queued' ELSE status END,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        available_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+      WHERE status IN ('running', 'finalizing');
+
+      INSERT INTO task_dispatch_outbox (run_id, status, available_at)
+      SELECT id, 'pending', clock_timestamp()
+      FROM assistant_runs
+      WHERE status IN ('queued', 'finalizing')
+      ON CONFLICT (run_id) DO NOTHING;
+
+      CREATE OR REPLACE FUNCTION settle_terminal_assistant_run_dispatch()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.status IN ('complete', 'error', 'cancelled')
+          AND OLD.status IS DISTINCT FROM NEW.status THEN
+          UPDATE task_dispatch_outbox
+          SET status = 'dispatched',
+            locked_at = NULL,
+            locked_by = NULL,
+            dispatched_at = COALESCE(dispatched_at, clock_timestamp()),
+            updated_at = clock_timestamp()
+          WHERE run_id = NEW.id
+            AND status <> 'dispatched';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS assistant_runs_settle_task_dispatch ON assistant_runs;
+      CREATE TRIGGER assistant_runs_settle_task_dispatch
+        AFTER UPDATE OF status ON assistant_runs
+        FOR EACH ROW EXECUTE FUNCTION settle_terminal_assistant_run_dispatch();
+    `,
+  },
 ];

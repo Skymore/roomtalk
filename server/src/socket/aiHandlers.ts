@@ -26,8 +26,9 @@ import { normalizeCodexRunSettings } from '../services/codexRunSettings';
 import type { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import type { CodeAgentTurnInput } from '../services/codeAgentSessionService';
 import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, CodexServiceTier, Message } from '../types';
-import type { AssistantRunExecutionContext } from '../services/assistantRunWorker';
+import type { AssistantRunExecutionContext } from '../services/assistantRunExecution';
 import { buildE2EFakeA2UIBatches } from '../services/e2eFakeA2UI';
+import type { AssistantRunEventPublisher } from '../services/assistantRunEvents';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, buildRoomPermissions, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext, SocketHandlerDeps } from './types';
@@ -509,15 +510,19 @@ const buildSystemPromptWithA2UI = (systemPrompt: string, roleName: string) => (
   })
 );
 
-const emitAssistantRunProjection = (
-  io: SocketHandlerDeps['io'],
+const emitAssistantRunProjection = async (
+  events: AssistantRunEventPublisher,
   projection: AssistantRunProjectionResult,
   stream: { runId: string; generation: number; chunkSeq: number },
-): void => {
+): Promise<void> => {
   if (projection.outcome !== 'applied') return;
-  io.to(projection.room.creatorId).emit('room_updated', projection.room);
+  await events.emit(
+    { kind: 'client', id: projection.room.creatorId },
+    'room_updated',
+    projection.room as unknown as Record<string, unknown>,
+  );
   if (projection.message.status === 'complete') {
-    io.to(projection.message.roomId).emit('ai_stream_end', {
+    await events.emit({ kind: 'room', id: projection.message.roomId }, 'ai_stream_end', {
       ...stream,
       messageId: projection.message.id,
       roomId: projection.message.roomId,
@@ -531,10 +536,14 @@ const emitAssistantRunProjection = (
         ? { completedAfterPrematureClose: true }
         : {}),
     });
-    io.to(projection.message.roomId).emit('ai_cost_total', projection.roomCostTotal);
+    await events.emit(
+      { kind: 'room', id: projection.message.roomId },
+      'ai_cost_total',
+      projection.roomCostTotal as unknown as Record<string, unknown>,
+    );
     return;
   }
-  io.to(projection.message.roomId).emit('ai_stream_error', {
+  await events.emit({ kind: 'room', id: projection.message.roomId }, 'ai_stream_error', {
     ...stream,
     messageId: projection.message.id,
     roomId: projection.message.roomId,
@@ -543,37 +552,62 @@ const emitAssistantRunProjection = (
     message: projection.message,
     partial: Boolean(projection.run.terminalPayload?.metadata?.partial),
   });
-  io.to(projection.message.roomId).emit('ai_cost_total', projection.roomCostTotal);
+  await events.emit(
+    { kind: 'room', id: projection.message.roomId },
+    'ai_cost_total',
+    projection.roomCostTotal as unknown as Record<string, unknown>,
+  );
 };
 
-type AssistantRunExecutorDeps = Pick<
+export type AssistantRunExecutorDeps = Pick<
   SocketHandlerDeps,
-  'io' | 'socketLogger' | 'openaiLogger' | 'getAIClientForModel'
+  'socketLogger' | 'openaiLogger' | 'getAIClientForModel'
 > & {
-  store: SocketHandlerDeps['store'] & Required<Pick<
-    RoomStore,
+  io?: SocketHandlerDeps['io'];
+  eventPublisher?: AssistantRunEventPublisher;
+  store: Required<Pick<RoomStore,
     'stageAssistantRunTerminal' | 'projectAssistantRunTerminal'
   >>;
 };
 
 export const executeAssistantRun = async (
   claim: AssistantRunClaim,
-  {
-    io,
-    store,
-    socketLogger,
-    openaiLogger,
-    getAIClientForModel,
-  }: AssistantRunExecutorDeps,
+  deps: AssistantRunExecutorDeps,
   execution: AssistantRunExecutionContext,
 ): Promise<void> => {
+  const { store, socketLogger, openaiLogger, getAIClientForModel } = deps;
+  const events: AssistantRunEventPublisher = deps.eventPublisher || {
+    emit: async (target, event, payload) => {
+      if (!deps.io) throw new Error('Assistant run executor has no event publisher');
+      deps.io.to(target.id).emit(event, payload);
+    },
+  };
   const { run, token } = claim;
   let chunkSeq = 0;
+  let eventChain = Promise.resolve();
   const nextStreamEvent = () => ({
     runId: run.id,
     generation: token.generation,
     chunkSeq: ++chunkSeq,
   });
+  const emitEvent = (
+    target: Parameters<AssistantRunEventPublisher['emit']>[0],
+    event: Parameters<AssistantRunEventPublisher['emit']>[1],
+    payload: Record<string, unknown>,
+  ): Promise<void> => {
+    eventChain = eventChain
+      .then(() => events.emit(target, event, payload))
+      .catch(error => {
+        openaiLogger.warn('Assistant run transient event delivery failed', {
+          error: error instanceof Error ? error.message : String(error),
+          event,
+          runId: run.id,
+          roomId: run.roomId,
+          generation: token.generation,
+        });
+      });
+    return eventChain;
+  };
 
   const project = async (): Promise<AssistantRunProjectionResult> => {
     execution.signal.throwIfAborted();
@@ -595,7 +629,8 @@ export const executeAssistantRun = async (
       });
       return projection;
     }
-    emitAssistantRunProjection(io, projection, nextStreamEvent());
+    await eventChain;
+    await emitAssistantRunProjection(events, projection, nextStreamEvent());
     openaiLogger.info('Projected durable assistant run terminal state', {
       runId: run.id,
       roomId: run.roomId,
@@ -685,7 +720,7 @@ export const executeAssistantRun = async (
   const emitTextChunk = (chunk: string) => {
     execution.signal.throwIfAborted();
     streamedTextContent += chunk;
-    io.to(run.roomId).emit('ai_chunk', {
+    void emitEvent({ kind: 'room', id: run.roomId }, 'ai_chunk', {
       ...nextStreamEvent(),
       messageId: run.aiMessageId,
       chunk,
@@ -704,7 +739,7 @@ export const executeAssistantRun = async (
       return false;
     }
     streamedA2UIPayload = mergeA2UIPayloads(streamedA2UIPayload, uiPayload);
-    io.to(run.roomId).emit('a2ui_update', {
+    await emitEvent({ kind: 'room', id: run.roomId }, 'a2ui_update', {
       ...nextStreamEvent(),
       messageId: run.aiMessageId,
       roomId: run.roomId,

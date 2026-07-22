@@ -315,6 +315,39 @@ export interface AssistantRunCreationResult {
   run: AssistantRunRecord;
 }
 
+export type TaskDispatchStatus = 'pending' | 'processing' | 'dispatched';
+
+export interface TaskDispatchRecord {
+  runId: string;
+  status: TaskDispatchStatus;
+  attempts: number;
+  availableAt: string;
+  createdAt: string;
+  updatedAt: string;
+  lockedAt?: string;
+  lockedBy?: string;
+  dispatchedAt?: string;
+  lastError?: string;
+}
+
+export interface TaskDispatchClaimOptions {
+  workerId: string;
+  limit?: number;
+  lockMs?: number;
+  now?: string;
+}
+
+export interface TaskDispatchClaimToken {
+  workerId: string;
+  attempt: number;
+}
+
+export interface TaskDispatchMetrics {
+  pendingCount: number;
+  processingCount: number;
+  oldestPendingAt?: string;
+}
+
 export type AssistantRunProjectionResult =
   | {
       outcome: 'applied';
@@ -479,10 +512,15 @@ export interface DurableRoomStore {
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
   createAssistantRunWithMessage?(message: Message, run: AssistantRunRecord): Promise<AssistantRunCreationResult | null>;
   claimAssistantRun?(options: AssistantRunClaimOptions): Promise<AssistantRunClaim | null>;
+  claimAssistantRunById?(runId: string, options: AssistantRunClaimOptions): Promise<AssistantRunClaim | null>;
   renewAssistantRunLease?(runId: string, claim: AssistantRunClaimToken, leaseMs: number, now?: string): Promise<boolean>;
   stageAssistantRunTerminal?(runId: string, claim: AssistantRunClaimToken, terminal: AssistantRunTerminalPayloadV1): Promise<AssistantRunRecord | null>;
   projectAssistantRunTerminal?(runId: string, claim: AssistantRunClaimToken): Promise<AssistantRunProjectionResult>;
   releaseAssistantRunClaim?(runId: string, claim: AssistantRunClaimToken, error: string, retryDelayMs: number, now?: string): Promise<boolean>;
+  claimTaskDispatches?(options: TaskDispatchClaimOptions): Promise<TaskDispatchRecord[]>;
+  markTaskDispatchDispatched?(runId: string, claim: TaskDispatchClaimToken, now?: string): Promise<boolean>;
+  releaseTaskDispatch?(runId: string, claim: TaskDispatchClaimToken, error: string, retryDelayMs: number, now?: string): Promise<boolean>;
+  readTaskDispatchMetrics?(): Promise<TaskDispatchMetrics>;
   claimOutboxEvents?(options: OutboxClaimOptions): Promise<OutboxEventRecord[]>;
   renewOutboxEventLease?(eventId: string, claim: OutboxClaimToken, now?: string): Promise<boolean>;
   markOutboxEventProcessed?(eventId: string, claim: OutboxClaimToken, processedAt?: string): Promise<OutboxEventRecord | null>;
@@ -939,6 +977,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.claimAssistantRun?.(options) || Promise.resolve(null);
   }
 
+  claimAssistantRunById(runId: string, options: AssistantRunClaimOptions) {
+    return this.durableStore.claimAssistantRunById?.(runId, options) || Promise.resolve(null);
+  }
+
   renewAssistantRunLease(runId: string, claim: AssistantRunClaimToken, leaseMs: number, now?: string) {
     return this.durableStore.renewAssistantRunLease?.(runId, claim, leaseMs, now) || Promise.resolve(false);
   }
@@ -957,6 +999,25 @@ export class CompositeRoomStore implements RoomStore {
 
   releaseAssistantRunClaim(runId: string, claim: AssistantRunClaimToken, error: string, retryDelayMs: number, now?: string) {
     return this.durableStore.releaseAssistantRunClaim?.(runId, claim, error, retryDelayMs, now) || Promise.resolve(false);
+  }
+
+  claimTaskDispatches(options: TaskDispatchClaimOptions) {
+    return this.durableStore.claimTaskDispatches?.(options) || Promise.resolve([]);
+  }
+
+  markTaskDispatchDispatched(runId: string, claim: TaskDispatchClaimToken, now?: string) {
+    return this.durableStore.markTaskDispatchDispatched?.(runId, claim, now) || Promise.resolve(false);
+  }
+
+  releaseTaskDispatch(runId: string, claim: TaskDispatchClaimToken, error: string, retryDelayMs: number, now?: string) {
+    return this.durableStore.releaseTaskDispatch?.(runId, claim, error, retryDelayMs, now) || Promise.resolve(false);
+  }
+
+  readTaskDispatchMetrics() {
+    return this.durableStore.readTaskDispatchMetrics?.() || Promise.resolve({
+      pendingCount: 0,
+      processingCount: 0,
+    });
   }
 
   claimOutboxEvents(options: OutboxClaimOptions) {

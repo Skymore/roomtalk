@@ -43,6 +43,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}@postgres:5432/${POSTGRES_DB:-message_system}
       POSTGRES_SSL: "false"
       REDIS_URL: redis://redis:6379
+      QUEUE_REDIS_URL: ${QUEUE_REDIS_URL:-redis://redis:6379}
       ROOM_EVENT_RETENTION_DAYS: ${ROOM_EVENT_RETENTION_DAYS:-7}
       ROOM_EVENT_MAX_PER_ROOM: ${ROOM_EVENT_MAX_PER_ROOM:-10000}
       ROOM_EVENT_PRUNE_INTERVAL_MS: ${ROOM_EVENT_PRUNE_INTERVAL_MS:-3600000}
@@ -50,10 +51,10 @@ services:
       ROOMTALK_INSTANCE_LEASE_TTL_MS: ${ROOMTALK_INSTANCE_LEASE_TTL_MS:-30000}
       ROOMTALK_INSTANCE_HEARTBEAT_MS: ${ROOMTALK_INSTANCE_HEARTBEAT_MS:-10000}
       ROOMTALK_RECOVERY_INTERVAL_MS: ${ROOMTALK_RECOVERY_INTERVAL_MS:-5000}
-      ASSISTANT_RUN_WORKER_POLL_INTERVAL_MS: ${ASSISTANT_RUN_WORKER_POLL_INTERVAL_MS:-1000}
-      ASSISTANT_RUN_WORKER_LEASE_MS: ${ASSISTANT_RUN_WORKER_LEASE_MS:-60000}
-      ASSISTANT_RUN_WORKER_RETRY_DELAY_MS: ${ASSISTANT_RUN_WORKER_RETRY_DELAY_MS:-30000}
-      ASSISTANT_RUN_WORKER_MAX_ATTEMPTS: ${ASSISTANT_RUN_WORKER_MAX_ATTEMPTS:-10}
+      ASSISTANT_RUN_DISPATCH_POLL_INTERVAL_MS: ${ASSISTANT_RUN_DISPATCH_POLL_INTERVAL_MS:-1000}
+      ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS: ${ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS:-5000}
+      ASSISTANT_RUN_DISPATCH_LOCK_MS: ${ASSISTANT_RUN_DISPATCH_LOCK_MS:-60000}
+      ASSISTANT_RUN_DISPATCH_BATCH_SIZE: ${ASSISTANT_RUN_DISPATCH_BATCH_SIZE:-20}
       MEDIA_STORAGE_MODE: s3
       MEDIA_BUCKET_NAME: ${MEDIA_BUCKET_NAME:-roomtalk-media}
       MEDIA_STORAGE_REGION: ${MEDIA_STORAGE_REGION:-us-east-1}
@@ -85,6 +86,51 @@ services:
     networks:
       - roomtalk
 
+  ai-worker:
+    image: roomtalk-local:dev
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - ${ROOMTALK_APP_ENV_FILE:-.env.compose}
+    environment:
+      NODE_ENV: production
+      PERSISTENCE_STORE: postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-roomtalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.compose}@postgres:5432/${POSTGRES_DB:-message_system}
+      POSTGRES_SSL: "false"
+      REDIS_URL: redis://redis:6379
+      QUEUE_REDIS_URL: ${QUEUE_REDIS_URL:-redis://redis:6379}
+      ASSISTANT_RUN_WORKER_CONCURRENCY: ${ASSISTANT_RUN_WORKER_CONCURRENCY:-2}
+      ASSISTANT_RUN_WORKER_LEASE_MS: ${ASSISTANT_RUN_WORKER_LEASE_MS:-60000}
+      ASSISTANT_RUN_WORKER_MAX_ATTEMPTS: ${ASSISTANT_RUN_WORKER_MAX_ATTEMPTS:-10}
+      ASSISTANT_RUN_QUEUE_ATTEMPTS: ${ASSISTANT_RUN_QUEUE_ATTEMPTS:-12}
+      ASSISTANT_RUN_QUEUE_BACKOFF_MS: ${ASSISTANT_RUN_QUEUE_BACKOFF_MS:-5000}
+      ASSISTANT_RUN_QUEUE_LOCK_MS: ${ASSISTANT_RUN_QUEUE_LOCK_MS:-60000}
+      AI_WORKER_HEALTH_PORT: "3013"
+      MEDIA_STORAGE_MODE: s3
+      MEDIA_BUCKET_NAME: ${MEDIA_BUCKET_NAME:-roomtalk-media}
+      MEDIA_STORAGE_REGION: ${MEDIA_STORAGE_REGION:-us-east-1}
+      MEDIA_STORAGE_ENDPOINT: http://object-storage:8333
+      MEDIA_STORAGE_PUBLIC_ENDPOINT: ${MEDIA_STORAGE_PUBLIC_ENDPOINT:-}
+      MEDIA_STORAGE_FORCE_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY_ID:?Set LOCAL_S3_ACCESS_KEY_ID in .env.compose}
+      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_ACCESS_KEY:?Set LOCAL_S3_SECRET_ACCESS_KEY in .env.compose}
+    command: ["npm", "run", "start:ai-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3013/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - roomtalk
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -109,7 +155,20 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     logging: *default-logging
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+      - --auto-aof-rewrite-percentage
+      - "100"
+      - --auto-aof-rewrite-min-size
+      - 64mb
+    volumes:
+      - redis_data:/data
     ports:
       - 127.0.0.1:${REDIS_HOST_PORT:-63799}:6379
     healthcheck:
@@ -187,6 +246,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
 networks:
   roomtalk:

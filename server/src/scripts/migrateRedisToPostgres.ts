@@ -749,6 +749,14 @@ export class PostgresMigrationTarget implements RedisToPostgresMigrationTarget {
           null,
         ],
       );
+      if (normalized.status === 'queued' || normalized.status === 'finalizing') {
+        await client.query(
+          `INSERT INTO task_dispatch_outbox (run_id, status, available_at)
+          VALUES ($1, 'pending', $2::timestamptz)
+          ON CONFLICT (run_id) DO NOTHING`,
+          [normalized.id, normalized.availableAt],
+        );
+      }
       if (sourceWasActive && status === 'cancelled' && hasStreamingPlaceholder) {
         await client.query(
           `UPDATE room_messages

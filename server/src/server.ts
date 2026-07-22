@@ -22,14 +22,15 @@ import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContex
 import { registerCodeAgentCodexAuthRoutes } from './routes/codeAgentCodexAuthRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
-import { executeAssistantRun } from './socket/aiHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
-import { createAssistantRunWorkerFromEnv } from './services/assistantRunWorker';
+import { createAssistantRunQueue } from './services/assistantRunQueue';
+import { TaskDispatchRelay } from './services/taskDispatchRelay';
+import { subscribeToAssistantRunEvents } from './services/assistantRunEvents';
 import { createCodeAgentAccessControl } from './services/codeAgentAccessControl';
 import { createCodeAgentRunner } from './services/codeAgentRunner';
 import {
@@ -90,7 +91,7 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
-const assistantRunLogger = new Logger('AssistantRunWorker');
+const assistantRunLogger = new Logger('AssistantRunQueue');
 const codeAgentLogger = new Logger('CodeAgent');
 const codexLogger = new Logger('Codex');
 const mediaStorageLogger = new Logger('MediaStorage');
@@ -277,6 +278,7 @@ redisClient.on('error', (err: Error) => {
 // 创建 Redis 适配器所需的客户端
 const pubClient = createClient({ url: REDIS_URL });
 const subClient = pubClient.duplicate();
+const assistantRunEventSubClient = pubClient.duplicate();
 let socketAdapterInstalled = false;
 
 // 监听 Redis 客户端错误
@@ -286,6 +288,10 @@ pubClient.on('error', (err: Error) => {
 
 subClient.on('error', (err: Error) => {
   redisLogger.error('Redis Sub Client Error:', { error: err.message, stack: err.stack });
+});
+
+assistantRunEventSubClient.on('error', (err: Error) => {
+  redisLogger.error('Assistant run transient subscriber error', { error: err.message, stack: err.stack });
 });
 
 // 初始化 Socket.IO 服务器（暂不设置适配器，等待 Redis 连接后再设置）
@@ -304,26 +310,27 @@ const aiTerminalPersistReconciler = new AITerminalPersistReconciler(store, opena
     io.local.to(message.roomId).emit('room_sync_required', { reason: 'ai_terminal_reconciled' });
   },
 });
+const authorizeLocalRoomPayload = async (roomId: string) => {
+  const localSocketIds = await io.local.in(roomId).allSockets();
+  return enforceRoomEventAuthorizationBarrier({
+    roomId,
+    socketIds: Array.from(localSocketIds),
+    getLocalSocket: socketId => io.sockets.sockets.get(socketId),
+    readStoredClientIds: socketIds => store.getClientIds!(socketIds),
+    readAuthorizedClientIds: clientIds => store.readRoomMemberClientIds!(roomId, clientIds),
+    onUnavailable: context => postgresLogger.warn('Room fast-path authorization unavailable', {
+      ...context,
+      roomId,
+      socketCount: localSocketIds.size,
+    }),
+  });
+};
 const roomEventBroadcaster = new RoomEventBroadcaster({
   store,
   logger: postgresLogger,
   maxPayloadBytes: parsePositiveIntegerEnv('ROOM_EVENT_FAST_PATH_MAX_BYTES', 256 * 1024),
   hasLocalSubscribers: async roomId => (await io.local.in(roomId).allSockets()).size > 0,
-  authorizeLocalRoom: async roomId => {
-    const localSocketIds = await io.local.in(roomId).allSockets();
-    return enforceRoomEventAuthorizationBarrier({
-      roomId,
-      socketIds: Array.from(localSocketIds),
-      getLocalSocket: socketId => io.sockets.sockets.get(socketId),
-      readStoredClientIds: socketIds => store.getClientIds!(socketIds),
-      readAuthorizedClientIds: clientIds => store.readRoomMemberClientIds!(roomId, clientIds),
-      onUnavailable: context => postgresLogger.warn('Room fast-path authorization unavailable', {
-        ...context,
-        roomId,
-        socketCount: localSocketIds.size,
-      }),
-    });
-  },
+  authorizeLocalRoom: authorizeLocalRoomPayload,
   emit: event => emitRoomEventLocally(io, event),
 });
 const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, event => {
@@ -334,6 +341,7 @@ const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, eve
 let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryReconcileTimer: ReturnType<typeof setInterval> | null = null;
+let unsubscribeAssistantRunEvents: (() => Promise<void>) | null = null;
 let realtimeLeaseEstablished = false;
 let realtimeRehydrateRequired = false;
 
@@ -514,12 +522,31 @@ const infrastructureReady = (async () => {
     await Promise.all([
       redisClient.connect(),
       pubClient.connect(),
-      subClient.connect()
+      subClient.connect(),
+      assistantRunEventSubClient.connect(),
     ]);
     
     // 设置 Socket.IO Redis 适配器
     io.adapter(createAdapter(pubClient, subClient));
     socketAdapterInstalled = true;
+
+    unsubscribeAssistantRunEvents = await subscribeToAssistantRunEvents(
+      assistantRunEventSubClient,
+      async event => {
+        if (event.target.kind === 'room' && !(await authorizeLocalRoomPayload(event.target.id))) {
+          return;
+        }
+        io.local.to(event.target.id).emit(event.event, event.payload);
+      },
+      value => assistantRunLogger.warn('Ignored invalid assistant run transient event', {
+        bytes: Buffer.byteLength(value, 'utf8'),
+      }),
+      (error, event) => assistantRunLogger.warn('Assistant run transient event delivery failed', {
+        error,
+        event: event.event,
+        target: event.target,
+      }),
+    );
 
     await postgresStore.verifySchema();
     await roomEventNotifier.start();
@@ -634,17 +661,19 @@ const audioTranscriptionRunner = createAssemblyAIAudioTranscriptionRunner({
   logger: routeLogger,
 });
 
-const assistantRunWorker = createAssistantRunWorkerFromEnv({
+const assistantRunQueue = createAssistantRunQueue();
+assistantRunQueue.on('error', error => {
+  assistantRunLogger.error('Assistant run BullMQ producer error', { error });
+});
+const assistantRunDispatchRelay = new TaskDispatchRelay({
   store,
+  queue: assistantRunQueue,
   logger: assistantRunLogger,
-  workerId: `assistant-run:${runtimeInstanceId}:${process.pid}`,
-  execute: (claim, execution) => executeAssistantRun(claim, {
-    io,
-    store,
-    socketLogger,
-    openaiLogger,
-    getAIClientForModel,
-  }, execution),
+  relayId: `assistant-run-dispatch:${runtimeInstanceId}:${process.pid}`,
+  pollIntervalMs: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_POLL_INTERVAL_MS', 1_000),
+  retryDelayMs: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS', 5_000),
+  lockMs: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_LOCK_MS', 60_000),
+  batchSize: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_BATCH_SIZE', 20),
 });
 
 registerSocketHandlers({
@@ -656,7 +685,7 @@ registerSocketHandlers({
   getAIClientForModel,
   aiStreamOwnerId,
   aiTerminalPersistReconciler,
-  onAssistantRunQueued: () => assistantRunWorker.wake(),
+  onAssistantRunQueued: () => assistantRunDispatchRelay.wake(),
   assemblyAIApiKey,
   codeAgentSessionService,
   codeAgentAccess,
@@ -667,9 +696,9 @@ registerSocketHandlers({
 });
 
 infrastructureReady
-  .then(() => assistantRunWorker.start())
+  .then(() => assistantRunDispatchRelay.start())
   .catch(error => {
-    assistantRunLogger.error('Assistant run worker did not start because infrastructure initialization failed', { error });
+    assistantRunLogger.error('Assistant run dispatch relay did not start because infrastructure initialization failed', { error });
   });
 
 loadStickerCatalog();
@@ -688,6 +717,16 @@ registerApiRoutes(app, {
   io,
   redisClient,
   socketAdapterReady: () => socketAdapterInstalled && pubClient.isReady && subClient.isReady,
+  assistantQueueHealth: async () => {
+    const client = await assistantRunQueue.client as unknown as {
+      status: string;
+      ping(): Promise<unknown>;
+    };
+    if (client.status !== 'ready') {
+      throw new Error(`Assistant run queue Redis is ${client.status}`);
+    }
+    await client.ping();
+  },
   routeLogger,
   getAIModelResponse,
   generateAIRoleDraft,
@@ -809,7 +848,10 @@ const shutdown = () => {
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();
   void Promise.allSettled([
-    assistantRunWorker.stop(),
+    assistantRunDispatchRelay.stop(),
+    assistantRunQueue.close(),
+    unsubscribeAssistantRunEvents?.() || Promise.resolve(),
+    assistantRunEventSubClient.quit(),
     Promise.resolve(store.releaseAIStreamOwner?.(aiStreamOwnerId)),
     roomEventNotifier.stop(),
     codeAgentDaemonRegistry?.shutdownAll() || Promise.resolve(),
