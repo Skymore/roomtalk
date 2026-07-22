@@ -843,15 +843,28 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async initializeSchema(): Promise<void> {
-    for (const sql of POSTGRES_SCHEMA_SQL) {
-      await this.pool.query(sql);
+    // The always-rerun DDL contains a few replace-style operations (for
+    // example DROP + ADD CONSTRAINT). PostgreSQL's IF EXISTS guards do not
+    // make a sequence of separate statements safe when two app instances
+    // initialize concurrently. Serialize and commit the complete schema
+    // reconciliation as one unit so a second initializer only observes the
+    // finished schema.
+    const appliedMigrations = await this.transaction(async client => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('roomtalk_schema_initialization'))");
+      for (const sql of POSTGRES_SCHEMA_SQL) {
+        await client.query(sql);
+      }
+      return this.runMigrations(client);
+    });
+    for (const id of appliedMigrations) {
+      this.logger.info('Applied PostgreSQL migration', { id });
     }
-    await this.runMigrations();
     this.logger.info('PostgreSQL schema initialized');
   }
 
-  private async runMigrations(): Promise<void> {
-    await this.pool.query(
+  private async runMigrations(client: PostgresQueryable): Promise<string[]> {
+    const appliedMigrations: string[] = [];
+    await client.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
         id TEXT PRIMARY KEY,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -859,7 +872,7 @@ export class PostgresStore implements DurableRoomStore {
     );
 
     for (const migration of POSTGRES_MIGRATIONS) {
-      const applied = await this.pool.query(
+      const applied = await client.query(
         'SELECT 1 FROM schema_migrations WHERE id = $1 LIMIT 1',
         [migration.id]
       );
@@ -867,28 +880,17 @@ export class PostgresStore implements DurableRoomStore {
         continue;
       }
 
-      // Apply the migration and record it atomically, so a crash mid-migration
-      // never leaves it marked as applied without its effect (or vice versa).
-      // The transaction-scoped advisory lock plus the in-transaction recheck
-      // also makes concurrent app startup safe: only one process may execute a
-      // migration body, including destructive replay-window cutovers.
-      await this.transaction(async client => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('roomtalk_schema_migrations'))");
-        const alreadyApplied = await client.query(
-          'SELECT 1 FROM schema_migrations WHERE id = $1 LIMIT 1',
-          [migration.id]
-        );
-        if (alreadyApplied.rows.length > 0) {
-          return;
-        }
-        await client.query(migration.sql);
-        await client.query(
-          'INSERT INTO schema_migrations (id) VALUES ($1)',
-          [migration.id]
-        );
-      });
-      this.logger.info('Applied PostgreSQL migration', { id: migration.id });
+      // initializeSchema owns one transaction and one advisory lock for the
+      // complete DDL + migration pass, so the migration effect and ledger row
+      // are atomic without a second lock or a nested transaction.
+      await client.query(migration.sql);
+      await client.query(
+        'INSERT INTO schema_migrations (id) VALUES ($1)',
+        [migration.id]
+      );
+      appliedMigrations.push(migration.id);
     }
+    return appliedMigrations;
   }
 
   async generateUniqueRoomId(): Promise<string> {
