@@ -1803,19 +1803,7 @@ describe('MessageItem replies', () => {
     });
   });
 
-  it('requests thumbnails only for media grid cells near the viewport', async () => {
-    const observed = new Map<Element, IntersectionObserverCallback>();
-    class TestIntersectionObserver {
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe = (element: Element) => { observed.set(element, this.callback); };
-      unobserve = (element: Element) => { observed.delete(element); };
-      disconnect = () => {};
-      takeRecords = () => [];
-      root = null;
-      rootMargin = '160px 0px';
-      thresholds = [0];
-    }
-    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+  it('requests thumbnails for every loaded media grid cell without a viewport observer', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/current.webp' });
     getRoomMediaHistoryMock.mockResolvedValue({
       roomId: 'room-1',
@@ -1851,24 +1839,22 @@ describe('MessageItem replies', () => {
 
     fireEvent.click(await screen.findByLabelText('openMediaViewer'));
     fireEvent.click(screen.getByLabelText('openMediaHistory'));
-    const cells = await screen.findAllByLabelText('openMediaItem');
-    expect(getMediaThumbnailUrlMock).not.toHaveBeenCalled();
+    await screen.findAllByLabelText('openMediaItem');
 
-    act(() => {
-      for (const cell of cells.slice(0, 2)) {
-        observed.get(cell)?.(
-          [{ isIntersecting: true, target: cell } as unknown as IntersectionObserverEntry],
-          {} as IntersectionObserver,
-        );
-      }
-    });
-
-    await waitFor(() => expect(getMediaThumbnailUrlMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getMediaThumbnailUrlMock).toHaveBeenCalledTimes(8));
     expect(getMediaThumbnailUrlMock.mock.calls.map(([params]) => params.assetId)).toEqual([
       'viewport-asset-0',
       'viewport-asset-1',
+      'viewport-asset-2',
+      'viewport-asset-3',
+      'viewport-asset-4',
+      'viewport-asset-5',
+      'viewport-asset-6',
+      'viewport-asset-7',
     ]);
-    expect(document.body.querySelectorAll('[aria-label="openMediaItem"] img')).toHaveLength(2);
+    await waitFor(() => {
+      expect(document.body.querySelectorAll('[aria-label="openMediaItem"] img')).toHaveLength(8);
+    });
   });
 
   it('mounts only the active and adjacent full-size carousel media', async () => {

@@ -115,7 +115,6 @@ const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
 const MEDIA_CAROUSEL_RENDER_RADIUS = 1;
-const MEDIA_GRID_ROOT_MARGIN = "160px 0px";
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
   filter === "all"
@@ -263,13 +262,9 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   openMediaLabel,
   onSelect,
 }) => {
-  const itemRef = React.useRef<HTMLButtonElement | null>(null);
   const mountedRef = React.useRef(true);
   const requestedThumbnailRef = React.useRef<string | null>(null);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
-  const [isNearViewport, setIsNearViewport] = React.useState(() => (
-    typeof IntersectionObserver === "undefined"
-  ));
   const [thumbnailUrl, setThumbnailUrl] = React.useState<string | null>(null);
   const [thumbnailError, setThumbnailError] = React.useState(false);
 
@@ -287,17 +282,7 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   }, [item.assetId]);
 
   React.useEffect(() => {
-    const element = itemRef.current;
-    if (!element || typeof IntersectionObserver === "undefined") return undefined;
-    const observer = new IntersectionObserver(([entry]) => {
-      setIsNearViewport(Boolean(entry?.isIntersecting));
-    }, { rootMargin: MEDIA_GRID_ROOT_MARGIN });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  React.useEffect(() => {
-    if (item.kind !== "image" || !isNearViewport || requestedThumbnailRef.current === item.assetId) {
+    if (item.kind !== "image" || requestedThumbnailRef.current === item.assetId) {
       return;
     }
     requestedThumbnailRef.current = item.assetId;
@@ -312,7 +297,7 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
         console.warn("Failed to load media thumbnail:", error);
         setThumbnailError(true);
       });
-  }, [isNearViewport, item.assetId, item.kind, roomId]);
+  }, [item.assetId, item.kind, roomId]);
 
   React.useEffect(() => {
     setVideoPreviewError(false);
@@ -320,21 +305,17 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
 
   return (
     <button
-      ref={itemRef}
       type="button"
       aria-label={openMediaLabel}
       className={`relative aspect-square cursor-pointer overflow-hidden bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 ${isActive ? "ring-2 ring-[#d97757]" : ""}`}
       onClick={() => onSelect(item)}
     >
-      {!isNearViewport ? (
-        <span className="block h-full w-full bg-white/[0.04]" aria-hidden="true" />
-      ) : item.kind === "image" && thumbnailUrl ? (
+      {item.kind === "image" && thumbnailUrl ? (
         <img
           src={thumbnailUrl}
           alt={sharedImageLabel}
           crossOrigin="anonymous"
           className="h-full w-full object-cover"
-          loading="lazy"
           decoding="async"
           onError={() => {
             setThumbnailUrl(null);
