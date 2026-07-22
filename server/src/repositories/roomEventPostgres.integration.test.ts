@@ -646,6 +646,44 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'error');
   });
 
+  it('fences AI worker ownership and never resurrects a deleted placeholder', async () => {
+    const roomId = 'fenced-ai-stream-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, 'fenced-message', {
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+    }), 'inline-owner');
+    assert.ok(await store.appendMessage(placeholder));
+    const headBeforeClaims = await store.readRoomEventHead(roomId);
+
+    assert.equal((await store.claimAIMessageStream(roomId, placeholder.id, { ownerId: 'worker-1', fence: 1 })).outcome, 'claimed');
+    assert.equal((await store.claimAIMessageStream(roomId, placeholder.id, { ownerId: 'worker-2', fence: 2 })).outcome, 'claimed');
+    assert.equal(
+      await store.readRoomEventHead(roomId),
+      headBeforeClaims,
+      'internal ownership changes must not create public room events',
+    );
+    const completed = { ...placeholder, content: 'durable answer', status: 'complete' as const };
+    assert.deepEqual(await store.finalizeAIMessage(completed, { ownerId: 'worker-1', fence: 1 }), { outcome: 'obsolete' });
+    assert.equal((await store.finalizeAIMessage(completed, { ownerId: 'worker-2', fence: 2 })).outcome, 'applied');
+    assert.equal((await store.readMessagesByRoom(roomId)).find(item => item.id === placeholder.id)?.content, 'durable answer');
+
+    const deleted = withAIStreamRecoveryMetadata(message(roomId, 'deleted-fenced-message', {
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+    }), 'inline-owner');
+    assert.ok(await store.appendMessage(deleted));
+    assert.equal((await store.claimAIMessageStream(roomId, deleted.id, { ownerId: 'worker-3', fence: 1 })).outcome, 'claimed');
+    assert.equal((await store.deleteMessageById(roomId, deleted.id))?.deleted, true);
+    assert.deepEqual(
+      await store.finalizeAIMessage({ ...deleted, content: 'late answer', status: 'complete' }, { ownerId: 'worker-3', fence: 1 }),
+      { outcome: 'obsolete' },
+    );
+    assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === deleted.id), false);
+  });
+
   it('allows only one app instance to run singleton maintenance at a time', async () => {
     let releaseFirst!: () => void;
     let markFirstStarted!: () => void;

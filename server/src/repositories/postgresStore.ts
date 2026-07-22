@@ -1,8 +1,8 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
-import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
+import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { orderMessageBatches } from '../services/messageDomain';
@@ -103,6 +103,7 @@ type MessageRow = {
   reply_to: unknown;
   ui_payload?: unknown;
   ai_stream_owner_id?: string | null;
+  ai_stream_fence?: number | string;
   code_agent_mode?: string | null;
   code_agent_queued_input?: unknown;
   code_agent_image_message_ids?: unknown;
@@ -252,7 +253,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -628,6 +629,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.replyTo),
   toJsonb(message.uiPayload),
   getAIStreamOwnerId(message) || null,
+  getAIStreamFence(message),
   message.codeAgentMode || null,
   toJsonb(message.codeAgentQueuedInput),
   toJsonb(message.codeAgentImageMessageIds),
@@ -706,6 +708,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   reply_to,
   ui_payload,
   ai_stream_owner_id,
+  ai_stream_fence,
   code_agent_mode,
   code_agent_queued_input,
   code_agent_image_message_ids,
@@ -716,7 +719,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   client_batch_id,
   client_batch_index
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30, $31, $32, $33
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30, $31, $32, $33, $34
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -743,6 +746,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   reply_to = EXCLUDED.reply_to,
   ui_payload = EXCLUDED.ui_payload,
   ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
+  ai_stream_fence = EXCLUDED.ai_stream_fence,
   code_agent_mode = EXCLUDED.code_agent_mode,
   code_agent_queued_input = EXCLUDED.code_agent_queued_input,
   code_agent_image_message_ids = EXCLUDED.code_agent_image_message_ids,
@@ -1070,6 +1074,113 @@ export class PostgresStore implements DurableRoomStore {
       this.logger.error('Error upserting message in PostgreSQL', { error, roomId: message.roomId, messageId: message.id });
       return null;
     }
+  }
+
+  async claimAIMessageStream(
+    roomId: string,
+    messageId: string,
+    ownership: AIStreamOwnership,
+  ): Promise<AIStreamClaimResult> {
+    if (!Number.isSafeInteger(ownership.fence) || ownership.fence <= 0 || !ownership.ownerId) {
+      throw new Error('AI worker claim requires a positive fence and owner ID');
+    }
+    return this.transaction(async client => {
+      const claimed = await client.query(
+        `UPDATE room_messages
+        SET ai_stream_owner_id = $3,
+          ai_stream_fence = $4
+        WHERE id = $1
+          AND room_id = $2
+          AND status = 'streaming'
+          AND (
+            ai_stream_fence < $4
+            OR (ai_stream_fence = $4 AND ai_stream_owner_id = $3)
+          )
+        RETURNING id`,
+        [messageId, roomId, ownership.ownerId, ownership.fence],
+      );
+      if (!claimed.rows[0]) return { outcome: 'obsolete' };
+
+      const room = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1`,
+        [roomId],
+      );
+      if (!room.rows[0]) return { outcome: 'obsolete' };
+      return { outcome: 'claimed', room: mapRoom(room.rows[0]) };
+    });
+  }
+
+  async finalizeAIMessage(
+    message: Message,
+    expectedOwnership: AIStreamOwnership,
+  ): Promise<AITerminalTransitionResult> {
+    if (message.status !== 'complete' && message.status !== 'error') {
+      throw new Error('AI terminal transition requires complete or error status');
+    }
+    if (!Number.isSafeInteger(expectedOwnership.fence) || expectedOwnership.fence < 0) {
+      throw new Error('AI terminal transition requires a non-negative ownership fence');
+    }
+
+    return this.transaction(async client => {
+      const updated = await client.query<MessageRow>(
+        `UPDATE room_messages
+        SET content = $4,
+          timestamp = $5::timestamptz,
+          updated_at = COALESCE($6::timestamptz, $5::timestamptz),
+          status = $7,
+          is_error = $8,
+          ai_model = $9::jsonb,
+          usage = $10::jsonb,
+          cost = $11::jsonb,
+          ui_payload = $12::jsonb,
+          model_step_id = $13,
+          model_step_sequence = $14,
+          ai_stream_owner_id = NULL
+        WHERE id = $1
+          AND room_id = $2
+          AND status = 'streaming'
+          AND ai_stream_owner_id IS NOT DISTINCT FROM $3
+          AND ai_stream_fence = $15
+        RETURNING ${MESSAGE_COLUMNS}`,
+        [
+          message.id,
+          message.roomId,
+          expectedOwnership.ownerId,
+          message.content,
+          message.timestamp,
+          message.updatedAt || null,
+          message.status,
+          message.isError ?? null,
+          toJsonb(message.aiModel),
+          toJsonb(message.usage),
+          toJsonb(message.cost),
+          toJsonb(message.uiPayload),
+          message.modelStepId || null,
+          message.modelStepSequence ?? null,
+          expectedOwnership.fence,
+        ],
+      );
+      if (!updated.rows[0]) {
+        return { outcome: 'obsolete' };
+      }
+
+      const room = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [message.roomId, message.timestamp],
+      );
+      if (!room.rows[0]) {
+        throw new Error(`AI terminal transition lost room ${message.roomId}`);
+      }
+      return {
+        outcome: 'applied',
+        room: mapRoom(room.rows[0]),
+        message: mapMessage(updated.rows[0]),
+      };
+    });
   }
 
   async updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
@@ -2443,7 +2554,29 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async markOutboxEventProcessed(eventId: string, processedAt = new Date().toISOString()): Promise<OutboxEventRecord | null> {
+  async renewOutboxEventLease(
+    eventId: string,
+    claim: OutboxClaimToken,
+    now = new Date().toISOString(),
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE outbox_events
+      SET locked_at = $4::timestamptz,
+        updated_at = $4::timestamptz
+      WHERE id = $1
+        AND status = 'processing'
+        AND locked_by = $2
+        AND attempts = $3`,
+      [eventId, claim.workerId, claim.attempt, now],
+    );
+    return (result.rowCount || 0) === 1;
+  }
+
+  async markOutboxEventProcessed(
+    eventId: string,
+    claim: OutboxClaimToken,
+    processedAt = new Date().toISOString(),
+  ): Promise<OutboxEventRecord | null> {
     try {
       const result = await this.pool.query<OutboxEventRow>(
         `UPDATE outbox_events
@@ -2454,8 +2587,11 @@ export class PostgresStore implements DurableRoomStore {
           last_error = NULL,
           updated_at = $2::timestamptz
         WHERE id = $1
+          AND status = 'processing'
+          AND locked_by = $3
+          AND attempts = $4
         RETURNING ${OUTBOX_EVENT_COLUMNS}`,
-        [eventId, processedAt]
+        [eventId, processedAt, claim.workerId, claim.attempt]
       );
       return result.rows[0] ? mapOutboxEvent(result.rows[0]) : null;
     } catch (error) {
@@ -2464,7 +2600,12 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async markOutboxEventFailed(eventId: string, errorMessage: string, options: OutboxFailOptions = {}): Promise<OutboxEventRecord | null> {
+  async markOutboxEventFailed(
+    eventId: string,
+    errorMessage: string,
+    claim: OutboxClaimToken,
+    options: OutboxFailOptions = {},
+  ): Promise<OutboxEventRecord | null> {
     const now = options.now || new Date().toISOString();
     const retryDelayMs = Math.max(0, options.retryDelayMs || 30_000);
     const maxAttempts = Math.max(1, options.maxAttempts || 10);
@@ -2479,8 +2620,11 @@ export class PostgresStore implements DurableRoomStore {
           last_error = $3,
           updated_at = $2::timestamptz
         WHERE id = $1
+          AND status = 'processing'
+          AND locked_by = $6
+          AND attempts = $7
         RETURNING ${OUTBOX_EVENT_COLUMNS}`,
-        [eventId, now, errorMessage, retryDelayMs, maxAttempts]
+        [eventId, now, errorMessage, retryDelayMs, maxAttempts, claim.workerId, claim.attempt]
       );
       return result.rows[0] ? mapOutboxEvent(result.rows[0]) : null;
     } catch (error) {

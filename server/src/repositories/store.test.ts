@@ -84,6 +84,8 @@ const durableClientAccountStubs = () => ({
 
 const durableMutationStubs = () => ({
   async appendMessageWithAtomicPosition() { return room(); },
+  async claimAIMessageStream() { return { outcome: 'claimed' as const, room: room() }; },
+  async finalizeAIMessage(newMessage: Message) { return { outcome: 'applied' as const, room: room(), message: newMessage }; },
   async updateMessageContent() { return { room: room(), found: true, updatedMessage: message() }; },
   async deleteMessageById() { return { room: room(), deleted: true }; },
   async truncateBeforeMessage() { return { room: room(), messages: [message()], targetFound: true }; },
@@ -307,6 +309,8 @@ describe('CompositeRoomStore', () => {
         };
       },
       async upsertMessage(_message: Message) { calls.push('durable.upsertMessage'); return room(); },
+      async claimAIMessageStream() { calls.push('durable.claimAIMessageStream'); return { outcome: 'claimed', room: room() }; },
+      async finalizeAIMessage(newMessage: Message) { calls.push('durable.finalizeAIMessage'); return { outcome: 'applied', room: room(), message: newMessage }; },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
       async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
       async truncateBeforeMessage() { calls.push('durable.truncateBeforeMessage'); return { room: room(), messages: [message()], targetFound: true }; },
@@ -435,6 +439,15 @@ describe('CompositeRoomStore', () => {
       asset: mediaAsset(),
     });
     assert.deepEqual(await store.upsertMessage(message()), room());
+    assert.deepEqual(
+      await store.claimAIMessageStream('room-1', 'ai-1', { ownerId: 'worker-1', fence: 1 }),
+      { outcome: 'claimed', room: room() },
+    );
+    const completedAIMessage = message({ id: 'ai-1', messageType: 'ai', status: 'complete' });
+    assert.deepEqual(
+      await store.finalizeAIMessage(completedAIMessage, { ownerId: 'worker-1', fence: 1 }),
+      { outcome: 'applied', room: room(), message: completedAIMessage },
+    );
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
     assert.deepEqual(await store.truncateBeforeMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
@@ -546,6 +559,8 @@ describe('CompositeRoomStore', () => {
       'durable.appendMessageWithAtomicPosition',
       'durable.appendMediaMessageWithAsset',
       'durable.upsertMessage',
+      'durable.claimAIMessageStream',
+      'durable.finalizeAIMessage',
       'durable.updateMessageContent',
       'durable.deleteMessageById',
       'durable.truncateBeforeMessage',
@@ -749,6 +764,14 @@ describe('CompositeRoomStore', () => {
       },
       async appendMessageWithAtomicPosition(newMessage: Message) { calls.push(`durable.atomicAppend:${newMessage.id}`); return newMessage.id === 'fail-atomic' ? null : room(); },
       async upsertMessage(newMessage: Message) { calls.push(`durable.upsert:${newMessage.id}`); return room(); },
+      async claimAIMessageStream(_roomId: string, messageId: string) {
+        calls.push(`durable.claimAI:${messageId}`);
+        return { outcome: 'claimed', room: room() };
+      },
+      async finalizeAIMessage(newMessage: Message) {
+        calls.push(`durable.finalizeAI:${newMessage.id}`);
+        return { outcome: 'applied', room: room(), message: newMessage };
+      },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
       async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
       async truncateBeforeMessage() { calls.push('durable.truncateBeforeMessage'); return { room: room(), messages: [message()], targetFound: true }; },
@@ -818,6 +841,13 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.appendMediaMessageWithAsset(message({ id: 'media-ok', messageType: 'media' }), mediaAsset()), { room: room(), message: message({ id: 'media-ok', messageType: 'media' }), asset: mediaAsset() });
     assert.equal(await store.appendMediaMessageWithAsset(message({ id: 'fail-media', messageType: 'media' }), mediaAsset()), null);
     assert.deepEqual(await store.upsertMessage(message({ id: 'upsert' })), room());
+    assert.deepEqual(await store.claimAIMessageStream('room-1', 'ai-claim', { ownerId: 'worker-1', fence: 1 }), { outcome: 'claimed', room: room() });
+    const terminalAIMessage = message({ id: 'ai-final', messageType: 'ai', status: 'complete' });
+    assert.deepEqual(await store.finalizeAIMessage(terminalAIMessage, { ownerId: 'worker-1', fence: 1 }), {
+      outcome: 'applied',
+      room: room(),
+      message: terminalAIMessage,
+    });
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
     assert.deepEqual(await store.truncateBeforeMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
@@ -843,6 +873,10 @@ describe('CompositeRoomStore', () => {
       'cache.invalidate:room-1',
       'durable.appendMedia:fail-media',
       'durable.upsert:upsert',
+      'cache.invalidate:room-1',
+      'durable.claimAI:ai-claim',
+      'cache.invalidate:room-1',
+      'durable.finalizeAI:ai-final',
       'cache.invalidate:room-1',
       'durable.updateMessageContent',
       'cache.invalidate:room-1',

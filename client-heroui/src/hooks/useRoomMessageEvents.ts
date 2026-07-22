@@ -193,6 +193,8 @@ export const useRoomMessageEvents = ({
   useEffect(() => {
     let cancelled = false;
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+    let replayRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let replayRetryAttempt = 0;
     let requestSequence = 0;
     let hasBaseline = false;
     let hasMoreMessages = false;
@@ -228,6 +230,21 @@ export const useRoomMessageEvents = ({
       scrollTimer = setTimeout(() => {
         scrollTimer = null;
         scrollToBottom(behavior);
+      }, delayMs);
+    };
+    const clearReplayRetry = () => {
+      replayRetryAttempt = 0;
+      if (replayRetryTimer) clearTimeout(replayRetryTimer);
+      replayRetryTimer = null;
+    };
+    const scheduleReplayRetry = (reason: string) => {
+      if (cancelled || replayRetryTimer) return;
+      const delayMs = Math.min(10_000, 250 * (2 ** Math.min(replayRetryAttempt, 6)));
+      replayRetryAttempt += 1;
+      logRoomMessageDiagnostic('event-replay-retry-scheduled', { roomId, reason, delayMs, replayRetryAttempt });
+      replayRetryTimer = setTimeout(() => {
+        replayRetryTimer = null;
+        void syncFromCursor();
       }, delayMs);
     };
     const cacheWindow = (
@@ -404,6 +421,7 @@ export const useRoomMessageEvents = ({
           limit: options.limit ?? ROOM_MESSAGE_PAGE_LIMIT,
         });
         if (cancelled || !syncState.isSnapshotCurrent(snapshotToken)) return false;
+        clearReplayRetry();
         applySnapshot(snapshot);
         return true;
       } catch (error) {
@@ -413,6 +431,12 @@ export const useRoomMessageEvents = ({
         if (error instanceof SocketRequestError && error.code === 'ROOM_ACCESS_DENIED') {
           onRoomAccessDenied?.(roomId);
           return false;
+        }
+        if (
+          error instanceof SocketRequestError
+          && (error.code === 'ROOM_AUTH_UNAVAILABLE' || error.code === 'NOT_REGISTERED')
+        ) {
+          scheduleReplayRetry(error.code);
         }
         if (!cancelled) {
           setIsLoading(false);
@@ -531,6 +555,7 @@ export const useRoomMessageEvents = ({
                 limit: ROOM_EVENT_PAGE_LIMIT,
                 maxBytes: ROOM_EVENT_PAGE_MAX_BYTES,
               });
+              clearReplayRetry();
               syncState.notifyHead(page.headSeq);
               const hasTerminalDeletion = page.events.some(event => (
                 event.type === 'room.deleted' && event.seq === page.headSeq
@@ -596,6 +621,12 @@ export const useRoomMessageEvents = ({
                 onRoomAccessDenied?.(roomId);
                 keepReading = false;
                 break;
+              }
+              if (
+                error instanceof SocketRequestError
+                && (error.code === 'ROOM_AUTH_UNAVAILABLE' || error.code === 'NOT_REGISTERED')
+              ) {
+                scheduleReplayRetry(error.code);
               }
               logRoomMessageDiagnostic('event-request-failed', {
                 requestId,
@@ -828,6 +859,7 @@ export const useRoomMessageEvents = ({
       cancelled = true;
       clearTimeout(loadingTimeout);
       if (scrollTimer) clearTimeout(scrollTimer);
+      if (replayRetryTimer) clearTimeout(replayRetryTimer);
       pendingAIEvents.clear();
       if (requestHistoryRef.current === issueHistoryRequest) requestHistoryRef.current = null;
       socket.off('room_event_available', handleRoomEventAvailable);

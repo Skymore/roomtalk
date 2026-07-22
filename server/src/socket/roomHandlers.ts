@@ -265,6 +265,7 @@ export function registerRoomHandlers({
   socket,
   store,
   socketLogger,
+  resolveClientId,
   codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
   codeAgentSandboxService,
   publishedStaticSiteService,
@@ -355,6 +356,8 @@ export function registerRoomHandlers({
 
       await store.storeClientSession(socket.id, userId, browserInstanceId);
       socket.data.roomtalkClientId = userId;
+      socket.data.roomtalkBrowserInstanceId = browserInstanceId;
+      socket.data.roomtalkIdentityConflictNotified = false;
       const existingNicknames = await store.getClientNicknames([userId]);
       const existingNickname = existingNicknames[userId] || null;
       if (!existingNickname && username) {
@@ -379,7 +382,7 @@ export function registerRoomHandlers({
     if (!nickname) {
       return;
     }
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
     if (!userId) {
       socketLogger.warn('Unregistered client tried to set username', { socketId: socket.id });
       return;
@@ -392,7 +395,7 @@ export function registerRoomHandlers({
     payload: unknown,
     callback?: (result: { success: boolean; members?: RoomOnlineMember[]; error?: string }) => void
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
@@ -423,7 +426,7 @@ export function registerRoomHandlers({
     const callback = typeof payloadOrCallback === 'function'
       ? payloadOrCallback as (result: RoomListAck) => void
       : maybeCallback;
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to get rooms', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
@@ -443,7 +446,7 @@ export function registerRoomHandlers({
     const callback = typeof payloadOrCallback === 'function'
       ? payloadOrCallback as (result: RoomListAck) => void
       : maybeCallback;
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to get saved rooms', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
@@ -460,7 +463,7 @@ export function registerRoomHandlers({
     roomData: CreateRoomPayload,
     callback?: (response: string | { success: false; error: string } | { success: true; roomId: string }) => void,
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Invalid room creation attempt', {
         socketId: socket.id,
@@ -546,7 +549,7 @@ export function registerRoomHandlers({
 
   socket.on('join_room', (payload: unknown, callback?: (result: JoinRoomAck) => void) => serializeRoomMembershipMutation(async () => {
     const { roomId, password } = parseJoinRoomPayload(payload);
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
     if (!userId) {
       socketLogger.warn('Unregistered client tried to join room', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
@@ -692,7 +695,7 @@ export function registerRoomHandlers({
   }));
 
   socket.on('leave_room', (roomId: string) => serializeRoomMembershipMutation(async () => {
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
     if (!userId) return;
 
     socket.leave(roomId);
@@ -722,7 +725,7 @@ export function registerRoomHandlers({
   }));
 
   socket.on('save_room', async (payload: unknown, callback?: (result: RoomSaveAck) => void) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to save room', { socketId: socket.id });
       callback?.({ success: false, error: 'You are not registered' });
@@ -748,7 +751,7 @@ export function registerRoomHandlers({
   });
 
   socket.on('unsave_room', async (payload: unknown, callback?: (result: BasicRoomAck) => void) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to unsave room', { socketId: socket.id });
       callback?.({ success: false, error: 'You are not registered' });
@@ -769,7 +772,7 @@ export function registerRoomHandlers({
 
   socket.on('delete_room', (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => serializeRoomMembershipMutation(
     () => serializeRoomAccessMutation(roomId || `invalid:${socket.id}`, async () => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to delete room', { socketId: socket.id, roomId });
       callback?.({ success: false, message: 'You are not registered' });
@@ -858,7 +861,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; name?: string },
     callback?: (result: RenameRoomAck) => void
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to rename room', { socketId: socket.id, roomId: data?.roomId });
       callback?.({ success: false, error: 'You are not registered' });
@@ -919,7 +922,7 @@ export function registerRoomHandlers({
     payload: unknown,
     callback?: (result: RoomPermissionsAck) => void
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
@@ -946,7 +949,7 @@ export function registerRoomHandlers({
     payload: unknown,
     callback?: (result: RoomRoleMembersAck) => void,
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
@@ -977,7 +980,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
   ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
     if (!clientId) {
@@ -1061,7 +1064,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: RoomClientLookupAck) => void,
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
     if (!clientId) {
@@ -1096,7 +1099,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; codeAgentAccess?: unknown; codeAgentMode?: unknown; codeAgentBackend?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
@@ -1188,7 +1191,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
   ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
     if (!clientId) {
@@ -1241,7 +1244,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
   ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
     if (!clientId) {
@@ -1294,7 +1297,7 @@ export function registerRoomHandlers({
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
     if (!clientId) {
@@ -1353,7 +1356,9 @@ export function registerRoomHandlers({
   });
 
   socket.on('disconnect', (reason: string) => serializeRoomMembershipMutation(async () => {
-    const userId = await store.getClientId(socket.id);
+    const userId = typeof socket.data.roomtalkClientId === 'string'
+      ? socket.data.roomtalkClientId
+      : await store.getClientId(socket.id);
     if (userId) {
       socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
       const storedRooms = await store.getUserRooms(socket.id);
@@ -1361,7 +1366,9 @@ export function registerRoomHandlers({
         ...storedRooms,
         ...disconnectingRoomIds.filter(roomId => roomId !== userId),
       ])];
-      const browserInstanceId = await store.getBrowserInstanceId(socket.id);
+      const browserInstanceId = typeof socket.data.roomtalkBrowserInstanceId === 'string'
+        ? socket.data.roomtalkBrowserInstanceId
+        : await store.getBrowserInstanceId(socket.id);
       for (const roomId of rooms) {
         const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
         if (browserInstanceId) {
@@ -1385,7 +1392,7 @@ export function registerRoomHandlers({
 
   socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
     const room = await store.getRoomById(roomId);
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
 
     if (room) {
       if (room.type === 'codeAgent') {

@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { executeQueuedAssistantRun, registerAIHandlers } from './aiHandlers';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
+import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 
 type SocketEmit = {
   event: string;
@@ -296,6 +297,37 @@ const createHarness = (options: {
         : this.messages.map(message => message.id === newMessage.id ? newMessage : message);
       return room({ lastActivityAt: newMessage.timestamp });
     },
+    async claimAIMessageStream(roomId: string, messageId: string, ownership: { ownerId: string | null; fence: number }) {
+      const current = this.messages.find(item => item.roomId === roomId && item.id === messageId);
+      if (!current || current.status !== 'streaming') return { outcome: 'obsolete' as const };
+      const currentFence = getAIStreamFence(current);
+      const currentOwner = getAIStreamOwnerId(current);
+      if (currentFence > ownership.fence || (currentFence === ownership.fence && currentOwner !== ownership.ownerId)) {
+        return { outcome: 'obsolete' as const };
+      }
+      this.messages = this.messages.map(item => item.id === messageId
+        ? withAIStreamRecoveryMetadata(item, ownership.ownerId || undefined, ownership.fence)
+        : item);
+      return { outcome: 'claimed' as const, room: room() };
+    },
+    async finalizeAIMessage(newMessage: Message, ownership: { ownerId: string | null; fence: number }) {
+      this.upsertedMessages.push(newMessage);
+      if (options.rejectSaves || options.rejectSaveNumbers?.includes(this.upsertedMessages.length)) {
+        throw new Error('persistent store unavailable');
+      }
+      const current = this.messages.find(item => item.id === newMessage.id);
+      if (
+        !current
+        || current.status !== 'streaming'
+        || getAIStreamOwnerId(current) !== (ownership.ownerId || undefined)
+        || getAIStreamFence(current) !== ownership.fence
+      ) {
+        return { outcome: 'obsolete' as const };
+      }
+      const publicMessage = stripAIStreamRecoveryMetadata(newMessage);
+      this.messages = this.messages.map(item => item.id === newMessage.id ? publicMessage : item);
+      return { outcome: 'applied' as const, room: room({ lastActivityAt: newMessage.timestamp }), message: publicMessage };
+    },
     async incrementRoomAICost(roomId: string) {
       return roomCost(roomId);
     },
@@ -335,6 +367,7 @@ const createHarness = (options: {
     },
     aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
     codeAgentSessionService: options.codeAgentSessionService as any,
+    resolveClientId: () => store.getClientId(),
   });
 
   return { io, socket, store };
@@ -642,7 +675,18 @@ describe('AI socket handlers', () => {
   });
 
   it('executes a queued AI run from the outbox worker path', async () => {
-    const { io, store } = createHarness();
+    const { io, store } = createHarness({
+      messages: [
+        message(),
+        withAIStreamRecoveryMetadata(message({
+          id: 'queued-ai-message',
+          clientId: 'ai_assistant',
+          content: '',
+          messageType: 'ai',
+          status: 'streaming',
+        }), 'inline-owner'),
+      ],
+    });
     store.assistantRuns.push({
       id: 'run-1',
       status: 'queued',
@@ -671,7 +715,9 @@ describe('AI socket handlers', () => {
         getAIClientForModel: () => {
           throw new Error('E2E fake worker should not request a real client');
         },
+        aiStreamOwnerId: 'test-stream-owner',
       },
+      { claim: { workerId: 'worker-1', attempt: 1 }, signal: new AbortController().signal },
     );
 
     assert.equal(store.upsertedMessages.at(-1)?.id, 'queued-ai-message');
@@ -681,6 +727,47 @@ describe('AI socket handlers', () => {
     assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
+  });
+
+  it('does not let an obsolete worker cancel the replacement assistant run', async () => {
+    const replacementPlaceholder = withAIStreamRecoveryMetadata(message({
+      id: 'queued-ai-message',
+      clientId: 'ai_assistant',
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    }), 'replacement-worker', 2);
+    const { io, store } = createHarness({ messages: [message(), replacementPlaceholder] });
+    store.assistantRuns.push({ id: 'run-1', status: 'running', metadata: { runnerMode: 'worker' } });
+
+    await executeQueuedAssistantRun(
+      {
+        runId: 'run-1',
+        roomId: 'room-1',
+        requestedByClientId: 'client-1',
+        aiMessageId: 'queued-ai-message',
+        roleName: 'Assistant',
+        systemPrompt: 'You are helpful.',
+        model: selectedModel.id,
+        maxContextMessages: 100,
+        contextMessages: [message()],
+        historyUsedForContext: [message()],
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        normalizeAIModel: () => selectedModel,
+        getAIClientForModel: () => { throw new Error('obsolete worker must not call provider'); },
+        aiStreamOwnerId: 'stale-worker',
+      },
+      { claim: { workerId: 'stale-worker', attempt: 1 }, signal: new AbortController().signal },
+    );
+
+    assert.equal(store.assistantRuns[0].status, 'running');
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(io.roomEmits.length, 0);
   });
 
   it('uses only the current message when the room AI context limit is zero', async () => {
@@ -996,7 +1083,18 @@ describe('AI socket handlers', () => {
         },
       },
     };
-    const { io, store } = createHarness();
+    const { io, store } = createHarness({
+      messages: [
+        message(),
+        withAIStreamRecoveryMetadata(message({
+          id: 'queued-ai-message',
+          clientId: 'ai_assistant',
+          content: '',
+          messageType: 'ai',
+          status: 'streaming',
+        }), 'inline-owner'),
+      ],
+    });
     store.assistantRuns.push({
       id: 'run-reported-usage',
       status: 'queued',
@@ -1023,7 +1121,9 @@ describe('AI socket handlers', () => {
         openaiLogger: logger as any,
         normalizeAIModel: () => selectedModel,
         getAIClientForModel: () => ({ provider: 'deepseek', client: openAIClient as any }),
+        aiStreamOwnerId: 'test-stream-owner',
       },
+      { claim: { workerId: 'worker-1', attempt: 1 }, signal: new AbortController().signal },
     );
 
     const finalMessage = store.upsertedMessages.at(-1);

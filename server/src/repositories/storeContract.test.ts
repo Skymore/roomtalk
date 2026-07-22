@@ -583,6 +583,7 @@ type MessageRow = {
   reply_to: unknown;
   ui_payload: unknown;
   ai_stream_owner_id: string | null;
+  ai_stream_fence: number;
   code_agent_mode?: string | null;
   code_agent_queued_input?: unknown;
   code_agent_image_message_ids?: unknown;
@@ -823,6 +824,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         replyTo,
         uiPayload,
         aiStreamOwnerId,
+        aiStreamFence,
         codeAgentMode,
         codeAgentQueuedInput,
         codeAgentImageMessageIds,
@@ -866,6 +868,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         reply_to: jsonValue(replyTo),
         ui_payload: jsonValue(uiPayload),
         ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
+        ai_stream_fence: aiStreamFence === null || aiStreamFence === undefined ? 0 : Number(aiStreamFence),
         code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : String(codeAgentMode),
         code_agent_queued_input: jsonValue(codeAgentQueuedInput),
         code_agent_image_message_ids: jsonValue(codeAgentImageMessageIds),

@@ -89,6 +89,30 @@ export interface MessageUpdateResult {
   updatedMessage?: Message;
 }
 
+export type AITerminalTransitionResult =
+  | {
+      outcome: 'applied';
+      room: Room;
+      message: Message;
+    }
+  | {
+      outcome: 'obsolete';
+    };
+
+export interface AIStreamOwnership {
+  ownerId: string | null;
+  fence: number;
+}
+
+export type AIStreamClaimResult =
+  | {
+      outcome: 'claimed';
+      room: Room;
+    }
+  | {
+      outcome: 'obsolete';
+    };
+
 export interface CodeAgentQueueClaimResult {
   room: Room;
   message: Message;
@@ -282,6 +306,11 @@ export interface OutboxClaimOptions {
   lockMs?: number;
 }
 
+export interface OutboxClaimToken {
+  workerId: string;
+  attempt: number;
+}
+
 export interface OutboxFailOptions {
   retryDelayMs?: number;
   maxAttempts?: number;
@@ -348,6 +377,8 @@ export interface DurableRoomStore {
   appendMessageWithAtomicPosition(message: Message): Promise<Room | null>;
   appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null>;
   upsertMessage(message: Message): Promise<Room | null>;
+  claimAIMessageStream(roomId: string, messageId: string, ownership: AIStreamOwnership): Promise<AIStreamClaimResult>;
+  finalizeAIMessage(message: Message, expectedOwnership: AIStreamOwnership): Promise<AITerminalTransitionResult>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   updateCodeAgentQueuedMessage?(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate): Promise<MessageUpdateResult | null>;
   materializeCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, turnId?: string, insertedAt?: string): Promise<MessageUpdateResult | null>;
@@ -397,8 +428,9 @@ export interface DurableRoomStore {
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
   createAssistantRunWithOutbox?(run: AssistantRunRecord, event: OutboxEventRecord): Promise<{ run: AssistantRunRecord; event: OutboxEventRecord } | null>;
   claimOutboxEvents?(options: OutboxClaimOptions): Promise<OutboxEventRecord[]>;
-  markOutboxEventProcessed?(eventId: string, processedAt?: string): Promise<OutboxEventRecord | null>;
-  markOutboxEventFailed?(eventId: string, error: string, options?: OutboxFailOptions): Promise<OutboxEventRecord | null>;
+  renewOutboxEventLease?(eventId: string, claim: OutboxClaimToken, now?: string): Promise<boolean>;
+  markOutboxEventProcessed?(eventId: string, claim: OutboxClaimToken, processedAt?: string): Promise<OutboxEventRecord | null>;
+  markOutboxEventFailed?(eventId: string, error: string, claim: OutboxClaimToken, options?: OutboxFailOptions): Promise<OutboxEventRecord | null>;
   saveRoom(room: Room): Promise<Room | null>;
   addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
   removeRoomMember(roomId: string, clientId: string): Promise<boolean>;
@@ -454,7 +486,7 @@ export interface RealtimeRoomStore {
   getRoomOnlineMemberIds(roomId: string): Promise<string[]>;
   getRoomActiveBrowserInstanceIds(roomId: string): Promise<string[]>;
   clearRealtimeRoomMembers?(): Promise<void>;
-  heartbeatRealtimeInstance?(instanceId: string, ttlMs: number): Promise<void>;
+  heartbeatRealtimeInstance?(instanceId: string, ttlMs: number): Promise<{ reacquired: boolean }>;
   cleanupExpiredRealtimeInstances?(activeInstanceId: string): Promise<number>;
   getClientIds?(socketIds: string[]): Promise<Map<string, string>>;
   storeClientSession(socketId: string, userId: string, browserInstanceId?: string): Promise<void>;
@@ -551,6 +583,22 @@ export class CompositeRoomStore implements RoomStore {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
     return updatedRoom;
+  }
+
+  async claimAIMessageStream(roomId: string, messageId: string, ownership: AIStreamOwnership) {
+    const result = await this.durableStore.claimAIMessageStream(roomId, messageId, ownership);
+    if (result.outcome === 'claimed') {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async finalizeAIMessage(message: Message, expectedOwnership: AIStreamOwnership) {
+    const result = await this.durableStore.finalizeAIMessage(message, expectedOwnership);
+    if (result.outcome === 'applied') {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
   }
 
   async saveMessageHistory(roomId: string, messages: Message[]) {
@@ -839,12 +887,16 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.claimOutboxEvents?.(options) || Promise.resolve([]);
   }
 
-  markOutboxEventProcessed(eventId: string, processedAt?: string) {
-    return this.durableStore.markOutboxEventProcessed?.(eventId, processedAt) || Promise.resolve(null);
+  renewOutboxEventLease(eventId: string, claim: OutboxClaimToken, now?: string) {
+    return this.durableStore.renewOutboxEventLease?.(eventId, claim, now) || Promise.resolve(false);
   }
 
-  markOutboxEventFailed(eventId: string, error: string, options?: OutboxFailOptions) {
-    return this.durableStore.markOutboxEventFailed?.(eventId, error, options) || Promise.resolve(null);
+  markOutboxEventProcessed(eventId: string, claim: OutboxClaimToken, processedAt?: string) {
+    return this.durableStore.markOutboxEventProcessed?.(eventId, claim, processedAt) || Promise.resolve(null);
+  }
+
+  markOutboxEventFailed(eventId: string, error: string, claim: OutboxClaimToken, options?: OutboxFailOptions) {
+    return this.durableStore.markOutboxEventFailed?.(eventId, error, claim, options) || Promise.resolve(null);
   }
 
   saveRoom(room: Room) {
@@ -1078,7 +1130,7 @@ export class CompositeRoomStore implements RoomStore {
   }
 
   heartbeatRealtimeInstance(instanceId: string, ttlMs: number) {
-    return this.realtimeStore.heartbeatRealtimeInstance?.(instanceId, ttlMs) || Promise.resolve();
+    return this.realtimeStore.heartbeatRealtimeInstance?.(instanceId, ttlMs) || Promise.resolve({ reacquired: false });
   }
 
   cleanupExpiredRealtimeInstances(activeInstanceId: string) {

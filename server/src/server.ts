@@ -277,6 +277,7 @@ redisClient.on('error', (err: Error) => {
 // 创建 Redis 适配器所需的客户端
 const pubClient = createClient({ url: REDIS_URL });
 const subClient = pubClient.duplicate();
+let socketAdapterInstalled = false;
 
 // 监听 Redis 客户端错误
 pubClient.on('error', (err: Error) => {
@@ -333,6 +334,44 @@ const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, eve
 let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryReconcileTimer: ReturnType<typeof setInterval> | null = null;
+let realtimeLeaseEstablished = false;
+let realtimeRehydrateRequired = false;
+
+const rehydrateLocalRealtimeState = async () => {
+  const localSockets = Array.from(io.sockets.sockets.values());
+  for (const localSocket of localSockets) {
+    const clientId = typeof localSocket.data.roomtalkClientId === 'string'
+      ? localSocket.data.roomtalkClientId
+      : null;
+    if (!clientId) continue;
+    const browserInstanceId = typeof localSocket.data.roomtalkBrowserInstanceId === 'string'
+      ? localSocket.data.roomtalkBrowserInstanceId
+      : undefined;
+    const candidateRoomIds = Array.from(localSocket.rooms).filter(roomId => (
+      roomId !== localSocket.id && roomId !== clientId
+    ));
+    const roomIds = store.readRoomMemberClientIds
+      ? (await Promise.all(candidateRoomIds.map(async roomId => (
+        (await store.readRoomMemberClientIds!(roomId, [clientId])).has(clientId) ? roomId : null
+      )))).filter((roomId): roomId is string => Boolean(roomId))
+      : (await Promise.all(candidateRoomIds.map(async roomId => (
+        await store.isRoomMember(roomId, clientId) ? roomId : null
+      )))).filter((roomId): roomId is string => Boolean(roomId));
+
+    await store.storeClientSession(localSocket.id, clientId, browserInstanceId);
+    await store.storeUserRooms(localSocket.id, roomIds);
+    for (const roomId of roomIds) {
+      await store.updateRoomMemberCount(roomId, clientId, localSocket.id, true);
+      if (browserInstanceId) {
+        await store.updateRoomBrowserPresence(roomId, browserInstanceId, localSocket.id, true);
+      }
+    }
+  }
+  serverLogger.warn('Rehydrated local realtime state after Redis instance lease loss', {
+    runtimeInstanceId,
+    socketCount: localSockets.length,
+  });
+};
 
 const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
   apiKey: process.env.E2B_API_KEY,
@@ -480,6 +519,7 @@ const infrastructureReady = (async () => {
     
     // 设置 Socket.IO Redis 适配器
     io.adapter(createAdapter(pubClient, subClient));
+    socketAdapterInstalled = true;
 
     await postgresStore.initializeSchema();
     await roomEventNotifier.start();
@@ -490,10 +530,18 @@ const infrastructureReady = (async () => {
     );
     const heartbeatRuntime = async () => {
       const now = new Date().toISOString();
-      await Promise.all([
+      const [realtimeLease] = await Promise.all([
         store.heartbeatRealtimeInstance?.(runtimeInstanceId, instanceLeaseTtlMs),
         store.heartbeatAIStreamOwner?.(aiStreamOwnerId, runtimeInstanceId, now, instanceLeaseTtlMs),
       ]);
+      if (realtimeLeaseEstablished && realtimeLease?.reacquired) {
+        realtimeRehydrateRequired = true;
+      }
+      realtimeLeaseEstablished = true;
+      if (realtimeRehydrateRequired) {
+        await rehydrateLocalRealtimeState();
+        realtimeRehydrateRequired = false;
+      }
     };
     await heartbeatRuntime();
     runtimeHeartbeatTimer = setInterval(() => {
@@ -613,7 +661,7 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
     workerId: `server-${process.pid}-${aiStreamOwnerId || 'default'}`,
     eventTypes: ['ai.run_requested'],
     handlers: {
-      'ai.run_requested': event => executeQueuedAssistantRun(event.payload, {
+      'ai.run_requested': (event, execution) => executeQueuedAssistantRun(event.payload, {
         io,
         store,
         socketLogger,
@@ -625,7 +673,7 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
         assemblyAIApiKey,
         codeAgentSessionService,
         codeAgentAccess,
-      }),
+      }, execution),
     },
   });
   infrastructureReady
@@ -652,6 +700,7 @@ registerApiRoutes(app, {
   store,
   io,
   redisClient,
+  socketAdapterReady: () => socketAdapterInstalled && pubClient.isReady && subClient.isReady,
   routeLogger,
   getAIModelResponse,
   generateAIRoleDraft,

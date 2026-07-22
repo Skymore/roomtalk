@@ -13,6 +13,7 @@ const terminalMessage = (): Message => ({
   messageType: 'ai',
   status: 'error',
 });
+const ownership = { ownerId: 'owner-1', fence: 7 };
 
 describe('AITerminalPersistReconciler', () => {
   it('persists a terminal after-image after a multi-second database outage without restarting', async () => {
@@ -21,11 +22,11 @@ describe('AITerminalPersistReconciler', () => {
     const persisted: Message[] = [];
     const room = { id: 'room-1' } as Room;
     const store = {
-      upsertMessage: async (message: Message) => {
+      finalizeAIMessage: async (message: Message) => {
         attempts++;
         if (attempts <= 3) throw new Error('database unavailable');
         persisted.push(message);
-        return room;
+        return { outcome: 'applied' as const, room, message };
       },
     };
     const reconciled: string[] = [];
@@ -41,7 +42,7 @@ describe('AITerminalPersistReconciler', () => {
     );
 
     try {
-      reconciler.enqueue(terminalMessage(), { reason: 'test-outage' });
+      reconciler.enqueue(terminalMessage(), { reason: 'test-outage', expectedOwnership: ownership });
       assert.equal(await reconciler.reconcileNow(), 0);
       now = 1_000;
       assert.equal(await reconciler.reconcileNow(), 0);
@@ -59,13 +60,38 @@ describe('AITerminalPersistReconciler', () => {
     }
   });
 
+  it('drops a deferred terminal after-image when its placeholder was deleted or superseded', async () => {
+    let attempts = 0;
+    const reconciler = new AITerminalPersistReconciler(
+      {
+        finalizeAIMessage: async () => {
+          attempts++;
+          return { outcome: 'obsolete' as const };
+        },
+      },
+      new Logger('AITerminalPersistReconcilerTest'),
+    );
+
+    try {
+      reconciler.enqueue(terminalMessage(), { reason: 'deleted-placeholder', expectedOwnership: ownership });
+      assert.equal(await reconciler.reconcileNow(), 0);
+      assert.equal(attempts, 1);
+      assert.equal(reconciler.pendingCount, 0);
+    } finally {
+      reconciler.stop();
+    }
+  });
+
   it('rejects non-terminal messages', () => {
     const reconciler = new AITerminalPersistReconciler(
-      { upsertMessage: async () => null } as any,
+      { finalizeAIMessage: async () => ({ outcome: 'obsolete' as const }) } as any,
       new Logger('AITerminalPersistReconcilerTest'),
     );
     assert.throws(
-      () => reconciler.enqueue({ ...terminalMessage(), status: 'streaming' }, { reason: 'invalid' }),
+      () => reconciler.enqueue(
+        { ...terminalMessage(), status: 'streaming' },
+        { reason: 'invalid', expectedOwnership: ownership },
+      ),
       /Only terminal AI messages/,
     );
   });

@@ -248,6 +248,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
+    resolveClientId: () => store.getClientId(),
   } as any);
 
   return { io, socket, store };

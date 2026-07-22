@@ -120,6 +120,7 @@ export const POSTGRES_SCHEMA_SQL = [
     reply_to JSONB,
     ui_payload JSONB,
     ai_stream_owner_id TEXT,
+    ai_stream_fence BIGINT NOT NULL DEFAULT 0,
     code_agent_image_message_ids JSONB,
     updated_at TIMESTAMPTZ,
     position INTEGER NOT NULL
@@ -128,6 +129,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ui_payload JSONB`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_owner_id TEXT`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_fence BIGINT NOT NULL DEFAULT 0`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS turn_id TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS model_step_id TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS model_step_sequence INTEGER`,
@@ -684,6 +686,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         target_room_id TEXT;
         target_entity_id TEXT;
       BEGIN
+        IF TG_OP = 'UPDATE'
+          AND TG_TABLE_NAME = 'room_messages'
+          AND (to_jsonb(NEW) - ARRAY['ai_stream_owner_id', 'ai_stream_fence']::TEXT[])
+            = (to_jsonb(OLD) - ARRAY['ai_stream_owner_id', 'ai_stream_fence']::TEXT[])
+        THEN
+          RETURN NEW;
+        END IF;
         IF TG_OP = 'DELETE' THEN
           target_room_id := OLD.room_id;
           IF TG_TABLE_NAME = 'room_members' THEN
@@ -1243,6 +1252,67 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_ai_stream_owner_leases_expiry
         ON ai_stream_owner_leases (expires_at);
+    `,
+  },
+  {
+    // A worker claim is a generation, not just a process name. Terminal writes
+    // from an older generation cannot overwrite a replacement worker.
+    id: '0007_ai_stream_fencing',
+    sql: `
+      ALTER TABLE room_messages
+        ADD COLUMN IF NOT EXISTS ai_stream_fence BIGINT NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Stream ownership is internal concurrency metadata. Changing only the
+    // owner/fence must not advance the public room-event sequence.
+    id: '0008_ai_stream_internal_event_filter',
+    sql: `
+
+      CREATE OR REPLACE FUNCTION queue_room_event_entity_change()
+      RETURNS TRIGGER AS $$
+      DECLARE
+        target_room_id TEXT;
+        target_entity_id TEXT;
+      BEGIN
+        -- Stream ownership is internal concurrency metadata. Moving the lease
+        -- must not advance the public room-event sequence by itself.
+        IF TG_OP = 'UPDATE'
+          AND TG_TABLE_NAME = 'room_messages'
+          AND (to_jsonb(NEW) - ARRAY['ai_stream_owner_id', 'ai_stream_fence']::TEXT[])
+            = (to_jsonb(OLD) - ARRAY['ai_stream_owner_id', 'ai_stream_fence']::TEXT[])
+        THEN
+          RETURN NEW;
+        END IF;
+
+        IF TG_OP = 'DELETE' THEN
+          target_room_id := OLD.room_id;
+          IF TG_TABLE_NAME = 'room_members' THEN
+            target_entity_id := OLD.client_id;
+          ELSE
+            target_entity_id := OLD.id;
+          END IF;
+        ELSE
+          target_room_id := NEW.room_id;
+          IF TG_TABLE_NAME = 'room_members' THEN
+            target_entity_id := NEW.client_id;
+          ELSE
+            target_entity_id := NEW.id;
+          END IF;
+        END IF;
+
+        IF TG_TABLE_NAME = 'room_messages' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'message', target_entity_id);
+        ELSIF TG_TABLE_NAME = 'room_agent_turns' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'agent_turn', target_entity_id);
+        ELSIF TG_TABLE_NAME = 'room_members' THEN
+          PERFORM enqueue_room_event_change(target_room_id, 'member', target_entity_id);
+        END IF;
+
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
     `,
   },
 ];

@@ -31,4 +31,5 @@ export interface SocketHandlerDeps {
 
 export interface SocketConnectionContext extends SocketHandlerDeps {
   socket: Socket;
+  resolveClientId: () => Promise<string | null>;
 }

@@ -1,14 +1,16 @@
 import { Logger } from '../logger';
-import { RoomStore } from '../repositories/store';
+import { AIStreamOwnership, RoomStore } from '../repositories/store';
 import { Message } from '../types';
 
 export interface AITerminalPersistTaskContext {
   reason: string;
+  expectedOwnership: AIStreamOwnership;
 }
 
 interface PendingTask {
   message: Message;
   reason: string;
+  expectedOwnership: AIStreamOwnership;
   attempts: number;
   nextAttemptAt: number;
 }
@@ -35,7 +37,7 @@ export class AITerminalPersistReconciler {
   private running = false;
 
   constructor(
-    private readonly store: Pick<RoomStore, 'upsertMessage'>,
+    private readonly store: Pick<RoomStore, 'finalizeAIMessage'>,
     private readonly logger: Logger,
     private readonly options: AITerminalPersistReconcilerOptions = {},
   ) {
@@ -64,6 +66,7 @@ export class AITerminalPersistReconciler {
     this.pending.set(message.id, {
       message,
       reason: context.reason,
+      expectedOwnership: context.expectedOwnership,
       attempts: previous?.attempts || 0,
       nextAttemptAt: this.now(),
     });
@@ -83,9 +86,9 @@ export class AITerminalPersistReconciler {
       for (const [messageId, task] of Array.from(this.pending.entries())) {
         if (task.nextAttemptAt > now) continue;
         try {
-          const room = await this.store.upsertMessage(task.message);
-          if (room) {
-            this.pending.delete(messageId);
+          const result = await this.store.finalizeAIMessage(task.message, task.expectedOwnership);
+          if (result.outcome === 'applied') {
+            if (this.pending.get(messageId) === task) this.pending.delete(messageId);
             persisted++;
             this.options.onPersisted?.(task.message);
             this.logger.info('Persisted deferred AI terminal state', {
@@ -96,6 +99,14 @@ export class AITerminalPersistReconciler {
             });
             continue;
           }
+          if (this.pending.get(messageId) === task) this.pending.delete(messageId);
+          this.logger.info('Discarded obsolete deferred AI terminal state', {
+            roomId: task.message.roomId,
+            messageId,
+            attempts: task.attempts + 1,
+            reason: task.reason,
+          });
+          continue;
         } catch (error) {
           this.logger.warn('Deferred AI terminal persistence attempt failed', {
             error,
@@ -110,6 +121,7 @@ export class AITerminalPersistReconciler {
       }
     } finally {
       this.running = false;
+      if (this.pending.size === 0) this.stop();
     }
     return persisted;
   }

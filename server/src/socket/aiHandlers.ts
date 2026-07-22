@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { RoomStore } from '../repositories/store';
+import type { AIStreamOwnership, OutboxClaimToken, RoomStore } from '../repositories/store';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import { A2UI_BASIC_CATALOG_ID, mergeA2UIPayloads, normalizeA2UIPayload } from '../services/a2uiPayload';
@@ -190,6 +190,7 @@ const streamOpenAICompatibleWithA2UI = async (params: {
   emitTextChunk: (chunk: string) => void;
   logger: { warn(message: string, meta?: unknown): void; debug(message: string, meta?: unknown): void };
   messageId: string;
+  signal?: AbortSignal;
 }): Promise<StreamAIResult> => {
   const providerMessages = [...params.messages];
   let fullContent = '';
@@ -197,6 +198,7 @@ const streamOpenAICompatibleWithA2UI = async (params: {
 
   try {
     for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
+      params.signal?.throwIfAborted();
       let roundContent = '';
       const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
       const stream = await params.client.chat.completions.create({
@@ -207,9 +209,10 @@ const streamOpenAICompatibleWithA2UI = async (params: {
         tools: [openAIA2UITool],
         tool_choice: 'auto',
         stream_options: { include_usage: true },
-      } as any);
+      } as any, params.signal ? { signal: params.signal } : undefined);
 
       for await (const chunk of stream as any) {
+        params.signal?.throwIfAborted();
         if (chunk.usage) {
           reportedUsage = addReportedUsage(reportedUsage, chunk.usage);
         }
@@ -250,6 +253,7 @@ const streamOpenAICompatibleWithA2UI = async (params: {
       const toolMessages: any[] = [];
 
       for (const toolCall of assistantToolCalls) {
+        params.signal?.throwIfAborted();
         if (toolCall.function.name !== A2UI_TOOL_NAME) {
           toolMessages.push({
             role: 'tool',
@@ -290,6 +294,9 @@ const streamOpenAICompatibleWithA2UI = async (params: {
       }
     }
   } catch (error) {
+    if (params.signal?.aborted) {
+      params.signal.throwIfAborted();
+    }
     if (isPrematureCloseError(error) && fullContent.trim().length > 0) {
       throw new PartialAIStreamError(error, {
         fullContent,
@@ -317,21 +324,24 @@ const streamAnthropicWithA2UI = async (params: {
   emitTextChunk: (chunk: string) => void;
   logger: { warn(message: string, meta?: unknown): void };
   messageId: string;
+  signal?: AbortSignal;
 }): Promise<StreamAIResult> => {
   const providerMessages = [...params.messages];
   let fullContent = '';
   let reportedUsage: ReportedUsage = null;
 
   for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
+    params.signal?.throwIfAborted();
     const stream = params.client.messages.stream({
       model: params.model,
       max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
       system: [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }],
       messages: providerMessages,
       tools: [anthropicA2UITool],
-    } as any);
+    } as any, params.signal ? { signal: params.signal } : undefined);
 
     for await (const event of stream as any) {
+      params.signal?.throwIfAborted();
       if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
         const contentChunk: string = event.delta.text;
         fullContent += contentChunk;
@@ -350,6 +360,7 @@ const streamAnthropicWithA2UI = async (params: {
 
     const toolResults: any[] = [];
     for (const toolUse of toolUses) {
+      params.signal?.throwIfAborted();
       if (toolUse.name !== A2UI_TOOL_NAME) {
         toolResults.push({
           type: 'tool_result',
@@ -426,6 +437,13 @@ export type QueuedAssistantRunPayload = {
   contextMessages: Message[];
   historyUsedForContext: Message[];
 };
+
+export interface QueuedAIExecutionContext {
+  claim: OutboxClaimToken;
+  signal: AbortSignal;
+}
+
+type AITerminalSaveOutcome = 'saved' | 'obsolete' | 'failed';
 
 type EditMessageAndAskAIData = AIRequestData & {
   messageId: string;
@@ -533,8 +551,10 @@ export const executeQueuedAssistantRun = async (
     openaiLogger,
     normalizeAIModel,
     getAIClientForModel,
+    aiStreamOwnerId,
     aiTerminalPersistReconciler,
   }: SocketHandlerDeps,
+  execution: QueuedAIExecutionContext,
 ) => {
   if (!isQueuedAssistantRunPayload(payload)) {
     throw new Error('Invalid ai.run_requested payload');
@@ -579,39 +599,58 @@ export const executeQueuedAssistantRun = async (
     }
   };
 
-  const saveAIMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+  if (!aiStreamOwnerId) {
+    throw new Error('Queued AI execution requires a stream owner ID');
+  }
+  const streamOwnership: AIStreamOwnership = {
+    ownerId: aiStreamOwnerId,
+    fence: execution.claim.attempt,
+  };
+  const streamClaim = await store.claimAIMessageStream(roomId, aiMessageId, streamOwnership);
+  if (streamClaim.outcome === 'obsolete') {
+    openaiLogger.info('Skipped obsolete queued AI run', { runId, roomId, messageId: aiMessageId, streamOwnership });
+    return;
+  }
+  execution.signal.throwIfAborted();
+
+  const saveAIMessage = async (message: Message, logLabel: string): Promise<AITerminalSaveOutcome> => {
     try {
-      const updatedRoom = await store.upsertMessage(message);
-      if (!updatedRoom) {
-        openaiLogger.error(`Persistent store rejected worker ${logLabel} AI message`, { messageId: message.id, roomId, status: message.status });
-        return false;
+      execution.signal.throwIfAborted();
+      const result = await store.finalizeAIMessage(message, streamOwnership);
+      if (result.outcome === 'obsolete') {
+        openaiLogger.info(`Discarded obsolete worker ${logLabel} AI terminal state`, { messageId: message.id, roomId, status: message.status, streamOwnership });
+        return 'obsolete';
       }
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      io.to(result.room.creatorId).emit('room_updated', result.room);
       openaiLogger.info(`Saved worker ${logLabel} AI message to persistent history`, {
         messageId: message.id,
         roomId,
         status: message.status,
       });
-      return true;
+      return 'saved';
     } catch (err) {
+      if (execution.signal.aborted) {
+        execution.signal.throwIfAborted();
+      }
       openaiLogger.error(`Failed to save worker ${logLabel} AI message to persistent history`, { error: err, messageId: message.id, roomId });
-      return false;
+      return 'failed';
     }
   };
 
-  const saveAIErrorMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+  const saveAIErrorMessage = async (message: Message, logLabel: string): Promise<AITerminalSaveOutcome> => {
     for (let attempt = 1; attempt <= ERROR_STATE_SAVE_ATTEMPTS; attempt++) {
-      const saved = await saveAIMessage(message, attempt === 1 ? logLabel : `${logLabel} retry ${attempt}`);
-      if (saved) {
-        return true;
-      }
+      const outcome = await saveAIMessage(message, attempt === 1 ? logLabel : `${logLabel} retry ${attempt}`);
+      if (outcome !== 'failed') return outcome;
 
       if (attempt < ERROR_STATE_SAVE_ATTEMPTS) {
         await wait(ERROR_STATE_SAVE_RETRY_DELAY_MS * attempt);
       }
     }
 
-    aiTerminalPersistReconciler?.enqueue(message, { reason: `worker-${logLabel}` });
+    aiTerminalPersistReconciler?.enqueue(message, {
+      reason: `worker-${logLabel}`,
+      expectedOwnership: streamOwnership,
+    });
     openaiLogger.error('Failed to persist worker AI error state after retries; queued durable reconciliation', {
       messageId: aiMessageId,
       roomId,
@@ -622,7 +661,18 @@ export const executeQueuedAssistantRun = async (
       error: 'AI response status could not be saved yet. Durable reconciliation is retrying it.',
       roomId,
     });
-    return false;
+    return 'failed';
+  };
+
+  const stopObsoleteRun = async (outcome: AITerminalSaveOutcome): Promise<boolean> => {
+    if (outcome !== 'obsolete') return false;
+    openaiLogger.info('Stopped stale queued AI run without changing replacement run state', {
+      runId,
+      roomId,
+      messageId: aiMessageId,
+      streamOwnership,
+    });
+    return true;
   };
 
   const startedAt = new Date().toISOString();
@@ -637,6 +687,7 @@ export const executeQueuedAssistantRun = async (
   let fallbackUsageMessages: Array<{ content: any }> = [];
 
   const emitA2UIUpdate = async (messages: unknown[]): Promise<boolean> => {
+    execution.signal.throwIfAborted();
     const uiPayload = await normalizeA2UIPayload(messages);
     if (!uiPayload) {
       openaiLogger.warn('Ignoring invalid worker A2UI stream update', { messageId: aiMessageId, roomId });
@@ -665,6 +716,7 @@ export const executeQueuedAssistantRun = async (
       const chunkDelayMs = getE2EFakeAIChunkDelayMs();
       for (const chunk of chunks) {
         await wait(chunkDelayMs);
+        execution.signal.throwIfAborted();
         streamedTextContent += chunk;
         io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
       }
@@ -689,7 +741,8 @@ export const executeQueuedAssistantRun = async (
         cost,
       };
       const finalSaved = await saveAIMessage(finalAiMessage, 'E2E fake complete');
-      if (!finalSaved) {
+      if (await stopObsoleteRun(finalSaved)) return;
+      if (finalSaved === 'failed') {
         throw new Error('Failed to save final AI response');
       }
       await updateAssistantRun({
@@ -722,7 +775,9 @@ export const executeQueuedAssistantRun = async (
         content: errorNotice,
         timestamp: new Date().toISOString(),
       };
-      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+      const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+      if (await stopObsoleteRun(errorSaveOutcome)) return;
+      const errorSaved = errorSaveOutcome === 'saved';
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: errorNotice,
@@ -762,6 +817,7 @@ export const executeQueuedAssistantRun = async (
         },
         logger: openaiLogger,
         messageId: aiMessageId,
+        signal: execution.signal,
       });
       fullContent = streamResult.fullContent;
       streamedTextContent = fullContent;
@@ -779,6 +835,7 @@ export const executeQueuedAssistantRun = async (
         },
         logger: openaiLogger,
         messageId: aiMessageId,
+        signal: execution.signal,
       });
       fullContent = streamResult.fullContent;
       streamedTextContent = fullContent;
@@ -786,6 +843,7 @@ export const executeQueuedAssistantRun = async (
       usageMessages = streamResult.usageMessages;
     }
 
+    execution.signal.throwIfAborted();
     const usage = normalizeUsage(reportedUsage, usageMessages, fullContent);
     const cost = calculateAICost(selectedModel, usage);
     const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
@@ -804,7 +862,8 @@ export const executeQueuedAssistantRun = async (
     }
 
     const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
-    if (!finalSaved) {
+    if (await stopObsoleteRun(finalSaved)) return;
+    if (finalSaved === 'failed') {
       const errorNotice = 'Sorry, unable to save the AI response.';
       const errorAiMessage: Message = {
         ...initialAiMessage,
@@ -812,7 +871,9 @@ export const executeQueuedAssistantRun = async (
         content: appendAIErrorNotice(streamedTextContent, errorNotice),
         timestamp: new Date().toISOString(),
       };
-      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'final-save error');
+      const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'final-save error');
+      if (await stopObsoleteRun(errorSaveOutcome)) return;
+      const errorSaved = errorSaveOutcome === 'saved';
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: errorNotice,
@@ -850,6 +911,9 @@ export const executeQueuedAssistantRun = async (
       roomCostTotal,
     });
   } catch (error) {
+    if (execution.signal.aborted) {
+      execution.signal.throwIfAborted();
+    }
     socketLogger.error('Error processing queued AI stream request', {
       error: error instanceof Error ? error.message : error,
       clientId: requestedByClientId,
@@ -882,7 +946,8 @@ export const executeQueuedAssistantRun = async (
         finalAiMessage.uiPayload = streamedA2UIPayload;
       }
       const finalSaved = await saveAIMessage(finalAiMessage, 'premature-close complete');
-      if (!finalSaved) {
+      if (await stopObsoleteRun(finalSaved)) return;
+      if (finalSaved === 'failed') {
         throw new Error('Failed to save premature-close AI response');
       }
       await updateAssistantRun({
@@ -925,7 +990,9 @@ export const executeQueuedAssistantRun = async (
     if (streamedA2UIPayload) {
       errorAiMessage.uiPayload = streamedA2UIPayload;
     }
-    const errorSaved = await saveAIErrorMessage(errorAiMessage, 'stream error');
+    const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'stream error');
+    if (await stopObsoleteRun(errorSaveOutcome)) return;
+    const errorSaved = errorSaveOutcome === 'saved';
     io.to(roomId).emit('ai_stream_error', {
       messageId: aiMessageId,
       error: errorNotice,
@@ -954,6 +1021,7 @@ export function registerAIHandlers({
   aiStreamOwnerId,
   aiTerminalPersistReconciler,
   codeAgentSessionService,
+  resolveClientId,
 }: SocketConnectionContext) {
   const notifyMessageHistoryInvalidated = (roomId: string, reason: string) => {
     io.to(roomId).emit('message_history_invalidated', { roomId, reason });
@@ -1208,40 +1276,52 @@ export function registerAIHandlers({
       model: selectedModel,
     });
     const persistedInitialAiMessage = withAIStreamRecoveryMetadata(initialAiMessage, aiStreamOwnerId);
+    const streamOwnership: AIStreamOwnership = { ownerId: aiStreamOwnerId || null, fence: 0 };
 
-    const saveAIMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+    const saveAIMessage = async (message: Message, logLabel: string): Promise<AITerminalSaveOutcome> => {
       try {
-        const updatedRoom = await store.upsertMessage(message);
-        if (!updatedRoom) {
-          openaiLogger.error(`Persistent store rejected ${logLabel} AI message`, { messageId: message.id, roomId, status: message.status });
-          return false;
+        if (message.status === 'streaming') {
+          const updatedRoom = await store.upsertMessage(message);
+          if (!updatedRoom) {
+            openaiLogger.error(`Persistent store rejected ${logLabel} AI message`, { messageId: message.id, roomId, status: message.status });
+            return 'failed';
+          }
+          io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+          return 'saved';
         }
-        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+        const result = await store.finalizeAIMessage(message, streamOwnership);
+        if (result.outcome === 'obsolete') {
+          openaiLogger.info(`Discarded obsolete ${logLabel} AI terminal state`, { messageId: message.id, roomId, status: message.status, streamOwnership });
+          return 'obsolete';
+        }
+        if (!result.room) {
+          openaiLogger.error(`Persistent store rejected ${logLabel} AI message`, { messageId: message.id, roomId, status: message.status });
+          return 'failed';
+        }
+        io.to(result.room.creatorId).emit('room_updated', result.room);
         openaiLogger.info(`Saved ${logLabel} AI message to persistent history`, {
           messageId: message.id,
           roomId,
           status: message.status,
         });
-        return true;
+        return 'saved';
       } catch (err) {
         openaiLogger.error(`Failed to save ${logLabel} AI message to persistent history`, { error: err, messageId: message.id, roomId });
-        return false;
+        return 'failed';
       }
     };
 
-    const saveAIErrorMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+    const saveAIErrorMessage = async (message: Message, logLabel: string): Promise<AITerminalSaveOutcome> => {
       for (let attempt = 1; attempt <= ERROR_STATE_SAVE_ATTEMPTS; attempt++) {
-        const saved = await saveAIMessage(message, attempt === 1 ? logLabel : `${logLabel} retry ${attempt}`);
-        if (saved) {
-          return true;
-        }
+        const outcome = await saveAIMessage(message, attempt === 1 ? logLabel : `${logLabel} retry ${attempt}`);
+        if (outcome !== 'failed') return outcome;
 
         if (attempt < ERROR_STATE_SAVE_ATTEMPTS) {
           await wait(ERROR_STATE_SAVE_RETRY_DELAY_MS * attempt);
         }
       }
 
-      aiTerminalPersistReconciler?.enqueue(message, { reason: logLabel });
+      aiTerminalPersistReconciler?.enqueue(message, { reason: logLabel, expectedOwnership: streamOwnership });
       openaiLogger.error('Failed to persist AI error state after retries; queued durable reconciliation', {
         messageId: message.id,
         roomId,
@@ -1253,11 +1333,20 @@ export function registerAIHandlers({
         error: 'AI response status could not be saved yet. Durable reconciliation is retrying it.',
         roomId,
       });
-      return false;
+      return 'failed';
+    };
+
+    const stopObsoleteRun = async (outcome: AITerminalSaveOutcome): Promise<boolean> => {
+      if (outcome !== 'obsolete') return false;
+      await updateAssistantRun({
+        status: 'cancelled',
+        error: 'AI placeholder was superseded while the response was running',
+      });
+      return true;
     };
 
     const placeholderSaved = await saveAIMessage(persistedInitialAiMessage, 'streaming placeholder');
-    if (!placeholderSaved) {
+    if (placeholderSaved !== 'saved') {
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: 'Sorry, unable to start a durable AI response.',
@@ -1293,7 +1382,9 @@ export function registerAIHandlers({
         content: errorNotice,
         timestamp: new Date().toISOString(),
       };
-      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'queue error');
+      const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'queue error');
+      if (await stopObsoleteRun(errorSaveOutcome)) return;
+      const errorSaved = errorSaveOutcome === 'saved';
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: errorNotice,
@@ -1588,7 +1679,8 @@ export function registerAIHandlers({
       }
 
       const finalSaved = await saveAIMessage(finalAiMessage, 'E2E fake complete');
-      if (!finalSaved) {
+      if (await stopObsoleteRun(finalSaved)) return;
+      if (finalSaved === 'failed') {
         const errorNotice = 'Sorry, unable to save the AI response.';
         const errorAiMessage: Message = {
           ...initialAiMessage,
@@ -1596,7 +1688,9 @@ export function registerAIHandlers({
           content: errorNotice,
           timestamp: new Date().toISOString(),
         };
-        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'E2E fake final-save error');
+        const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'E2E fake final-save error');
+        if (await stopObsoleteRun(errorSaveOutcome)) return;
+        const errorSaved = errorSaveOutcome === 'saved';
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
           error: errorNotice,
@@ -1645,7 +1739,9 @@ export function registerAIHandlers({
           content: errorNotice,
           timestamp: new Date().toISOString(),
         };
-        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+        const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'empty-context error');
+        if (await stopObsoleteRun(errorSaveOutcome)) return;
+        const errorSaved = errorSaveOutcome === 'saved';
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
           error: errorNotice,
@@ -1727,7 +1823,8 @@ export function registerAIHandlers({
         finalAiMessage.uiPayload = streamedA2UIPayload;
       }
       const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
-      if (!finalSaved) {
+      if (await stopObsoleteRun(finalSaved)) return;
+      if (finalSaved === 'failed') {
         const errorNotice = 'Sorry, unable to save the AI response.';
         const errorAiMessage: Message = {
           ...initialAiMessage,
@@ -1735,7 +1832,9 @@ export function registerAIHandlers({
           content: appendAIErrorNotice(streamedTextContent, errorNotice),
           timestamp: new Date().toISOString(),
         };
-        const errorSaved = await saveAIErrorMessage(errorAiMessage, 'final-save error');
+        const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'final-save error');
+        if (await stopObsoleteRun(errorSaveOutcome)) return;
+        const errorSaved = errorSaveOutcome === 'saved';
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
           error: errorNotice,
@@ -1809,7 +1908,8 @@ export function registerAIHandlers({
         }
 
         const finalSaved = await saveAIMessage(finalAiMessage, 'premature-close complete');
-        if (!finalSaved) {
+        if (await stopObsoleteRun(finalSaved)) return;
+        if (finalSaved === 'failed') {
           const errorNotice = 'The AI response was generated, but could not be saved.';
           const errorAiMessage: Message = {
             ...initialAiMessage,
@@ -1817,7 +1917,9 @@ export function registerAIHandlers({
             content: appendAIErrorNotice(streamedTextContent, errorNotice),
             timestamp: new Date().toISOString(),
           };
-          const errorSaved = await saveAIErrorMessage(errorAiMessage, 'premature-close final-save error');
+          const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'premature-close final-save error');
+          if (await stopObsoleteRun(errorSaveOutcome)) return;
+          const errorSaved = errorSaveOutcome === 'saved';
           io.to(roomId).emit('ai_stream_error', {
             messageId: aiMessageId,
             error: errorNotice,
@@ -1874,7 +1976,9 @@ export function registerAIHandlers({
       if (streamedA2UIPayload) {
         errorAiMessage.uiPayload = streamedA2UIPayload;
       }
-      const errorSaved = await saveAIErrorMessage(errorAiMessage, 'stream error');
+      const errorSaveOutcome = await saveAIErrorMessage(errorAiMessage, 'stream error');
+      if (await stopObsoleteRun(errorSaveOutcome)) return;
+      const errorSaved = errorSaveOutcome === 'saved';
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: errorNotice,
@@ -1895,7 +1999,7 @@ export function registerAIHandlers({
     data: SendMessageAndAskAIData,
     callback?: (response: { success: boolean; message?: Message; error?: string }) => void
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;
@@ -1978,7 +2082,7 @@ export function registerAIHandlers({
   });
 
   socket.on('ask_ai', async (data: AIRequestData, callback?: AIAckCallback) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
       callback?.({ success: false, error: 'You are not registered' });
@@ -2084,7 +2188,7 @@ export function registerAIHandlers({
     data: SendMessageAndAskAIData,
     callback?: SendMessageAndAskAIAckCallback,
   ) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
       callback?.({ success: false, error: 'You are not registered' });
@@ -2259,7 +2363,7 @@ export function registerAIHandlers({
   });
 
   socket.on('edit_message_and_ask_ai', async (data: EditMessageAndAskAIData, callback?: AIAckCallback) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
       callback?.({ success: false, error: 'You are not registered' });
@@ -2371,7 +2475,7 @@ export function registerAIHandlers({
       return;
     }
 
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
       return;
     }

@@ -194,6 +194,7 @@ async function createTestServer(overrides: {
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
   codeAgentAccess?: Parameters<typeof registerApiRoutes>[1]['codeAgentAccess'];
+  socketAdapterReady?: Parameters<typeof registerApiRoutes>[1]['socketAdapterReady'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -552,6 +553,7 @@ async function createTestServer(overrides: {
     store: store as any,
     io: io as any,
     redisClient: redisClient as any,
+    socketAdapterReady: overrides.socketAdapterReady,
     routeLogger: routeLogger as any,
     getAIModelResponse: () => ({
       defaultModel: 'gpt-5.5',
@@ -2191,6 +2193,21 @@ describe('API routes', () => {
       assert.equal((await storageResponse.json() as any).dependencies.mediaStorage, 'unavailable');
     } finally {
       await objectFailureServer.close();
+    }
+  });
+
+  it('reports degraded readiness while the Socket.IO adapter is not connected', async () => {
+    const adapterFailureServer = await createTestServer({ socketAdapterReady: () => false });
+    try {
+      const response = await fetch(`${adapterFailureServer.baseUrl}/api/health/ready`);
+      assert.equal(response.status, 503);
+      const payload = await response.json() as any;
+      assert.equal(payload.ready, false);
+      assert.equal(payload.dependencies.socketAdapter, 'unavailable');
+      assert.equal(payload.dependencies.database, 'ready');
+      assert.equal(payload.dependencies.redis, 'ready');
+    } finally {
+      await adapterFailureServer.close();
     }
   });
 

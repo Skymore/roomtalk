@@ -375,6 +375,7 @@ const createHarness = (
     socketLogger: logger as any,
     codeAgentAccess,
     publishedStaticSiteService: options.publishedStaticSiteService as any,
+    resolveClientId: () => store.getClientId(),
   } as any);
 
   return { io, socket, store };
@@ -1225,6 +1226,7 @@ describe('room socket handlers', () => {
       store: harness.store as any,
       socketLogger: logger as any,
       codeAgentAccess: createCodeAgentAccessControl({ enabled: true }),
+      resolveClientId: () => harness.store.getClientId(),
     } as any);
 
     let releaseDelete = () => {};

@@ -1,7 +1,15 @@
 import { Logger } from '../logger';
-import { OutboxEventRecord, RoomStore } from '../repositories/store';
+import { OutboxClaimToken, OutboxEventRecord, RoomStore } from '../repositories/store';
 
-export type OutboxEventHandler = (event: OutboxEventRecord) => Promise<void>;
+export interface OutboxExecutionContext {
+  claim: OutboxClaimToken;
+  signal: AbortSignal;
+}
+
+export type OutboxEventHandler = (
+  event: OutboxEventRecord,
+  context: OutboxExecutionContext,
+) => Promise<void>;
 
 export interface OutboxWorkerOptions {
   store: RoomStore;
@@ -90,9 +98,10 @@ export class OutboxWorker {
   }
 
   private async processEvent(event: OutboxEventRecord) {
+    const claim = { workerId: this.options.workerId, attempt: event.attempts };
     const handler = this.options.handlers[event.eventType];
     if (!handler) {
-      await this.options.store.markOutboxEventFailed?.(event.id, `No handler registered for ${event.eventType}`, {
+      await this.options.store.markOutboxEventFailed?.(event.id, `No handler registered for ${event.eventType}`, claim, {
         retryDelayMs: this.options.retryDelayMs,
         maxAttempts: 1,
       });
@@ -100,23 +109,66 @@ export class OutboxWorker {
       return;
     }
 
+    if (!this.options.store.renewOutboxEventLease) {
+      throw new Error('Outbox worker requires lease renewal support');
+    }
+
+    const controller = new AbortController();
+    const renewalMs = Math.max(250, Math.floor((this.options.lockMs ?? 60_000) / 3));
+    let leaseLost = false;
+    let renewalInFlight: Promise<void> | null = null;
+    const renewLease = () => {
+      if (renewalInFlight || leaseLost) return renewalInFlight;
+      renewalInFlight = this.options.store.renewOutboxEventLease!(event.id, claim)
+        .then(renewed => {
+          if (!renewed) {
+            leaseLost = true;
+            controller.abort(new Error('Outbox execution lease was lost'));
+          }
+        })
+        .catch(error => {
+          leaseLost = true;
+          controller.abort(error);
+          this.options.logger.error('Outbox lease renewal failed', { error, eventId: event.id, claim });
+        })
+        .finally(() => {
+          renewalInFlight = null;
+        });
+      return renewalInFlight;
+    };
+    const renewalTimer = setInterval(() => void renewLease(), renewalMs);
+    renewalTimer.unref?.();
+
     try {
-      await handler(event);
-      await this.options.store.markOutboxEventProcessed?.(event.id);
+      await handler(event, { claim, signal: controller.signal });
+      if (renewalInFlight) await renewalInFlight;
+      if (leaseLost) {
+        this.options.logger.warn('Discarded completion from worker that lost its outbox lease', { eventId: event.id, claim });
+        return;
+      }
+      const processed = await this.options.store.markOutboxEventProcessed?.(event.id, claim);
+      if (!processed) {
+        this.options.logger.warn('Outbox completion was rejected by its claim fence', { eventId: event.id, claim });
+      }
     } catch (error) {
-      await this.options.store.markOutboxEventFailed?.(
-        event.id,
-        error instanceof Error ? error.message : String(error),
-        {
-          retryDelayMs: this.options.retryDelayMs,
-          maxAttempts: this.options.maxAttempts,
-        }
-      );
+      if (!leaseLost) {
+        await this.options.store.markOutboxEventFailed?.(
+          event.id,
+          error instanceof Error ? error.message : String(error),
+          claim,
+          {
+            retryDelayMs: this.options.retryDelayMs,
+            maxAttempts: this.options.maxAttempts,
+          }
+        );
+      }
       this.options.logger.error('Outbox event handler failed', {
         eventId: event.id,
         eventType: event.eventType,
         error,
       });
+    } finally {
+      clearInterval(renewalTimer);
     }
   }
 }

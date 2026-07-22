@@ -10,7 +10,7 @@ const TOKEN_EXPIRES_IN_SECONDS = 300;
  * directly to the realtime transcription WebSocket without ever seeing the
  * account API key. The key stays server-side; only a 5-minute token is exposed.
  */
-export function registerTranscriptionHandlers({ socket, store, socketLogger, assemblyAIApiKey }: SocketConnectionContext) {
+export function registerTranscriptionHandlers({ socket, store, socketLogger, assemblyAIApiKey, resolveClientId }: SocketConnectionContext) {
   const resolveAckCallback = (
     payloadOrCallback?: unknown,
     maybeCallback?: unknown,
@@ -35,7 +35,7 @@ export function registerTranscriptionHandlers({ socket, store, socketLogger, ass
       return;
     }
 
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;

@@ -174,6 +174,7 @@ const createHarness = (options: {
     getAIClientForModel: (() => ({})) as any,
     codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
     codeAgentSessionService: options.codeAgentSessionService,
+    resolveClientId: () => store.getClientId(),
     ...(options.lifecycleSandboxId ? {
       codeAgentSandboxLifecycle: {
         ensureReadySandbox: async (roomId: string, clientId: string) => {

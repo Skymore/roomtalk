@@ -4,7 +4,7 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -48,6 +48,68 @@ const REALTIME_INSTANCES_KEY = 'realtime:instances';
 const SOCKET_INSTANCES_KEY = 'socket:instances';
 const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
 const getRealtimeInstanceSocketsKey = (instanceId: string) => `realtime:instance:${instanceId}:sockets`;
+
+const HEARTBEAT_REALTIME_INSTANCE_SCRIPT = `
+-- HEARTBEAT_REALTIME_INSTANCE
+local existed = redis.call('EXISTS', KEYS[2])
+redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+redis.call('SADD', KEYS[1], ARGV[1])
+return existed == 0 and 1 or 0
+`;
+
+const CLEANUP_EXPIRED_REALTIME_INSTANCE_SCRIPT = `
+-- CLEANUP_EXPIRED_REALTIME_INSTANCE
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return 0
+end
+
+local socketIds = redis.call('SMEMBERS', KEYS[3])
+local cleaned = 0
+for _, socketId in ipairs(socketIds) do
+  local currentOwner = redis.call('HGET', KEYS[4], socketId)
+  if currentOwner == ARGV[1] then
+    local clientId = redis.call('HGET', KEYS[5], socketId)
+    local browserId = redis.call('HGET', KEYS[6], socketId)
+    local roomIdsJson = redis.call('HGET', KEYS[7], socketId)
+    local roomIds = {}
+    if roomIdsJson then
+      local ok, decoded = pcall(cjson.decode, roomIdsJson)
+      if ok and type(decoded) == 'table' then roomIds = decoded end
+    end
+
+    for _, roomId in ipairs(roomIds) do
+      if type(roomId) == 'string' then
+        if clientId then
+          local memberSocketsKey = 'room:' .. roomId .. ':member_sockets:' .. clientId
+          redis.call('SREM', memberSocketsKey, socketId)
+          if redis.call('SCARD', memberSocketsKey) == 0 then
+            redis.call('DEL', memberSocketsKey)
+            redis.call('SREM', 'room:' .. roomId .. ':members', clientId)
+          end
+        end
+        if browserId then
+          local browserSocketsKey = 'room:' .. roomId .. ':browser_instance_sockets:' .. browserId
+          redis.call('SREM', browserSocketsKey, socketId)
+          if redis.call('SCARD', browserSocketsKey) == 0 then
+            redis.call('DEL', browserSocketsKey)
+            redis.call('SREM', 'room:' .. roomId .. ':active_browser_instances', browserId)
+          end
+        end
+      end
+    end
+
+    redis.call('HDEL', KEYS[5], socketId)
+    redis.call('HDEL', KEYS[6], socketId)
+    redis.call('HDEL', KEYS[7], socketId)
+    redis.call('HDEL', KEYS[4], socketId)
+    cleaned = cleaned + 1
+  end
+end
+
+redis.call('DEL', KEYS[3])
+redis.call('SREM', KEYS[1], ARGV[1])
+return cleaned
+`;
 
 interface RoomMessagesCachePayload {
   eventSeq: number;
@@ -487,6 +549,83 @@ end
 return { 1, found, #existing, cjson.encode(room) }
 `;
 
+const FINALIZE_AI_MESSAGE_SCRIPT = `
+-- FINALIZE_AI_MESSAGE
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local updatedPayload = ''
+local found = 0
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == ARGV[2] and decoded['status'] == 'streaming' then
+    local owner = decoded['aiStreamOwnerId']
+    local ownerMatches = (ARGV[4] == '' and owner == nil)
+      or (owner ~= nil and tostring(owner) == ARGV[4])
+    local currentFence = tonumber(decoded['aiStreamFence'] or 0)
+    if ownerMatches and currentFence == tonumber(ARGV[5]) then
+      updatedPayload = ARGV[3]
+      redis.call('LSET', KEYS[2], i - 1, updatedPayload)
+      found = 1
+    end
+    break
+  end
+end
+
+if found == 1 then
+  local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
+  if ARGV[6] > currentLastActivityAt then
+    room['lastActivityAt'] = ARGV[6]
+  end
+  room['updatedAt'] = ARGV[6]
+  roomJson = cjson.encode(room)
+  redis.call('HSET', KEYS[1], ARGV[1], roomJson)
+end
+
+return { 1, found, roomJson, updatedPayload }
+`;
+
+const CLAIM_AI_MESSAGE_STREAM_SCRIPT = `
+-- CLAIM_AI_MESSAGE_STREAM
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local claimed = 0
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == ARGV[2] and decoded['status'] == 'streaming' then
+    local currentFence = tonumber(decoded['aiStreamFence'] or 0)
+    local nextFence = tonumber(ARGV[4])
+    local currentOwner = decoded['aiStreamOwnerId']
+    if currentFence < nextFence
+      or (currentFence == nextFence and currentOwner ~= nil and tostring(currentOwner) == ARGV[3]) then
+      decoded['aiStreamOwnerId'] = ARGV[3]
+      decoded['aiStreamFence'] = nextFence
+      redis.call('LSET', KEYS[2], i - 1, cjson.encode(decoded))
+      claimed = 1
+    end
+    break
+  end
+end
+return { 1, claimed, roomJson }
+`;
+
 const UPDATE_MESSAGE_CONTENT_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -558,6 +697,7 @@ return { 1, found, cjson.encode(room), updatedPayload }
 `;
 
 const DELETE_MESSAGE_BY_ID_SCRIPT = `
+-- DELETE_MESSAGE_BY_ID
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
   return { 0, 0, 0, '' }
@@ -1371,6 +1511,62 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error upserting message in Redis', { error, messageId: message.id, roomId: message.roomId });
       return null;
+    }
+  }
+
+  async claimAIMessageStream(roomId: string, messageId: string, ownership: { ownerId: string | null; fence: number }) {
+    if (!ownership.ownerId || !Number.isSafeInteger(ownership.fence) || ownership.fence <= 0) {
+      throw new Error('AI worker claim requires a positive fence and owner ID');
+    }
+    const result = await (this.redisClient as any).eval(CLAIM_AI_MESSAGE_STREAM_SCRIPT, {
+      keys: ['rooms', `room:${roomId}:messages`],
+      arguments: [roomId, messageId, ownership.ownerId, String(ownership.fence)],
+    });
+    const claimed = Array.isArray(result) && Number(result[1]) === 1;
+    if (!claimed) return { outcome: 'obsolete' as const };
+    const room = parseScriptRoom(result, 2);
+    if (!room) throw new Error('Redis AI worker claim returned an invalid room');
+    await this.invalidateRoomMessagesCache(roomId);
+    return { outcome: 'claimed' as const, room };
+  }
+
+  async finalizeAIMessage(
+    message: Message,
+    expectedOwnership: { ownerId: string | null; fence: number },
+  ) {
+    if (message.status !== 'complete' && message.status !== 'error') {
+      throw new Error('AI terminal transition requires complete or error status');
+    }
+    if (!Number.isSafeInteger(expectedOwnership.fence) || expectedOwnership.fence < 0) {
+      throw new Error('AI terminal transition requires a non-negative ownership fence');
+    }
+
+    try {
+      const publicMessage = stripAIStreamRecoveryMetadata(message);
+      const result = await (this.redisClient as any).eval(FINALIZE_AI_MESSAGE_SCRIPT, {
+        keys: ['rooms', `room:${message.roomId}:messages`],
+        arguments: [
+          message.roomId,
+          message.id,
+          JSON.stringify(publicMessage),
+          expectedOwnership.ownerId || '',
+          String(expectedOwnership.fence),
+          message.timestamp,
+        ],
+      });
+      const found = Array.isArray(result) && Number(result[1]) === 1;
+      if (!found) return { outcome: 'obsolete' as const };
+
+      const room = parseScriptRoom(result, 2);
+      const updatedMessage = parseScriptMessage(Array.isArray(result) ? result[3] : undefined);
+      if (!room || !updatedMessage) {
+        throw new Error('Redis AI terminal transition returned an invalid result');
+      }
+      await this.invalidateRoomMessagesCache(message.roomId);
+      return { outcome: 'applied' as const, room, message: updatedMessage };
+    } catch (error) {
+      this.logger.error('Error finalizing Redis AI message', { error, messageId: message.id, roomId: message.roomId });
+      throw error;
     }
   }
 
@@ -2350,11 +2546,37 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async markOutboxEventProcessed(eventId: string, processedAt = new Date().toISOString()): Promise<OutboxEventRecord | null> {
+  async renewOutboxEventLease(
+    eventId: string,
+    claim: OutboxClaimToken,
+    now = new Date().toISOString(),
+  ): Promise<boolean> {
+    const raw = await this.redisClient.hGet(OUTBOX_EVENTS_KEY, eventId);
+    if (!raw) return false;
+    const event = JSON.parse(raw) as OutboxEventRecord;
+    if (event.status !== 'processing' || event.lockedBy !== claim.workerId || event.attempts !== claim.attempt) {
+      return false;
+    }
+    await this.redisClient.hSet(OUTBOX_EVENTS_KEY, eventId, JSON.stringify({
+      ...event,
+      lockedAt: now,
+      updatedAt: now,
+    }));
+    return true;
+  }
+
+  async markOutboxEventProcessed(
+    eventId: string,
+    claim: OutboxClaimToken,
+    processedAt = new Date().toISOString(),
+  ): Promise<OutboxEventRecord | null> {
     try {
       const raw = await this.redisClient.hGet(OUTBOX_EVENTS_KEY, eventId);
       if (!raw) return null;
       const event = JSON.parse(raw) as OutboxEventRecord;
+      if (event.status !== 'processing' || event.lockedBy !== claim.workerId || event.attempts !== claim.attempt) {
+        return null;
+      }
       const next: OutboxEventRecord = {
         ...event,
         status: 'processed',
@@ -2373,7 +2595,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async markOutboxEventFailed(eventId: string, errorMessage: string, options: OutboxFailOptions = {}): Promise<OutboxEventRecord | null> {
+  async markOutboxEventFailed(
+    eventId: string,
+    errorMessage: string,
+    claim: OutboxClaimToken,
+    options: OutboxFailOptions = {},
+  ): Promise<OutboxEventRecord | null> {
     const now = options.now || new Date().toISOString();
     const retryDelayMs = Math.max(0, options.retryDelayMs || 30_000);
     const maxAttempts = Math.max(1, options.maxAttempts || 10);
@@ -2381,6 +2608,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const raw = await this.redisClient.hGet(OUTBOX_EVENTS_KEY, eventId);
       if (!raw) return null;
       const event = JSON.parse(raw) as OutboxEventRecord;
+      if (event.status !== 'processing' || event.lockedBy !== claim.workerId || event.attempts !== claim.attempt) {
+        return null;
+      }
       const terminal = (event.attempts || 0) >= maxAttempts;
       const availableAt = terminal ? event.availableAt : new Date((Date.parse(now) || Date.now()) + retryDelayMs).toISOString();
       const next: OutboxEventRecord = {
@@ -3186,11 +3416,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async heartbeatRealtimeInstance(instanceId: string, ttlMs: number): Promise<void> {
-    await Promise.all([
-      this.redisClient.sAdd(REALTIME_INSTANCES_KEY, instanceId),
-      this.redisClient.set(getRealtimeInstanceHeartbeatKey(instanceId), '1', { PX: ttlMs }),
-    ]);
+  async heartbeatRealtimeInstance(instanceId: string, ttlMs: number): Promise<{ reacquired: boolean }> {
+    const result = await (this.redisClient as any).eval(HEARTBEAT_REALTIME_INSTANCE_SCRIPT, {
+      keys: [REALTIME_INSTANCES_KEY, getRealtimeInstanceHeartbeatKey(instanceId)],
+      arguments: [instanceId, String(ttlMs)],
+    });
+    return { reacquired: Number(result) === 1 };
   }
 
   async cleanupExpiredRealtimeInstances(activeInstanceId: string): Promise<number> {
@@ -3198,50 +3429,19 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     let cleanedSockets = 0;
     for (const instanceId of instanceIds) {
       if (instanceId === activeInstanceId) continue;
-      const heartbeat = await this.redisClient.get(getRealtimeInstanceHeartbeatKey(instanceId));
-      if (heartbeat) continue;
-
-      const socketIds = await this.redisClient.sMembers(getRealtimeInstanceSocketsKey(instanceId));
-      for (const socketId of socketIds) {
-        const [clientId, browserInstanceId, roomIdsJson] = await Promise.all([
-          this.redisClient.hGet('socket:clients', socketId),
-          this.redisClient.hGet('socket:browser_instances', socketId),
-          this.redisClient.hGet('socket:rooms', socketId),
-        ]);
-        let roomIds: string[] = [];
-        try {
-          const parsed = roomIdsJson ? JSON.parse(roomIdsJson) : [];
-          if (Array.isArray(parsed)) roomIds = parsed.filter(roomId => typeof roomId === 'string');
-        } catch {
-          roomIds = [];
-        }
-        for (const roomId of roomIds) {
-          if (clientId) {
-            await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
-              keys: [`room:${roomId}:members`, `room:${roomId}:member_sockets:${clientId}`],
-              arguments: [clientId, socketId, '0'],
-            });
-          }
-          if (browserInstanceId) {
-            await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
-              keys: [getRoomActiveBrowserInstancesKey(roomId), getRoomBrowserInstanceSocketsKey(roomId, browserInstanceId)],
-              arguments: [browserInstanceId, socketId, '0'],
-            });
-          }
-        }
-        await Promise.all([
-          this.redisClient.hDel('socket:clients', socketId),
-          this.redisClient.hDel('socket:browser_instances', socketId),
-          this.redisClient.hDel('socket:rooms', socketId),
-          this.redisClient.hDel(SOCKET_INSTANCES_KEY, socketId),
-        ]);
-        cleanedSockets++;
-      }
-      await Promise.all([
-        this.redisClient.del(getRealtimeInstanceSocketsKey(instanceId)),
-        this.redisClient.del(getRealtimeInstanceHeartbeatKey(instanceId)),
-        this.redisClient.sRem(REALTIME_INSTANCES_KEY, instanceId),
-      ]);
+      const cleaned = await (this.redisClient as any).eval(CLEANUP_EXPIRED_REALTIME_INSTANCE_SCRIPT, {
+        keys: [
+          REALTIME_INSTANCES_KEY,
+          getRealtimeInstanceHeartbeatKey(instanceId),
+          getRealtimeInstanceSocketsKey(instanceId),
+          SOCKET_INSTANCES_KEY,
+          'socket:clients',
+          'socket:browser_instances',
+          'socket:rooms',
+        ],
+        arguments: [instanceId],
+      });
+      cleanedSockets += Number(cleaned) || 0;
     }
     if (cleanedSockets > 0) {
       this.logger.info('Cleaned expired realtime instance presence', { activeInstanceId, cleanedSockets });

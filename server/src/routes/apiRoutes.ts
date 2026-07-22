@@ -37,6 +37,7 @@ interface ApiRouteOptions {
   store: RoomStore;
   io: Server;
   redisClient: RedisClientType;
+  socketAdapterReady?: () => boolean;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
@@ -1518,13 +1519,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       Promise.resolve().then(() => mediaObjectStorage.checkHealth()),
     ]);
     const [databaseCheck, redisCheck, mediaStorageCheck] = checks;
-    const ready = checks.every(check => check.status === 'fulfilled') && Boolean(io.of('/').adapter);
+    const socketAdapterReady = options.socketAdapterReady
+      ? options.socketAdapterReady()
+      : Boolean(io.of('/').adapter);
+    const ready = checks.every(check => check.status === 'fulfilled') && socketAdapterReady;
     const roomCount = databaseCheck.status === 'fulfilled' ? databaseCheck.value : null;
     const dependencies = {
       database: databaseCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
       redis: redisCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
       mediaStorage: mediaStorageCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
-      socketAdapter: io.of('/').adapter ? 'ready' : 'unavailable',
+      socketAdapter: socketAdapterReady ? 'ready' : 'unavailable',
     } as const;
 
     if (!ready) {

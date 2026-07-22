@@ -18,6 +18,7 @@ import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage'
 import { ObservabilityEventInput } from './observabilityEvents';
 import { CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { CodexConnectionError } from './codexConnection';
+import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata } from './aiStreamRecovery';
 
 type RoomEmit = {
   roomId: string;
@@ -167,6 +168,30 @@ class MemoryCodeAgentStore {
     }
     this.messages.set(message.roomId, messages);
     return { ...room, lastActivityAt: message.timestamp };
+  }
+
+  async finalizeAIMessage(
+    message: Message,
+    expectedOwnership: { ownerId: string | null; fence: number },
+  ) {
+    const room = this.rooms.get(message.roomId);
+    const messages = this.messages.get(message.roomId);
+    if (!room || !messages) return { outcome: 'obsolete' as const };
+    const index = messages.findIndex(item => item.id === message.id);
+    const current = index >= 0 ? messages[index] : null;
+    if (
+      !current
+      || current.status !== 'streaming'
+      || (getAIStreamOwnerId(current) || null) !== expectedOwnership.ownerId
+      || getAIStreamFence(current) !== expectedOwnership.fence
+    ) {
+      return { outcome: 'obsolete' as const };
+    }
+    const publicMessage = stripAIStreamRecoveryMetadata(message);
+    messages[index] = publicMessage;
+    const updatedRoom = { ...room, lastActivityAt: message.timestamp };
+    this.rooms.set(message.roomId, updatedRoom);
+    return { outcome: 'applied' as const, room: updatedRoom, message: publicMessage };
   }
 
   async appendMessageWithAtomicPosition(message: Message) {
@@ -775,7 +800,8 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'ai']);
     assert.equal(messages[1].status, 'complete');
     assert.equal(messages[1].content, 'Working...');
-    assert.equal((messages[1] as any).aiStreamOwnerId, 'owner-1');
+    assert.equal((messages[1] as any).aiStreamOwnerId, undefined);
+    assert.equal((messages[1] as any).aiStreamFence, undefined);
     assert.equal(messages[2].toolCallId, 'tool-1');
     assert.equal(messages[3].toolOutputPreview, '# RoomTalk');
     assert.equal(messages[3].content, '# RoomTalk');

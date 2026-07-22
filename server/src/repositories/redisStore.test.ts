@@ -7,6 +7,7 @@ import {
 } from './redisStore';
 import { AICost, MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { OutboxEventRecord } from './store';
+import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 
 const toTime = (value?: string) => Date.parse(value || '') || 0;
 const latest = (first?: string, second?: string) => toTime(first) >= toTime(second) ? first : second;
@@ -206,6 +207,144 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('HEARTBEAT_REALTIME_INSTANCE')) {
+      const [instanceId] = options.arguments;
+      const existed = this.strings.has(options.keys[1]);
+      this.strings.set(options.keys[1], instanceId);
+      this.setMembers(options.keys[0]).add(instanceId);
+      return existed ? 0 : 1;
+    }
+
+    if (script.includes('CLEANUP_EXPIRED_REALTIME_INSTANCE')) {
+      const [instanceId] = options.arguments;
+      const [instancesKey, heartbeatKey, instanceSocketsKey, socketInstancesKey, clientsKey, browsersKey, roomsKey] = options.keys;
+      if (this.strings.has(heartbeatKey)) return 0;
+
+      let cleaned = 0;
+      for (const socketId of Array.from(this.setMembers(instanceSocketsKey))) {
+        if (this.hash(socketInstancesKey).get(socketId) !== instanceId) continue;
+        const clientId = this.hash(clientsKey).get(socketId);
+        const browserId = this.hash(browsersKey).get(socketId);
+        const roomIdsRaw = this.hash(roomsKey).get(socketId);
+        let roomIds: string[] = [];
+        try {
+          const parsed = roomIdsRaw ? JSON.parse(roomIdsRaw) : [];
+          if (Array.isArray(parsed)) roomIds = parsed.filter((value): value is string => typeof value === 'string');
+        } catch {
+          roomIds = [];
+        }
+
+        for (const roomId of roomIds) {
+          if (clientId) {
+            const memberSocketsKey = `room:${roomId}:member_sockets:${clientId}`;
+            this.setMembers(memberSocketsKey).delete(socketId);
+            if (this.setMembers(memberSocketsKey).size === 0) {
+              await this.del(memberSocketsKey);
+              this.setMembers(`room:${roomId}:members`).delete(clientId);
+            }
+          }
+          if (browserId) {
+            const browserSocketsKey = `room:${roomId}:browser_instance_sockets:${browserId}`;
+            this.setMembers(browserSocketsKey).delete(socketId);
+            if (this.setMembers(browserSocketsKey).size === 0) {
+              await this.del(browserSocketsKey);
+              this.setMembers(`room:${roomId}:active_browser_instances`).delete(browserId);
+            }
+          }
+        }
+
+        this.hash(clientsKey).delete(socketId);
+        this.hash(browsersKey).delete(socketId);
+        this.hash(roomsKey).delete(socketId);
+        this.hash(socketInstancesKey).delete(socketId);
+        cleaned++;
+      }
+      await this.del(instanceSocketsKey);
+      this.setMembers(instancesKey).delete(instanceId);
+      return cleaned;
+    }
+
+    if (script.includes('CLAIM_AI_MESSAGE_STREAM')) {
+      const [roomsKey, messagesKey] = options.keys;
+      const [roomId, messageId, ownerId, nextFenceRaw] = options.arguments;
+      const roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, 0, ''];
+      const list = this.lists.get(messagesKey) || [];
+      let claimed = 0;
+      for (let index = 0; index < list.length; index++) {
+        const current = JSON.parse(list[index]);
+        if (current.id !== messageId || current.status !== 'streaming') continue;
+        const currentFence = Number(current.aiStreamFence || 0);
+        const nextFence = Number(nextFenceRaw);
+        if (currentFence < nextFence || (currentFence === nextFence && current.aiStreamOwnerId === ownerId)) {
+          current.aiStreamOwnerId = ownerId;
+          current.aiStreamFence = nextFence;
+          list[index] = JSON.stringify(current);
+          claimed = 1;
+        }
+        break;
+      }
+      this.lists.set(messagesKey, list);
+      return [1, claimed, roomJson];
+    }
+
+    if (script.includes('FINALIZE_AI_MESSAGE')) {
+      const [roomsKey, messagesKey] = options.keys;
+      const [roomId, messageId, payload, ownerId, fenceRaw, timestamp] = options.arguments;
+      let roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
+      const list = this.lists.get(messagesKey) || [];
+      let found = 0;
+      for (let index = 0; index < list.length; index++) {
+        const current = JSON.parse(list[index]);
+        if (current.id !== messageId || current.status !== 'streaming') continue;
+        const ownerMatches = ownerId === ''
+          ? current.aiStreamOwnerId === undefined
+          : current.aiStreamOwnerId === ownerId;
+        if (ownerMatches && Number(current.aiStreamFence || 0) === Number(fenceRaw)) {
+          list[index] = payload;
+          found = 1;
+        }
+        break;
+      }
+      this.lists.set(messagesKey, list);
+      if (found === 1) {
+        const currentRoom = JSON.parse(roomJson);
+        if (timestamp > (currentRoom.lastActivityAt || currentRoom.createdAt || '')) {
+          currentRoom.lastActivityAt = timestamp;
+        }
+        currentRoom.updatedAt = timestamp;
+        roomJson = JSON.stringify(currentRoom);
+        this.hash(roomsKey).set(roomId, roomJson);
+      }
+      return [1, found, roomJson, found === 1 ? payload : ''];
+    }
+
+    if (script.includes('DELETE_MESSAGE_BY_ID')) {
+      const [roomsKey, messagesKey, clientMessageIdsKey] = options.keys;
+      const [roomId, messageId] = options.arguments;
+      const roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, 0, 0, ''];
+      const existing = this.lists.get(messagesKey) || [];
+      const remaining = existing.filter(payload => JSON.parse(payload).id !== messageId);
+      const deleted = remaining.length !== existing.length;
+      let updatedRoom = JSON.parse(roomJson);
+      if (deleted) {
+        const latestTimestamp = remaining.reduce((latestValue, payload) => {
+          const timestamp = JSON.parse(payload).timestamp || '';
+          return timestamp > latestValue ? timestamp : latestValue;
+        }, '');
+        updatedRoom = {
+          ...updatedRoom,
+          lastActivityAt: latestTimestamp || updatedRoom.createdAt,
+        };
+        this.hash(roomsKey).set(roomId, JSON.stringify(updatedRoom));
+        this.lists.set(messagesKey, remaining);
+        this.rebuildClientMessageIds(messagesKey, clientMessageIdsKey);
+      }
+      return [1, deleted ? 1 : 0, remaining.length, JSON.stringify(updatedRoom)];
+    }
+
     if (script.includes('RENEW_ROOM_ACCESS_MUTATION_LOCK')) {
       const [token] = options.arguments;
       return this.strings.get(options.keys[0]) === token ? 1 : 0;
@@ -1269,6 +1408,57 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readRoomAICost('room-bad'), { roomId: 'room-bad', currency: 'USD', totalUsd: 0 });
   });
 
+  it('fences AI terminal writes and never resurrects a deleted placeholder', async () => {
+    const { store } = createStore();
+    await store.saveRoom(room());
+    const placeholder = withAIStreamRecoveryMetadata(message({
+      id: 'ai-1',
+      clientId: 'ai_assistant',
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    }), 'inline-owner');
+    await store.appendMessage(placeholder);
+
+    assert.equal((await store.claimAIMessageStream('room-1', 'ai-1', { ownerId: 'worker-1', fence: 1 })).outcome, 'claimed');
+    assert.equal((await store.claimAIMessageStream('room-1', 'ai-1', { ownerId: 'worker-2', fence: 2 })).outcome, 'claimed');
+
+    const completed = message({
+      ...placeholder,
+      content: 'complete answer',
+      status: 'complete',
+    });
+    assert.deepEqual(
+      await store.finalizeAIMessage(completed, { ownerId: 'worker-1', fence: 1 }),
+      { outcome: 'obsolete' },
+    );
+    assert.equal((await store.finalizeAIMessage(completed, { ownerId: 'worker-2', fence: 2 })).outcome, 'applied');
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [{
+      ...completed,
+      aiStreamOwnerId: undefined,
+      aiStreamFence: undefined,
+    }].map(item => {
+      const { aiStreamOwnerId: _owner, aiStreamFence: _fence, ...publicItem } = item;
+      return publicItem;
+    }));
+
+    const deletedPlaceholder = withAIStreamRecoveryMetadata(message({
+      id: 'ai-deleted',
+      clientId: 'ai_assistant',
+      content: '',
+      messageType: 'ai',
+      status: 'streaming',
+    }), 'inline-owner');
+    await store.appendMessage(deletedPlaceholder);
+    assert.equal((await store.claimAIMessageStream('room-1', 'ai-deleted', { ownerId: 'worker-3', fence: 1 })).outcome, 'claimed');
+    await store.deleteMessageById('room-1', 'ai-deleted');
+    assert.deepEqual(
+      await store.finalizeAIMessage({ ...deletedPlaceholder, content: 'late answer', status: 'complete' }, { ownerId: 'worker-3', fence: 1 }),
+      { outcome: 'obsolete' },
+    );
+    assert.equal((await store.readMessagesByRoom('room-1')).some(item => item.id === 'ai-deleted'), false);
+  });
+
   it('does not reclaim terminally failed outbox events', async () => {
     const { store } = createStore();
     const saved = await store.createOutboxEvent(outboxEvent());
@@ -1283,10 +1473,15 @@ describe('RedisStore', () => {
     assert.equal(claimed[0].status, 'processing');
     assert.equal(claimed[0].attempts, 1);
 
-    const failed = await store.markOutboxEventFailed('event-1', 'boom', {
-      maxAttempts: 1,
-      now: '2026-06-22T00:00:02.000Z',
-    });
+    const failed = await store.markOutboxEventFailed(
+      'event-1',
+      'boom',
+      { workerId: 'worker-1', attempt: 1 },
+      {
+        maxAttempts: 1,
+        now: '2026-06-22T00:00:02.000Z',
+      },
+    );
     assert.equal(failed?.status, 'failed');
 
     const reclaimed = await store.claimOutboxEvents({

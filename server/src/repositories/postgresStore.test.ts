@@ -740,9 +740,12 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[23], null);
+          assert.equal(call.params?.[24], 0);
           assert.equal(call.params?.[25], null);
           assert.equal(call.params?.[26], null);
-          assert.equal(call.params?.[27], 2);
+          assert.equal(call.params?.[27], null);
+          assert.equal(call.params?.[28], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -824,9 +827,12 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[23], null);
+          assert.equal(call.params?.[24], 0);
           assert.equal(call.params?.[25], null);
           assert.equal(call.params?.[26], null);
-          assert.equal(call.params?.[27], 4);
+          assert.equal(call.params?.[27], null);
+          assert.equal(call.params?.[28], 4);
         },
       },
       {
@@ -944,9 +950,12 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[23], null);
+          assert.equal(call.params?.[24], 0);
           assert.equal(call.params?.[25], null);
           assert.equal(call.params?.[26], null);
-          assert.equal(call.params?.[27], 3);
+          assert.equal(call.params?.[27], null);
+          assert.equal(call.params?.[28], 3);
         },
       },
       {
@@ -977,6 +986,72 @@ describe('PostgresStore', () => {
     assert.equal(await store.upsertMessage(message()), null);
     assert.equal(client.calls.some(call => /INSERT INTO room_messages/.test(call.sql)), false);
     assert.equal(client.released, true);
+  });
+
+  it('fences AI terminal writes and never inserts a missing placeholder', async () => {
+    const terminalMessage = message({
+      id: 'ai-1',
+      clientId: 'ai_assistant',
+      content: 'complete answer',
+      messageType: 'ai',
+      status: 'complete',
+    });
+    const terminalRow = {
+      id: 'ai-1',
+      room_id: 'room-1',
+      client_id: 'ai_assistant',
+      content: 'complete answer',
+      timestamp: terminalMessage.timestamp,
+      updated_at: terminalMessage.timestamp,
+      message_type: 'ai',
+      status: 'complete',
+      ai_stream_owner_id: null,
+      ai_stream_fence: 2,
+    };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ id: 'ai-1' }],
+        assertCall(call) {
+          assert.match(call.sql, /status = 'streaming'/);
+          assert.match(call.sql, /ai_stream_fence < \$4/);
+          assert.deepEqual(call.params, ['ai-1', 'room-1', 'worker-2', 2]);
+        },
+      },
+      { rows: [roomRow()] },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [terminalRow],
+        assertCall(call) {
+          assert.match(call.sql, /ai_stream_owner_id IS NOT DISTINCT FROM \$3/);
+          assert.match(call.sql, /ai_stream_fence = \$15/);
+          assert.doesNotMatch(call.sql, /INSERT INTO room_messages/);
+          assert.equal(call.params?.[2], 'worker-2');
+          assert.equal(call.params?.[14], 2);
+        },
+      },
+      { rows: [roomRow({ last_activity_at: terminalMessage.timestamp })] },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [],
+        assertCall(call) {
+          assert.match(call.sql, /UPDATE room_messages/);
+          assert.doesNotMatch(call.sql, /INSERT INTO room_messages/);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const store = new PostgresStore(new ScriptedPool([], client), logger as any);
+
+    assert.equal((await store.claimAIMessageStream('room-1', 'ai-1', { ownerId: 'worker-2', fence: 2 })).outcome, 'claimed');
+    assert.equal((await store.finalizeAIMessage(terminalMessage, { ownerId: 'worker-2', fence: 2 })).outcome, 'applied');
+    assert.deepEqual(
+      await store.finalizeAIMessage({ ...terminalMessage, id: 'deleted-ai' }, { ownerId: 'worker-2', fence: 2 }),
+      { outcome: 'obsolete' },
+    );
+    assert.equal(client.calls.some(call => /INSERT INTO room_messages/.test(call.sql)), false);
   });
 
   it('supports code-agent recovery queries and sandbox status CAS', async () => {
@@ -1114,9 +1189,11 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[21], JSON.stringify(aiMessage.replyTo));
           assert.equal(call.params?.[22], JSON.stringify(aiMessage.uiPayload));
           assert.equal(call.params?.[23], null);
+          assert.equal(call.params?.[24], 0);
           assert.equal(call.params?.[25], null);
           assert.equal(call.params?.[26], null);
-          assert.equal(call.params?.[27], 0);
+          assert.equal(call.params?.[27], null);
+          assert.equal(call.params?.[28], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },

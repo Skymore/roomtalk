@@ -82,7 +82,7 @@ const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
   ))
 );
 
-export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
+export function registerMessageHandlers({ io, socket, store, socketLogger, resolveClientId }: SocketConnectionContext) {
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
   socket.on('get_room_messages', (_request: unknown, callback?: (response: {
@@ -124,7 +124,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
     const limit = request?.limit;
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
     socketLogger.debug('Client requested room snapshot', { socketId: socket.id, userId, roomId, beforeMessageId, limit });
 
     if (!userId) {
@@ -211,7 +211,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
-    const userId = await store.getClientId(socket.id);
+    const userId = await resolveClientId();
     if (!userId) {
       callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
       return;
@@ -324,7 +324,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       callback?.({ success: false, error: 'Invalid message payload' });
       return;
     }
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to send message', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
@@ -456,7 +456,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     if (!allowMessageMutation()) {
       return callback?.({ success: false, error: 'Too many message requests' });
     }
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       return callback?.({ success: false, error: 'Not registered' });
     }
@@ -514,7 +514,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
   });
 
   socket.on('delete_message', async (data: { roomId: string; messageId: string }, callback?: (response: { success: boolean; error?: string }) => void) => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       return callback?.({ success: false, error: 'Not registered' });
     }
@@ -572,7 +572,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
   socket.on('clear_room_messages', async (payload: unknown, callback?: (response: { success: boolean; error?: string }) => void) => {
     const { roomId, confirmation } = parseClearRoomPayload(payload);
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to clear messages', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
@@ -625,7 +625,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       callback?.({ success: false, error: 'Too many A2UI action requests' });
       return;
     }
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
     if (!clientId) {
       callback?.({ success: false, error: 'You are not registered' });
       return;

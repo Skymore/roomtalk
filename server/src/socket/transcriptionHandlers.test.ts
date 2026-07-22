@@ -40,6 +40,7 @@ const createHarness = (options: { clientId?: string | null; assemblyAIApiKey?: s
     store: store as any,
     socketLogger: logger as any,
     assemblyAIApiKey: options.assemblyAIApiKey,
+    resolveClientId: () => store.getClientId(),
   } as any);
 
   return { socket };

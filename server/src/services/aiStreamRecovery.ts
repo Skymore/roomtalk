@@ -7,6 +7,7 @@ export interface InterruptedStreamingMessageRecoveryOptions {
 
 export type AIStreamTrackedMessage = Message & {
   aiStreamOwnerId?: string;
+  aiStreamFence?: number;
 };
 
 export const resolveAIStreamOwnerId = (env: NodeJS.ProcessEnv = process.env, runtimeInstanceId?: string): string => {
@@ -20,7 +21,11 @@ export const resolveAIStreamOwnerId = (env: NodeJS.ProcessEnv = process.env, run
   return createHash('sha256').update(rawOwnerId).digest('hex').slice(0, 32);
 };
 
-export const withAIStreamRecoveryMetadata = (message: Message, aiStreamOwnerId?: string): AIStreamTrackedMessage => {
+export const withAIStreamRecoveryMetadata = (
+  message: Message,
+  aiStreamOwnerId?: string,
+  aiStreamFence = 0,
+): AIStreamTrackedMessage => {
   if (!aiStreamOwnerId) {
     return message;
   }
@@ -28,13 +33,23 @@ export const withAIStreamRecoveryMetadata = (message: Message, aiStreamOwnerId?:
   return {
     ...message,
     aiStreamOwnerId,
+    aiStreamFence,
   };
 };
 
 export const getAIStreamOwnerId = (message: Message): string | undefined =>
   (message as AIStreamTrackedMessage).aiStreamOwnerId;
 
+export const getAIStreamFence = (message: Message): number => {
+  const fence = (message as AIStreamTrackedMessage).aiStreamFence;
+  return Number.isSafeInteger(fence) && Number(fence) >= 0 ? Number(fence) : 0;
+};
+
 export const stripAIStreamRecoveryMetadata = (message: Message): Message => {
-  const { aiStreamOwnerId: _aiStreamOwnerId, ...publicMessage } = message as AIStreamTrackedMessage;
+  const {
+    aiStreamOwnerId: _aiStreamOwnerId,
+    aiStreamFence: _aiStreamFence,
+    ...publicMessage
+  } = message as AIStreamTrackedMessage;
   return publicMessage;
 };

@@ -606,6 +606,7 @@ export function registerCodeAgentWorkspaceHandlers({
   codeAgentSessionService,
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
+  resolveClientId,
 }: SocketConnectionContext) {
   const codeWorkspaceFilePreviewService = codeAgentSandboxService && codeWorkspaceAssetAccess
     ? new CodeWorkspaceFilePreviewService({
@@ -618,7 +619,7 @@ export function registerCodeAgentWorkspaceHandlers({
     roomId: string | null,
     action: string
   ): Promise<{ success: true; clientId: string; room: Room } | { success: false; error: string; clientId?: string | null }> => {
-    const clientId = await store.getClientId(socket.id);
+    const clientId = await resolveClientId();
 
     if (!clientId) {
       socketLogger.warn(`Unregistered client tried to ${action}`, { socketId: socket.id, roomId });

@@ -292,6 +292,24 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.messages).toBe('cached-message,message-6');
   });
 
+  it('automatically retries replay after transient socket registration loss', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 0, hasMore: false, cachedAt: Date.now(),
+    };
+    socketMock.requestEvents
+      .mockRejectedValueOnce(new socketMock.SocketRequestError('NOT_REGISTERED', 'registration index unavailable'))
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, {
+        events: [event(1)],
+        headSeq: 1,
+      }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-1');
+  });
+
   it('drains multiple bounded event pages without losing the first page', async () => {
     cacheMock.memory = {
       roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),

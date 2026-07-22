@@ -27,6 +27,7 @@ describe('OutboxWorker', () => {
         calls.push('claim');
         return claimed;
       },
+      renewOutboxEventLease: async () => true,
       markOutboxEventProcessed: async (eventId: string) => {
         calls.push(`processed:${eventId}`);
         return claimed[0];
@@ -79,6 +80,49 @@ describe('OutboxWorker', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'evt-1');
     assert.match(String(calls[0][1]), /No handler registered/);
-    assert.deepEqual(calls[0][2], { retryDelayMs: undefined, maxAttempts: 1 });
+    assert.deepEqual(calls[0][2], { workerId: 'worker-1', attempt: 1 });
+    assert.deepEqual(calls[0][3], { retryDelayMs: undefined, maxAttempts: 1 });
+  });
+
+  it('aborts work and rejects a stale completion after losing its lease', async () => {
+    const calls: string[] = [];
+    const claimed = [event()];
+    const store = {
+      claimOutboxEvents: async () => claimed,
+      renewOutboxEventLease: async () => {
+        calls.push('renew');
+        return false;
+      },
+      markOutboxEventProcessed: async () => {
+        calls.push('processed');
+        return claimed[0];
+      },
+      markOutboxEventFailed: async () => {
+        calls.push('failed');
+        return claimed[0];
+      },
+    };
+    const worker = new OutboxWorker({
+      store: store as any,
+      logger: new Logger('OutboxWorkerTest'),
+      workerId: 'worker-1',
+      lockMs: 300,
+      handlers: {
+        'test.event': async (_handledEvent, { signal }) => {
+          await new Promise<void>(resolve => {
+            signal.addEventListener('abort', () => {
+              calls.push('aborted');
+              resolve();
+            }, { once: true });
+          });
+        },
+      },
+    });
+
+    (worker as any).stopped = false;
+    await worker.tick();
+    worker.stop();
+
+    assert.deepEqual(calls, ['renew', 'aborted']);
   });
 });

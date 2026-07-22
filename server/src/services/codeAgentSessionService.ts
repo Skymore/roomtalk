@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { MessageUpdateResult, RoomStore } from '../repositories/store';
+import { AIStreamOwnership, MessageUpdateResult, RoomStore } from '../repositories/store';
 import { AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from './aiHistory';
@@ -31,7 +31,7 @@ import {
   DEFAULT_CODE_AGENT_RUNNER_COMMAND,
 } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
-import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
+import { getAIStreamFence, stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
 import type { MediaObjectStorage } from './mediaObjectStorage';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
@@ -104,7 +104,7 @@ export interface CodeAgentSessionServiceOptions {
   observability?: ObservabilityEventRecorder;
   mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
   aiStreamOwnerId?: string;
-  aiTerminalPersistReconciler?: { enqueue(message: Message, context: { reason: string }): void };
+  aiTerminalPersistReconciler?: { enqueue(message: Message, context: { reason: string; expectedOwnership: AIStreamOwnership }): void };
   leaseOwnerId?: string;
   roomLeaseTtlMs?: number;
   now?: () => Date;
@@ -667,7 +667,11 @@ export class CodeAgentSessionService {
             usage: completionMetadata.usage,
             cost: completionMetadata.cost,
           };
-          finalRoom = await this.store.upsertMessage(finalMessage);
+          const finalResult = await this.store.finalizeAIMessage(finalMessage, this.aiStreamOwnership(finalMessage));
+          if (finalResult.outcome === 'obsolete') {
+            throw new Error('Agent response was superseded before completion');
+          }
+          finalRoom = finalResult.room;
           if (!finalRoom) {
             throw new Error('Unable to save the completed agent response');
           }
@@ -2081,7 +2085,11 @@ export class CodeAgentSessionService {
         usage: step.usage,
         cost: step.cost,
       };
-      const updatedRoom = await this.store.upsertMessage(completedMessage);
+      const completedResult = await this.store.finalizeAIMessage(completedMessage, this.aiStreamOwnership(completedMessage));
+      if (completedResult.outcome === 'obsolete') {
+        throw new Error(`Coco model-step message was superseded: ${event.stepId}`);
+      }
+      const updatedRoom = completedResult.room;
       if (!updatedRoom) {
         throw new Error(`Unable to persist Coco model-step message: ${event.stepId}`);
       }
@@ -2184,7 +2192,7 @@ export class CodeAgentSessionService {
       status: 'complete',
       timestamp: this.now().toISOString(),
     };
-    await this.store.upsertMessage(sealedMessage).catch(err => {
+    await this.store.finalizeAIMessage(sealedMessage, this.aiStreamOwnership(sealedMessage)).catch(err => {
       this.logger.warn('Failed to seal AI segment', { error: err, roomId, messageId: state.activeMessageId });
     });
     state.segmentHasUnsealedText = false;
@@ -2216,6 +2224,13 @@ export class CodeAgentSessionService {
     active.pendingSteerMessageIds.clear();
   }
 
+  private aiStreamOwnership(message: Message): AIStreamOwnership {
+    return {
+      ownerId: this.options.aiStreamOwnerId || null,
+      fence: getAIStreamFence(message),
+    };
+  }
+
   private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
     const content = error instanceof Error ? error.message : 'Agent task failed';
     const errorMessage: Message = {
@@ -2224,12 +2239,19 @@ export class CodeAgentSessionService {
       status: 'error',
       timestamp: this.now().toISOString(),
     };
-    const updatedRoom = await this.store.upsertMessage(errorMessage).catch(saveError => {
+    const ownership = this.aiStreamOwnership(errorMessage);
+    let deferred = false;
+    const terminalResult = await this.store.finalizeAIMessage(errorMessage, ownership).catch(saveError => {
+      deferred = true;
       this.logger.error('Failed to persist code-agent AI error state', { error: saveError, roomId, messageId: aiMessage.id });
       return null;
     });
-    if (!updatedRoom) {
-      this.options.aiTerminalPersistReconciler?.enqueue(errorMessage, { reason: 'code-agent-terminal-error' });
+    const updatedRoom = terminalResult?.outcome === 'applied' ? terminalResult.room : null;
+    if (deferred) {
+      this.options.aiTerminalPersistReconciler?.enqueue(errorMessage, {
+        reason: 'code-agent-terminal-error',
+        expectedOwnership: ownership,
+      });
     }
     const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
     if (errorRoom) {
