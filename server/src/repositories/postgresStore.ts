@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
+import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -3067,6 +3067,30 @@ export class PostgresStore implements DurableRoomStore {
       [runId, claim.workerId, claim.attempt, now || null, Math.max(0, retryDelayMs), errorMessage],
     );
     return (result.rowCount || 0) === 1;
+  }
+
+  async readActiveDispatchedTaskDispatches(
+    options: ActiveTaskDispatchQueryOptions = {},
+  ): Promise<TaskDispatchRecord[]> {
+    const limit = Math.min(1_000, Math.max(1, Math.floor(options.limit || 200)));
+    const graceMs = Math.max(0, options.graceMs ?? 30_000);
+    const result = await this.pool.query<TaskDispatchRow>(
+      `WITH runtime_clock AS (
+        SELECT COALESCE($1::timestamptz, clock_timestamp()) AS now
+      )
+      SELECT dispatch.*
+      FROM task_dispatch_outbox AS dispatch
+      JOIN assistant_runs AS run ON run.id = dispatch.run_id
+      CROSS JOIN runtime_clock
+      WHERE run.status IN ('queued', 'running', 'finalizing')
+        AND dispatch.status = 'dispatched'
+        AND dispatch.dispatched_at <= runtime_clock.now - ($3::bigint * interval '1 millisecond')
+        AND ($4::text IS NULL OR dispatch.run_id > $4)
+      ORDER BY dispatch.run_id ASC
+      LIMIT $2`,
+      [options.now || null, limit, graceMs, options.afterRunId || null],
+    );
+    return result.rows.map(mapTaskDispatch);
   }
 
   async readTaskDispatchMetrics(): Promise<TaskDispatchMetrics> {

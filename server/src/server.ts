@@ -28,7 +28,8 @@ import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
-import { createAssistantRunQueue } from './services/assistantRunQueue';
+import { createAssistantRunQueue, readAssistantRunQueueHealth } from './services/assistantRunQueue';
+import { AssistantRunQueueReconciler } from './services/assistantRunQueueReconciler';
 import { TaskDispatchRelay } from './services/taskDispatchRelay';
 import { subscribeToAssistantRunEvents } from './services/assistantRunEvents';
 import { createCodeAgentAccessControl } from './services/codeAgentAccessControl';
@@ -675,6 +676,14 @@ const assistantRunDispatchRelay = new TaskDispatchRelay({
   lockMs: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_LOCK_MS', 60_000),
   batchSize: parsePositiveIntegerEnv('ASSISTANT_RUN_DISPATCH_BATCH_SIZE', 20),
 });
+const assistantRunQueueReconciler = new AssistantRunQueueReconciler({
+  store,
+  queue: assistantRunQueue,
+  logger: assistantRunLogger,
+  pollIntervalMs: parsePositiveIntegerEnv('ASSISTANT_RUN_RECONCILE_INTERVAL_MS', 30_000),
+  graceMs: parsePositiveIntegerEnv('ASSISTANT_RUN_RECONCILE_GRACE_MS', 30_000),
+  batchSize: parsePositiveIntegerEnv('ASSISTANT_RUN_RECONCILE_BATCH_SIZE', 200),
+});
 
 registerSocketHandlers({
   io,
@@ -696,9 +705,12 @@ registerSocketHandlers({
 });
 
 infrastructureReady
-  .then(() => assistantRunDispatchRelay.start())
+  .then(() => {
+    assistantRunDispatchRelay.start();
+    assistantRunQueueReconciler.start();
+  })
   .catch(error => {
-    assistantRunLogger.error('Assistant run dispatch relay did not start because infrastructure initialization failed', { error });
+    assistantRunLogger.error('Assistant run queue services did not start because infrastructure initialization failed', { error });
   });
 
 loadStickerCatalog();
@@ -717,16 +729,7 @@ registerApiRoutes(app, {
   io,
   redisClient,
   socketAdapterReady: () => socketAdapterInstalled && pubClient.isReady && subClient.isReady,
-  assistantQueueHealth: async () => {
-    const client = await assistantRunQueue.client as unknown as {
-      status: string;
-      ping(): Promise<unknown>;
-    };
-    if (client.status !== 'ready') {
-      throw new Error(`Assistant run queue Redis is ${client.status}`);
-    }
-    await client.ping();
-  },
+  assistantQueueHealth: () => readAssistantRunQueueHealth(assistantRunQueue),
   routeLogger,
   getAIModelResponse,
   generateAIRoleDraft,
@@ -849,13 +852,15 @@ const shutdown = () => {
   forceExit.unref();
   void Promise.allSettled([
     assistantRunDispatchRelay.stop(),
+    assistantRunQueueReconciler.stop(),
+  ]).then(() => Promise.allSettled([
     assistantRunQueue.close(),
     unsubscribeAssistantRunEvents?.() || Promise.resolve(),
     assistantRunEventSubClient.quit(),
     Promise.resolve(store.releaseAIStreamOwner?.(aiStreamOwnerId)),
     roomEventNotifier.stop(),
     codeAgentDaemonRegistry?.shutdownAll() || Promise.resolve(),
-  ]).finally(() => {
+  ])).finally(() => {
     clearTimeout(forceExit);
     process.exit(0);
   });

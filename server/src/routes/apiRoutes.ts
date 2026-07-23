@@ -37,13 +37,14 @@ import {
   MediaThumbnailResolver,
   MediaThumbnailService,
 } from '../services/mediaThumbnail';
+import type { AssistantRunQueueHealthSnapshot } from '../services/assistantRunQueue';
 
 interface ApiRouteOptions {
   store: RoomStore;
   io: Server;
   redisClient: RedisClientType;
   socketAdapterReady?: () => boolean;
-  assistantQueueHealth?: () => Promise<void>;
+  assistantQueueHealth?: () => Promise<AssistantRunQueueHealthSnapshot>;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
@@ -1598,18 +1599,25 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       }),
       options.assistantQueueHealth
         ? Promise.resolve().then(() => options.assistantQueueHealth!())
-        : Promise.resolve(),
+        : Promise.resolve<AssistantRunQueueHealthSnapshot | null>(null),
     ]);
     const [databaseCheck, redisCheck, mediaStorageCheck, dispatchCheck, assistantQueueCheck] = checks;
     const socketAdapterReady = options.socketAdapterReady
       ? options.socketAdapterReady()
       : Boolean(io.of('/').adapter);
+    const assistantQueueStatus = assistantQueueCheck.status === 'fulfilled'
+      ? assistantQueueCheck.value
+      : null;
+    const assistantWorkerReady = !options.assistantQueueHealth
+      || Boolean(assistantQueueStatus?.workerAvailable);
     const ready = databaseCheck.status === 'fulfilled'
       && redisCheck.status === 'fulfilled'
       && mediaStorageCheck.status === 'fulfilled'
       && dispatchCheck.status === 'fulfilled'
       && socketAdapterReady;
-    const degraded = !ready || assistantQueueCheck.status === 'rejected';
+    const degraded = !ready
+      || assistantQueueCheck.status === 'rejected'
+      || !assistantWorkerReady;
     const roomCount = databaseCheck.status === 'fulfilled' ? databaseCheck.value : null;
     const dependencies = {
       database: databaseCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
@@ -1618,6 +1626,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       socketAdapter: socketAdapterReady ? 'ready' : 'unavailable',
       ...(options.assistantQueueHealth ? {
         assistantQueue: assistantQueueCheck.status === 'fulfilled' ? 'ready' : 'unavailable',
+        assistantWorker: assistantWorkerReady ? 'ready' : 'unavailable',
       } : {}),
     } as const;
 
@@ -1646,10 +1655,22 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       dependencies,
       assistantQueue: {
         dispatch: assistantQueueCheck.status === 'fulfilled' ? 'available' : 'deferred',
+        ...(options.assistantQueueHealth ? {
+          worker: assistantWorkerReady ? 'available' : 'unavailable',
+        } : {}),
         ...(dispatchCheck.status === 'fulfilled' ? dispatchCheck.value : {
           pendingCount: null,
           processingCount: null,
         }),
+        ...(assistantQueueStatus ? {
+          waitingCount: assistantQueueStatus.waitingCount,
+          activeCount: assistantQueueStatus.activeCount,
+          delayedCount: assistantQueueStatus.delayedCount,
+          failedCount: assistantQueueStatus.failedCount,
+          workerHeartbeatAt: assistantQueueStatus.workerHeartbeatAt || null,
+          workerHeartbeatExpiresInMs: assistantQueueStatus.workerHeartbeatExpiresInMs || null,
+          oldestQueuedAt: assistantQueueStatus.oldestQueuedAt || null,
+        } : {}),
       },
       features: {
         codeAgent: {

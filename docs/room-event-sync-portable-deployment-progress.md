@@ -156,7 +156,7 @@ The first release respected a stop-the-world protocol boundary. The maintenance 
 | --- | --- |
 | Full Server suite | 851 passed in 111 suites; real PostgreSQL 17 migration/transactions ran without skips |
 | Full Client suite | 1,025 passed in 97 files |
-| BullMQ + Redis integration | Duplicate relay dedupe, simulated Worker crash retry, and single completion passed |
+| BullMQ + Redis integration | Duplicate relay dedupe, simulated processor-failure retry, and single completion passed |
 | Server / Client production build | Passed |
 | Production image | `roomtalk-local:dev`, image SHA `128708f3280f` |
 | Migration ledger | 11/11; `0010_assistant_run_bullmq_dispatch` recorded |
@@ -168,7 +168,7 @@ The first release respected a stop-the-world protocol boundary. The maintenance 
 | Loopback, `room.ruit.me`, and `roomtalk.ruit.me` | `online`, `ready=true`, `assistantQueue=ready`, 100 rooms |
 | Public Socket.IO handshake | Succeeded with WebSocket upgrade available |
 
-Deployment verification did not call a paid Provider. Recent App, Worker, and migration logs contained no fatal, panic, uncaught, unhandled, or error record. CI now provisions real PostgreSQL 17 and Redis 7 services. The important regressions cover deferred dispatch during queue outage, deterministic job deduplication, Worker crash recovery, terminal/finalizing runs avoiding a second Provider call, exact generation release, and database atomicity across placeholder, run, room event, and dispatch intent.
+Deployment verification did not call a paid Provider. Recent App, Worker, and migration logs contained no fatal, panic, uncaught, unhandled, or error record. CI now provisions real PostgreSQL 17 and Redis 7 services. The initial regressions covered deferred dispatch during queue outage, deterministic job deduplication, processor-failure retry, terminal/finalizing runs avoiding a second Provider call after staging, exact generation release, and database atomicity across placeholder, run, room event, and dispatch intent.
 
 ## Rollback and ongoing operations
 

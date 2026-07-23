@@ -2258,10 +2258,41 @@ describe('API routes', () => {
       assert.equal(payload.ready, true);
       assert.equal(payload.status, 'degraded');
       assert.equal(payload.dependencies.assistantQueue, 'unavailable');
+      assert.equal(payload.dependencies.assistantWorker, 'unavailable');
       assert.equal(payload.assistantQueue.dispatch, 'deferred');
+      assert.equal(payload.assistantQueue.worker, 'unavailable');
       assert.equal(payload.rooms, 1);
     } finally {
       await queueFailureServer.close();
+    }
+  });
+
+  it('reports a missing AI Worker heartbeat without taking the HTTP App out of rotation', async () => {
+    const workerFailureServer = await createTestServer({
+      assistantQueueHealth: async () => ({
+        workerAvailable: false,
+        waitingCount: 2,
+        activeCount: 0,
+        delayedCount: 1,
+        failedCount: 0,
+        oldestQueuedAt: '2026-07-22T12:00:00.000Z',
+      }),
+    });
+    try {
+      const response = await fetch(`${workerFailureServer.baseUrl}/api/status`);
+      assert.equal(response.status, 200);
+      const payload = await response.json() as any;
+      assert.equal(payload.ready, true);
+      assert.equal(payload.status, 'degraded');
+      assert.equal(payload.dependencies.assistantQueue, 'ready');
+      assert.equal(payload.dependencies.assistantWorker, 'unavailable');
+      assert.equal(payload.assistantQueue.dispatch, 'available');
+      assert.equal(payload.assistantQueue.worker, 'unavailable');
+      assert.equal(payload.assistantQueue.waitingCount, 2);
+      assert.equal(payload.assistantQueue.delayedCount, 1);
+      assert.equal(payload.assistantQueue.oldestQueuedAt, '2026-07-22T12:00:00.000Z');
+    } finally {
+      await workerFailureServer.close();
     }
   });
 

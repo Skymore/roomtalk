@@ -52,6 +52,8 @@ PostgreSQL and Redis cannot participate in one atomic transaction. Writing Postg
 
 RoomTalk therefore commits a minimal dispatch intent with the run. The relay claims a bounded batch with a fenced token, enqueues the deterministic BullMQ `jobId=runId`, and only then marks the exact claim dispatched. If Redis is down or the App dies mid-relay, the claim expires or is released to pending. Re-enqueueing is safe because the job ID deduplicates the same active request.
 
+Acknowledgement is not the end of recovery. A periodic App-side reconciler acquires a PostgreSQL advisory lock, reads only active runs whose dispatch is already marked `dispatched`, and checks the corresponding BullMQ job after a short grace period. A missing job is recreated with the same `runId`; an exhausted failed job or a completed job whose run is still non-terminal is returned to waiting. Active, waiting, and delayed jobs are left untouched. A rotating cursor bounds each pass without permanently starving later run IDs. This closes the practical Redis-loss/restore gap while keeping BullMQ as the scheduler and PostgreSQL as business truth.
+
 The dispatch table is not a second task ledger. It does not own provider results, terminal status, cost, or user-visible errors. It answers one question only: has the committed run been handed to the scheduler?
 
 ## Execution and fencing
@@ -77,6 +79,8 @@ If the Worker crashes after step 1, a BullMQ retry detects `finalizing` and perf
 
 No separate `assistant_run_usage` table is required for correctness. Usage and cost remain in the immutable terminal payload after a Message is deleted, and the one locked terminal transition is already the idempotency key. A future auditable billing ledger can be added for a product requirement, not as accidental duplicate state.
 
+The boundary must be stated precisely. RoomTalk guarantees one accepted terminal projection and one internal cost settlement. It cannot universally guarantee one external Provider invocation: if the Provider accepted a request but the Worker died before terminal staging, takeover may send the request again. Providers with a reliable idempotency-key API can tighten that one integration, but the portable contract remains at-least-once Provider invocation with generation-fenced results. This is preferable to claiming an exactly-once property the system cannot observe.
+
 ## Transient delivery
 
 The Worker has no Socket.IO server. It publishes a bounded, versioned transient envelope to Redis. Each App receives it, verifies its schema and size, resolves currently authenticated local sockets, rechecks room membership, and emits with `io.local`.
@@ -89,17 +93,19 @@ This is a latency path, not a correctness source. The browser buffers a transien
 | --- | --- |
 | Queue Redis is unavailable after send | PostgreSQL commit remains valid, dispatch returns to pending, App reports degraded/deferred dispatch, and relay retries. |
 | Relay crashes after enqueue | Deterministic `jobId` deduplicates the retry; the exact fenced dispatch claim is acknowledged later. |
-| Worker crashes before Provider terminal payload | BullMQ retry/stalled recovery claims the durable run with a new generation. |
+| An acknowledged job is absent after Redis loss/restore | Reconciliation sees an active PostgreSQL run and recreates the deterministic job. |
+| BullMQ attempts are exhausted while the run remains active | Reconciliation returns the failed job to waiting; the domain attempt cap still terminalizes repeated execution failures. |
+| Worker crashes before Provider terminal payload | BullMQ retry/stalled recovery claims the durable run with a new generation; the external Provider may be called again. |
 | Worker crashes after terminal payload | Retry performs projection only; Provider is not called again. |
 | Placeholder is deleted or replaced | Conditional projection is obsolete and cannot resurrect or overwrite it. |
 | App restarts | The Worker continues; transient delivery resumes when Apps resubscribe, and durable room replay repairs loss. |
 | Worker restarts | Browser/App sessions continue; queued/active jobs recover through BullMQ and PostgreSQL leases. |
 
-Failed BullMQ jobs remain an operational signal with bounded retention. Operators may inspect and manually retry infrastructure failures. Durable provider errors are normal terminal business outcomes and are not kept in an infinite retry loop.
+Failed BullMQ jobs remain an operational signal with bounded retention. The reconciler automatically retries one only while PostgreSQL still says the run is active; durable Provider errors are normal terminal business outcomes and are not kept in an infinite retry loop.
 
 ## Health and portability
 
-App readiness continues to protect serving dependencies. Queue-only failure is `degraded` but ready because PostgreSQL can accept and defer a request without losing it. The Worker exposes a separate health endpoint that checks PostgreSQL, queue Redis, transient Redis, and the Worker loop.
+App readiness continues to protect serving dependencies. Queue-only failure is `degraded` but ready because PostgreSQL can accept and defer a request without losing it. Every Worker renews a shared queue-Redis TTL heartbeat. Public status becomes degraded when that heartbeat expires even if Redis still responds, and reports PostgreSQL pending/processing dispatch plus BullMQ waiting/active/delayed/failed counts and oldest queued time. The Worker also retains its separate health endpoint for PostgreSQL, queue Redis, transient Redis, and local Worker state.
 
 The Mac Compose topology runs App and Worker from the same image with PostgreSQL, Redis, SeaweedFS, and Cloudflare Tunnel. On AWS, the same boundary maps to two ECS services or two EKS deployments, RDS/Aurora PostgreSQL, ElastiCache for Redis OSS, and S3. A future queue split changes `QUEUE_REDIS_URL`; it does not change `assistant_runs` or the Socket protocol.
 
@@ -109,14 +115,17 @@ The release must prove user-relevant failures, not only isolated helpers:
 
 - an accepted request survives queue unavailability;
 - duplicate dispatch creates one active BullMQ job;
-- a simulated crashed Worker is retried and completes once;
+- a processor failure is retried and completes;
+- a dispatched job deleted from Redis is rebuilt from the active PostgreSQL run;
+- an exhausted failed job is returned to waiting while its run remains active;
+- an expired Worker heartbeat degrades status without taking the durable HTTP App out of rotation;
 - a terminal or cancelled run does not call the Provider;
 - a `finalizing` run projects without re-running the Provider;
 - failure releases only the exact generation before retry;
 - PostgreSQL creates placeholder, run, room event, and dispatch atomically;
 - the real migration backfills active runs and preserves terminal runs;
 - App and Worker build from the production image and expose correct health;
-- public RoomTalk status remains healthy after the maintenance cutover.
+- public RoomTalk status reports a live Worker and queue metrics after the maintenance cutover.
 
 The first production deployment is a stop-the-world protocol cutover: stop the old embedded polling Worker, make a paired PostgreSQL/object backup, apply migration `0010`, restart Redis with its durable queue configuration, then start the new App and dedicated Worker together. Mixed old and new executors are not supported across this boundary.
 

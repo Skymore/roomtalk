@@ -107,9 +107,9 @@ PostgreSQL 负责跨实例 fan-out；每个 listener 只通知连接到本实例
 
 Realtime 与任务恢复也按实例划分。每个 App 进程生成唯一 runtime instance ID，在 Redis 续租 TTL heartbeat，并记录自己拥有的 sockets。Heartbeat 和实例注册在同一段 Lua 内完成；清理也重新检查 heartbeat 与 owner。滚动启动不会清空其他实例的 presence。Code Agent turn 与 sandbox recovery 查询会排除未过期 fenced room lease；recovery 与 retention loop 使用 PostgreSQL advisory lock。权威依据是 lease，不是进程内存或 hostname。
 
-普通 Chat AI 使用独立调度边界。一个事务同时创建 streaming placeholder、`assistant_runs`、对应 room event 与 `task_dispatch_outbox`。App relay 只把 `{ schemaVersion: 1, runId }` 以 `jobId=runId` 送入 BullMQ，再确认精确的 fenced dispatch claim。Redis 不可用时 row 回到 pending，已经接受的用户请求仍留在 PostgreSQL。独立 `ai-worker` claim 精确 run，按配置做有界并发，持续续租 PostgreSQL generation，并通过版本化 Redis channel 发布 transient event；每个 App 在 `io.local` 前重新校验本机 socket 权限。
+普通 Chat AI 使用独立调度边界。一个事务同时创建 streaming placeholder、`assistant_runs`、对应 room event 与 `task_dispatch_outbox`。App relay 只把 `{ schemaVersion: 1, runId }` 以 `jobId=runId` 送入 BullMQ，再确认精确的 fenced dispatch claim。Redis 不可用时 row 回到 pending，已经接受的用户请求仍留在 PostgreSQL。Dispatch 确认后还有一轮受 PostgreSQL advisory lock 保护的对账：只检查尚未终态的 run，BullMQ job 缺失时补建，failed 或业务仍 active 却提前 completed 时重试。它覆盖空 Redis 恢复和 infrastructure attempts 耗尽，但不会把 PostgreSQL 重新变成 polling scheduler。独立 `ai-worker` claim 精确 run，按配置做有界并发，持续续租 PostgreSQL generation，并通过版本化 Redis channel 发布 transient event；每个 App 在 `io.local` 前重新校验本机 socket 权限。
 
-BullMQ 只拥有 waiting、并发、backoff、stalled recovery 与运维 retention，不拥有业务状态或 result backend。`assistant_runs` 拥有 request snapshot、status、generation、immutable terminal payload、error 与 usage；终态事务只累计一次 Message 和 room cost。系统刻意不建立 `assistant_run_usage` ledger，因为锁定的唯一 run transition 已提供幂等边界，而 immutable terminal payload 已保留审计依据。
+BullMQ 只拥有 waiting、并发、backoff、stalled recovery 与运维 retention，不拥有业务状态或 result backend。`assistant_runs` 拥有 request snapshot、status、generation、immutable terminal payload、error 与 usage；终态事务只累计一次 Message 和 room cost。系统刻意不建立 `assistant_run_usage` ledger，因为锁定的唯一 run transition 已提供幂等边界，而 immutable terminal payload 已保留审计依据。这里的 exactly-once 只到 RoomTalk 的 PostgreSQL 边界：如果 Provider 已接受请求，但进程在 terminal payload 落库前退出，新 generation 仍可能再次调用外部 Provider。有可靠 idempotency key 的 Provider 可单独接入；基础可迁移契约是 Provider 至少一次、旧 generation 不能落结果、终态 projection 与内部费用只结算一次。
 
 ## 协议切换边界
 

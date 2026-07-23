@@ -150,13 +150,20 @@ The App and `ai-worker` run from the same image but are separate processes. The 
 | `ASSISTANT_RUN_DISPATCH_RETRY_DELAY_MS` | Delay before a failed Redis enqueue becomes claimable again; default `5000`. |
 | `ASSISTANT_RUN_DISPATCH_LOCK_MS` | Fenced dispatch claim duration; default `60000`. |
 | `ASSISTANT_RUN_DISPATCH_BATCH_SIZE` | Maximum dispatch intents relayed per tick; default `20`. |
+| `ASSISTANT_RUN_RECONCILE_INTERVAL_MS` | Interval for checking active PostgreSQL runs against BullMQ; default `30000`. |
+| `ASSISTANT_RUN_RECONCILE_GRACE_MS` | Minimum age before a dispatched active run is checked for a missing/failed job; default `30000`. |
+| `ASSISTANT_RUN_RECONCILE_BATCH_SIZE` | Active dispatches checked per reconciliation pass; default `200`, with a rotating cursor across full batches. |
 | `ASSISTANT_RUN_WORKER_CONCURRENCY` | BullMQ jobs executed concurrently by one worker process; default `2`. |
 | `ASSISTANT_RUN_WORKER_LEASE_MS` | PostgreSQL run-owner lease renewed during provider execution; default `60000`. |
 | `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | Domain-level claim limit recorded in `assistant_runs`; default `10`. |
+| `ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS` | Queue-Redis Worker heartbeat interval; default `5000`. |
+| `ASSISTANT_RUN_WORKER_HEARTBEAT_TTL_MS` | Shared any-worker heartbeat TTL used by `/api/status`; default `20000`. |
 | `ASSISTANT_RUN_QUEUE_ATTEMPTS` | BullMQ infrastructure attempts; default `12`. |
 | `ASSISTANT_RUN_QUEUE_BACKOFF_MS` | Base exponential BullMQ retry delay; default `5000`. |
 | `ASSISTANT_RUN_QUEUE_LOCK_MS` | BullMQ active-job lock duration; default `60000`. |
 | `ASSISTANT_RUN_QUEUE_*_RETENTION_*` | Optional completed/failed job age and count limits for operations and diagnosis. |
+
+The App-side reconciler is a bounded repair loop, not a second scheduler. Under a PostgreSQL advisory lock it selects only non-terminal `assistant_runs` whose dispatch was already acknowledged, then re-adds a missing deterministic job or retries a failed/prematurely completed one. Waiting, delayed, and active jobs are left alone. This lets a PostgreSQL restore recover into an empty queue and repairs exhausted infrastructure retries without changing terminal business state.
 | `AI_WORKER_HEALTH_PORT` | Worker-only health endpoint; Compose uses `3013`. |
 
 If queue Redis is unavailable after PostgreSQL accepts a request, its dispatch row remains pending and the relay retries; the App reports `degraded` with deferred dispatch rather than losing the request. BullMQ retry handles infrastructure interruption, while a durable terminal provider error is a completed business outcome, not an endlessly retried job. `LOG_FILE_ENABLED` controls optional file logging; production logs must remain structured and secret-safe.

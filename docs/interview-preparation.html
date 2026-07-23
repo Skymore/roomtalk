@@ -488,28 +488,34 @@ PostgreSQL advisory lock ── one recovery / retention runner per pass</div>
 <h3 id="arch-ai"><span data-lang="zh">3. AI 流式响应</span><span data-lang="en">3. AI Streaming Response</span></h3>
 
 <div class="diagram" data-lang="zh">客户端 → App → PostgreSQL: placeholder + assistant_run + dispatch intent
-   ▲                         │ commit                 │
+   ▲                         │ commit                 │         ▲
    │                 App relay → BullMQ → 独立 AI Worker → Provider
-   └── durable room event ◀──┴──── Redis transient chunk fast path ──┘</div>
+   │                    ▲        │                        │
+   └── durable room event ◀──┴──── Redis transient fast path ─┘
+                        └── active-run reconciler ────────┘</div>
 <div class="diagram" data-lang="en">Client → App → PostgreSQL: placeholder + assistant_run + dispatch intent
-   ▲                       │ commit                 │
+   ▲                       │ commit                 │         ▲
    │               App relay → BullMQ → dedicated AI Worker → Provider
-   └── durable room event ◀┴──── Redis transient chunk fast path ───┘</div>
+   │                  ▲        │                        │
+   └── durable room event ◀┴──── Redis transient fast path ──┘
+                      └── active-run reconciler ─────────┘</div>
 
 <ul data-lang="zh">
   <li>一个 PostgreSQL 事务同时创建 <code>status: streaming</code> placeholder、<code>assistant_runs</code>、placeholder room event 与 <code>task_dispatch_outbox</code>。业务请求与待投递意图要么一起提交，要么一起回滚。</li>
   <li>App relay 只把 <code>{ schemaVersion: 1, runId }</code> 以 <code>jobId=runId</code> 送入 BullMQ。Redis 暂时不可用时 dispatch row 保持 pending，所以“用户看到已接受但任务消失”的窗口被关闭。</li>
+  <li>Dispatch 已确认后仍有周期对账：App 在 PostgreSQL advisory lock 下只读取未终态 run。BullMQ job 缺失时按同一 <code>runId</code> 补建；failed 或业务仍 active 却提前 completed 的 job 重新放回 waiting；waiting/active/delayed job 不动。</li>
   <li>独立 Node/TypeScript Worker 从 PostgreSQL 读取 request snapshot，claim 精确 run 并得到 generation lease。BullMQ 负责 waiting、并发、backoff 与 stalled recovery；<code>assistant_runs</code> 才负责业务状态和结果。</li>
   <li>Worker 通过版本化 Redis channel 发布 <code>ai_chunk</code>/<code>a2ui_update</code>/<code>ai_stream_end</code>；每个 App 重新鉴权本机 socket 后用 <code>io.local</code> 转发。早到事件按 <code>messageId</code> 有界暂存，旧 generation 被忽略。</li>
-  <li>Provider 完成后先把 immutable terminal payload 写入 run，再在一个事务里投影最终 Message、run 状态与房间费用。若中途崩溃，retry 只重做 projection，不会重复调用 Provider或计费。</li>
+  <li>Provider 完成后先把 immutable terminal payload 写入 run，再在一个事务里投影最终 Message、run 状态与房间费用。Terminal staging 之后崩溃，retry 只重做 projection。若进程在 Provider 接受请求后、staging 前退出，外部调用仍是至少一次；generation fence 只接受一个终态，内部费用也只结算一次。</li>
   <li>终态只允许更新同 room、仍为 streaming、owner/generation 匹配的现有 placeholder。消息已删除、已完成或被新 Worker 接管时，旧 job 变 obsolete，绝不会 upsert 复活。</li>
 </ul>
 <ul data-lang="en">
   <li>One PostgreSQL transaction creates the <code>status: streaming</code> placeholder, <code>assistant_runs</code>, placeholder room event, and <code>task_dispatch_outbox</code>. The accepted business request and enqueue intent commit or roll back together.</li>
   <li>The App relay sends only <code>{ schemaVersion: 1, runId }</code> to BullMQ with <code>jobId=runId</code>. If Redis is temporarily unavailable, the dispatch row stays pending, closing the “accepted request silently vanished” window.</li>
+  <li>Acknowledged dispatch is still reconciled. Under a PostgreSQL advisory lock, the App checks only non-terminal runs: it recreates a missing deterministic job, retries failed or prematurely completed jobs, and leaves waiting/active/delayed work alone.</li>
   <li>A dedicated Node/TypeScript Worker reads the request snapshot from PostgreSQL and claims the exact run with a generation lease. BullMQ owns waiting, concurrency, backoff, and stalled recovery; <code>assistant_runs</code> owns business status and results.</li>
   <li>The Worker publishes <code>ai_chunk</code>/<code>a2ui_update</code>/<code>ai_stream_end</code> through a versioned Redis channel. Every App reauthorizes attached sockets and emits with <code>io.local</code>. Early events are bounded-buffered by <code>messageId</code>; older generations are ignored.</li>
-  <li>After the Provider completes, the Worker first stages an immutable terminal payload, then projects final Message, run state, and room cost in one transaction. A crash between those steps retries projection only, never the Provider call or charge.</li>
+  <li>After the Provider completes, the Worker first stages an immutable terminal payload, then projects final Message, run state, and room cost in one transaction. A crash after staging retries projection only. A crash after remote acceptance but before staging can repeat the external call; generation fencing still admits one terminal result and settles RoomTalk's internal cost once.</li>
   <li>Terminal projection updates only an existing placeholder in the same room that is still streaming and owned by that generation. Deleted, terminal, or replacement-owned messages make the old job obsolete rather than being upserted back to life.</li>
 </ul>
 
@@ -1291,10 +1297,10 @@ Mobile WebSocket recovery produced some of the hardest bugs in the project. The 
 </ol>
 
 <blockquote data-lang="zh">
-迁移期间，我们用同一套 Store contract 约束两个实现的行为。切换完成后，serving path 只保留 PostgreSQL 这一套 durable 实现；Redis 可以随时清空重建。兼容层负责降低迁移风险，任务完成后就退出主路径，避免长期维护模式开关和两个事实源。
+迁移期间，我们用同一套 Store contract 约束两个实现的行为。切换完成后，serving path 只保留 PostgreSQL 这一套 durable 业务实现；realtime/cache Redis 可以重建，BullMQ queue 则应正常持久化，计划恢复到空队列时由 PostgreSQL active-run reconciliation 重建未完成任务。兼容层负责降低迁移风险，任务完成后就退出主路径，避免长期维护模式开关和两个事实源。
 </blockquote>
 <blockquote data-lang="en">
-During migration, one Store contract kept both implementations behaviorally aligned. After cutover, the serving path kept PostgreSQL as its only durable implementation; Redis can be flushed and rebuilt. The compatibility layer reduced migration risk, then left the main path so the runtime would not carry a permanent mode switch or two sources of truth.
+During migration, one Store contract kept both implementations behaviorally aligned. After cutover, PostgreSQL became the only durable business implementation. Realtime/cache Redis can rebuild; BullMQ queue state is normally persisted, while a planned empty-queue restore reconstructs unfinished work from active PostgreSQL runs. The compatibility layer reduced migration risk, then left the main path so the runtime would not carry a permanent mode switch or two sources of truth.
 </blockquote>
 
 <!-- ===== 难点8：房间同步 ===== -->
@@ -1970,11 +1976,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>Redis 挂了怎么办？</summary>
-  <div class="answer">需要区分 realtime Redis 与 queue 责任，即使它们当前是一个实例。业务事实仍在 PostgreSQL；cache/presence 丢失会重建，本机 Socket 继续以认证后的 <code>socket.data</code> 为身份权威。Queue 不可用时，App 已提交的 <code>task_dispatch_outbox</code> 保持 pending，状态接口显示 degraded/deferred，Redis 恢复后 relay 再送入 BullMQ，所以请求不丢。正在运行的 job 依赖 Redis AOF 与 BullMQ lock/stalled 机制恢复，因此生产配置使用 named volume、AOF <code>everysec</code> 和 <code>noeviction</code>，不能把整个 Redis 当可随时 flush 的 cache。</div>
+  <div class="answer">需要区分 realtime Redis 与 queue 责任，即使它们当前是一个实例。业务事实仍在 PostgreSQL；cache/presence 丢失会重建，本机 Socket 继续以认证后的 <code>socket.data</code> 为身份权威。Queue 不可用时，App 已提交的 <code>task_dispatch_outbox</code> 保持 pending，状态接口显示 degraded/deferred，Redis 恢复后 relay 再送入 BullMQ。若 dispatch 已 ack 但 job 在 AOF 窗口或 volume 恢复中丢失，active-run reconciler 会按 PostgreSQL 重建；attempts 耗尽但 run 仍 active 也会重试。生产仍使用 named volume、AOF <code>everysec</code> 和 <code>noeviction</code>，因为保护现场比恢复更便宜；不能把 queue 当普通 cache 随手 flush。</div>
 </details>
 <details data-lang="en">
   <summary>What happens if Redis goes down?</summary>
-  <div class="answer">Realtime and queue responsibilities must be separated conceptually even though they initially share one Redis. Business facts remain in PostgreSQL; cache/presence rebuild, and attached sockets retain authenticated <code>socket.data</code> identity. If the queue is unavailable, committed <code>task_dispatch_outbox</code> rows stay pending, status reports degraded/deferred dispatch, and the relay enqueues them after recovery. Active jobs rely on Redis AOF plus BullMQ lock/stalled recovery, so production uses a named volume, AOF <code>everysec</code>, and <code>noeviction</code>; the whole Redis instance is no longer treated as flushable cache.</div>
+  <div class="answer">Realtime and queue responsibilities must be separated conceptually even though they initially share one Redis. Business facts remain in PostgreSQL; cache/presence rebuild, and attached sockets retain authenticated <code>socket.data</code> identity. If the queue is unavailable, committed <code>task_dispatch_outbox</code> rows stay pending, status reports degraded/deferred dispatch, and the relay enqueues them after recovery. If an acknowledged job disappears in an AOF window or volume restore, active-run reconciliation rebuilds it from PostgreSQL; an exhausted job is also retried while its run remains active. Production still uses a named volume, AOF <code>everysec</code>, and <code>noeviction</code> because preserving live scheduling state is cheaper than recovery. Queue Redis is not casually flushed like cache.</div>
 </details>
 
 <details data-lang="zh">
@@ -2033,20 +2039,38 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>一条 AI message 从发送到完成经历什么？</summary>
-  <div class="answer">鉴权后，一个 PostgreSQL 事务创建 streaming placeholder、<code>assistant_runs</code>、placeholder room event 与 <code>task_dispatch_outbox</code>。App relay 用确定性 <code>jobId=runId</code> 把最小 job 送入 BullMQ。Worker 再从 PostgreSQL 读取完整 request，claim 精确 run 并得到 generation lease；续租失败会停止 owned work，旧 generation 的 chunk/终态都无效。Chunk 经 Redis transient channel 到 App，再由 App 鉴权并 <code>io.local</code> 推给浏览器；早于 placeholder 的 chunk 会有界缓存。Provider 返回后，Worker先把 immutable terminal payload staged 到 run，再用一个事务投影 Message、run terminal status 与 room cost。若 staged 后崩溃，retry 只 project，不再调用 Provider；placeholder 已删除或被新 generation 接管时只返回 obsolete，绝不 upsert 复活。最终 room event 让所有客户端收敛。</div>
+  <div class="answer">鉴权后，一个 PostgreSQL 事务创建 streaming placeholder、<code>assistant_runs</code>、placeholder room event 与 <code>task_dispatch_outbox</code>。App relay 用确定性 <code>jobId=runId</code> 把最小 job 送入 BullMQ；ack 之后还有 active-run reconciler 检查 missing/failed job。Worker 再从 PostgreSQL 读取完整 request，claim 精确 run 并得到 generation lease；续租失败会停止 owned work，旧 generation 的 chunk/终态都无效。Chunk 经 Redis transient channel 到 App，再由 App 鉴权并 <code>io.local</code> 推给浏览器；早于 placeholder 的 chunk 会有界缓存。Provider 返回后，Worker 先把 immutable terminal payload staged 到 run，再用一个事务投影 Message、run terminal status 与 room cost。若 staged 后崩溃，retry 只 project；若 Provider 已接受但 staging 尚未发生，接管者可能再次调用外部服务，所以调用语义是至少一次。无论哪种顺序，只有一个 generation 能提交终态，内部费用只累计一次；placeholder 已删除或被新 generation 接管时只返回 obsolete，绝不 upsert 复活。最终 room event 让所有客户端收敛。</div>
 </details>
 <details data-lang="en">
   <summary>What happens during one AI-message lifecycle?</summary>
-  <div class="answer">After authorization, one PostgreSQL transaction creates the streaming placeholder, <code>assistant_runs</code>, placeholder room event, and <code>task_dispatch_outbox</code>. The App relay enqueues a minimal job with deterministic <code>jobId=runId</code>. The Worker reads the complete request from PostgreSQL and claims the exact run with a generation lease; lost renewal ends owned work, and stale chunks or terminal writes are rejected. Chunks cross a Redis transient channel to Apps, which reauthorize and emit with <code>io.local</code>; a chunk that beats its placeholder is bounded-buffered. After the Provider returns, the Worker stages an immutable terminal payload and atomically projects Message, run terminal state, and room cost. A crash after staging retries projection only, never the Provider; a deleted or replacement-owned placeholder is obsolete and never upserted back. The final room event converges every client.</div>
+  <div class="answer">After authorization, one PostgreSQL transaction creates the streaming placeholder, <code>assistant_runs</code>, placeholder room event, and <code>task_dispatch_outbox</code>. The App relay enqueues a minimal job with deterministic <code>jobId=runId</code>, while active-run reconciliation covers missing or exhausted jobs after acknowledgement. The Worker reads the complete request from PostgreSQL and claims the exact run with a generation lease; lost renewal ends owned work, and stale chunks or terminal writes are rejected. Chunks cross a Redis transient channel to Apps, which reauthorize and emit with <code>io.local</code>; a chunk that beats its placeholder is bounded-buffered. After the Provider returns, the Worker stages an immutable terminal payload and atomically projects Message, run terminal state, and room cost. A crash after staging retries projection only. A crash after remote acceptance but before staging may invoke the Provider again, so external execution is at-least-once; one generation still wins terminal projection and internal cost settlement. A deleted or replacement-owned placeholder is obsolete and never upserted back. The final room event converges every client.</div>
 </details>
 
 <details data-lang="zh">
   <summary>部署重启时，为什么 queued AI 不会被 startup recovery 判死？</summary>
-  <div class="answer"><code>assistant_runs</code> 是业务事实，App/Worker 进程内存不是。Queued run 同时拥有 pending dispatch；migration <code>0010</code> 还会为 cutover 前 active run 回填 dispatch。App 重启后 relay 继续补投，Worker 重启后 BullMQ 重新 claim。Running run 的旧 generation lease 过期后，新 Worker 才能取得更高 generation；finalizing run 只 project。首次切换必须先停止旧 embedded polling Worker，再启动 BullMQ Worker，避免两套 executor 重叠。</div>
+  <div class="answer"><code>assistant_runs</code> 是业务事实，App/Worker 进程内存不是。Queued run 同时拥有 pending dispatch；migration <code>0010</code> 还会为 cutover 前 active run 回填 dispatch。App 重启后 relay 继续补投；dispatch 已标为 sent、但 Redis 中 job 已不存在或 failed attempts 耗尽时，advisory-locked reconciler 会按 PostgreSQL active run 修复。Worker 重启后 BullMQ 重新 claim。Running run 的旧 generation lease 过期后，新 Worker 才能取得更高 generation；finalizing run 只 project。首次切换必须先停止旧 embedded polling Worker，再启动 BullMQ Worker，避免两套 executor 重叠。</div>
 </details>
 <details data-lang="en">
   <summary>Why doesn't startup recovery kill a queued AI job during deployment?</summary>
-  <div class="answer"><code>assistant_runs</code> is business truth; App/Worker memory is not. A queued run has pending dispatch, and migration <code>0010</code> backfills dispatch for active pre-cutover runs. App restart resumes relay; Worker restart lets BullMQ reclaim work. A running generation must lose its lease before a replacement claims a higher generation, while a finalizing run performs projection only. The first cutover stops the embedded polling Worker before the BullMQ Worker starts so the two executors never overlap.</div>
+  <div class="answer"><code>assistant_runs</code> is business truth; App/Worker memory is not. A queued run has pending dispatch, and migration <code>0010</code> backfills dispatch for active pre-cutover runs. App restart resumes relay. If a dispatch was acknowledged but its Redis job disappeared or exhausted attempts, the advisory-locked reconciler repairs it from the active PostgreSQL run. Worker restart lets BullMQ reclaim work. A running generation must lose its lease before a replacement claims a higher generation, while a finalizing run performs projection only. The first cutover stops the embedded polling Worker before the BullMQ Worker starts so the two executors never overlap.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>Outbox 已经是 <code>dispatched</code>，但 BullMQ job 丢了怎么办？</summary>
+  <div class="answer">只靠 relay 不够，因为 relay 只 claim pending/processing dispatch，已经 ack 的 row 不会自动回退。RoomTalk 因此增加一条很窄的反熵路径：App 每 30 秒尝试取得同名 PostgreSQL advisory lock，选出仍为 queued/running/finalizing、dispatch 已确认且至少经过 30 秒 grace period 的 run，再按有界批次检查 BullMQ。找不到 job 就用相同 <code>jobId=runId</code> 补建；job 为 failed，或 job 已 completed 但业务 run 尚未终态，就重置 infrastructure attempts 并放回 waiting；waiting、active、delayed 不动。多实例只有锁持有者执行，满批次用 cursor 轮转。即使检查与 Worker 完成发生竞态，新 job 也会先读 PostgreSQL，发现 run 已 terminal 后 no-op。这个设计支持 AOF 窗口丢失、Redis volume 恢复和 PostgreSQL 恢复到空队列，但没有把数据库重新变成高频 polling scheduler。</div>
+</details>
+<details data-lang="en">
+  <summary>What if the outbox says <code>dispatched</code> but the BullMQ job is gone?</summary>
+  <div class="answer">The relay alone cannot repair that state because it claims only pending or expired-processing dispatch; an acknowledged row does not move backward automatically. RoomTalk therefore adds a narrow anti-entropy loop. Every thirty seconds an App attempts the same PostgreSQL advisory lock, selects queued/running/finalizing runs whose dispatch was acknowledged beyond a thirty-second grace period, and checks BullMQ in bounded pages. A missing job is recreated with the same <code>jobId=runId</code>. A failed job, or a completed job whose business run is still non-terminal, has infrastructure attempts reset and returns to waiting. Waiting, active, and delayed jobs are untouched. Only the lock holder runs a pass, and a cursor rotates across full batches. A race with normal completion is safe because any replacement job first reads PostgreSQL and no-ops on a terminal run. This supports AOF-window loss, Redis-volume recovery, and restoring PostgreSQL into an empty queue without turning the database back into a high-frequency scheduler.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>AI Provider 调用能做到 exactly-once 吗？</summary>
+  <div class="answer">不能对所有 Provider 做这个承诺。能严格保证的是 RoomTalk 内部的结果边界：每次执行有 generation/owner lease；旧 generation 的 chunk 和 terminal write 无效；terminal projection 锁定同一条 <code>assistant_runs</code>，在一个 PostgreSQL 事务中更新 Message、run 与 room cost，所以被接受的终态和内部费用只发生一次。如果 Worker 在 terminal payload staged 之后退出，重试只 project，不再调用 Provider。真正无法完全观测的是“Provider 已接受请求，但响应或 staging 前进程退出”这一小段窗口，新 generation 为了完成用户请求可能再次调用 Provider。某个 Provider 若提供可靠的 idempotency key，可以按集成收紧；通用契约应诚实地写成 Provider 至少一次、内部终态 exactly-once。</div>
+</details>
+<details data-lang="en">
+  <summary>Can an AI Provider call be exactly once?</summary>
+  <div class="answer">Not as a universal guarantee. RoomTalk can guarantee its own result boundary: each execution has a generation/owner lease, stale chunks and terminal writes are rejected, and terminal projection locks one <code>assistant_runs</code> row before updating Message, run, and room cost in one PostgreSQL transaction. That makes the accepted terminal result and internal cost settlement exactly once. If the Worker dies after terminal staging, retry performs projection only and does not call the Provider. The unobservable window is remote acceptance followed by process loss before a response is staged; a replacement generation may call the Provider again to finish the user request. A Provider-specific reliable idempotency key can tighten that integration, but the portable contract is at-least-once Provider invocation and exactly-once internal terminal projection.</div>
 </details>
 
 <details data-lang="zh">
@@ -2087,11 +2111,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>现在的 AI Worker 是最终模型吗？为什么没有 <code>assistant_run_usage</code>？</summary>
-  <div class="answer">当前业务一致性模型已经收敛：<code>assistant_runs</code> 保存 request、status、generation/lease、immutable terminal payload、error 与 usage；BullMQ 只调度。终态 projection 锁定唯一 run，并在同一事务中更新 Message、run 与 room cost；run 离开 <code>finalizing</code> 后，重复 projection 是 no-op，所以不需要再用 <code>assistant_run_usage</code> 充当幂等凭证。Terminal payload 在消息删除后仍保留用量审计。以后若产品需要发票级账本、跨房间重新结算或不可变财务分录，可以新增 usage ledger；现在加只会复制事实。可继续演进的是运维能力，例如 dashboard、manual retry 与独立 queue Redis，而不是再造一套业务状态。</div>
+  <div class="answer">当前业务一致性模型已经收敛：<code>assistant_runs</code> 保存 request、status、generation/lease、immutable terminal payload、error 与 usage；BullMQ 只调度。终态 projection 锁定唯一 run，并在同一事务中更新 Message、run 与 room cost；run 离开 <code>finalizing</code> 后，重复 projection 是 no-op，所以不需要再用 <code>assistant_run_usage</code> 充当幂等凭证。Terminal payload 在消息删除后仍保留用量审计。运行模型也补上了必要的反熵：active run 会与 BullMQ missing/failed job 周期对账，Worker 用 TTL heartbeat 证明 consumer 存活，公开状态暴露 queue depth 与 oldest age。以后若产品需要发票级账本、跨房间重新结算或不可变财务分录，可以新增 usage ledger；现在加只会复制事实。继续演进的重点是告警、容量和 Provider-specific idempotency，而不是再造一套业务状态。</div>
 </details>
 <details data-lang="en">
   <summary>Is the AI Worker model final, and why is there no <code>assistant_run_usage</code>?</summary>
-  <div class="answer">The business-consistency model is now converged: <code>assistant_runs</code> stores request, status, generation/lease, immutable terminal payload, error, and usage; BullMQ only schedules. Terminal projection locks one run and updates Message, run, and room cost in one transaction. After the run leaves <code>finalizing</code>, repeated projection is a no-op, so a separate <code>assistant_run_usage</code> row is unnecessary as an idempotency receipt. The terminal payload retains usage even if the Message is deleted. A future invoice-grade ledger, cross-room recomputation, or immutable accounting product could justify another table; adding one now would duplicate facts. Future work is operational—dashboards, manual retry, or a dedicated queue Redis—not a second business state machine.</div>
+  <div class="answer">The business-consistency model is now converged: <code>assistant_runs</code> stores request, status, generation/lease, immutable terminal payload, error, and usage; BullMQ only schedules. Terminal projection locks one run and updates Message, run, and room cost in one transaction. After the run leaves <code>finalizing</code>, repeated projection is a no-op, so a separate <code>assistant_run_usage</code> row is unnecessary as an idempotency receipt. The terminal payload retains usage even if the Message is deleted. The operating model now also has the necessary anti-entropy: active runs reconcile against missing/failed BullMQ jobs, a TTL heartbeat proves consumer availability, and public status exposes queue depth and oldest age. A future invoice-grade ledger, cross-room recomputation, or immutable accounting product could justify another table; adding one now would duplicate facts. Further work belongs in alerting, capacity, and Provider-specific idempotency—not a second business state machine.</div>
 </details>
 
 <details data-lang="zh">
@@ -2123,11 +2147,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>现在迁移 AWS 难吗？</summary>
-  <div class="answer">应用层映射已经明确：同一镜像分别运行 App 与 Worker 两个 ECS service（或 EKS deployment），PostgreSQL 到 RDS/Aurora，realtime 与 BullMQ 先共用 ElastiCache for Redis OSS，未来用 <code>QUEUE_REDIS_URL</code> 拆成独立 replication group；SeaweedFS object key 原样复制到 S3，E2B 不变。切换时除了 PostgreSQL/S3 增量，还要排空或迁移 active BullMQ job，不能像纯 cache 一样空启动。真正零停机仍需要 PostgreSQL logical replication/CDC 或 AWS DMS；room event log 只修复客户端同步。</div>
+  <div class="answer">应用层映射已经明确：同一镜像分别运行 App 与 Worker 两个 ECS service（或 EKS deployment），PostgreSQL 到 RDS/Aurora，realtime 与 BullMQ 先共用 ElastiCache for Redis OSS，未来用 <code>QUEUE_REDIS_URL</code> 拆成独立 replication group；SeaweedFS object key 原样复制到 S3，E2B 不变。维护窗口迁移可以先停止旧 Worker、复制一致的 PostgreSQL/S3，再让新 queue 从空状态启动：pending dispatch 由 relay 发送，已 ack 但仍 active 的 run 由 reconciler 重建。若要求零停机并保留正在执行的 Provider call，仍要排空/迁移 active job，数据库也需要 logical replication/CDC 或 AWS DMS；room event log 只修复客户端同步，不能复制数据库。</div>
 </details>
 <details data-lang="en">
   <summary>How difficult is an AWS migration now?</summary>
-  <div class="answer">The mapping is explicit: run the same image as separate App and Worker ECS services (or EKS deployments), PostgreSQL on RDS/Aurora, realtime plus BullMQ initially on ElastiCache for Redis OSS, and later split scheduling through <code>QUEUE_REDIS_URL</code>; copy SeaweedFS object keys unchanged to S3 and keep E2B. Cutover must drain or migrate active BullMQ jobs in addition to PostgreSQL/S3 deltas; queue Redis cannot start empty like pure cache. True zero downtime still needs PostgreSQL logical replication/CDC or AWS DMS. Room events repair clients, not databases.</div>
+  <div class="answer">The mapping is explicit: run the same image as separate App and Worker ECS services (or EKS deployments), PostgreSQL on RDS/Aurora, realtime plus BullMQ initially on ElastiCache for Redis OSS, and later split scheduling through <code>QUEUE_REDIS_URL</code>; copy SeaweedFS object keys unchanged to S3 and keep E2B. A maintenance cutover can stop the old Worker, copy a consistent PostgreSQL/S3 state, and start with an empty new queue: the relay sends pending dispatch, while reconciliation rebuilds acknowledged-but-active runs. A zero-downtime cutover that preserves in-flight Provider calls still needs active-job drain/migration, and the database needs logical replication/CDC or AWS DMS. Room events repair clients; they do not replicate databases.</div>
 </details>
 
 <details data-lang="zh">
@@ -2314,22 +2338,24 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <div class="card" data-lang="zh">
   <h4>4. Release 守门</h4>
-  <p>Compose 对 PostgreSQL/S3 credential fail-fast，容器 healthcheck、loopback/public status 与真实边界 smoke 共同决定发布成功；Source push 与生产部署是两种状态。这里的 healthcheck 不是只验证端口：App readiness 会真正读取 RoomTalk 的 PostgreSQL schema、执行 Redis <code>PING</code>、探测对象存储 bucket，并确认 Socket adapter 的 pub/sub 两个 Redis client 都处于 connected ready，而不是只检查 adapter 对象已经创建。</p>
+  <p>Compose 对 PostgreSQL/S3 credential fail-fast，容器 healthcheck、loopback/public status 与真实边界 smoke 共同决定发布成功；Source push 与生产部署是两种状态。这里的 healthcheck 不是只验证端口：App readiness 会真正读取 RoomTalk 的 PostgreSQL schema、执行 Redis <code>PING</code>、探测对象存储 bucket，并确认 Socket adapter 的 pub/sub 两个 Redis client 都处于 connected ready，而不是只检查 adapter 对象已经创建。AI Worker 还每 5 秒续租一个默认 20 秒 TTL 的共享 heartbeat；公开 status 同时输出 waiting、active、delayed、failed 和 oldest queued time，避免“Redis 在线、consumer 已死”仍显示 online。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>4. Release Guardrails</h4>
-  <p>Compose fails fast on missing PostgreSQL/S3 credentials, while container health checks, loopback/public status, and boundary smokes define release success. Source push and production deployment are separate states. The App health check does more than open a port: readiness reads the RoomTalk PostgreSQL schema, executes Redis <code>PING</code>, probes the object-storage bucket, and requires both Redis pub/sub clients behind the Socket adapter to be connected—not merely constructed.</p>
+  <p>Compose fails fast on missing PostgreSQL/S3 credentials, while container health checks, loopback/public status, and boundary smokes define release success. Source push and production deployment are separate states. The App health check does more than open a port: readiness reads the RoomTalk PostgreSQL schema, executes Redis <code>PING</code>, probes the object-storage bucket, and requires both Redis pub/sub clients behind the Socket adapter to be connected—not merely constructed. The AI Worker also renews a shared heartbeat every five seconds with a twenty-second default TTL. Public status reports waiting, active, delayed, failed, and oldest queued time, so “Redis is up but no consumer is alive” cannot remain online.</p>
 </div>
 
 <div class="card" data-lang="zh">
   <h4>为什么要分 liveness、readiness 和 degraded？</h4>
   <p><strong>Liveness</strong> 只回答“这个 Node 进程还能不能处理 HTTP”。如果 PostgreSQL 短暂不可用，不应该让 Kubernetes 反复重启一个本来正常的 App 进程，因此 <code>/api/health/live</code> 不访问下游。<strong>Readiness</strong> 回答“现在把用户流量送进来是否安全”，所以 <code>/api/health/ready</code> 与 <code>/api/status</code> 必须检查所有关键依赖；失败时返回 HTTP 503 和 <code>status: "degraded"</code>。</p>
   <p>最重要的是保留领域含义：<code>rooms: 0</code> 表示数据库查询成功，而且确实没有房间；数据库查询失败则是 <code>rooms: null</code>，并把 <code>dependencies.database</code> 标为 <code>unavailable</code>。不能为了让 status 看起来“在线”而把 infrastructure error 转换成合法业务值。Compose 用 readiness 判断 App 健康；迁移 AWS 后，load balancer/readiness 停止导流，liveness 只在进程自身失效时触发重启。</p>
+  <p>Queue/Worker 采用另一种 degraded 语义：只要 PostgreSQL 可写，App 仍能可靠接受请求并留下 dispatch intent，所以不会因为 Worker 短暂重启就把整个 HTTP 实例摘流；但 status 会变成 <code>degraded</code>，并标明 <code>assistantWorker: unavailable</code>。这样既不丢请求，也不会把“任务没人消费”伪装成完全在线。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>Why separate liveness, readiness, and degraded?</h4>
   <p><strong>Liveness</strong> asks only whether the Node process can still handle HTTP. A temporary PostgreSQL outage should not make Kubernetes restart an otherwise healthy App process, so <code>/api/health/live</code> has no downstream checks. <strong>Readiness</strong> asks whether it is safe to send user traffic now. Therefore <code>/api/health/ready</code> and <code>/api/status</code> check every required dependency and return HTTP 503 with <code>status: "degraded"</code> when one fails.</p>
   <p>The domain distinction matters: <code>rooms: 0</code> means the query succeeded and the database really contains no rooms. A failed query produces <code>rooms: null</code> and <code>dependencies.database: "unavailable"</code>. Infrastructure errors must not be converted into valid business values merely to keep a status page green. Compose consumes readiness; on AWS, readiness removes a replica from traffic while liveness restarts it only when the process itself has failed.</p>
+  <p>Queue and Worker failure use a different degraded mode. As long as PostgreSQL remains writable, the App can safely accept a request and preserve dispatch intent, so a brief Worker restart does not remove the whole HTTP replica from traffic. Status still becomes <code>degraded</code> with <code>assistantWorker: unavailable</code>. The system neither loses the request nor pretends that background execution is healthy.</p>
 </div>
 
 <div class="card" data-lang="zh">

@@ -130,9 +130,9 @@ Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新
 | 目的 | 恢复可见状态 | 可靠桥接 PostgreSQL commit 与 Redis | 调度 Provider 执行 |
 | 清理 | retention 连续前缀 | 确定性 enqueue 后 settled | completed/failed 运维保留 |
 
-AI placeholder、`assistant_runs`、room event 与 dispatch row 在一个 PostgreSQL 事务里提交。Relay 随后用 `jobId=runId` 把最小 `{ schemaVersion: 1, runId }` job 送入 BullMQ；重复 relay 不会创建第二份任务。Queue 故障时 dispatch 回到 pending，因此已接受请求不会消失在 PostgreSQL 与 Redis 之间。独立 Worker 从 PostgreSQL 读取 request，claim 精确 run 并得到新 generation，在 Provider 执行期间持续续租 owner lease。
+AI placeholder、`assistant_runs`、room event 与 dispatch row 在一个 PostgreSQL 事务里提交。Relay 随后用 `jobId=runId` 把最小 `{ schemaVersion: 1, runId }` job 送入 BullMQ；重复 relay 不会创建第二份任务。Queue 故障时 dispatch 回到 pending，因此已接受请求不会消失在 PostgreSQL 与 Redis 之间。Dispatch 确认后，受 advisory lock 保护的修复循环只检查 PostgreSQL 仍 active 的 run：缺失 job 按确定性 ID 补建，failed 或业务尚未终态却提前 completed 的 job 重试，waiting/active/delayed job 不动。独立 Worker 从 PostgreSQL 读取 request，claim 精确 run 并得到新 generation，在 Provider 执行期间持续续租 owner lease。
 
-`assistant_runs` 是唯一业务 aggregate，拥有 request snapshot、generation、lease、immutable terminal payload、status、error 与 usage。系统不会从 BullMQ state 判断业务成功，也不使用 result backend。Retry 发现 terminal payload 已落库时只做 Message/run/cost projection，不再请求 Provider。锁定的唯一 terminal transition 已防止重复计费，因此刻意不建立第二张 `assistant_run_usage` ledger。
+`assistant_runs` 是唯一业务 aggregate，拥有 request snapshot、generation、lease、immutable terminal payload、status、error 与 usage。系统不会从 BullMQ state 判断业务成功，也不使用 result backend。Retry 发现 terminal payload 已落库时只做 Message/run/cost projection，不再请求 Provider。锁定的唯一 terminal transition 已防止内部费用重复累计，因此刻意不建立第二张 `assistant_run_usage` ledger。若进程在 Provider 接受请求后、terminal staging 前退出，接管者仍可能再次请求外部 Provider；所以准确契约是 Provider 至少一次，终态 projection 与 RoomTalk 内部费用在 generation fence 下只接受一次。
 
 因此 Socket delivery 本身不需要 durable outbox：room data 已能通过 cursor 恢复，每个授权客户端都是 fan-out reader，不是 competing worker；重试 Socket 通知只是在重复事件日志已经解决的工作。`messageVersion` 同样没有必要，因为 room seq 已经同时表达顺序和精确缺失区间。
 
@@ -147,7 +147,7 @@ AI placeholder、`assistant_runs`、room event 与 dispatch row 在一个 Postgr
 | Redis 7，AOF realtime + BullMQ | 托管 Redis | ElastiCache for Redis OSS |
 | SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
 
-Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是 App/Worker 共享镜像、PostgreSQL schema/dump/WAL、BullMQ Redis contract、可分离的 `REDIS_URL` / `QUEUE_REDIS_URL`，以及 S3 API。Realtime/cache key 可自然预热，但 active BullMQ job 必须排空或恢复。当前生产使用 SeaweedFS，回滚部署使用 Tigris，未来 AWS 使用 S3，object key 与 API 不变。
+Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是 App/Worker 共享镜像、PostgreSQL schema/dump/WAL、BullMQ Redis contract、可分离的 `REDIS_URL` / `QUEUE_REDIS_URL`，以及 S3 API。Realtime/cache key 可自然预热；零停机迁移应排空或迁移 active job，维护窗口则可在旧 Worker 停止后让新 queue 空启动，因为 pending dispatch 会由 relay 投递，已 ack 但仍 active 的 run 会从 PostgreSQL 重建。当前生产使用 SeaweedFS，回滚部署使用 Tigris，未来 AWS 使用 S3，object key 与 API 不变。
 
 本地启动与备份：
 
@@ -159,13 +159,13 @@ docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 
 必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。本地 S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。SeaweedFS 与 S3 端口只对 Compose 私网和 loopback 开放；`MEDIA_STORAGE_ENDPOINT` 让服务端流量留在 Compose 网络，`MEDIA_STORAGE_PUBLIC_ENDPOINT` 为 edge hostname 生成浏览器上传/下载签名。
 
-运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后原样启动刚才停下的容器。恢复路径刻意使用 `compose start`，而不是 `compose up`，避免新 Compose 定义在旧镜像上被提前 reconcile，让备份意外变成部署。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
+运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后原样启动刚才停下的容器。恢复路径刻意使用 `compose start`，而不是 `compose up`，避免新 Compose 定义在旧镜像上被提前 reconcile，让备份意外变成部署。Queue Redis 是运行状态，不是业务备份源：PostgreSQL 恢复到空队列时，pending dispatch 会由 relay 投递，已经 ack 但仍 active 的 dispatch 会由 reconciler 重建。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
 长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、`assistant_runs`、dispatch intent 与 turn 仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。Redis 使用 named volume、AOF `everysec` 与 `noeviction` 保护 active BullMQ job。
 
-健康状态不是一个乐观 boolean。`/api/health/live` 只探测 App 进程；`/api/status` 与 `/api/health/ready` 检查真实表读取、realtime Redis、S3 与 Socket adapter。Serving dependency 失败时返回 HTTP 503 与 `rooms: null`；只有 queue 故障时 App 仍 ready，但报告 `degraded` 和 deferred dispatch。`ai-worker` 单独检查 PostgreSQL、queue Redis、transient Redis 与 worker state。AWS 还需监控磁盘和 queue backlog。
+健康状态不是一个乐观 boolean。`/api/health/live` 只探测 App 进程；`/api/status` 与 `/api/health/ready` 检查真实表读取、realtime Redis、S3 与 Socket adapter。Serving dependency 失败时返回 HTTP 503 与 `rooms: null`；只有 queue 故障时 App 仍 ready，但报告 `degraded` 和 deferred dispatch。每个 `ai-worker` 会续租一个共享 queue-Redis TTL heartbeat，所以 Worker 已死但 Redis 仍在线时，公开状态也会 degraded。状态同时输出 PostgreSQL pending/processing dispatch、BullMQ waiting/active/delayed/failed 和 oldest queued time。`ai-worker` 仍有独立健康检查；AWS 需要对宿主磁盘、Worker heartbeat 过期和持续 queue age 告警。
 
-GitHub CI 使用 Node 24.18，同时启动 PostgreSQL 17 与 Redis 7，并设置 `ROOM_EVENT_TEST_DATABASE_URL` 和 `BULLMQ_TEST_REDIS_URL`。Trigger/transaction/fence 与真实 BullMQ dedupe/stalled-retry 测试都会执行，不会因为缺依赖静默 skip。
+GitHub CI 使用 Node 24.18，同时启动 PostgreSQL 17 与 Redis 7，并设置 `ROOM_EVENT_TEST_DATABASE_URL` 和 `BULLMQ_TEST_REDIS_URL`。Trigger/transaction/fence 与真实 BullMQ 去重、processor retry、missing-job rebuild、exhausted-job reconciliation 测试都会执行，不会因为缺依赖静默 skip。
 
 ## 不可变事件生产 migration
 

@@ -337,6 +337,13 @@ export interface TaskDispatchClaimOptions {
   now?: string;
 }
 
+export interface ActiveTaskDispatchQueryOptions {
+  limit?: number;
+  graceMs?: number;
+  now?: string;
+  afterRunId?: string;
+}
+
 export interface TaskDispatchClaimToken {
   workerId: string;
   attempt: number;
@@ -520,6 +527,7 @@ export interface DurableRoomStore {
   claimTaskDispatches?(options: TaskDispatchClaimOptions): Promise<TaskDispatchRecord[]>;
   markTaskDispatchDispatched?(runId: string, claim: TaskDispatchClaimToken, now?: string): Promise<boolean>;
   releaseTaskDispatch?(runId: string, claim: TaskDispatchClaimToken, error: string, retryDelayMs: number, now?: string): Promise<boolean>;
+  readActiveDispatchedTaskDispatches?(options?: ActiveTaskDispatchQueryOptions): Promise<TaskDispatchRecord[]>;
   readTaskDispatchMetrics?(): Promise<TaskDispatchMetrics>;
   claimOutboxEvents?(options: OutboxClaimOptions): Promise<OutboxEventRecord[]>;
   renewOutboxEventLease?(eventId: string, claim: OutboxClaimToken, now?: string): Promise<boolean>;
@@ -1011,6 +1019,10 @@ export class CompositeRoomStore implements RoomStore {
 
   releaseTaskDispatch(runId: string, claim: TaskDispatchClaimToken, error: string, retryDelayMs: number, now?: string) {
     return this.durableStore.releaseTaskDispatch?.(runId, claim, error, retryDelayMs, now) || Promise.resolve(false);
+  }
+
+  readActiveDispatchedTaskDispatches(options?: ActiveTaskDispatchQueryOptions) {
+    return this.durableStore.readActiveDispatchedTaskDispatches?.(options) || Promise.resolve([]);
   }
 
   readTaskDispatchMetrics() {

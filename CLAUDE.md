@@ -60,8 +60,9 @@ Room synchronization follows these invariants:
 - Do not hydrate old events from current rows, add a realtime delivery outbox, or restore `messageVersion`/`roomVersion`.
 - Keep typing, presence, AI chunks, voice, and WebRTC outside the durable sequence. Buffer early AI transient events by `messageId` within the 60-second, 64-ID, 512-event, 512-KiB limits.
 - Emit `ai_stream_error` with an explicit `persisted` flag. The normal path persists a complete safe error Message and includes it with `persisted: true`; if immediate projection fails, `persisted: false` terminalizes the local placeholder while the durable `assistant_runs.terminal_payload` remains available for BullMQ projection retry. PostgreSQL generation leases prevent stale takeover writes.
+- Reconcile active PostgreSQL assistant runs against BullMQ after a short grace period. Missing deterministic jobs and exhausted failed jobs are requeued under a PostgreSQL advisory lock; waiting/active/delayed jobs and terminal runs are never touched. Provider invocation is at-least-once if a process dies after remote acceptance but before terminal staging, while generation fencing keeps terminal projection and internal cost settlement exactly once.
 - Own Redis presence by a unique runtime instance ID with TTL heartbeats. Cleanup removes only expired instance sockets. Recover Code Agent turns/sandboxes only after their fenced leases expire, and run recovery/retention under PostgreSQL advisory locks instead of destructive all-instance startup cleanup.
-- Keep liveness separate from readiness. `/api/health/live` proves only that the Node process can answer; `/api/status` and `/api/health/ready` execute a real PostgreSQL table query, Redis `PING`, S3-compatible bucket probe, and Socket adapter check. Dependency failure is `503 degraded` with `rooms: null`, never a fabricated business value such as zero rooms.
+- Keep liveness separate from readiness. `/api/health/live` proves only that the Node process can answer; `/api/status` and `/api/health/ready` execute a real PostgreSQL table query, Redis `PING`, S3-compatible bucket probe, and Socket adapter check. Dependency failure is `503 degraded` with `rooms: null`, never a fabricated business value such as zero rooms. The AI Worker publishes a queue-Redis TTL heartbeat; its absence and BullMQ backlog metrics degrade `/api/status` without rejecting otherwise durable HTTP traffic.
 - Keep a message ID bound to its original room. PostgreSQL rejects cross-room upserts; a future move operation must be an explicit source delete plus target upsert.
 - Update the canonical message array and React `previous` state separately so transient handlers preserve pending and failed optimistic sends.
 
@@ -83,7 +84,7 @@ All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` con
 - `aiModels.ts` — model registry, normalization, model options from env
 - `aiClients.ts` — OpenRouter/direct API client factory
 - `aiStreamRecovery.ts` + `aiTerminalPersistReconciler.ts` — lease streaming owners, retry terminal persistence in-process, and recover only expired owners
-- `assistantRunQueue.ts` + `taskDispatchRelay.ts` + `assistantRunBullProcessor.ts` — enqueue ordinary chat AI runs through BullMQ, bridge the PostgreSQL dispatch outbox, and execute fenced run aggregates in the dedicated worker process
+- `assistantRunQueue.ts` + `taskDispatchRelay.ts` + `assistantRunQueueReconciler.ts` + `assistantRunBullProcessor.ts` — enqueue ordinary chat AI runs through BullMQ, bridge and reconcile the PostgreSQL dispatch outbox, expose Worker/queue health, and execute fenced run aggregates in the dedicated worker process
 - `mediaObjectStorage.ts` — S3-compatible object storage (SeaweedFS in current production; Tigris retained for rollback), presigned URLs
 - `clientAuth.ts` — password hashing, token-based auth
 - `googleAuth.ts` — Google OAuth credential verification

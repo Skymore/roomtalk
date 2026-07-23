@@ -952,6 +952,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       pendingCount: 0,
       processingCount: 0,
     });
+    assert.deepEqual(
+      (await store.readActiveDispatchedTaskDispatches({
+        graceMs: 0,
+        now: '2026-07-22T00:00:02.001Z',
+      })).map(item => item.runId),
+      [runId],
+    );
 
     const claimedRun = await store.claimAssistantRunById(runId, {
       workerId: 'bull-worker-1',
@@ -1245,6 +1252,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.deleteMessageById(roomId, queuedMessageId))?.deleted, true);
     assert.equal((await store.getAssistantRun(queuedRunId))?.status, 'cancelled');
     assert.equal(await store.claimAssistantRun({ workerId: 'must-not-run', now: createdAt }), null);
+    assert.deepEqual(
+      (await store.readActiveDispatchedTaskDispatches({
+        graceMs: 0,
+        now: '2026-07-22T00:00:00.000Z',
+      })).map(item => item.runId),
+      [],
+    );
   });
 
   it('keeps a streaming placeholder recoverable while its assistant run is active', async () => {

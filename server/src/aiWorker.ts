@@ -12,8 +12,10 @@ import {
   createQueueRedisConnection,
   decodeAssistantRunJobData,
   resolveAssistantRunQueueName,
+  resolveAssistantRunWorkerHeartbeatTtlMs,
   resolveQueueRedisUrl,
   type AssistantRunJobDataV1,
+  writeAssistantRunWorkerHeartbeat,
 } from './services/assistantRunQueue';
 import { processAssistantRunJob } from './services/assistantRunBullProcessor';
 import { RedisAssistantRunEventPublisher } from './services/assistantRunEvents';
@@ -51,6 +53,8 @@ queueConnection.on('error', error => redisLogger.error('AI worker queue Redis er
 
 let shuttingDown = false;
 let worker: Worker<AssistantRunJobDataV1> | null = null;
+let workerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let lastWorkerHeartbeatAt: string | null = null;
 
 const healthPort = parsePositiveInt(process.env.AI_WORKER_HEALTH_PORT, 3013);
 const healthServer = http.createServer(async (request, response) => {
@@ -68,6 +72,7 @@ const healthServer = http.createServer(async (request, response) => {
     response.end(JSON.stringify({
       status: ready ? 'ready' : 'degraded',
       worker: worker?.isRunning() ? 'running' : 'stopped',
+      workerHeartbeatAt: lastWorkerHeartbeatAt,
       queueRedis: queueConnection.status,
       transientRedis: transientRedis.isReady ? 'ready' : 'unavailable',
     }));
@@ -124,6 +129,23 @@ const start = async () => {
   worker.on('stalled', jobId => logger.warn('Assistant run BullMQ job stalled', { jobId }));
   worker.on('error', error => logger.error('Assistant run BullMQ worker error', { error }));
 
+  const heartbeatTtlMs = resolveAssistantRunWorkerHeartbeatTtlMs();
+  const heartbeatIntervalMs = Math.max(1_000, Math.min(
+    parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS, 5_000),
+    Math.floor(heartbeatTtlMs / 2),
+  ));
+  const heartbeat = async () => {
+    const value = await writeAssistantRunWorkerHeartbeat(queueConnection, workerId);
+    lastWorkerHeartbeatAt = value.heartbeatAt;
+  };
+  await heartbeat();
+  workerHeartbeatTimer = setInterval(() => {
+    void heartbeat().catch(error => {
+      logger.error('Assistant run worker heartbeat failed', { error });
+    });
+  }, heartbeatIntervalMs);
+  workerHeartbeatTimer.unref?.();
+
   await new Promise<void>((resolve, reject) => {
     healthServer.once('error', reject);
     healthServer.listen(healthPort, '0.0.0.0', () => resolve());
@@ -133,6 +155,8 @@ const start = async () => {
     queue: resolveAssistantRunQueueName(),
     concurrency: parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_CONCURRENCY, 2),
     healthPort,
+    heartbeatIntervalMs,
+    heartbeatTtlMs,
   });
 };
 
@@ -140,6 +164,8 @@ const shutdown = async (signal: string) => {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info('Stopping assistant run BullMQ worker', { signal });
+  if (workerHeartbeatTimer) clearInterval(workerHeartbeatTimer);
+  workerHeartbeatTimer = null;
   const forceExit = setTimeout(() => process.exit(1), 15_000);
   forceExit.unref();
   healthServer.close();

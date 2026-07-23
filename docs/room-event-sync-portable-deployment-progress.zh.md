@@ -156,7 +156,7 @@ Schema 也不再由每个 App 冷启动修改。Compose 的一次性 `migrate` s
 | --- | --- |
 | 完整 Server suite | 111 个 suite、851 项通过；真实 PostgreSQL 17 migration/transaction 无 skip |
 | 完整 Client suite | 97 个文件、1,025 项通过 |
-| BullMQ + Redis 集成 | duplicate relay 去重、模拟 Worker crash retry、单次完成通过 |
+| BullMQ + Redis 集成 | duplicate relay 去重、模拟 processor failure retry、单次完成通过 |
 | Server / Client production build | 通过 |
 | Production image | `roomtalk-local:dev`，镜像 SHA `128708f3280f` |
 | Migration ledger | 11/11；`0010_assistant_run_bullmq_dispatch` 已记录 |
@@ -168,7 +168,7 @@ Schema 也不再由每个 App 冷启动修改。Compose 的一次性 `migrate` s
 | 本机回环、`room.ruit.me`、`roomtalk.ruit.me` | `online`、`ready=true`、`assistantQueue=ready`、100 个 room |
 | 公网 Socket.IO handshake | 成功；可升级 WebSocket |
 
-发布验证没有调用付费 Provider。近十分钟 App、Worker 与 migration 日志中没有 fatal、panic、uncaught、unhandled 或 error 记录。CI 现在同时提供真实 PostgreSQL 17 与 Redis 7，关键测试覆盖队列不可用后的 deferred dispatch、确定性 job 去重、Worker 崩溃恢复、terminal/finalizing run 不重复调用 Provider、精确 generation release，以及 placeholder/run/room event/dispatch 的数据库原子性。
+发布验证没有调用付费 Provider。近十分钟 App、Worker 与 migration 日志中没有 fatal、panic、uncaught、unhandled 或 error 记录。CI 现在同时提供真实 PostgreSQL 17 与 Redis 7；首轮关键测试覆盖队列不可用后的 deferred dispatch、确定性 job 去重、processor failure retry、terminal staging 之后 finalizing run 不重复调用 Provider、精确 generation release，以及 placeholder/run/room event/dispatch 的数据库原子性。
 
 ## 回滚与持续运维
 

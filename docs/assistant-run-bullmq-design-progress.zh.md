@@ -129,6 +129,8 @@ Relay 的语义是 at-least-once：
 
 这张表只回答“是否已尝试把 run 交给调度器”，不回答 run 是否成功，也不保存 Provider 结果。终态仍只由 `assistant_runs` 描述。
 
+`dispatched` 也不是永久放弃恢复。App 还有一轮周期对账：先取得 PostgreSQL advisory lock，再读取仍为 queued/running/finalizing、且 dispatch 已确认并经过短暂 grace period 的 run。BullMQ job 缺失时用同一 `runId` 补建；job 已 failed 或已经 completed、但 PostgreSQL run 仍未终态时，把它重新放回 waiting。waiting、active 与 delayed job 不动。每轮只检查有界批次，满批次通过 runId cursor 轮转，因此不会在多实例上重复扫，也不会长期饿死后面的 run。这一层修的是 Redis 丢失/恢复和 attempts 耗尽，不重新发明 PostgreSQL scheduler。
+
 ## 4. 执行状态机与不变量
 
 ### 4.1 业务状态机
@@ -161,10 +163,12 @@ Worker 以 `runId` 读取 PostgreSQL：
 2. Provider 成功后 terminal payload 一旦落库，任何重试都只能 project，不能再次调用 Provider。
 3. 删除或截断 streaming placeholder 后，任何旧 job 都不能 INSERT 或 upsert 它。
 4. 旧 generation 的 chunk、stream end 和 terminal write 都被拒绝。
-5. BullMQ job 丢失或 Redis 短暂不可用，不会丢失 PostgreSQL 中的 run；dispatch relay 会补发。
-6. BullMQ job 重复，不会导致重复 Provider 调用或重复费用。
+5. Redis enqueue 前失败由 dispatch relay 补发；dispatch 已确认后 job 丢失或 attempts 耗尽，则由 active-run reconciler 修复。
+6. BullMQ job 重复或旧 generation 接管冲突，不会产生第二个被接受的终态，也不会重复累计 RoomTalk 内部费用。
 7. App 不消费 AI job；`ai-worker` 不接受用户 Socket 请求。
 8. `room_events` 不承载 transient chunk，最终完整 message 仍通过 durable event 收敛。
+
+这里必须把 exactly-once 的边界说准确：RoomTalk 能保证终态 projection 与内部费用结算只接受一次，但不能对所有外部 Provider 承诺只调用一次。如果 Provider 已接受请求，而 Worker 在 terminal payload 落库前退出，接管后的 generation 可能再次发起请求。某个 Provider 若提供可靠 idempotency key，可以为该集成单独增强；基础契约仍是 Provider 至少一次、旧 generation 不能提交结果。
 
 ## 5. Transient AI 流的跨进程路径
 
@@ -198,7 +202,7 @@ Worker 已不再持有 Socket.IO server，因此不能直接 `io.to(roomId).emit
 PostgreSQL 仍保留：
 
 - `generation`：业务 fencing；
-- 当前执行 owner/lease：阻止重复 Provider side effect，并支持失效接管；
+- 当前执行 owner/lease：阻止两个 generation 同时提交副作用，并支持失效接管；
 - `attempt`：业务审计，可从每次成功 claim 递增；
 - `terminal_payload`：Provider 已完成的不可变结果。
 
@@ -211,12 +215,13 @@ PostgreSQL 仍保留：
 - liveness：Node HTTP process 可响应；
 - readiness：PostgreSQL、realtime Redis、对象存储和 Socket adapter 可用；
 - queue Redis/dispatch relay 异常：状态报告 degraded，但只要 PostgreSQL 正常，仍可接受 AI 请求并显示 queued placeholder，因为投递意图不会丢失；
-- backlog 指标：pending dispatch count、oldest pending age、enqueue failures。
+- backlog 指标：pending/processing dispatch、BullMQ waiting/active/delayed/failed 与 oldest queued time；
+- active-run reconciliation：advisory lock 下检查已 ack dispatch，missing job 补建，failed/completed-but-nonterminal job 重试。
 
 ### 7.2 AI Worker
 
 - 独立 Compose healthcheck；
-- 检查 queue Redis 连接、PostgreSQL 可读与 Worker event-loop heartbeat；
+- 检查 queue Redis 连接、PostgreSQL 可读与 Worker event-loop heartbeat；Worker 用共享 TTL key 证明“至少一个 consumer 存活”；
 - 指标/日志至少包括 waiting、active、delayed、failed、stalled、runId、generation、attempt、provider latency；
 - 日志不得包含 prompt、凭据或完整上下文。
 
@@ -237,11 +242,11 @@ PostgreSQL 仍保留：
 
 ### 场景 B：Relay 在 enqueue 后、ack 前崩溃
 
-预期：重复投递使用相同 `jobId=runId`；Provider 只调用一次；房间费用只累计一次。
+预期：重复投递使用相同 `jobId=runId`，只有一个 generation 能被接受；房间费用只累计一次。若崩溃发生在 Provider 已接受请求、terminal payload 尚未落库之间，外部调用仍可能重试，这不是 RoomTalk 能普遍消除的边界。
 
 ### 场景 C：Worker 在 Provider 调用中崩溃
 
-预期：BullMQ stalled/retry 恢复；新 claim 使用更高 generation；旧 Worker 的 chunk 和 terminal write 无效；最终消息收敛且不重复计费。
+预期：BullMQ stalled/retry 恢复；新 claim 使用更高 generation；旧 Worker 的 chunk 和 terminal write 无效；最终消息与内部费用只收敛一次。Provider 调用采用至少一次语义。
 
 ### 场景 D：terminal payload 已保存，projection 前崩溃
 
@@ -262,6 +267,14 @@ PostgreSQL 仍保留：
 ### 场景 H：从 migration `0009` cutover
 
 预期：已有 queued/running run 被安全放回 dispatch；finalizing run 只 project；terminal run 不入队；旧嵌入式 Worker 与新 BullMQ Worker 不同时运行。
+
+### 场景 I：dispatch 已确认，但 Redis job 丢失或 failed attempts 耗尽
+
+预期：PostgreSQL 仍 active 的 run 被 singleton reconciler 发现；missing job 使用同一 `runId` 补建，failed job 重置 infrastructure attempts 后回到 waiting。Terminal run、waiting/active/delayed job 不受影响。
+
+### 场景 J：Worker 进程停止但 queue Redis 仍在线
+
+预期：共享 heartbeat 在 TTL 后过期；App 仍可持久化请求并保持 HTTP ready，但 `/api/status` 变为 degraded，明确显示 Worker unavailable 与队列积压。
 
 ## 9. 发布与回滚
 
@@ -310,6 +323,13 @@ PostgreSQL 仍保留：
 - [x] CI 为 `master` / PR 配置真实 PostgreSQL 与 Redis 服务；
 - [x] 维护窗口部署并验证 `room.ruit.me` 与兼容域名。
 
+### Post-cutover reliability closure
+
+- [x] 增加 active PostgreSQL run 与 BullMQ job 的 advisory-locked reconciliation；
+- [x] 覆盖 missing job、exhausted failed job 与 PostgreSQL 恢复到空队列；
+- [x] 增加 Worker TTL heartbeat 与 waiting/active/delayed/failed/oldest-queued 状态；
+- [x] 把 Provider 契约修正为至少一次，把 exactly-once 限定在终态 projection 与内部费用结算。
+
 ## 11. 完成标准
 
 只有同时满足以下条件，本阶段才算完成：
@@ -317,7 +337,10 @@ PostgreSQL 仍保留：
 - App 进程不再 claim 或执行普通聊天 AI run；
 - 独立 BullMQ Worker 能从 `runId` 恢复完整执行；
 - Redis 短暂不可用不会丢失已提交请求；
-- duplicate/stalled/retry 不会重复 Provider 副作用或费用；
+- duplicate/stalled/retry 只有一个 generation 能提交终态，内部费用只结算一次；
+- Provider 在 terminal staging 前的外部调用使用至少一次语义，不伪称跨服务 exactly-once；
+- acknowledged job 丢失或 attempts 耗尽时，active run 会由 reconciler 自动恢复；
+- Worker 失联时公开状态在 TTL 内变为 degraded；
 - terminal payload 后的恢复不会重跑 Provider；
 - 删除 placeholder 后任何 job 都不能复活消息；
 - Compose 与 AWS 迁移边界有明确配置；
