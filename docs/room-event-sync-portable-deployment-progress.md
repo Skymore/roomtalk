@@ -170,6 +170,12 @@ The first release respected a stop-the-world protocol boundary. The maintenance 
 
 Deployment verification did not call a paid Provider. Recent App, Worker, and migration logs contained no fatal, panic, uncaught, unhandled, or error record. CI now provisions real PostgreSQL 17 and Redis 7 services. The initial regressions covered deferred dispatch during queue outage, deterministic job deduplication, processor-failure retry, terminal/finalizing runs avoiding a second Provider call after staging, exact generation release, and database atomicity across placeholder, run, room event, and dispatch intent.
 
+### Assistant queue reliability closure, 2026-07-22
+
+Commit `46b4d48a` closes the practical gap left after the first BullMQ cutover. An App-side singleton reconciler now compares active PostgreSQL runs with already-acknowledged BullMQ jobs: it recreates a missing deterministic job and retries a failed or prematurely completed job only while the business run remains active. The Worker renews a shared TTL heartbeat, and `/api/status` reports Worker availability together with dispatch and BullMQ backlog. This deliberately does not claim universal Provider exactly-once; a crash after remote acceptance but before terminal staging can still repeat that external call, while generation fencing keeps only one RoomTalk terminal result and one internal cost settlement.
+
+The maintenance window created and validated `roomtalk-20260723T004010Z.dump` and `roomtalk-object-storage-20260723T004010Z.tar.gz`, then deployed production image `79b1e87ada299f8d1125bb6d756d5b38a9a2f91b6fda515dc2a53ac5ad1797b6`. The full Server suite passed 862 tests in 114 suites, real PostgreSQL 17 tests passed 34 cases without skips, real Redis/BullMQ recovery tests passed 3 cases, and GitHub Server/Client CI passed. After deployment, all six services were running; ten historical runs were terminal, no active run lacked dispatch, and every dispatch/queue backlog count was zero. Loopback, `room.ruit.me`, and `roomtalk.ruit.me` all reported `online`, `ready=true`, `assistantQueue=ready`, and `assistantWorker=ready` with a live heartbeat. No paid Provider request was generated.
+
 ## Rollback and ongoing operations
 
 Rollback after either production boundary is a data operation. Do not re-enable Fly or change DNS by itself after the Mac has accepted writes. Stop or gate the current writer, reconcile PostgreSQL and object deltas, restore a matching database/object pair, verify the target, and only then switch traffic.

@@ -170,6 +170,12 @@ Schema 也不再由每个 App 冷启动修改。Compose 的一次性 `migrate` s
 
 发布验证没有调用付费 Provider。近十分钟 App、Worker 与 migration 日志中没有 fatal、panic、uncaught、unhandled 或 error 记录。CI 现在同时提供真实 PostgreSQL 17 与 Redis 7；首轮关键测试覆盖队列不可用后的 deferred dispatch、确定性 job 去重、processor failure retry、terminal staging 之后 finalizing run 不重复调用 Provider、精确 generation release，以及 placeholder/run/room event/dispatch 的数据库原子性。
 
+### Assistant queue 可靠性收口，2026-07-22
+
+Commit `46b4d48a` 补上首次 BullMQ 切换后仍有实际价值的恢复缺口。App 侧 singleton reconciler 会核对 PostgreSQL active run 与已经确认的 BullMQ job：确定性 job 消失时补建；job failed 或过早 completed、而业务 run 仍 active 时才重新调度。Worker 持续续期共享 TTL heartbeat，`/api/status` 同时报告 Worker 是否在线、dispatch backlog 与 BullMQ backlog。这里不宣称跨 Provider 的通用 exactly-once：远端接受请求后、terminal staging 前崩溃，外部调用仍可能重复；generation fencing 只允许一个 RoomTalk 终态与一次内部费用结算生效。
+
+维护窗口生成并校验了 `roomtalk-20260723T004010Z.dump` 与 `roomtalk-object-storage-20260723T004010Z.tar.gz`，随后部署生产镜像 `79b1e87ada299f8d1125bb6d756d5b38a9a2f91b6fda515dc2a53ac5ad1797b6`。完整 Server suite 为 114 个 suite、862 项通过；真实 PostgreSQL 17 测试 34 项通过且无 skip；真实 Redis/BullMQ 恢复测试 3 项通过；GitHub Server、Client CI 均通过。部署后六个服务全部运行，十个历史 run 全部 terminal，没有 active run 缺 dispatch，dispatch 与 queue 的各项 backlog 都是 0。本机回环、`room.ruit.me` 与 `roomtalk.ruit.me` 都返回 `online`、`ready=true`、`assistantQueue=ready`、`assistantWorker=ready`，Worker heartbeat 正常续期。本次没有调用付费 Provider。
+
 ## 回滚与持续运维
 
 跨过任一生产边界后，回滚都是数据操作。Mac 已接受写入时，不能只重新启用 Fly 或切 DNS。应先停止或 gate 当前 writer，协调 PostgreSQL 与对象增量，恢复匹配的数据库和对象备份，验证目标，然后才切流量。

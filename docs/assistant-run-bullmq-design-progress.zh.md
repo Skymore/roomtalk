@@ -330,6 +330,12 @@ PostgreSQL 仍保留：
 - [x] 增加 Worker TTL heartbeat 与 waiting/active/delayed/failed/oldest-queued 状态；
 - [x] 把 Provider 契约修正为至少一次，把 exactly-once 限定在终态 projection 与内部费用结算。
 
+### 收口版本的生产证据
+
+收口版本 commit `46b4d48a` 于 2026-07-22 本地时间部署。维护窗口先生成并校验成对备份 `roomtalk-20260723T004010Z.dump` 与 `roomtalk-object-storage-20260723T004010Z.tar.gz`，随后才构建和替换 App、AI Worker。完整 Server suite 为 114 个 suite、862 项通过；真实 PostgreSQL 17 的 run/migration 测试 34 项通过且无 skip；真实 Redis/BullMQ 丢 job 与 failed-job 恢复测试 3 项通过；GitHub Server、Client CI 均通过。
+
+生产镜像 SHA 为 `79b1e87ada299f8d1125bb6d756d5b38a9a2f91b6fda515dc2a53ac5ad1797b6`。部署后六个 Compose 服务全部运行，十个历史 run 全部 terminal，没有 active run 缺少 dispatch；pending、processing、waiting、active、delayed、failed 均为 0。本机回环、`room.ruit.me` 与 `roomtalk.ruit.me` 都返回 `online`、`ready=true`、`assistantQueue=ready`、`assistantWorker=ready`，并带有仍在续期的 Worker heartbeat。本次验证没有调用付费 Provider。
+
 ## 11. 完成标准
 
 只有同时满足以下条件，本阶段才算完成：
