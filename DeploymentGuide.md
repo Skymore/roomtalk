@@ -3,21 +3,22 @@
 [中文](部署指南.md)
 
 Status: Current production runbook
-Updated: 2026-07-22
+Updated: 2026-07-23
 Production: [https://room.ruit.me/](https://room.ruit.me/)
 
 ## Production Shape
 
-RoomTalk production currently runs on a MacBook as six long-lived Docker Compose services:
+RoomTalk production currently runs on a MacBook as seven long-lived Docker Compose services:
 
 - `app`: the root multi-stage application image, binding Node/Express/Socket.IO to loopback port `3012`;
 - `ai-worker`: the same image running the BullMQ consumer and ordinary chat AI providers, with a private health endpoint on `3013`;
 - `postgres`: PostgreSQL 17, the only durable serving authority, using the `postgres_data` Docker volume;
 - `redis`: Redis 7 for Socket.IO, presence, sessions, bounded caches, transient Worker events, and BullMQ; a named volume plus AOF `everysec` and `noeviction` protect active jobs;
 - `object-storage`: SeaweedFS 4.29 exposing an S3-compatible API, persisted under `runtime/object-storage`;
-- `cloudflared`: the outbound Cloudflare Tunnel that provides public DNS/TLS without exposing inbound host ports.
+- `cloudflared`: the outbound connector for the primary `ruit.me` Cloudflare Tunnel;
+- `cloudflared-wenlin`: a token-authenticated connector for the separately managed `ai-chat.wenlin.dev` Tunnel.
 
-`room.ruit.me` is canonical, `roomtalk.ruit.me` is a compatibility hostname, and `roomtalk-objects.ruit.me` carries presigned browser object transfers. E2B remains the external execution plane for room-scoped code-agent sandboxes.
+`room.ruit.me` is canonical, `roomtalk.ruit.me` is a compatibility hostname, `roomtalk-objects.ruit.me` carries presigned browser object transfers, and `ai-chat.wenlin.dev` reaches the same App through its dedicated Tunnel. Both connectors are outbound, so the host exposes no inbound application port. E2B remains the external execution plane for room-scoped code-agent sandboxes.
 
 The former Fly app, Supabase database, Tigris bucket, and Upstash Redis remain rollback sources only. Fly is suspended and its scheduled GitHub Actions workflow is manually disabled; none of those services receives production writes.
 
@@ -51,22 +52,23 @@ The application image and the pinned E2B artifact are separate releases. A norma
    node scripts/local-production.mjs --profile edge ps
    curl -fsS http://127.0.0.1:3012/api/status
    curl -fsS https://room.ruit.me/api/status
+   curl -fsS https://ai-chat.wenlin.dev/api/status
    ```
 
-   `/api/health/live` is process liveness and intentionally ignores downstream failures. Compose and Kubernetes readiness use `/api/health/ready`: it verifies PostgreSQL, realtime Redis, object storage, and the Socket adapter. A serving failure returns `503 degraded` with `rooms: null`; queue-only failure remains ready but reports deferred dispatch because PostgreSQL can retain the request. The Worker separately checks PostgreSQL, queue Redis, transient Redis, and its processing loop. After a detached `up`, `local-production.mjs` waits for the five local App/Worker/stateful services plus Cloudflare Tunnel, checks loopback and public readiness, and reports host free space plus allocated `Docker.raw` space.
+   `/api/health/live` is process liveness and intentionally ignores downstream failures. Compose and Kubernetes readiness use `/api/health/ready`: it verifies PostgreSQL, realtime Redis, object storage, and the Socket adapter. A serving failure returns `503 degraded` with `rooms: null`; queue-only failure remains ready but reports deferred dispatch because PostgreSQL can retain the request. The Worker separately checks PostgreSQL, queue Redis, transient Redis, and its processing loop. After a detached `up`, `local-production.mjs` waits for the five local App/Worker/stateful services plus both Cloudflare connectors, checks loopback and both public readiness endpoints, and reports host free space plus allocated `Docker.raw` space.
 
 6. Run a risk-based user smoke. Room-event, media, OAuth/connection, and E2B changes require checks at those actual boundaries.
 
 Documentation-only commits do not require a production rebuild.
 
-An incompatible room-event migration is not a routine rolling release. Take a paired backup, stop `cloudflared` and every old app process, then start only the new image. Production used this procedure for migrations `0003` and `0004` on 2026-07-21.
+An incompatible room-event migration is not a routine rolling release. Take a paired backup, stop both Cloudflare connectors and every old app process, then start only the new image. Production used this procedure for migrations `0003` and `0004` on 2026-07-21.
 
 ## First-Time Host Provisioning
 
 1. Install Docker Desktop and keep the Mac on AC power with automatic sleep disabled for the production session.
 2. Copy `.env.compose.example` to ignored `.env.compose`; generate independent PostgreSQL and local S3 credentials.
 3. Store the complete application environment as a JSON object in the macOS Keychain item `roomtalk-production-env`. Never commit or print it.
-4. Create ignored `runtime/cloudflared/config.yml` and `runtime/cloudflared/credentials.json` for the dedicated tunnel.
+4. Create ignored `runtime/cloudflared/config.yml` and `runtime/cloudflared/credentials.json` for the primary Tunnel, and store `CLOUDFLARE_WENLIN_TUNNEL_TOKEN` in the same Keychain JSON for the separately managed Wenlin Tunnel.
 5. Restore a paired PostgreSQL custom archive and SeaweedFS snapshot, or initialize an empty environment.
 6. Verify the pinned E2B template/artifact/source-ref set before enabling code-agent rooms.
 7. Start with `node scripts/local-production.mjs --profile edge up -d --build` and complete the verification checklist below.
@@ -93,11 +95,11 @@ Run the paired maintenance backup only in an announced maintenance window:
 node scripts/backup-local-production.mjs
 ```
 
-This command has no help or dry-run mode. Invoking it immediately stops `cloudflared`, `app`, `ai-worker`, and `object-storage`, writes a PostgreSQL custom archive plus a matching SeaweedFS tarball under `backups/`, and then restarts those services in a `finally` path.
+This command has no help or dry-run mode. Invoking it immediately stops both Cloudflare connectors, `app`, `ai-worker`, and `object-storage`, writes a PostgreSQL custom archive plus a matching SeaweedFS tarball under `backups/`, and then restarts those services in a `finally` path.
 
 After every backup:
 
-- confirm all six services are healthy and public `/api/status` is online;
+- confirm all seven services are healthy and both public `/api/status` endpoints are online;
 - keep the database dump and object snapshot as one timestamped pair;
 - copy encrypted artifacts off the Mac;
 - periodically restore both artifacts into isolated targets and compare database/object counts.
@@ -121,9 +123,9 @@ See [the artifact contract](docs/code-agent-sandbox-artifact.md).
 
 ### Control plane
 
-- All six Compose services report healthy/running, including the dedicated `ai-worker`.
-- Loopback and public `/api/status` return `status: "online"`, `ready: true`, `persistenceStore: "postgres"`, ready PostgreSQL/Redis/media dependencies, and a ready socket adapter.
-- `room.ruit.me` and `roomtalk.ruit.me` serve the intended application; the object hostname accepts only signed object operations.
+- All seven Compose services report healthy/running, including the dedicated `ai-worker` and both Cloudflare connectors.
+- Loopback and both public `/api/status` endpoints return `status: "online"`, `ready: true`, `persistenceStore: "postgres"`, ready PostgreSQL/Redis/media dependencies, and a ready socket adapter.
+- `room.ruit.me`, `roomtalk.ruit.me`, and `ai-chat.wenlin.dev` serve the intended application; the object hostname accepts only signed object operations.
 - No startup errors appear for PostgreSQL schema/event listeners, Redis, object storage, workers, or Socket.IO.
 
 ### User and synchronization flow
@@ -162,7 +164,9 @@ node scripts/local-production.mjs --profile edge ps
 node scripts/local-production.mjs --profile edge logs --tail=200 app
 node scripts/local-production.mjs --profile edge logs --tail=200 ai-worker
 node scripts/local-production.mjs --profile edge logs --tail=200 cloudflared
+node scripts/local-production.mjs --profile edge logs --tail=200 cloudflared-wenlin
 curl -fsS https://room.ruit.me/api/status
+curl -fsS https://ai-chat.wenlin.dev/api/status
 ```
 
 Long-running containers use Docker JSON log rotation of 10 MB per file and five files. Database-backed observability, turn, event, run, and dispatch records are not affected by that process-log limit.

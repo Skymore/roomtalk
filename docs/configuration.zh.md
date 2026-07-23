@@ -179,5 +179,6 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 - 生产 E2B 必须同时对齐 template、artifact version、source ref、runner dependency 和 smoke 证据。
 - 应用或配置变更通过 `node scripts/local-production.mjs --profile edge up -d --build` 生效。该命令先运行 migration job，再替换 App 与 Worker；随后验证 Compose health、Worker health、loopback 与公网 `/api/status`。
 - `/api/health/live` 只用于进程 liveness；`/api/health/ready` 与 `/api/status` 会验证 PostgreSQL schema、realtime Redis、对象存储和 Socket adapter。Serving dependency 不可用时返回 `503` 与 `rooms: null`；只有 queue 不可用时，App 仍 ready 但状态为 `degraded`，因为 PostgreSQL 能安全延迟 dispatch。
-- `local-production.mjs` 会在 detached startup 后自动验证六个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH` 与 `ROOMTALK_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
+- 主 `ruit.me` Tunnel 使用 ignored `CLOUDFLARE_TUNNEL_CONFIG_FILE` 与 `CLOUDFLARE_TUNNEL_CREDENTIALS_FILE` 路径。单独管理的 `ai-chat.wenlin.dev` Tunnel 从 Keychain 环境读取 `CLOUDFLARE_WENLIN_TUNNEL_TOKEN`；不得提交或打印该 token。
+- `local-production.mjs` 会在 detached startup 后自动验证七个生产服务并报告宿主/Docker 磁盘占用。`ROOMTALK_MIN_HOST_FREE_GB`、`ROOMTALK_DOCKER_RAW_WARN_GB`、`ROOMTALK_DOCKER_RAW_PATH`、`ROOMTALK_PUBLIC_STATUS_URL` 与 `ROOMTALK_WENLIN_PUBLIC_STATUS_URL` 用于调整这项本地 operator 检查。
 - 旧 Fly GitHub Actions workflow 已手工禁用，只保留为回滚历史，不再拥有当前部署。

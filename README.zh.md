@@ -101,9 +101,9 @@ flowchart LR
   App --> Providers["Google / GitHub / Codex / AI providers"]
 ```
 
-MacBook 长期运行六个 Compose 服务：app、独立 `ai-worker`、PostgreSQL、Redis、SeaweedFS 和 `cloudflared`。PostgreSQL 与 Redis 都使用 named volume；由于 Redis 现在既承载可重建的 realtime/cache key，也承载 BullMQ 运行任务，因此启用 AOF `everysec` 与 `noeviction`。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
+MacBook 长期运行 app、独立 `ai-worker`、PostgreSQL、Redis、SeaweedFS 与两个 `cloudflared` connector。主 connector 承载 `ruit.me` 域名，第二个 connector 在单独管理的 Cloudflare 账户中承载 `ai-chat.wenlin.dev`。PostgreSQL 与 Redis 都使用 named volume；由于 Redis 现在既承载可重建的 realtime/cache key，也承载 BullMQ 运行任务，因此启用 AOF `everysec` 与 `noeviction`。浏览器媒体通过独立对象域名使用预签名 URL 传输；服务端对象操作留在 Compose 私网。
 
-`room.ruit.me` 是主域名，`roomtalk.ruit.me` 是兼容入口。Runtime 同时 allowlist `ai-chat.wenlin.dev`，但该域名的 DNS 切换单独管理。旧 Fly app 已暂停；Supabase、Tigris 和 Upstash 仅作为临时回滚资源保留，不再接收生产写入。
+`room.ruit.me` 是主域名，`roomtalk.ruit.me` 是兼容入口。`ai-chat.wenlin.dev` 通过其 Cloudflare 账户中的专用 Tunnel 到达同一个 App。旧 Fly app 已暂停；Supabase、Tigris 和 Upstash 仅作为临时回滚资源保留，不再接收生产写入。
 
 ### 房间事件 fan-out 拓扑
 

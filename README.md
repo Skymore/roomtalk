@@ -101,9 +101,9 @@ flowchart LR
   App --> Providers["Google / GitHub / Codex / AI providers"]
 ```
 
-The MacBook runs six long-lived Compose services: the app, a dedicated AI worker, PostgreSQL, Redis, SeaweedFS, and `cloudflared`. PostgreSQL and Redis use named volumes; Redis enables AOF `everysec` and `noeviction` because it now contains BullMQ jobs as well as rebuildable realtime/cache keys. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
+The MacBook runs the app, a dedicated AI worker, PostgreSQL, Redis, SeaweedFS, and two `cloudflared` connectors. The primary connector serves the `ruit.me` hostnames; the second connector serves `ai-chat.wenlin.dev` from its separately managed Cloudflare account. PostgreSQL and Redis use named volumes; Redis enables AOF `everysec` and `noeviction` because it now contains BullMQ jobs as well as rebuildable realtime/cache keys. Browser media transfers use presigned URLs through the separate object hostname; server-side object operations stay on the private Compose network.
 
-`room.ruit.me` is the primary hostname and `roomtalk.ruit.me` is a compatibility hostname. The runtime also allowlists `ai-chat.wenlin.dev`, but that hostname has a separately managed DNS cutover. The former Fly app is suspended; Supabase, Tigris, and Upstash remain only as temporary rollback resources and receive no production writes.
+`room.ruit.me` is the primary hostname and `roomtalk.ruit.me` is a compatibility hostname. `ai-chat.wenlin.dev` reaches the same App through a dedicated Tunnel in its own Cloudflare account. The former Fly app is suspended; Supabase, Tigris, and Upstash remain only as temporary rollback resources and receive no production writes.
 
 ### Room-event fan-out topology
 

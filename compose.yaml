@@ -222,6 +222,20 @@ services:
     networks:
       - roomtalk
 
+  cloudflared-wenlin:
+    image: cloudflare/cloudflared:2026.7.2
+    profiles: ["edge"]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_WENLIN_TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - roomtalk
+
   postgres-backup:
     image: postgres:17-alpine
     profiles: ["ops"]

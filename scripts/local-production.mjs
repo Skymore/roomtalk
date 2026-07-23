@@ -54,8 +54,11 @@ const verifyReadinessUrl = async url => {
 
 const verifyProduction = async ({ composePrefix, composeEnv, edgeEnabled, roomtalkPort }) => {
   const expectedServices = ['app', 'ai-worker', 'postgres', 'redis', 'object-storage']
-  if (edgeEnabled) expectedServices.push('cloudflared')
-  const publicStatusUrl = process.env.ROOMTALK_PUBLIC_STATUS_URL || 'https://room.ruit.me/api/status'
+  if (edgeEnabled) expectedServices.push('cloudflared', 'cloudflared-wenlin')
+  const publicStatusUrls = [
+    process.env.ROOMTALK_PUBLIC_STATUS_URL || 'https://room.ruit.me/api/status',
+    process.env.ROOMTALK_WENLIN_PUBLIC_STATUS_URL || 'https://ai-chat.wenlin.dev/api/status',
+  ]
   let lastError
 
   for (let attempt = 1; attempt <= 60; attempt++) {
@@ -80,7 +83,11 @@ const verifyProduction = async ({ composePrefix, composeEnv, edgeEnabled, roomta
       }
 
       await verifyReadinessUrl(`http://127.0.0.1:${roomtalkPort}/api/health/ready`)
-      if (edgeEnabled) await verifyReadinessUrl(publicStatusUrl)
+      if (edgeEnabled) {
+        for (const publicStatusUrl of publicStatusUrls) {
+          await verifyReadinessUrl(publicStatusUrl)
+        }
+      }
       console.log(`RoomTalk production verified: ${expectedServices.join(', ')}`)
       reportHostCapacity()
       return
