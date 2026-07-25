@@ -93,7 +93,7 @@ Fast path 只改变延迟，不改变正确性边界。PostgreSQL 把 hint fan-o
 
 滚动发布除了 room-event 投递，还需要明确 runtime ownership。RoomTalk 现在为每个进程生成唯一 runtime instance ID。Redis 保存实例 TTL heartbeat、该实例拥有的 socket ID，以及每个 socket 的 room/browser presence。启动时不再清空全局 presence；singleton reconciliation 只移除 heartbeat 已过期实例名下的记录，因此启动实例 B 不会抹掉仍由实例 A 服务的在线用户。
 
-运行任务遵循同一规则。只有不存在未过期 fenced room lease 时，Code Agent turn 与 sandbox 才能恢复。普通 Chat AI 不再属于请求 App 实例：queued run 有 durable dispatch intent，active Worker 持有 generation lease，`finalizing` run 已保存 immutable terminal payload，因此 App 重启不能判死 job。旧 lease 消失后 BullMQ retry 或 replacement Worker 才能取得更高 generation，旧 transient/terminal write 都会被 fence 拒绝。
+运行任务遵循同一规则。Code Agent 是绑定房间的交互执行链路，不是 BullMQ job。一个 PostgreSQL 事务在返回成功前同时创建 prompt/placeholder/turn，并取得 `{ roomId, turnId, ownerId, fence }` lease；之后每次由执行过程产生的 turn write 都证明这个 claim，terminal transaction 一次收敛 message、cost、room/session、turn 与精确 lease release。旧进程在 takeover 后不能继续写。Recovery 锁定并重新检查候选项，只有不存在匹配 live lease 时才恢复 turn/sandbox，或把遗留 `starting`/`steering` 输入放回 queue。普通 Chat AI 使用另一条边界：queued run 有 durable dispatch intent，active Worker 持有 generation lease，`finalizing` run 已保存 immutable terminal payload，因此 App 重启不能判死 job。旧 lease 消失后 BullMQ retry 或 replacement Worker 才能取得更高 generation，旧 transient/terminal write 都会被 fence 拒绝。
 
 Recovery 与 retention loop 在每个副本中都存在，但执行前获取命名 PostgreSQL advisory lock；一轮只有一个实例做维护，其余实例跳过。Event broadcaster 也只为每个房间保存固定大小的 min/max pending state。生产路径未显式传入测试时间时，assistant-run 与 dispatch lease 都以 PostgreSQL `clock_timestamp()` 为时钟权威，避免多节点 wall-clock 偏差。
 
@@ -110,6 +110,8 @@ Migration `0004_public_member_change_events` 修复了曾运行 pre-production V
 Migration `0005_message_room_immutability_and_event_clock` 强制 message-room invariant，并切换到 wall-clock event timestamp；V1 payload 格式不变。
 
 Migration `0006_ai_stream_owner_leases` 增加 stream-owner 接管所需的 PostgreSQL heartbeat/expiry 表。它是 additive migration，不改变 V1 room-event 格式。
+
+Migration `0011_code_agent_turn_fencing` 把 running Code Agent turn 绑定到 room-lease owner 与 generation。旧 App 不会用这个 claim 约束 transcript/terminal write，因此首次部署 `0011` 必须使用维护窗口，不能与旧版本混合滚动。
 
 Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新的 V1 `room.deleted` tombstone，保留 `deleted_reader_ids`，并把 retention floor 指向 tombstone。即使 cursor 早于已清理前缀，服务端仍返回这个终态事件，客户端只对 deletion 允许这一次 seq 跳跃，从而避免 `CURSOR_EXPIRED → 无法取得 snapshot` 死循环。系统不长期维护双格式 decoder。
 

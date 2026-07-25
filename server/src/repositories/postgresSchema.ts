@@ -1626,4 +1626,37 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION settle_terminal_assistant_run_dispatch();
     `,
   },
+  {
+    // A room lease only prevents concurrent starts when every durable write
+    // also proves which lease generation produced it. Persist that claim on
+    // the turn so stale App instances cannot append or finalize after takeover.
+    id: '0011_code_agent_turn_fencing',
+    sql: `
+      ALTER TABLE room_agent_turns
+        ADD COLUMN IF NOT EXISTS lease_owner TEXT,
+        ADD COLUMN IF NOT EXISTS lease_fence BIGINT;
+
+      UPDATE room_agent_turns AS turn
+      SET lease_owner = lease.owner_id,
+        lease_fence = lease.fence
+      FROM code_agent_room_leases AS lease
+      WHERE turn.room_id = lease.room_id
+        AND turn.id = lease.turn_id
+        AND turn.status = 'running'
+        AND (turn.lease_owner IS NULL OR turn.lease_fence IS NULL);
+
+      ALTER TABLE room_agent_turns
+        DROP CONSTRAINT IF EXISTS room_agent_turns_lease_pair_check;
+      ALTER TABLE room_agent_turns
+        ADD CONSTRAINT room_agent_turns_lease_pair_check
+        CHECK (
+          (lease_owner IS NULL AND lease_fence IS NULL)
+          OR (lease_owner IS NOT NULL AND lease_fence IS NOT NULL AND lease_fence > 0)
+        );
+
+      CREATE INDEX IF NOT EXISTS idx_room_agent_turns_active_claim
+        ON room_agent_turns (room_id, id, lease_owner, lease_fence)
+        WHERE status = 'running';
+    `,
+  },
 ];

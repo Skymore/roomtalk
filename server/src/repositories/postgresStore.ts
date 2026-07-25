@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
+import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -234,6 +234,8 @@ type RoomAgentTurnRow = {
   phase_message: string | null;
   last_heartbeat_at: string | Date | null;
   updated_at: string | Date;
+  lease_owner?: string | null;
+  lease_fence?: number | string | null;
 };
 
 type OutboxEventRow = {
@@ -1467,6 +1469,64 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async materializeCodeAgentQueuedMessageForTurn(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState,
+    claim: CodeAgentTurnClaim,
+    insertedAt = new Date().toISOString(),
+  ): Promise<MessageUpdateResult | null> {
+    if (roomId !== claim.roomId) {
+      throw new Error('Queued code-agent message does not match its turn claim');
+    }
+    return this.transaction(async client => {
+      const room = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+        [roomId],
+      );
+      if (!room.rows[0]) return null;
+      if (!await this.lockCodeAgentTurnClaim(client, claim)) {
+        return { room: mapRoom(room.rows[0]), found: false };
+      }
+
+      const nextPosition = await client.query<{ position: number | string }>(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+        [roomId],
+      );
+      const updated = await client.query<MessageRow>(
+        `UPDATE room_messages
+        SET position = $5,
+          timestamp = $6::timestamptz,
+          updated_at = $6::timestamptz,
+          turn_id = $4,
+          code_agent_queued_input = NULL
+        WHERE room_id = $1
+          AND id = $2
+          AND code_agent_queued_input->>'state' = $3
+        RETURNING ${MESSAGE_COLUMNS}`,
+        [
+          roomId,
+          messageId,
+          expectedState,
+          claim.turnId,
+          Number(nextPosition.rows[0]?.position || 0),
+          insertedAt,
+        ],
+      );
+      if (!updated.rows[0]) {
+        return { room: mapRoom(room.rows[0]), found: false };
+      }
+      const updatedRoom = await this.updateRoomLastActivityFromMessages(
+        client,
+        roomId,
+        toIsoString(room.rows[0].created_at),
+      );
+      return updatedRoom
+        ? { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) }
+        : null;
+    });
+  }
+
   async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = new Date().toISOString()) {
     try {
       return await this.transaction(async client => {
@@ -1561,7 +1621,57 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows.map(row => row.room_id);
     } catch (error) {
       this.logger.error('Error finding PostgreSQL rooms with queued code-agent messages', { error });
-      return [];
+      throw error;
+    }
+  }
+
+  async recoverStaleCodeAgentQueuedMessages(
+    staleBefore: string,
+    updatedAt = new Date().toISOString(),
+  ): Promise<number> {
+    try {
+      const result = await this.pool.query(
+        `UPDATE room_messages AS message
+        SET code_agent_queued_input =
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(
+                  message.code_agent_queued_input,
+                  '{state}',
+                  to_jsonb('queued'::text),
+                  true
+                ),
+                '{updatedAt}',
+                to_jsonb($2::text),
+                true
+              ),
+              '{lastError}',
+              to_jsonb(
+                CASE message.code_agent_queued_input->>'state'
+                  WHEN 'steering' THEN 'The active turn ended before the steer input was inserted'
+                  ELSE 'The queued turn did not finish starting and was restored'
+                END
+              ),
+              true
+            ),
+          updated_at = $2::timestamptz
+        WHERE message.code_agent_queued_input->>'state' IN ('starting', 'steering')
+          AND message.updated_at <= $1::timestamptz
+          AND NOT EXISTS (
+            SELECT 1
+            FROM code_agent_room_leases AS lease
+            WHERE lease.room_id = message.room_id
+              AND lease.expires_at > clock_timestamp()
+          )`,
+        [staleBefore, updatedAt],
+      );
+      return result.rowCount || 0;
+    } catch (error) {
+      this.logger.error('Error recovering stale PostgreSQL code-agent queue states', {
+        error,
+        staleBefore,
+      });
+      throw error;
     }
   }
 
@@ -2019,6 +2129,424 @@ export class PostgresStore implements DurableRoomStore {
     });
   }
 
+  async beginCodeAgentTurn(input: CodeAgentTurnStartInput): Promise<CodeAgentTurnStartResult> {
+    if (
+      input.turn.id !== input.placeholder.turnId
+      || input.turn.roomId !== input.roomId
+      || input.placeholder.roomId !== input.roomId
+      || input.turn.status !== 'running'
+      || input.placeholder.status !== 'streaming'
+      || !input.ownerId
+      || !Number.isFinite(input.leaseTtlMs)
+      || input.leaseTtlMs <= 0
+    ) {
+      throw new Error('Invalid atomic code-agent turn start');
+    }
+
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [input.roomId],
+        );
+        if (!room.rows[0]) return { outcome: 'missing_room' as const };
+
+        let queuedMessage: MessageRow | undefined;
+        if (input.queuedMessageId) {
+          const queued = await client.query<MessageRow>(
+            `SELECT ${MESSAGE_COLUMNS}
+            FROM room_messages
+            WHERE room_id = $1
+              AND id = $2
+              AND code_agent_queued_input->>'state' = 'starting'
+            FOR UPDATE`,
+            [input.roomId, input.queuedMessageId],
+          );
+          queuedMessage = queued.rows[0];
+          if (!queuedMessage) return { outcome: 'queue_conflict' as const };
+        }
+
+        const lease = await client.query<CodeAgentRoomLeaseRow>(
+          `INSERT INTO code_agent_room_leases (room_id, turn_id, owner_id, fence, expires_at)
+          VALUES ($1, $2, $3, 1, $4::timestamptz + ($5::bigint * interval '1 millisecond'))
+          ON CONFLICT (room_id) DO UPDATE SET
+            turn_id = EXCLUDED.turn_id,
+            owner_id = EXCLUDED.owner_id,
+            fence = code_agent_room_leases.fence + 1,
+            expires_at = EXCLUDED.expires_at
+          WHERE code_agent_room_leases.expires_at <= $4::timestamptz
+          RETURNING room_id, turn_id, owner_id, fence, expires_at`,
+          [input.roomId, input.turn.id, input.ownerId, input.now, Math.floor(input.leaseTtlMs)],
+        );
+        const leaseRow = lease.rows[0];
+        if (!leaseRow) return { outcome: 'busy' as const };
+
+        let materializedPrompt: Message | undefined;
+        if (queuedMessage && input.queuedMessageId) {
+          const nextPosition = await client.query<{ position: number | string }>(
+            `SELECT COALESCE(MAX(position), -1) + 1 AS position
+            FROM room_messages
+            WHERE room_id = $1`,
+            [input.roomId],
+          );
+          const materialized = await client.query<MessageRow>(
+            `UPDATE room_messages
+            SET position = $3,
+              timestamp = $4::timestamptz,
+              updated_at = $4::timestamptz,
+              turn_id = $5,
+              code_agent_queued_input = NULL
+            WHERE room_id = $1
+              AND id = $2
+              AND code_agent_queued_input->>'state' = 'starting'
+            RETURNING ${MESSAGE_COLUMNS}`,
+            [
+              input.roomId,
+              input.queuedMessageId,
+              Number(nextPosition.rows[0]?.position || 0),
+              input.now,
+              input.turn.id,
+            ],
+          );
+          if (!materialized.rows[0]) {
+            throw new Error(`Queued code-agent input ${input.queuedMessageId} lost its start claim`);
+          }
+          materializedPrompt = mapMessage(materialized.rows[0]);
+        }
+
+        const nextPosition = await client.query<{ position: number | string }>(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+          [input.roomId],
+        );
+        const placeholder = await client.query<MessageRow>(
+          `${INSERT_MESSAGE_ROW_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+          messageParams(input.placeholder, Number(nextPosition.rows[0]?.position || 0)),
+        );
+        if (!placeholder.rows[0]) throw new Error('Failed to insert code-agent placeholder');
+
+        const turn = await client.query<RoomAgentTurnRow>(
+          `INSERT INTO room_agent_turns (
+            ${ROOM_AGENT_TURN_COLUMNS},
+            lease_owner,
+            lease_fence
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+          )
+          RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
+          [
+            input.turn.id,
+            input.turn.roomId,
+            input.turn.status,
+            input.turn.startedAt,
+            input.turn.completedAt || null,
+            input.turn.finalMessageId || null,
+            input.turn.backend,
+            input.turn.assistantName,
+            input.turn.phase || null,
+            input.turn.phaseMessage || null,
+            input.turn.lastHeartbeatAt || null,
+            input.turn.updatedAt,
+            input.ownerId,
+            Number(leaseRow.fence),
+          ],
+        );
+        if (!turn.rows[0]) throw new Error('Failed to insert code-agent turn');
+
+        const updatedRoom = await client.query<RoomRow>(
+          `UPDATE rooms
+          SET code_agent_status = 'running',
+            last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+            updated_at = clock_timestamp()
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
+          [input.roomId, input.now],
+        );
+        if (!updatedRoom.rows[0]) throw new Error('Failed to mark code-agent room running');
+
+        return {
+          outcome: 'started' as const,
+          room: mapRoom(updatedRoom.rows[0]),
+          turn: mapRoomAgentTurn(turn.rows[0]),
+          placeholder: mapMessage(placeholder.rows[0]),
+          lease: mapCodeAgentRoomLease(leaseRow),
+          ...(materializedPrompt ? { materializedPrompt } : {}),
+        };
+      });
+    } catch (error) {
+      this.logger.error('Error starting atomic PostgreSQL code-agent turn', {
+        error,
+        roomId: input.roomId,
+        turnId: input.turn.id,
+        messageId: input.placeholder.id,
+      });
+      throw error;
+    }
+  }
+
+  async updateCodeAgentTurn(turn: RoomAgentTurn, claim: CodeAgentTurnClaim): Promise<RoomAgentTurn | null> {
+    if (
+      turn.id !== claim.turnId
+      || turn.roomId !== claim.roomId
+      || turn.status !== 'running'
+      || !claim.ownerId
+      || !Number.isSafeInteger(claim.fence)
+      || claim.fence <= 0
+    ) {
+      throw new Error('Invalid fenced code-agent turn update');
+    }
+
+    const result = await this.pool.query<RoomAgentTurnRow>(
+      `UPDATE room_agent_turns AS turn
+      SET phase = $5,
+        phase_message = $6,
+        last_heartbeat_at = $7::timestamptz,
+        updated_at = $8::timestamptz
+      WHERE turn.id = $1
+        AND turn.room_id = $2
+        AND turn.status = 'running'
+        AND turn.lease_owner = $3
+        AND turn.lease_fence = $4
+        AND EXISTS (
+          SELECT 1
+          FROM code_agent_room_leases AS lease
+          WHERE lease.room_id = turn.room_id
+            AND lease.turn_id = turn.id
+            AND lease.owner_id = $3
+            AND lease.fence = $4
+            AND lease.expires_at > clock_timestamp()
+        )
+      RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
+      [
+        turn.id,
+        turn.roomId,
+        claim.ownerId,
+        claim.fence,
+        turn.phase || null,
+        turn.phaseMessage || null,
+        turn.lastHeartbeatAt || null,
+        turn.updatedAt,
+      ],
+    );
+    return result.rows[0] ? mapRoomAgentTurn(result.rows[0]) : null;
+  }
+
+  async appendCodeAgentMessage(
+    message: Message,
+    claim: CodeAgentTurnClaim,
+    cost?: AICost | null,
+  ): Promise<CodeAgentMessageMutationResult> {
+    if (message.roomId !== claim.roomId || message.turnId !== claim.turnId) {
+      throw new Error('Code-agent message does not match its turn claim');
+    }
+
+    return this.transaction(async client => {
+      const room = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+        [claim.roomId],
+      );
+      if (!room.rows[0] || !await this.lockCodeAgentTurnClaim(client, claim)) {
+        return { outcome: 'stale' as const };
+      }
+
+      const nextPosition = await client.query<{ position: number | string }>(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+        [message.roomId],
+      );
+      const inserted = await client.query<MessageRow>(
+        `${INSERT_MESSAGE_ROW_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+        messageParams(message, Number(nextPosition.rows[0]?.position || 0)),
+      );
+      if (!inserted.rows[0]) throw new Error(`Failed to append code-agent message ${message.id}`);
+
+      const roomCostTotal = await this.incrementRoomAICostWithClient(client, message.roomId, cost);
+      const updatedRoom = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+          updated_at = clock_timestamp()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [message.roomId, message.timestamp],
+      );
+      if (!updatedRoom.rows[0]) throw new Error(`Code-agent append lost room ${message.roomId}`);
+      return {
+        outcome: 'applied' as const,
+        room: mapRoom(updatedRoom.rows[0]),
+        message: mapMessage(inserted.rows[0]),
+        roomCostTotal,
+      };
+    });
+  }
+
+  async finalizeCodeAgentMessage(
+    message: Message,
+    expectedOwnership: AIStreamOwnership,
+    claim: CodeAgentTurnClaim,
+    cost?: AICost | null,
+  ): Promise<CodeAgentMessageMutationResult> {
+    if (
+      message.roomId !== claim.roomId
+      || message.turnId !== claim.turnId
+      || (message.status !== 'complete' && message.status !== 'error')
+    ) {
+      throw new Error('Invalid fenced code-agent message finalization');
+    }
+
+    return this.transaction(async client => {
+      const room = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+        [claim.roomId],
+      );
+      if (!room.rows[0] || !await this.lockCodeAgentTurnClaim(client, claim)) {
+        return { outcome: 'stale' as const };
+      }
+
+      const updated = await this.finalizeAIMessageWithClient(client, message, expectedOwnership);
+      if (!updated) return { outcome: 'obsolete' as const };
+
+      const roomCostTotal = await this.incrementRoomAICostWithClient(client, message.roomId, cost);
+      const updatedRoom = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+          updated_at = clock_timestamp()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [message.roomId, message.timestamp],
+      );
+      if (!updatedRoom.rows[0]) throw new Error(`Code-agent finalization lost room ${message.roomId}`);
+      return {
+        outcome: 'applied' as const,
+        room: mapRoom(updatedRoom.rows[0]),
+        message: mapMessage(updated),
+        roomCostTotal,
+      };
+    });
+  }
+
+  async finishCodeAgentTurn(input: CodeAgentTurnTerminalInput): Promise<CodeAgentTurnTerminalResult> {
+    const { claim } = input;
+    if (
+      !claim.ownerId
+      || !Number.isSafeInteger(claim.fence)
+      || claim.fence <= 0
+      || (input.message && (
+        input.message.roomId !== claim.roomId
+        || input.message.turnId !== claim.turnId
+        || (input.message.status !== 'complete' && input.message.status !== 'error')
+        || !input.expectedMessageOwnership
+      ))
+    ) {
+      throw new Error('Invalid atomic code-agent terminal transition');
+    }
+
+    return this.transaction(async client => {
+      const roomLock = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+        [claim.roomId],
+      );
+      if (!roomLock.rows[0] || !await this.lockCodeAgentTurnClaim(client, claim)) {
+        return { outcome: 'stale' as const };
+      }
+
+      let savedMessage: Message | undefined;
+      let actualOutcome = input.outcome;
+      if (input.message && input.expectedMessageOwnership) {
+        const updated = await this.finalizeAIMessageWithClient(
+          client,
+          input.message,
+          input.expectedMessageOwnership,
+        );
+        if (!updated) {
+          actualOutcome = 'cancelled';
+        } else {
+          savedMessage = mapMessage(updated);
+        }
+      }
+
+      const deleteMessageIds = Array.from(new Set(input.deleteMessageIds || []))
+        .filter(messageId => messageId && messageId !== savedMessage?.id);
+      if (deleteMessageIds.length > 0) {
+        await client.query(
+          `DELETE FROM room_messages
+          WHERE room_id = $1
+            AND turn_id = $2
+            AND id = ANY($3::text[])`,
+          [claim.roomId, claim.turnId, deleteMessageIds],
+        );
+      }
+
+      const shouldSettleCost = actualOutcome === 'complete';
+      const roomCostTotal = await this.incrementRoomAICostWithClient(
+        client,
+        claim.roomId,
+        shouldSettleCost ? input.cost : null,
+      );
+      const roomStatus = actualOutcome === 'complete' || actualOutcome === 'cancelled'
+        ? 'idle'
+        : 'error';
+      const room = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET code_agent_status = $2,
+          code_agent_session_id = CASE
+            WHEN $2 = 'idle' AND $3::text IS NOT NULL THEN $3
+            ELSE code_agent_session_id
+          END,
+          last_activity_at = GREATEST(last_activity_at, $4::timestamptz),
+          updated_at = clock_timestamp()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [claim.roomId, roomStatus, input.sessionId || null, input.completedAt],
+      );
+      if (!room.rows[0]) throw new Error(`Code-agent terminal transition lost room ${claim.roomId}`);
+
+      const finalMessageId = actualOutcome === 'cancelled'
+        ? null
+        : (savedMessage?.id || input.finalMessageId || null);
+      const turn = await client.query<RoomAgentTurnRow>(
+        `UPDATE room_agent_turns
+        SET status = $5,
+          completed_at = $6::timestamptz,
+          final_message_id = $7,
+          phase = NULL,
+          phase_message = NULL,
+          last_heartbeat_at = $6::timestamptz,
+          updated_at = $6::timestamptz
+        WHERE id = $1
+          AND room_id = $2
+          AND status = 'running'
+          AND lease_owner = $3
+          AND lease_fence = $4
+        RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
+        [
+          claim.turnId,
+          claim.roomId,
+          claim.ownerId,
+          claim.fence,
+          actualOutcome,
+          input.completedAt,
+          finalMessageId,
+        ],
+      );
+      if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
+
+      await client.query(
+        `DELETE FROM code_agent_room_leases
+        WHERE room_id = $1
+          AND turn_id = $2
+          AND owner_id = $3
+          AND fence = $4`,
+        [claim.roomId, claim.turnId, claim.ownerId, claim.fence],
+      );
+
+      return {
+        outcome: actualOutcome === 'cancelled' ? 'obsolete' as const : 'applied' as const,
+        room: mapRoom(room.rows[0]),
+        turn: mapRoomAgentTurn(turn.rows[0]),
+        ...(savedMessage ? { message: savedMessage } : {}),
+        roomCostTotal,
+      };
+    });
+  }
+
   async upsertRoomAgentTurn(turn: RoomAgentTurn): Promise<RoomAgentTurn | null> {
     try {
       const result = await this.pool.query<RoomAgentTurnRow>(
@@ -2040,7 +2568,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapRoomAgentTurn(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error upserting PostgreSQL room agent turn', { error, roomId: turn.roomId, turnId: turn.id });
-      return null;
+      throw error;
     }
   }
 
@@ -2065,19 +2593,86 @@ export class PostgresStore implements DurableRoomStore {
 
   async failInterruptedRoomAgentTurns(completedAt = new Date().toISOString()): Promise<number> {
     try {
-      const result = await this.pool.query(
-        `UPDATE room_agent_turns AS turn
-        SET status = 'error', completed_at = $1, phase = NULL, phase_message = NULL, last_heartbeat_at = $1, updated_at = $1
-        WHERE turn.status = 'running'
-          AND NOT EXISTS (
-            SELECT 1 FROM code_agent_room_leases AS lease
-            WHERE lease.room_id = turn.room_id
-              AND lease.turn_id = turn.id
-              AND lease.expires_at > $1::timestamptz
-          )`,
-        [completedAt]
-      );
-      return result.rowCount || 0;
+      return await this.transaction(async client => {
+        const candidates = await client.query<{
+          id: string;
+          room_id: string;
+          lease_owner: string | null;
+          lease_fence: number | string | null;
+        }>(
+          `SELECT id, room_id, lease_owner, lease_fence
+          FROM room_agent_turns
+          WHERE status = 'running'
+          ORDER BY room_id, id
+          FOR UPDATE SKIP LOCKED`,
+        );
+        const turnIds: string[] = [];
+        for (const candidate of candidates.rows) {
+          const lease = await client.query<{ live: boolean }>(
+            `SELECT expires_at > $5::timestamptz AS live
+            FROM code_agent_room_leases
+            WHERE room_id = $1
+              AND turn_id = $2
+              AND ($3::text IS NULL OR owner_id = $3)
+              AND ($4::bigint IS NULL OR fence = $4)
+            FOR UPDATE`,
+            [
+              candidate.room_id,
+              candidate.id,
+              candidate.lease_owner,
+              candidate.lease_fence === null ? null : Number(candidate.lease_fence),
+              completedAt,
+            ],
+          );
+          if (lease.rows[0]?.live) continue;
+
+          await client.query(
+            `DELETE FROM code_agent_room_leases
+            WHERE room_id = $1
+              AND turn_id = $2
+              AND ($3::text IS NULL OR owner_id = $3)
+              AND ($4::bigint IS NULL OR fence = $4)`,
+            [
+              candidate.room_id,
+              candidate.id,
+              candidate.lease_owner,
+              candidate.lease_fence === null ? null : Number(candidate.lease_fence),
+            ],
+          );
+          const recovered = await client.query<{ id: string }>(
+            `UPDATE room_agent_turns
+            SET status = 'error',
+              completed_at = $2::timestamptz,
+              phase = NULL,
+              phase_message = NULL,
+              last_heartbeat_at = $2::timestamptz,
+              updated_at = $2::timestamptz
+            WHERE id = $1
+              AND status = 'running'
+            RETURNING id`,
+            [candidate.id, completedAt],
+          );
+          if (recovered.rows[0]) turnIds.push(recovered.rows[0].id);
+        }
+        if (turnIds.length > 0) {
+          await client.query(
+            `UPDATE room_messages
+            SET content = CASE
+                  WHEN btrim(content) = '' THEN 'Response interrupted.'
+                  ELSE content
+                END,
+              status = 'error',
+              is_error = true,
+              ai_stream_owner_id = NULL,
+              updated_at = $2::timestamptz
+            WHERE turn_id = ANY($1::text[])
+              AND message_type = 'ai'
+              AND status = 'streaming'`,
+            [turnIds, completedAt],
+          );
+        }
+        return turnIds.length;
+      });
     } catch (error) {
       this.logger.error('Error recovering interrupted PostgreSQL room agent turns', { error });
       throw error;
@@ -2116,7 +2711,8 @@ export class PostgresStore implements DurableRoomStore {
     turnId: string,
     ownerId: string,
     now: string,
-    ttlMs: number
+    ttlMs: number,
+    fence?: number,
   ): Promise<CodeAgentRoomLease | null> {
     try {
       const result = await this.pool.query<CodeAgentRoomLeaseRow>(
@@ -2124,25 +2720,35 @@ export class PostgresStore implements DurableRoomStore {
         SET expires_at = $4::timestamptz + ($5::bigint * interval '1 millisecond')
         WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3
           AND expires_at > $4::timestamptz
+          AND ($6::bigint IS NULL OR fence = $6)
         RETURNING room_id, turn_id, owner_id, fence, expires_at`,
-        [roomId, turnId, ownerId, now, ttlMs]
+        [roomId, turnId, ownerId, now, ttlMs, fence ?? null]
       );
       return result.rows[0] ? mapCodeAgentRoomLease(result.rows[0]) : null;
     } catch (error) {
-      this.logger.error('Error renewing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
+      this.logger.error('Error renewing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId, fence });
       return null;
     }
   }
 
-  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string): Promise<boolean> {
+  async releaseCodeAgentRoomLease(
+    roomId: string,
+    turnId: string,
+    ownerId: string,
+    fence?: number,
+  ): Promise<boolean> {
     try {
       const result = await this.pool.query(
-        'DELETE FROM code_agent_room_leases WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3',
-        [roomId, turnId, ownerId]
+        `DELETE FROM code_agent_room_leases
+        WHERE room_id = $1
+          AND turn_id = $2
+          AND owner_id = $3
+          AND ($4::bigint IS NULL OR fence = $4)`,
+        [roomId, turnId, ownerId, fence ?? null]
       );
       return (result.rowCount || 0) > 0;
     } catch (error) {
-      this.logger.error('Error releasing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
+      this.logger.error('Error releasing PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId, fence });
       return false;
     }
   }
@@ -4062,6 +4668,63 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async recoverInterruptedCodeAgentRoomStates(now = new Date().toISOString()): Promise<number> {
+    try {
+      return await this.transaction(async client => {
+        const candidates = await client.query<{ id: string }>(
+          `SELECT id
+          FROM rooms
+          WHERE type = 'codeAgent'
+            AND (sandbox_status = 'creating' OR code_agent_status = 'running')
+          ORDER BY id
+          FOR UPDATE SKIP LOCKED`,
+        );
+        let recovered = 0;
+        for (const candidate of candidates.rows) {
+          const lease = await client.query<{ live: boolean }>(
+            `SELECT expires_at > $2::timestamptz AS live
+            FROM code_agent_room_leases
+            WHERE room_id = $1
+            FOR UPDATE`,
+            [candidate.id, now],
+          );
+          if (lease.rows[0]?.live) continue;
+
+          await client.query(
+            `DELETE FROM code_agent_room_leases
+            WHERE room_id = $1
+              AND expires_at <= $2::timestamptz`,
+            [candidate.id, now],
+          );
+          const updated = await client.query(
+            `UPDATE rooms
+            SET sandbox_status = CASE
+                  WHEN sandbox_status = 'creating' THEN 'error'
+                  ELSE sandbox_status
+                END,
+              code_agent_status = CASE
+                  WHEN code_agent_status = 'running' THEN 'error'
+                  ELSE code_agent_status
+                END,
+              sandbox_updated_at = CASE
+                  WHEN sandbox_status = 'creating' THEN $2::timestamptz
+                  ELSE sandbox_updated_at
+                END,
+              updated_at = clock_timestamp()
+            WHERE id = $1
+              AND (sandbox_status = 'creating' OR code_agent_status = 'running')`,
+            [candidate.id, now],
+          );
+          recovered += updated.rowCount || 0;
+        }
+        return recovered;
+      });
+    } catch (error) {
+      this.logger.error('Error atomically recovering interrupted PostgreSQL code-agent room states', { error });
+      throw error;
+    }
+  }
+
   async findDanglingToolCalls(): Promise<Message[]> {
     try {
       const result = await this.pool.query<MessageRow>(
@@ -4192,6 +4855,106 @@ export class PostgresStore implements DurableRoomStore {
     } finally {
       client.release();
     }
+  }
+
+  private async lockCodeAgentTurnClaim(
+    client: PostgresClient,
+    claim: CodeAgentTurnClaim,
+  ): Promise<boolean> {
+    const result = await client.query<{ id: string }>(
+      `SELECT turn.id
+      FROM room_agent_turns AS turn
+      JOIN code_agent_room_leases AS lease
+        ON lease.room_id = turn.room_id
+        AND lease.turn_id = turn.id
+      WHERE turn.id = $1
+        AND turn.room_id = $2
+        AND turn.status = 'running'
+        AND turn.lease_owner = $3
+        AND turn.lease_fence = $4
+        AND lease.owner_id = $3
+        AND lease.fence = $4
+        AND lease.expires_at > clock_timestamp()
+      FOR UPDATE OF turn, lease`,
+      [claim.turnId, claim.roomId, claim.ownerId, claim.fence],
+    );
+    return Boolean(result.rows[0]);
+  }
+
+  private async finalizeAIMessageWithClient(
+    client: PostgresClient,
+    message: Message,
+    expectedOwnership: AIStreamOwnership,
+  ): Promise<MessageRow | null> {
+    const updated = await client.query<MessageRow>(
+      `UPDATE room_messages
+      SET content = $4,
+        timestamp = $5::timestamptz,
+        updated_at = COALESCE($6::timestamptz, $5::timestamptz),
+        status = $7,
+        is_error = $8,
+        ai_model = $9::jsonb,
+        usage = $10::jsonb,
+        cost = $11::jsonb,
+        ui_payload = $12::jsonb,
+        model_step_id = $13,
+        model_step_sequence = $14,
+        ai_stream_owner_id = NULL
+      WHERE id = $1
+        AND room_id = $2
+        AND status = 'streaming'
+        AND ai_stream_owner_id IS NOT DISTINCT FROM $3
+        AND ai_stream_fence = $15
+      RETURNING ${MESSAGE_COLUMNS}`,
+      [
+        message.id,
+        message.roomId,
+        expectedOwnership.ownerId,
+        message.content,
+        message.timestamp,
+        message.updatedAt || null,
+        message.status,
+        message.isError ?? (message.status === 'error'),
+        toJsonb(message.aiModel),
+        toJsonb(message.usage),
+        toJsonb(message.cost),
+        toJsonb(message.uiPayload),
+        message.modelStepId || null,
+        message.modelStepSequence ?? null,
+        expectedOwnership.fence,
+      ],
+    );
+    return updated.rows[0] || null;
+  }
+
+  private async incrementRoomAICostWithClient(
+    client: PostgresClient,
+    roomId: string,
+    cost?: AICost | null,
+  ): Promise<RoomAICostTotal> {
+    const totalUsd = Number.isFinite(cost?.totalUsd) && Number(cost?.totalUsd) > 0
+      ? Number(cost!.totalUsd)
+      : 0;
+    if (totalUsd > 0) {
+      await client.query(
+        `INSERT INTO room_ai_cost_totals (room_id, total_usd, updated_at)
+        VALUES ($1, $2, clock_timestamp())
+        ON CONFLICT (room_id) DO UPDATE SET
+          total_usd = room_ai_cost_totals.total_usd + EXCLUDED.total_usd,
+          updated_at = clock_timestamp()`,
+        [roomId, totalUsd],
+      );
+    }
+    const result = await client.query<{ total_usd: number | string }>(
+      'SELECT total_usd FROM room_ai_cost_totals WHERE room_id = $1',
+      [roomId],
+    );
+    const parsedTotal = Number.parseFloat(String(result.rows[0]?.total_usd || '0'));
+    return {
+      roomId,
+      currency: 'USD',
+      totalUsd: Number.isFinite(parsedTotal) ? parsedTotal : 0,
+    };
   }
 
   private async transaction<T>(work: (client: PostgresClient) => Promise<T>): Promise<T> {

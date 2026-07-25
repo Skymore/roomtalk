@@ -512,7 +512,6 @@ const codeAgentSessionService = new CodeAgentSessionService(
     observability: observabilityRecorder,
     mediaObjectStorage,
     aiStreamOwnerId,
-    aiTerminalPersistReconciler,
   }
 );
 
@@ -582,23 +581,29 @@ const infrastructureReady = (async () => {
     const runRecoveryReconciler = async () => {
       const maintenance = await postgresStore.withMaintenanceLock('roomtalk_recovery_reconciler', async () => {
         const now = new Date().toISOString();
-        const [cleanedPresence, recoveredStreams, recoveredTurns, recoveredSandboxes] = await Promise.all([
+        const queueStaleMs = parsePositiveIntegerEnv('CODE_AGENT_QUEUE_STALE_MS', 2 * 60 * 1000);
+        const staleQueueBefore = new Date(Date.now() - queueStaleMs).toISOString();
+        const [cleanedPresence, recoveredStreams, recoveredTurns, recoveredSandboxes, recoveredQueuedInputs] = await Promise.all([
           store.cleanupExpiredRealtimeInstances?.(runtimeInstanceId) || Promise.resolve(0),
           store.failOrphanedStreamingMessages?.('Response interrupted.') || Promise.resolve(0),
           store.failInterruptedRoomAgentTurns?.(now) || Promise.resolve(0),
           codeAgentSandboxLifecycle.recoverInterruptedSandboxes(),
+          store.recoverStaleCodeAgentQueuedMessages?.(staleQueueBefore, now) || Promise.resolve(0),
         ]);
-        if (cleanedPresence || recoveredStreams || recoveredTurns || recoveredSandboxes) {
+        if (cleanedPresence || recoveredStreams || recoveredTurns || recoveredSandboxes || recoveredQueuedInputs) {
           serverLogger.warn('Recovered expired runtime ownership', {
             cleanedPresence,
             recoveredStreams,
             recoveredTurns,
             recoveredSandboxes,
+            recoveredQueuedInputs,
           });
         }
       });
       if (!maintenance.acquired) {
         serverLogger.debug('Skipped recovery reconciliation because another instance owns maintenance');
+      } else {
+        await codeAgentSessionService.resumeQueuedTurns();
       }
     };
     await runRecoveryReconciler();

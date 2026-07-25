@@ -654,21 +654,317 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       sandboxStatus: 'ready',
     }));
     assert.ok(await store.upsertRoomAgentTurn(runningTurn));
-    assert.ok(await store.acquireCodeAgentRoomLease(
+    const liveLease = await store.acquireCodeAgentRoomLease(
       roomId,
       runningTurn.id,
       'instance-a',
       '2026-07-21T00:00:00.000Z',
       30_000,
-    ));
+    );
+    assert.ok(liveLease);
 
     assert.equal(await store.failInterruptedRoomAgentTurns('2026-07-21T00:00:10.000Z'), 0);
     assert.deepEqual(await store.findInterruptedCodeAgentRooms('2026-07-21T00:00:10.000Z'), []);
+    assert.equal(await store.recoverInterruptedCodeAgentRoomStates('2026-07-21T00:00:10.000Z'), 0);
 
     assert.equal(await store.failInterruptedRoomAgentTurns('2026-07-21T00:00:31.000Z'), 1);
+    assert.equal(await store.renewCodeAgentRoomLease(
+      roomId,
+      runningTurn.id,
+      'instance-a',
+      '2026-07-21T00:00:31.000Z',
+      30_000,
+      liveLease?.fence,
+    ), null);
     assert.deepEqual(
       (await store.findInterruptedCodeAgentRooms('2026-07-21T00:00:31.000Z')).map(room => room.id),
       [roomId],
+    );
+    assert.equal(await store.recoverInterruptedCodeAgentRoomStates('2026-07-21T00:00:31.000Z'), 1);
+    assert.equal((await store.getRoomById(roomId))?.codeAgentStatus, 'error');
+  });
+
+  it('removes an expired room lease before recovering Code Agent room state', async () => {
+    const roomId = 'expired-code-agent-room-state';
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'running',
+      sandboxStatus: 'ready',
+    }));
+    const lease = await store.acquireCodeAgentRoomLease(
+      roomId,
+      'orphaned-turn',
+      'expired-instance',
+      '2026-07-21T00:00:00.000Z',
+      30_000,
+    );
+    assert.ok(lease);
+
+    assert.equal(await store.recoverInterruptedCodeAgentRoomStates('2026-07-21T00:00:31.000Z'), 1);
+    assert.equal((await store.getRoomById(roomId))?.codeAgentStatus, 'error');
+    assert.equal(await store.renewCodeAgentRoomLease(
+      roomId,
+      'orphaned-turn',
+      'expired-instance',
+      '2026-07-21T00:00:31.000Z',
+      30_000,
+      lease?.fence,
+    ), null);
+  });
+
+  it('atomically starts a code-agent turn and rejects every stale-fence write after takeover', async () => {
+    const roomId = 'fenced-code-agent-room';
+    const now = new Date().toISOString();
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+    }));
+    const firstTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', now),
+      id: 'fenced-turn-1',
+      startedAt: now,
+      updatedAt: now,
+    };
+    const firstPlaceholder = withAIStreamRecoveryMetadata(message(roomId, 'fenced-ai-1', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId: firstTurn.id,
+    }), 'stream-owner-1');
+    const first = await store.beginCodeAgentTurn({
+      roomId,
+      turn: firstTurn,
+      placeholder: firstPlaceholder,
+      ownerId: 'instance-1',
+      now,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(first.outcome, 'started');
+    if (first.outcome !== 'started') return;
+    assert.equal((await store.getRoomById(roomId))?.codeAgentStatus, 'running');
+    assert.deepEqual((await store.readMessagesByRoom(roomId)).map(item => item.id), ['fenced-ai-1']);
+    assert.deepEqual((await store.readRoomAgentTurns(roomId)).map(item => item.id), ['fenced-turn-1']);
+
+    await pool.query(
+      `UPDATE code_agent_room_leases
+      SET expires_at = clock_timestamp() - interval '1 second'
+      WHERE room_id = $1`,
+      [roomId],
+    );
+    const secondNow = new Date().toISOString();
+    const secondTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', secondNow),
+      id: 'fenced-turn-2',
+      startedAt: secondNow,
+      updatedAt: secondNow,
+    };
+    const secondPlaceholder = withAIStreamRecoveryMetadata(message(roomId, 'fenced-ai-2', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId: secondTurn.id,
+    }), 'stream-owner-2');
+    const second = await store.beginCodeAgentTurn({
+      roomId,
+      turn: secondTurn,
+      placeholder: secondPlaceholder,
+      ownerId: 'instance-2',
+      now: secondNow,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(second.outcome, 'started');
+    if (second.outcome !== 'started') return;
+
+    const staleClaim = {
+      roomId,
+      turnId: firstTurn.id,
+      ownerId: first.lease.ownerId,
+      fence: first.lease.fence,
+    };
+    assert.deepEqual(
+      await store.appendCodeAgentMessage(message(roomId, 'stale-tool', {
+        messageType: 'tool_call',
+        turnId: firstTurn.id,
+      }), staleClaim),
+      { outcome: 'stale' },
+    );
+    assert.equal(await store.updateCodeAgentTurn({
+      ...firstTurn,
+      phase: 'running',
+      updatedAt: new Date().toISOString(),
+    }, staleClaim), null);
+    assert.deepEqual(await store.finishCodeAgentTurn({
+      claim: staleClaim,
+      outcome: 'complete',
+      completedAt: new Date().toISOString(),
+    }), { outcome: 'stale' });
+    assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'stale-tool'), false);
+  });
+
+  it('rolls back the whole code-agent terminal projection when any terminal write fails', async () => {
+    const roomId = 'atomic-code-agent-terminal-room';
+    const now = new Date().toISOString();
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+    }));
+    const runningTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', now),
+      id: 'atomic-code-agent-turn',
+      startedAt: now,
+      updatedAt: now,
+    };
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, 'atomic-code-agent-ai', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId: runningTurn.id,
+    }), 'atomic-stream-owner');
+    const started = await store.beginCodeAgentTurn({
+      roomId,
+      turn: runningTurn,
+      placeholder,
+      ownerId: 'atomic-instance',
+      now,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(started.outcome, 'started');
+    if (started.outcome !== 'started') return;
+    const claim = {
+      roomId,
+      turnId: runningTurn.id,
+      ownerId: started.lease.ownerId,
+      fence: started.lease.fence,
+    };
+    const completedMessage: Message = {
+      ...placeholder,
+      content: 'durable answer',
+      status: 'complete',
+      timestamp: new Date().toISOString(),
+      cost: {
+        currency: 'USD',
+        inputUsd: 0.25,
+        outputUsd: 0,
+        totalUsd: 0.25,
+        inputPerMillion: 1,
+        outputPerMillion: 1,
+        estimated: false,
+      },
+    };
+
+    await assert.rejects(
+      store.finishCodeAgentTurn({
+        claim,
+        outcome: 'complete',
+        completedAt: new Date().toISOString(),
+        finalMessageId: 'missing-final-message',
+        cost: completedMessage.cost,
+      }),
+      /foreign key|violates/i,
+    );
+    assert.equal((await store.readMessagesByRoom(roomId))[0]?.status, 'streaming');
+    assert.equal((await store.readRoomAgentTurns(roomId))[0]?.status, 'running');
+    assert.equal((await store.getRoomById(roomId))?.codeAgentStatus, 'running');
+    assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0);
+
+    const terminal = await store.finishCodeAgentTurn({
+      claim,
+      outcome: 'complete',
+      completedAt: new Date().toISOString(),
+      message: completedMessage,
+      expectedMessageOwnership: { ownerId: 'atomic-stream-owner', fence: 0 },
+      finalMessageId: completedMessage.id,
+      sessionId: 'codex-session-1',
+      cost: completedMessage.cost,
+    });
+    assert.equal(terminal.outcome, 'applied');
+    if (terminal.outcome !== 'applied') return;
+    assert.equal(terminal.message?.status, 'complete');
+    assert.equal(terminal.turn.status, 'complete');
+    assert.equal(terminal.room.codeAgentStatus, 'idle');
+    assert.equal(terminal.room.codeAgentSessionId, 'codex-session-1');
+    assert.equal(terminal.roomCostTotal.totalUsd, 0.25);
+    assert.deepEqual(await store.finishCodeAgentTurn({
+      claim,
+      outcome: 'complete',
+      completedAt: new Date().toISOString(),
+      cost: completedMessage.cost,
+    }), { outcome: 'stale' });
+    assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.25);
+  });
+
+  it('restores abandoned starting and steering queue states but leaves live turns alone', async () => {
+    const roomId = 'recover-code-agent-queue-room';
+    const liveRoomId = 'live-code-agent-queue-room';
+    const oldTimestamp = '2026-07-20T00:00:00.000Z';
+    for (const id of [roomId, liveRoomId]) {
+      assert.ok(await store.saveRoom({
+        ...room(id),
+        type: 'codeAgent',
+        codeAgentStatus: 'idle',
+      }));
+    }
+    assert.ok(await store.appendMessage(message(roomId, 'abandoned-starting', {
+      codeAgentQueuedInput: {
+        state: 'starting',
+        queuedAt: oldTimestamp,
+        updatedAt: oldTimestamp,
+        selectedModel: assistantTestModel,
+      },
+      updatedAt: oldTimestamp,
+    })));
+    assert.ok(await store.appendMessage(message(roomId, 'abandoned-steering', {
+      codeAgentQueuedInput: {
+        state: 'steering',
+        queuedAt: oldTimestamp,
+        updatedAt: oldTimestamp,
+        selectedModel: assistantTestModel,
+      },
+      updatedAt: oldTimestamp,
+    })));
+    assert.ok(await store.appendMessage(message(liveRoomId, 'live-steering', {
+      codeAgentQueuedInput: {
+        state: 'steering',
+        queuedAt: oldTimestamp,
+        updatedAt: oldTimestamp,
+        selectedModel: assistantTestModel,
+      },
+      updatedAt: oldTimestamp,
+    })));
+    assert.ok(await store.acquireCodeAgentRoomLease(
+      liveRoomId,
+      'live-turn',
+      'live-instance',
+      new Date().toISOString(),
+      60_000,
+    ));
+
+    assert.equal(
+      await store.recoverStaleCodeAgentQueuedMessages(
+        '2026-07-21T00:00:00.000Z',
+        '2026-07-24T00:00:00.000Z',
+      ),
+      2,
+    );
+    const recovered = await store.readMessagesByRoom(roomId);
+    assert.deepEqual(
+      recovered.map(item => item.codeAgentQueuedInput?.state),
+      ['queued', 'queued'],
+    );
+    assert.equal(
+      (await store.readMessagesByRoom(liveRoomId))[0]?.codeAgentQueuedInput?.state,
+      'steering',
     );
   });
 

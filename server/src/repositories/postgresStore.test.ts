@@ -285,7 +285,11 @@ describe('PostgresStore', () => {
   });
 
   it('propagates recovery query failures so maintenance retries instead of reporting no work', async () => {
-    const turnStore = new PostgresStore(new ScriptedPool([{ error: new Error('turn query unavailable') }]), logger as any);
+    const turnStore = new PostgresStore(new ScriptedPool([], new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { error: new Error('turn query unavailable') },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'ROLLBACK') },
+    ])), logger as any);
     const sandboxStore = new PostgresStore(new ScriptedPool([{ error: new Error('sandbox query unavailable') }]), logger as any);
 
     await assert.rejects(turnStore.failInterruptedRoomAgentTurns(), /turn query unavailable/);
@@ -1382,10 +1386,21 @@ describe('PostgresStore', () => {
       last_heartbeat_at: turn.lastHeartbeatAt,
       updated_at: turn.updatedAt,
     };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ id: 'turn-1', room_id: 'room-1', lease_owner: null, lease_fence: null }],
+        assertCall: call => assert.match(call.sql, /FROM room_agent_turns/),
+      },
+      { rows: [], assertCall: call => assert.match(call.sql, /FROM code_agent_room_leases/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM code_agent_room_leases/) },
+      { rows: [{ id: 'turn-1' }], assertCall: call => assert.match(call.sql, /status = 'error'/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /UPDATE room_messages/) },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
     const pool = new ScriptedPool([
       { rows: [row], assertCall: call => assert.match(call.sql, /INSERT INTO room_agent_turns/) },
       { rows: [row], assertCall: call => assert.match(call.sql, /FROM room_agent_turns WHERE room_id/) },
-      { rowCount: 1, assertCall: call => assert.match(call.sql, /status = 'error'/) },
       {
         rows: [{ room_id: 'room-1', turn_id: 'turn-1', owner_id: 'worker-1', fence: '1', expires_at: '2026-05-03T00:01:00.000Z' }],
         assertCall: call => assert.match(call.sql, /INSERT INTO code_agent_room_leases/),
@@ -1396,7 +1411,7 @@ describe('PostgresStore', () => {
         assertCall: call => assert.match(call.sql, /UPDATE code_agent_room_leases/),
       },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM code_agent_room_leases/) },
-    ]);
+    ], client);
     const store = new PostgresStore(pool, logger as any);
 
     assert.deepEqual(await store.upsertRoomAgentTurn(turn), turn);

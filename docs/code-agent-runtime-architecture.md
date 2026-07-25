@@ -3,7 +3,7 @@
 [中文](code-agent-runtime-architecture.zh.md)
 
 Status: Current
-Verified against `master`: 2026-07-20
+Verified against `master`: 2026-07-24
 
 This document describes the current implementation. Earlier files under `docs/` may describe individual phases, spikes, or migration plans; use this file as the concise architecture entry point and use source/tests as the final authority.
 
@@ -102,8 +102,7 @@ sequenceDiagram
   User->>UI: Send prompt, images, mode and run settings
   UI->>RT: ask_ai over authenticated Socket.IO
   RT->>RT: Validate room membership, access, mode and backend
-  RT->>DB: Acquire and renew a fenced room execution lease
-  RT->>DB: Persist prompt and durable running turn
+  RT->>DB: Atomic start: acquire next fence, materialize prompt, create placeholder/turn, mark room running
   RT->>RT: Ensure/resume room sandbox and extend active TTL
   RT->>E2B: Ensure one healthy daemon for the sandbox
   RT->>RT: Issue turn-scoped context/model/publish credentials
@@ -113,17 +112,19 @@ sequenceDiagram
   Model-->>Agent: Stream text, usage and tool decisions
   Agent-->>E2B: Ordered text/tool/model-step events
   E2B-->>RT: JSONL events tagged with turnId
-  RT->>DB: Split AI segments and append tool call/result by server position
-  RT-->>UI: Stream transcript, status, usage and controls
+  RT->>DB: Persist each segment/tool/usage write under the live turn claim
+  RT-->>UI: Broadcast only the accepted durable projection
   Agent-->>E2B: final/error
   E2B-->>RT: final/error then turn_released
-  RT->>DB: Complete turn and save backend session ID
+  RT->>DB: Atomic finish: message + cost + room/session + turn + exact lease release
   RT->>RT: Shorten sandbox to idle TTL and drain queued prompts
 ```
 
 ### Turn controls
 
-Only one agent turn mutates a room workspace at a time. A durable, fenced room lease enforces that invariant across multiple RoomTalk processes; the in-process active-turn map is only a fast local guard. Additional user prompts can be queued, edited, canceled, or promoted into steering input. Queued input stays visibly queued until it is claimed and materialized at the next turn boundary. A running turn supports:
+Only one agent turn mutates a room workspace at a time. A durable PostgreSQL claim `{ roomId, turnId, ownerId, fence }` enforces that invariant across RoomTalk processes; the in-process active-turn map is only a fast local guard. Turn creation is not a chain of best-effort writes. One transaction locks the room, validates any queued input being claimed, increments the room lease fence, materializes the prompt, inserts the assistant placeholder and `room_agent_turn`, and marks the room running. The Socket acknowledgement is sent only after that transaction commits.
+
+Every execution-produced phase, transcript, model-step, steering materialization, and terminal write rechecks the same claim against the unexpired room lease. Losing the lease therefore removes write authority, rather than merely changing an observability field. The winner can take a higher fence; delayed work from an older process cannot append a tool result, overwrite room state, settle cost, or release the winner's lease. Additional user prompts can be queued, edited, canceled, or promoted into steering input. Queued input stays visibly queued until it is claimed and materialized at a turn boundary. A running turn supports:
 
 - `interrupt`: request a clean cancellation and bound the wait for release;
 - `steer`: inject additional guidance into the active agent flow;
@@ -263,16 +264,19 @@ RoomTalk persists:
 
 ### Runtime state
 
-E2B owns the live filesystem, Git worktree, processes, terminals, and preview servers. Redis owns presence, socket sessions, pub/sub, model-gateway counters, caches, and the separate ordinary-chat BullMQ queue; Code Agent turns do not use that queue. The durable store owns the fenced room execution lease. The Node process owns only local active-turn, preview/terminal-session, and daemon-handle maps.
+E2B owns the live filesystem, Git worktree, processes, terminals, and preview servers. Redis owns presence, socket sessions, pub/sub, model-gateway counters, caches, and the separate ordinary-chat BullMQ queue. Code Agent turns deliberately do not use that queue: they are interactive, room-bound sessions attached to one mutable sandbox and daemon, with steer, interrupt, approval, terminal, and preview controls. Their scheduling and ownership unit is the fenced room turn in PostgreSQL. The Node process owns only replaceable local active-turn, preview/terminal-session, and daemon-handle maps.
 
 ### Recovery paths
 
-- Server startup marks orphaned running turns as interrupted/error and resumes durable queued prompts.
-- A stale `creating` sandbox state is converted to error before retry.
+- A singleton periodic recovery pass, not startup alone, locks candidate room/turn rows and marks interrupted work only after rechecking that no matching live fenced lease exists.
+- `starting` or `steering` queue entries abandoned before materialization return to `queued` after `CODE_AGENT_QUEUE_STALE_MS` (two minutes by default), again only without a live room lease. The same pass drains ready queued prompts, so a one-time startup miss does not strand them.
+- A stale `creating` or `running` room/sandbox state is converted to error only under the same locked no-live-lease check.
 - Paused E2B sandboxes auto-resume with memory/files preserved.
 - An incompatible pinned artifact triggers bounded archive export, replacement sandbox creation, import, Git initialization, atomic room swap, and old-sandbox cleanup.
 - Daemon startup removes stale local agent processes; server shutdown stops tracked daemons.
 - Static artifacts remain independent of sandbox lifetime.
+
+Normal completion and failure also converge transactionally. The terminal transaction checks the exact turn claim, conditionally finalizes the still-owned streaming message, removes unused placeholders, settles the applicable turn cost, updates room and backend-session state, marks the turn terminal, and deletes only the matching lease. If any statement fails, PostgreSQL rolls back the whole projection. If the message was deleted or the fence was superseded, the old execution is obsolete and cannot recreate or overwrite state.
 
 The system does not yet claim a general immutable workspace-revision/rollback layer. Git and archive migration protect current workspace continuity, while published artifacts and room transcripts are separately durable.
 
@@ -293,7 +297,7 @@ Server-assigned message positions order canonical history, while the PostgreSQL-
 Changes are tested at the contract boundary where they can fail:
 
 - Python runner tests for Coco/Codex mapping, daemon sequencing, permissions, broker/CLI behavior, controls, and image input.
-- Node tests for protocol parsing, session orchestration, transcript ordering, lifecycle migration, daemon registry, model gateway, socket authorization, workspace access, and static publishing.
+- Node tests for protocol parsing, atomic turn start/rollback, fenced transcript and terminal writes, stale-fence takeover, abandoned queue recovery, terminal projection rollback/idempotency, session orchestration, transcript ordering, lifecycle migration, daemon registry, model gateway, socket authorization, workspace access, and static publishing.
 - Client tests for turn rendering, queue controls, files/diffs/reviews, terminal local echo/input batching, browser tabs, artifacts, and responsive behavior.
 - Playwright for end-to-end room, mobile recovery, multi-client, media, and persistence flows.
 - E2B smoke for the exact pinned artifact, daemon/backend startup, permissions, context, image input, toolchain, and public artifact behavior.
@@ -320,4 +324,4 @@ App-only UI, store, or socket changes do not require an E2B rebuild unless they 
 
 The strongest way to describe this subsystem is:
 
-> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, fenced room execution, durable turns, scoped model/context/publish access, and sandbox lifecycle. Each room gets an isolated E2B execution plane with a reusable daemon that runs Coco, our self-built CLI agent, or Codex app-server through the room owner's connected subscription for authorized members. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while the server preserves event ordering and recovers queued turns, paused sandboxes, stale daemons, and artifact upgrades.
+> I built a shared cloud code-agent room, not a remote shell widget. RoomTalk acts as the control plane for identity, permissions, fenced room execution, durable turns, scoped model/context/publish access, and sandbox lifecycle. A turn starts and finishes through PostgreSQL transactions, and every intermediate write proves the same room-lease fence, so a crashed or superseded process cannot leave half a turn or overwrite its replacement. Each room gets an isolated E2B execution plane with a reusable daemon that runs Coco, our self-built CLI agent, or Codex app-server through the room owner's connected subscription for authorized members. The browser exposes files, Git diffs and review comments, a PTY terminal, dev-server previews, and durable artifacts, while periodic recovery returns abandoned queue claims and recovers only work whose lease has actually expired.

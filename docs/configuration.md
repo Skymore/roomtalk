@@ -40,6 +40,7 @@ The client is a Vite application. Only values safe to expose publicly may use a 
 | `ROOMTALK_INSTANCE_LEASE_TTL_MS` | Redis/PostgreSQL runtime-owner lease duration; default `30000`. Expired owners become eligible for presence/task recovery. |
 | `ROOMTALK_INSTANCE_HEARTBEAT_MS` | Runtime-owner heartbeat interval; default `10000` and clamped below half the lease TTL. |
 | `ROOMTALK_RECOVERY_INTERVAL_MS` | Singleton expired-owner/turn/sandbox reconciliation interval; default `5000`. |
+| `CODE_AGENT_QUEUE_STALE_MS` | Age after which abandoned Code Agent `starting`/`steering` inputs are restored to `queued` when no live room lease exists; default `120000`. |
 | `ROOMTALK_INSTANCE_ID` | Optional explicit per-process identity. It must be unique for every simultaneously running replica; normally leave it unset so RoomTalk derives a unique process identity. |
 | `AI_STREAM_OWNER_ID` | Optional deployment namespace for AI stream owners. The runtime instance identity is still included, so replicas do not share one owner lease. |
 

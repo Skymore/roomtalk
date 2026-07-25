@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { AIStreamOwnership, MessageUpdateResult, RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
+import { AIStreamOwnership, CodeAgentMessageMutationResult, CodeAgentTurnClaim, CodeAgentTurnTerminalResult, MessageUpdateResult, RoomStore } from '../repositories/store';
+import { AICost, AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from './aiHistory';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
@@ -104,7 +104,6 @@ export interface CodeAgentSessionServiceOptions {
   observability?: ObservabilityEventRecorder;
   mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
   aiStreamOwnerId?: string;
-  aiTerminalPersistReconciler?: { enqueue(message: Message, context: { reason: string; expectedOwnership: AIStreamOwnership }): void };
   leaseOwnerId?: string;
   roomLeaseTtlMs?: number;
   now?: () => Date;
@@ -288,20 +287,37 @@ export class CodeAgentSessionService {
     let publicFailureMessage: string | undefined;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let roomLeaseFence: number | undefined;
+    let turnClaim: CodeAgentTurnClaim | undefined;
     let leaseLost = false;
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
     const updateTurn = (patch: Partial<RoomAgentTurn>) => {
       turnUpdateChain = turnUpdateChain.then(async () => {
-        if (!turnRecord) return;
+        if (!turnRecord || !turnClaim) return;
         const now = this.now().toISOString();
-        turnRecord = await this.publishRoomAgentTurn({
+        const nextTurn: RoomAgentTurn = {
           ...turnRecord,
           ...patch,
           updatedAt: patch.updatedAt || now,
-        });
-      }).catch(error => {
+        };
+        if (nextTurn.status !== 'running') {
+          throw new Error('Terminal code-agent turns must use the atomic completion transaction');
+        }
+        const persisted = await this.store.updateCodeAgentTurn?.(nextTurn, turnClaim);
+        if (!persisted) {
+          leaseLost = true;
+          throw new Error('Workspace agent lease was lost before the turn update');
+        }
+        turnRecord = persisted;
+        this.emitter.to(turnRecord.roomId).emit('agent_turn_updated', turnRecord);
+      }).catch(async error => {
         this.logger.error('Failed to update active room agent turn', { error, roomId: input.roomId, turnId });
+        if (leaseLost) {
+          const active = this.activeTurns.get(input.roomId);
+          if (active?.turnId === turnId && active.process) {
+            await this.stopRunnerProcess(active.process, input.roomId);
+          }
+        }
       });
       return turnUpdateChain;
     };
@@ -314,27 +330,6 @@ export class CodeAgentSessionService {
     try {
       aiMessageId = this.createId();
       turnId = this.createId();
-      const roomLease = await this.store.acquireCodeAgentRoomLease?.(
-        input.roomId,
-        turnId,
-        this.leaseOwnerId,
-        this.now().toISOString(),
-        this.roomLeaseTtlMs
-      );
-      if (!roomLease) {
-        return rejectTurn('An agent task is already running in this workspace', { reason: 'room_lease_unavailable' });
-      }
-      roomLeaseFence = roomLease.fence;
-      this.activeTurns.set(input.roomId, {
-        roomId: input.roomId,
-        clientId: input.clientId,
-        turnId,
-        backend: turnBackend,
-        leaseFence: roomLease.fence,
-        interruptedByUser: false,
-        pendingSteerMessageIds: new Set(),
-        pendingControls: new Map(),
-      });
       const placeholderMessage = createAIPlaceholderMessage({
           id: aiMessageId,
           roomId: input.roomId,
@@ -348,38 +343,8 @@ export class CodeAgentSessionService {
         turnId,
         codeAgentMode: turnMode.mode,
       }, this.options.aiStreamOwnerId);
-
-      const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
-      if (!runningRoom) {
-        publicFailureMessage = 'Unable to mark Workspace room as preparing';
-        throw new Error('Unable to mark Workspace room as preparing');
-      }
-      roomMarkedRunning = true;
-      this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
-
-      if (input.promptMessageId && input.promptMessage?.codeAgentQueuedInput?.state === 'starting') {
-        const materialized = await this.store.materializeCodeAgentQueuedMessage?.(
-          input.roomId,
-          input.promptMessageId,
-          'starting',
-          turnId,
-          this.now().toISOString()
-        );
-        if (!materialized?.found || !materialized.updatedMessage) {
-          publicFailureMessage = 'Queued agent input changed before the turn started';
-          throw new Error(publicFailureMessage);
-        }
-        this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
-      }
-
-      const placeholderRoom = await this.store.upsertMessage(aiMessage);
-      if (!placeholderRoom) {
-        publicFailureMessage = 'Unable to start a durable agent response';
-        throw new Error('Unable to start a durable agent response');
-      }
-      this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
       const turnStartedAt = new Date(turnStartedAtMs).toISOString();
-      turnRecord = await this.publishRoomAgentTurn({
+      const initialTurn: RoomAgentTurn = {
         id: turnId,
         roomId: input.roomId,
         status: 'running',
@@ -390,10 +355,56 @@ export class CodeAgentSessionService {
         assistantName: this.displayBackendName(turnBackend),
         lastHeartbeatAt: turnStartedAt,
         updatedAt: turnStartedAt,
+      };
+      if (!this.store.beginCodeAgentTurn) {
+        throw new Error('Atomic code-agent turn storage is unavailable');
+      }
+      publicFailureMessage = 'Unable to start a durable agent response';
+      const started = await this.store.beginCodeAgentTurn({
+        roomId: input.roomId,
+        turn: initialTurn,
+        placeholder: aiMessage,
+        ownerId: this.leaseOwnerId,
+        now: turnStartedAt,
+        leaseTtlMs: this.roomLeaseTtlMs,
+        ...(input.promptMessageId && input.promptMessage?.codeAgentQueuedInput?.state === 'starting'
+          ? { queuedMessageId: input.promptMessageId }
+          : {}),
       });
+      if (started.outcome !== 'started') {
+        if (started.outcome === 'busy') {
+          return rejectTurn('An agent task is already running in this workspace', { reason: 'room_lease_unavailable' });
+        }
+        publicFailureMessage = started.outcome === 'queue_conflict'
+          ? 'Queued agent input changed before the turn started'
+          : 'Workspace room no longer exists';
+        throw new Error(publicFailureMessage);
+      }
+      publicFailureMessage = undefined;
+      roomLeaseFence = started.lease.fence;
+      turnClaim = {
+        roomId: input.roomId,
+        turnId,
+        ownerId: this.leaseOwnerId,
+        fence: started.lease.fence,
+      };
+      turnRecord = started.turn;
+      aiMessage = started.placeholder;
+      roomMarkedRunning = true;
       placeholderAnnounced = true;
+      this.activeTurns.set(input.roomId, {
+        roomId: input.roomId,
+        clientId: input.clientId,
+        turnId,
+        backend: turnBackend,
+        leaseFence: started.lease.fence,
+        interruptedByUser: false,
+        pendingSteerMessageIds: new Set(),
+        pendingControls: new Map(),
+      });
+      this.emitter.to(started.room.creatorId).emit('room_updated', started.room);
+      this.emitter.to(started.turn.roomId).emit('agent_turn_updated', started.turn);
       heartbeatTimer = setInterval(() => {
-        void updateTurn({ lastHeartbeatAt: this.now().toISOString() });
         leaseRenewalChain = leaseRenewalChain.then(async () => {
           if (leaseLost) return;
           const renewed = await this.store.renewCodeAgentRoomLease?.(
@@ -401,9 +412,13 @@ export class CodeAgentSessionService {
             turnId,
             this.leaseOwnerId,
             this.now().toISOString(),
-            this.roomLeaseTtlMs
+            this.roomLeaseTtlMs,
+            roomLeaseFence,
           );
-          if (renewed) return;
+          if (renewed && renewed.fence === roomLeaseFence) {
+            await updateTurn({ lastHeartbeatAt: this.now().toISOString() });
+            return;
+          }
           leaseLost = true;
           publicFailureMessage = 'Workspace agent lease was lost';
           this.logger.error('Code-agent room lease was lost during an active turn', {
@@ -591,7 +606,8 @@ export class CodeAgentSessionService {
           } else if (event.type === 'tool_result' && event.name === 'approval_request') {
             await updatePhase('running', 'Agent is working');
           }
-          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
+          if (!turnClaim) throw new Error('Code-agent turn claim is unavailable');
+          await this.handleRunnerEvent(event, input.roomId, turnId, turnClaim, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
       const runResult = await this.runRunnerWithConnections({
@@ -618,14 +634,15 @@ export class CodeAgentSessionService {
       await this.flushInterruptedToolCalls(
         input.roomId,
         turnId,
+        turnClaim!,
         streamState,
         new Error('agent turn ended before tool completion'),
-        aiMessage,
+        aiMessage!,
         turnBackend
       );
 
       if (turnBackend !== 'code-agent' && streamState.needsNewSegment) {
-        await this.sealCurrentSegment(input.roomId, aiMessage, streamState);
+        await this.sealCurrentSegment(input.roomId, turnClaim!, aiMessage!, streamState);
       }
 
       const answer = streamState.segmentContent || streamState.fullContent;
@@ -649,7 +666,6 @@ export class CodeAgentSessionService {
       const finalActiveId = streamState.activeMessageId;
       const hasVisibleText = streamState.nonEmptySegmentIds.size > 0;
       let finalMessage: Message | null = null;
-      let finalRoom: Room | null = null;
       if (hasVisibleText) {
         if (turnBackend === 'code-agent') {
           finalMessage = streamState.completedAIMessageById.get(finalActiveId) || null;
@@ -658,7 +674,7 @@ export class CodeAgentSessionService {
           }
         } else {
           finalMessage = {
-            ...aiMessage,
+            ...aiMessage!,
             id: finalActiveId,
             content: answer,
             status: 'complete',
@@ -667,59 +683,61 @@ export class CodeAgentSessionService {
             usage: completionMetadata.usage,
             cost: completionMetadata.cost,
           };
-          const finalResult = await this.store.finalizeAIMessage(finalMessage, this.aiStreamOwnership(finalMessage));
-          if (finalResult.outcome === 'obsolete') {
-            throw new Error('Agent response was superseded before completion');
-          }
-          finalRoom = finalResult.room;
-          if (!finalRoom) {
-            throw new Error('Unable to save the completed agent response');
-          }
-        }
-      } else {
-        const deleteResult = await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
-          this.logger.warn('Failed to clean up empty code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
-          return null;
-        });
-        if (deleteResult) {
         }
       }
 
-      // Clean up unused initial placeholder if streaming moved to a new segment
+      const deleteMessageIds: string[] = [];
+      if (!hasVisibleText) {
+        deleteMessageIds.push(aiMessageId);
+      }
       if (hasVisibleText && finalActiveId !== aiMessageId) {
         const firstSegmentUsed = streamState.nonEmptySegmentIds.has(aiMessageId);
         if (!firstSegmentUsed) {
-          await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
-            this.logger.warn('Failed to clean up unused code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
-          });
+          deleteMessageIds.push(aiMessageId);
         }
       }
 
-      const roomCostTotal = turnBackend === 'code-agent'
-        ? streamState.roomCostTotal || await this.store.readRoomAICost(input.roomId)
-        : await this.store.incrementRoomAICost(input.roomId, turnCost || null);
-
       await updatePhase('completing', 'Saving the result');
-
-      const idleRoom = await this.patchRoom(input.roomId, {
-        codeAgentStatus: 'idle',
-        codeAgentSessionId: runResult.finalEvent.sessionId,
+      if (!turnClaim || !this.store.finishCodeAgentTurn) {
+        throw new Error('Atomic code-agent completion is unavailable');
+      }
+      const turnCompletedAt = this.now().toISOString();
+      const terminal = await this.store.finishCodeAgentTurn({
+        claim: turnClaim,
+        outcome: 'complete',
+        completedAt: turnCompletedAt,
+        ...(finalMessage && turnBackend !== 'code-agent'
+          ? {
+              message: finalMessage,
+              expectedMessageOwnership: this.aiStreamOwnership(finalMessage),
+            }
+          : {}),
+        ...(finalMessage ? { finalMessageId: finalMessage.id } : {}),
+        ...(deleteMessageIds.length > 0 ? { deleteMessageIds } : {}),
+        sessionId: runResult.finalEvent.sessionId,
+        cost: turnBackend === 'code-agent' ? null : (turnCost || null),
       });
+      if (terminal.outcome === 'stale') {
+        leaseLost = true;
+        throw new Error('Workspace agent lease was lost before completion');
+      }
+      if (terminal.outcome === 'obsolete') {
+        await this.recordTurnEvent('warn', 'code_agent.turn.superseded', input, turnId, turnStartedAtMs, {
+          payload: { backend: turnBackend, messageId: finalActiveId },
+        });
+        return {
+          success: false,
+          messageId: aiMessageId,
+          error: 'Agent response was superseded before completion',
+        };
+      }
+      turnRecord = terminal.turn;
+      finalMessage = terminal.message || finalMessage;
+      const roomCostTotal = terminal.roomCostTotal;
+      this.emitter.to(turnRecord.roomId).emit('agent_turn_updated', turnRecord);
       if (runnerProcess) {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
         runnerProcess = null;
-      }
-      const turnCompletedAt = this.now().toISOString();
-      if (turnRecord) {
-        await updateTurn({
-          status: 'complete',
-          phase: undefined,
-          phaseMessage: undefined,
-          completedAt: turnCompletedAt,
-          finalMessageId: finalMessage?.id || streamState.lastMessageId,
-          lastHeartbeatAt: turnCompletedAt,
-          updatedAt: turnCompletedAt,
-        });
       }
       if (finalMessage) {
         this.emitter.to(input.roomId).emit('ai_stream_end', {
@@ -733,10 +751,7 @@ export class CodeAgentSessionService {
         });
       }
       this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
-      const roomForUpdate = idleRoom || finalRoom;
-      if (roomForUpdate) {
-        this.emitter.to(roomForUpdate.creatorId).emit('room_updated', roomForUpdate);
-      }
+      this.emitter.to(terminal.room.creatorId).emit('room_updated', terminal.room);
       await this.recordTurnEvent('info', 'code_agent.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
         provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
@@ -777,27 +792,62 @@ export class CodeAgentSessionService {
       });
       if (placeholderAnnounced && aiMessage) {
         if (streamState) {
-          await this.flushInterruptedToolCalls(input.roomId, turnId, streamState, reportedError, aiMessage, turnBackend);
+          await this.flushInterruptedToolCalls(input.roomId, turnId, turnClaim!, streamState, reportedError, aiMessage, turnBackend)
+            .catch(flushError => {
+              this.logger.warn('Unable to persist every interrupted tool result', {
+                error: flushError,
+                roomId: input.roomId,
+                turnId,
+              });
+            });
         }
-        const errorTargetMessage = streamState?.completedAIMessageById.get(errorTargetId) || { ...aiMessage, id: errorTargetId };
-        await this.saveCodeAgentError(input.roomId, errorTargetMessage, reportedError, turnBackend);
-        if (turnRecord) {
-          const turnCompletedAt = this.now().toISOString();
-          await updateTurn({
-            status: 'error',
-            phase: undefined,
-            phaseMessage: undefined,
-            completedAt: turnCompletedAt,
-            finalMessageId: errorTargetId,
-            lastHeartbeatAt: turnCompletedAt,
-            updatedAt: turnCompletedAt,
+        const alreadyCompleted = streamState?.completedAIMessageById.get(errorTargetId);
+        const content = reportedError instanceof Error ? reportedError.message : 'Agent task failed';
+        const errorMessage: Message | undefined = alreadyCompleted
+          ? undefined
+          : {
+              ...aiMessage,
+              id: errorTargetId,
+              content,
+              status: 'error',
+              timestamp: this.now().toISOString(),
+            };
+        let terminal: CodeAgentTurnTerminalResult = { outcome: 'stale' };
+        if (turnClaim && turnRecord && this.store.finishCodeAgentTurn) {
+          terminal = await this.store.finishCodeAgentTurn({
+            claim: turnClaim,
+            outcome: 'error',
+            completedAt: this.now().toISOString(),
+            finalMessageId: alreadyCompleted?.id || errorMessage?.id,
+            ...(errorMessage
+              ? {
+                  message: errorMessage,
+                  expectedMessageOwnership: this.aiStreamOwnership(errorMessage),
+                }
+              : {}),
+          }).catch(saveError => {
+            this.logger.error('Failed to persist atomic code-agent error state', {
+              error: saveError,
+              roomId: input.roomId,
+              turnId,
+              messageId: errorTargetId,
+            });
+            return { outcome: 'stale' as const };
           });
         }
-      } else if (roomMarkedRunning) {
-        const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
-        if (errorRoom) {
-          this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
+        const persistedMessage = terminal.outcome === 'applied' ? terminal.message : undefined;
+        if (terminal.outcome !== 'stale') {
+          turnRecord = terminal.turn;
+          this.emitter.to(turnRecord.roomId).emit('agent_turn_updated', turnRecord);
+          this.emitter.to(terminal.room.creatorId).emit('room_updated', terminal.room);
         }
+        this.emitter.to(input.roomId).emit('ai_stream_error', {
+          messageId: errorTargetId,
+          error: content,
+          roomId: input.roomId,
+          persisted: Boolean(persistedMessage),
+          ...(persistedMessage ? { message: stripAIStreamRecoveryMetadata(persistedMessage) } : {}),
+        });
       }
       if (!callbackSent) {
         ack({ success: false, error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed` });
@@ -830,7 +880,7 @@ export class CodeAgentSessionService {
         this.activeTurns.delete(input.roomId);
       }
       if (roomLeaseFence !== undefined) {
-        await this.store.releaseCodeAgentRoomLease?.(input.roomId, turnId, this.leaseOwnerId);
+        await this.store.releaseCodeAgentRoomLease?.(input.roomId, turnId, this.leaseOwnerId, roomLeaseFence);
       }
       if (shouldDrainQueue) {
         this.scheduleQueuedTurn(input.roomId);
@@ -1880,6 +1930,7 @@ export class CodeAgentSessionService {
     event: CodeAgentRunnerEvent,
     roomId: string,
     turnId: string,
+    claim: CodeAgentTurnClaim,
     baseAIMessage: Message,
     selectedModel: AIModelOption,
     state: CodeAgentTurnStreamState,
@@ -1908,11 +1959,11 @@ export class CodeAgentSessionService {
       if (active?.turnId !== turnId || event.turnId !== turnId || !active.pendingSteerMessageIds.has(event.messageId)) {
         return;
       }
-      const materialized = await this.store.materializeCodeAgentQueuedMessage?.(
+      const materialized = await this.store.materializeCodeAgentQueuedMessageForTurn?.(
         roomId,
         event.messageId,
         'steering',
-        turnId,
+        claim,
         this.now().toISOString()
       );
       if (!materialized?.found || !materialized.updatedMessage) {
@@ -1935,11 +1986,11 @@ export class CodeAgentSessionService {
       if (backend !== 'code-agent') {
         throw new Error(`Unexpected model_step event from ${backend}`);
       }
-      await this.handleCocoModelStep(event, roomId, turnId, baseAIMessage, selectedModel, state);
+      await this.handleCocoModelStep(event, roomId, turnId, claim, baseAIMessage, selectedModel, state);
       return;
     }
     if (event.type === 'error') {
-      await this.flushInterruptedToolCalls(roomId, turnId, state, event.message, baseAIMessage, backend);
+      await this.flushInterruptedToolCalls(roomId, turnId, claim, state, event.message, baseAIMessage, backend);
     }
     const mapped = mapCodeAgentRunnerEvent(event, {
       roomId,
@@ -1951,7 +2002,7 @@ export class CodeAgentSessionService {
 
     if (mapped.kind === 'ai_delta') {
       if (state.needsNewSegment) {
-        await this.sealCurrentSegment(roomId, baseAIMessage, state);
+        await this.sealCurrentSegment(roomId, claim, baseAIMessage, state);
         const newId = this.createId();
         const segmentMessage: Message = {
           ...baseAIMessage,
@@ -1961,11 +2012,11 @@ export class CodeAgentSessionService {
           timestamp: this.now().toISOString(),
           aiModel: this.messageAIModelForBackend(backend, selectedModel, codexRunSettings),
         };
-        const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
-        if (!segmentRoom) {
+        const segmentResult = await this.appendFencedCodeAgentMessage(segmentMessage, claim);
+        if (segmentResult.outcome !== 'applied') {
           throw new Error('Unable to create new AI segment message');
         }
-        this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
+        this.emitter.to(segmentResult.room.creatorId).emit('room_updated', segmentResult.room);
         state.activeMessageId = newId;
         state.lastMessageId = newId;
         state.segmentContent = '';
@@ -2011,8 +2062,25 @@ export class CodeAgentSessionService {
         }
       }
 
-      const updatedRoom = await this.store.appendMessageWithAtomicPosition(mapped.message);
-      if (!updatedRoom) {
+      let stepCost: AICost | null | undefined;
+      if (event.type === 'tool_call' && backend === 'code-agent') {
+        const stepId = state.modelStepIdByToolCallId.get(event.id)!;
+        const step = state.modelSteps.get(stepId)!;
+        if (step.anchorMessageId === mapped.message.id) {
+          stepCost = step.cost;
+        }
+      }
+      const appendResult = await this.appendFencedCodeAgentMessage(mapped.message, claim, stepCost)
+        .catch(error => {
+          this.logger.error('Unable to persist code-agent runner message', {
+            error,
+            roomId,
+            turnId,
+            messageType: mapped.message.messageType,
+          });
+          throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
+        });
+      if (appendResult.outcome !== 'applied') {
         throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
       }
       if (event.type === 'tool_call') {
@@ -2021,14 +2089,16 @@ export class CodeAgentSessionService {
           const stepId = state.modelStepIdByToolCallId.get(event.id)!;
           const step = state.modelSteps.get(stepId)!;
           if (step.anchorMessageId === mapped.message.id) {
-            await this.commitCocoModelStepCost(roomId, state, step);
+            step.costCommitted = true;
+            state.roomCostTotal = appendResult.roomCostTotal;
+            this.emitter.to(roomId).emit('ai_cost_total', appendResult.roomCostTotal);
           }
         }
       } else if (event.type === 'tool_result') {
         state.pendingToolCalls.delete(event.id);
       }
       state.lastMessageId = mapped.message.id;
-      this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
     }
   }
 
@@ -2036,6 +2106,7 @@ export class CodeAgentSessionService {
     event: CodeAgentRunnerModelStepEvent,
     roomId: string,
     turnId: string,
+    claim: CodeAgentTurnClaim,
     baseAIMessage: Message,
     selectedModel: AIModelOption,
     state: CodeAgentTurnStreamState
@@ -2058,7 +2129,12 @@ export class CodeAgentSessionService {
       }
     }
 
-    const step = {
+    const step: CocoModelStepCostRecord & {
+      hasText: boolean;
+      toolCallIds: string[];
+      aiModel: Message['aiModel'];
+      costCommitted?: boolean;
+    } = {
       ...buildCocoModelStepCost(event, selectedModel),
       hasText: event.hasText,
       toolCallIds: [...event.toolCallIds],
@@ -2085,8 +2161,12 @@ export class CodeAgentSessionService {
         usage: step.usage,
         cost: step.cost,
       };
-      const completedResult = await this.store.finalizeAIMessage(completedMessage, this.aiStreamOwnership(completedMessage));
-      if (completedResult.outcome === 'obsolete') {
+      const completedResult = await this.finalizeFencedCodeAgentMessage(
+        completedMessage,
+        claim,
+        step.cost,
+      );
+      if (completedResult.outcome !== 'applied') {
         throw new Error(`Coco model-step message was superseded: ${event.stepId}`);
       }
       const updatedRoom = completedResult.room;
@@ -2096,7 +2176,9 @@ export class CodeAgentSessionService {
       step.anchorMessageId = completedMessage.id;
       state.completedAIMessageById.set(completedMessage.id, completedMessage);
       state.segmentHasUnsealedText = false;
-      await this.commitCocoModelStepCost(roomId, state, step);
+      step.costCommitted = true;
+      state.roomCostTotal = completedResult.roomCostTotal;
+      this.emitter.to(roomId).emit('ai_cost_total', completedResult.roomCostTotal);
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     } else if (event.toolCallIds.length === 0) {
       throw new Error(`Coco model step has no text or tool calls: ${event.stepId}`);
@@ -2104,21 +2186,10 @@ export class CodeAgentSessionService {
     state.needsNewSegment = true;
   }
 
-  private async commitCocoModelStepCost(
-    roomId: string,
-    state: CodeAgentTurnStreamState,
-    step: CocoModelStepCostRecord & { costCommitted?: boolean }
-  ) {
-    if (step.costCommitted) return;
-    const roomCostTotal = await this.store.incrementRoomAICost(roomId, step.cost);
-    step.costCommitted = true;
-    state.roomCostTotal = roomCostTotal;
-    this.emitter.to(roomId).emit('ai_cost_total', roomCostTotal);
-  }
-
   private async flushInterruptedToolCalls(
     roomId: string,
     turnId: string,
+    claim: CodeAgentTurnClaim,
     state: CodeAgentTurnStreamState,
     error: unknown,
     baseAIMessage: Message,
@@ -2151,12 +2222,12 @@ export class CodeAgentSessionService {
         isError: true,
         codeAgentMode: baseAIMessage.codeAgentMode,
       };
-      const updatedRoom = await this.store.appendMessageWithAtomicPosition(message).catch(err => {
+      const appendResult = await this.appendFencedCodeAgentMessage(message, claim).catch(err => {
         this.logger.warn('Failed to persist interrupted tool result', { error: err, roomId, turnId, toolCallId });
-        return null;
+        return { outcome: 'stale' as const };
       });
-      if (updatedRoom) {
-        this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      if (appendResult.outcome === 'applied') {
+        this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
       }
       await this.recordObservabilityEvent({
         level: 'warn',
@@ -2176,14 +2247,13 @@ export class CodeAgentSessionService {
     }
   }
 
-  private async sealCurrentSegment(roomId: string, baseAIMessage: Message, state: CodeAgentTurnStreamState) {
+  private async sealCurrentSegment(
+    roomId: string,
+    claim: CodeAgentTurnClaim,
+    baseAIMessage: Message,
+    state: CodeAgentTurnStreamState,
+  ) {
     if (!state.segmentHasUnsealedText || !state.segmentContent.trim()) return;
-
-    this.emitter.to(roomId).emit('ai_stream_end', {
-      messageId: state.activeMessageId,
-      roomId,
-      content: state.segmentContent,
-    });
 
     const sealedMessage: Message = {
       ...baseAIMessage,
@@ -2192,10 +2262,43 @@ export class CodeAgentSessionService {
       status: 'complete',
       timestamp: this.now().toISOString(),
     };
-    await this.store.finalizeAIMessage(sealedMessage, this.aiStreamOwnership(sealedMessage)).catch(err => {
-      this.logger.warn('Failed to seal AI segment', { error: err, roomId, messageId: state.activeMessageId });
+    const result = await this.finalizeFencedCodeAgentMessage(sealedMessage, claim);
+    if (result.outcome !== 'applied') {
+      throw new Error(`Unable to seal AI segment ${state.activeMessageId}`);
+    }
+    this.emitter.to(roomId).emit('ai_stream_end', {
+      messageId: state.activeMessageId,
+      roomId,
+      content: state.segmentContent,
     });
     state.segmentHasUnsealedText = false;
+  }
+
+  private async appendFencedCodeAgentMessage(
+    message: Message,
+    claim: CodeAgentTurnClaim,
+    cost?: AICost | null,
+  ): Promise<CodeAgentMessageMutationResult> {
+    if (!this.store.appendCodeAgentMessage) {
+      throw new Error('Fenced code-agent message storage is unavailable');
+    }
+    return this.store.appendCodeAgentMessage(message, claim, cost);
+  }
+
+  private async finalizeFencedCodeAgentMessage(
+    message: Message,
+    claim: CodeAgentTurnClaim,
+    cost?: AICost | null,
+  ): Promise<CodeAgentMessageMutationResult> {
+    if (!this.store.finalizeCodeAgentMessage) {
+      throw new Error('Fenced code-agent message finalization is unavailable');
+    }
+    return this.store.finalizeCodeAgentMessage(
+      message,
+      this.aiStreamOwnership(message),
+      claim,
+      cost,
+    );
   }
 
   private async requeuePendingSteers(active: ActiveCodeAgentTurn) {
@@ -2229,59 +2332,6 @@ export class CodeAgentSessionService {
       ownerId: this.options.aiStreamOwnerId || null,
       fence: getAIStreamFence(message),
     };
-  }
-
-  private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
-    const content = error instanceof Error ? error.message : 'Agent task failed';
-    const errorMessage: Message = {
-      ...aiMessage,
-      content,
-      status: 'error',
-      timestamp: this.now().toISOString(),
-    };
-    const ownership = this.aiStreamOwnership(errorMessage);
-    let deferred = false;
-    const terminalResult = await this.store.finalizeAIMessage(errorMessage, ownership).catch(saveError => {
-      deferred = true;
-      this.logger.error('Failed to persist code-agent AI error state', { error: saveError, roomId, messageId: aiMessage.id });
-      return null;
-    });
-    const updatedRoom = terminalResult?.outcome === 'applied' ? terminalResult.room : null;
-    if (deferred) {
-      this.options.aiTerminalPersistReconciler?.enqueue(errorMessage, {
-        reason: 'code-agent-terminal-error',
-        expectedOwnership: ownership,
-      });
-    }
-    const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
-    if (errorRoom) {
-      this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
-    }
-    this.emitter.to(roomId).emit('ai_stream_error', {
-      messageId: aiMessage.id,
-      error: content,
-      roomId,
-      persisted: Boolean(updatedRoom),
-      ...(updatedRoom ? { message: stripAIStreamRecoveryMetadata(errorMessage) } : {}),
-    });
-  }
-
-  private async patchRoom(roomId: string, patch: Partial<Room>) {
-    const currentRoom = await this.store.getRoomById(roomId);
-    if (!currentRoom) {
-      return null;
-    }
-    return this.store.saveRoom({ ...currentRoom, ...patch });
-  }
-
-  private async publishRoomAgentTurn(turn: RoomAgentTurn): Promise<RoomAgentTurn> {
-    const persisted = await this.store.upsertRoomAgentTurn?.(turn).catch(error => {
-      this.logger.error('Failed to persist room agent turn', { error, roomId: turn.roomId, turnId: turn.id, status: turn.status });
-      return null;
-    });
-    const published = persisted || turn;
-    this.emitter.to(turn.roomId).emit('agent_turn_updated', published);
-    return published;
   }
 
   private rejectPendingControls(active: ActiveCodeAgentTurn | undefined, error: string) {

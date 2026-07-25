@@ -128,12 +128,13 @@ class MemoryCodeAgentStore {
     return lease;
   }
 
-  async renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
+  async renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number) {
     const current = this.roomLeases.get(roomId);
     if (
       !current ||
       current.turnId !== turnId ||
       current.ownerId !== ownerId ||
+      (fence !== undefined && current.fence !== fence) ||
       Date.parse(current.expiresAt) <= Date.parse(now)
     ) {
       return null;
@@ -143,9 +144,9 @@ class MemoryCodeAgentStore {
     return renewed;
   }
 
-  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string) {
+  async releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, fence?: number) {
     const current = this.roomLeases.get(roomId);
-    if (!current || current.turnId !== turnId || current.ownerId !== ownerId) {
+    if (!current || current.turnId !== turnId || current.ownerId !== ownerId || (fence !== undefined && current.fence !== fence)) {
       return false;
     }
     this.roomLeases.delete(roomId);
@@ -168,6 +169,153 @@ class MemoryCodeAgentStore {
     }
     this.messages.set(message.roomId, messages);
     return { ...room, lastActivityAt: message.timestamp };
+  }
+
+  private hasTurnClaim(claim: { roomId: string; turnId: string; ownerId: string; fence: number }) {
+    const lease = this.roomLeases.get(claim.roomId);
+    const turn = this.agentTurns.get(claim.turnId);
+    return Boolean(
+      lease
+      && turn?.status === 'running'
+      && lease.turnId === claim.turnId
+      && lease.ownerId === claim.ownerId
+      && lease.fence === claim.fence,
+    );
+  }
+
+  async beginCodeAgentTurn(input: any) {
+    if (this.upsertFailures > 0) {
+      this.upsertFailures--;
+      throw new Error('placeholder unavailable');
+    }
+    const room = this.rooms.get(input.roomId);
+    if (!room) return { outcome: 'missing_room' as const };
+    const existingLease = this.roomLeases.get(input.roomId);
+    if (existingLease && Date.parse(existingLease.expiresAt) > Date.parse(input.now)) {
+      return { outcome: 'busy' as const };
+    }
+    let materializedPrompt: Message | undefined;
+    if (input.queuedMessageId) {
+      const messages = this.messages.get(input.roomId) || [];
+      const queued = messages.find(message => (
+        message.id === input.queuedMessageId
+        && message.codeAgentQueuedInput?.state === 'starting'
+      ));
+      if (!queued) return { outcome: 'queue_conflict' as const };
+      queued.turnId = input.turn.id;
+      queued.timestamp = input.now;
+      queued.updatedAt = input.now;
+      queued.codeAgentQueuedInput = undefined;
+      materializedPrompt = { ...queued };
+    }
+    const lease = await this.acquireCodeAgentRoomLease(
+      input.roomId,
+      input.turn.id,
+      input.ownerId,
+      input.now,
+      input.leaseTtlMs,
+    );
+    if (!lease) return { outcome: 'busy' as const };
+    this.agentTurns.set(input.turn.id, input.turn);
+    const placeholder = input.placeholder as Message;
+    this.messages.set(input.roomId, [...(this.messages.get(input.roomId) || []), placeholder]);
+    const updatedRoom = {
+      ...room,
+      codeAgentStatus: 'running' as const,
+      lastActivityAt: input.now,
+    };
+    this.rooms.set(input.roomId, updatedRoom);
+    return {
+      outcome: 'started' as const,
+      room: updatedRoom,
+      turn: input.turn,
+      placeholder,
+      lease,
+      ...(materializedPrompt ? { materializedPrompt } : {}),
+    };
+  }
+
+  async updateCodeAgentTurn(turn: RoomAgentTurn, claim: any) {
+    if (!this.hasTurnClaim(claim)) return null;
+    this.agentTurns.set(turn.id, turn);
+    return turn;
+  }
+
+  async appendCodeAgentMessage(message: Message, claim: any, cost?: any) {
+    if (!this.hasTurnClaim(claim)) return { outcome: 'stale' as const };
+    const updatedRoom = await this.appendMessageWithAtomicPosition(message);
+    if (!updatedRoom) throw new Error('append unavailable');
+    const roomCostTotal = await this.incrementRoomAICost(message.roomId, cost);
+    return {
+      outcome: 'applied' as const,
+      room: updatedRoom,
+      message,
+      roomCostTotal,
+    };
+  }
+
+  async finalizeCodeAgentMessage(message: Message, expectedOwnership: any, claim: any, cost?: any) {
+    if (!this.hasTurnClaim(claim)) return { outcome: 'stale' as const };
+    const result = await this.finalizeAIMessage(message, expectedOwnership);
+    if (result.outcome !== 'applied') return result;
+    const roomCostTotal = await this.incrementRoomAICost(message.roomId, cost);
+    return { ...result, roomCostTotal };
+  }
+
+  async finishCodeAgentTurn(input: any) {
+    if (!this.hasTurnClaim(input.claim)) return { outcome: 'stale' as const };
+    let message: Message | undefined;
+    let actualOutcome = input.outcome;
+    if (input.message) {
+      const result = await this.finalizeAIMessage(input.message, input.expectedMessageOwnership);
+      if (result.outcome !== 'applied') {
+        actualOutcome = 'cancelled';
+      } else {
+        message = result.message;
+      }
+    }
+    const messages = this.messages.get(input.claim.roomId) || [];
+    const deleteIds = new Set(input.deleteMessageIds || []);
+    this.messages.set(
+      input.claim.roomId,
+      messages.filter(item => !deleteIds.has(item.id) || item.id === message?.id),
+    );
+    if (actualOutcome === 'complete') {
+      await this.incrementRoomAICost(input.claim.roomId, input.cost);
+    }
+    const room = this.rooms.get(input.claim.roomId)!;
+    const updatedRoom = {
+      ...room,
+      codeAgentStatus: actualOutcome === 'error' ? 'error' as const : 'idle' as const,
+      ...(actualOutcome === 'complete' && input.sessionId ? { codeAgentSessionId: input.sessionId } : {}),
+      lastActivityAt: input.completedAt,
+    };
+    this.rooms.set(input.claim.roomId, updatedRoom);
+    const currentTurn = this.agentTurns.get(input.claim.turnId)!;
+    const turn: RoomAgentTurn = {
+      ...currentTurn,
+      status: actualOutcome,
+      completedAt: input.completedAt,
+      finalMessageId: actualOutcome === 'cancelled' ? undefined : (message?.id || input.finalMessageId),
+      phase: undefined,
+      phaseMessage: undefined,
+      lastHeartbeatAt: input.completedAt,
+      updatedAt: input.completedAt,
+    };
+    this.agentTurns.set(turn.id, turn);
+    await this.releaseCodeAgentRoomLease(
+      input.claim.roomId,
+      input.claim.turnId,
+      input.claim.ownerId,
+      input.claim.fence,
+    );
+    return {
+      outcome: actualOutcome === 'cancelled' ? 'obsolete' as const : 'applied' as const,
+      room: updatedRoom,
+      turn,
+      ...(message ? { message } : {}),
+      roomCostTotal: this.roomCost,
+    };
   }
 
   async finalizeAIMessage(
@@ -260,6 +408,14 @@ class MemoryCodeAgentStore {
     messages.splice(index, 1);
     messages.push(updatedMessage);
     return { room, found: true, updatedMessage };
+  }
+
+  async materializeCodeAgentQueuedMessageForTurn(roomId: string, messageId: string, expectedState: string, claim: any, insertedAt?: string) {
+    if (!this.hasTurnClaim(claim)) {
+      const room = this.rooms.get(roomId);
+      return room ? { room, found: false } : null;
+    }
+    return this.materializeCodeAgentQueuedMessage(roomId, messageId, expectedState, claim.turnId, insertedAt);
   }
 
   async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = '2026-05-03T00:00:00.000Z') {
@@ -2572,7 +2728,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
-  it('broadcasts room error state when placeholder persistence is rejected after running state was emitted', async () => {
+  it('rolls back the whole turn when placeholder persistence is rejected', async () => {
     const store = new MemoryCodeAgentStore(room(), [userMessage()]);
     store.upsertFailures = 1;
     const { emitter, service } = createService({ store });
@@ -2580,10 +2736,12 @@ describe('CodeAgentSessionService', () => {
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     assert.deepEqual(result, { success: false, error: 'Unable to start a durable agent response' });
-    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, undefined);
     const roomUpdates = emitter.roomEmits.filter(event => event.event === 'room_updated');
-    assert.equal((roomUpdates[0].args[0] as Room).codeAgentStatus, 'running');
-    assert.equal((roomUpdates[1].args[0] as Room).codeAgentStatus, 'error');
+    assert.equal(roomUpdates.length, 0);
+    assert.equal(store.agentTurns.size, 0);
+    assert.equal(store.roomLeases.size, 0);
+    assert.deepEqual((store.messages.get('room-1') || []).map(message => message.messageType), ['text']);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), false);
   });
 

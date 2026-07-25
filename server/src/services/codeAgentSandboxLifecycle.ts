@@ -41,6 +41,7 @@ export interface CodeAgentSandboxLifecycleStore {
     }
   ): Promise<Room | null>;
   findInterruptedCodeAgentRooms(): Promise<Room[]>;
+  recoverInterruptedCodeAgentRoomStates?(now?: string): Promise<number>;
 }
 
 export const DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -112,9 +113,17 @@ export class CodeAgentSandboxLifecycleService {
   }
 
   async recoverInterruptedSandboxes(): Promise<number> {
+    const timestamp = this.now().toISOString();
+    if (this.store.recoverInterruptedCodeAgentRoomStates) {
+      const recovered = await this.store.recoverInterruptedCodeAgentRoomStates(timestamp);
+      if (recovered > 0) {
+        this.logger.warn('Recovered interrupted code-agent sandbox room states', { count: recovered });
+      }
+      return recovered;
+    }
+
     const rooms = await this.store.findInterruptedCodeAgentRooms();
     let recovered = 0;
-    const timestamp = this.now().toISOString();
 
     for (const room of rooms) {
       let currentRoom = room;

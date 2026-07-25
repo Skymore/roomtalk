@@ -318,8 +318,8 @@
 </head>
 <body>
 <div class="architecture-note">
-  <span data-lang="zh">当前架构版本：2026-07-22，已部署到 <code>room.ruit.me</code>。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、AI stream 与 Code Agent task 都按 runtime instance/lease 划分；Socket 本机认证身份是连接期权威，Redis 索引可重建。AI worker 的 outbox claim、placeholder generation 与终态条件更新使用同一个 fence，旧 worker 不能覆盖接管者或复活已删除消息。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
-  <span data-lang="en">The 2026-07-22 architecture is deployed at <code>room.ruit.me</code>. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, AI streams, and Code Agent work are scoped by runtime instance and leases. The locally authenticated Socket identity is authoritative for the connection, while Redis indexes are rebuildable. One fence binds the AI worker's outbox claim, placeholder generation, and conditional terminal update, so a stale worker cannot overwrite its replacement or resurrect a deleted message. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
+  <span data-lang="zh">当前代码架构版本：2026-07-24；生产发布状态单独记录，不用文档版本冒充部署证据。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、普通 AI stream 与 Code Agent turn 都有明确 ownership。普通 AI 用 <code>assistant_runs</code> generation；Code Agent 用 <code>{roomId, turnId, ownerId, fence}</code> room lease claim。两条路径都让旧执行者失去写权限，而不只是记录一个“看起来过期”的状态。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
+  <span data-lang="en">Current source architecture: 2026-07-24. Production rollout is recorded separately rather than inferred from a documentation version. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, ordinary AI streams, and Code Agent turns each have explicit ownership. Ordinary AI uses an <code>assistant_runs</code> generation; Code Agent uses a <code>{roomId, turnId, ownerId, fence}</code> room-lease claim. In both paths an old executor loses write authority rather than merely looking stale in observability. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
 </div>
 <div class="lang-toggle">
   <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
@@ -461,7 +461,8 @@ single-origin transient event: App A → Redis adapter → App B/C → target cl
                       ↓ 只清理 expired owner
              presence / browser / socket room state
 
-PostgreSQL fenced lease ── 保护 running Code Agent turn / sandbox
+PostgreSQL turn claim ───── roomId + turnId + ownerId + fence
+                           原子 start / fenced writes / 原子 finish
 PostgreSQL AI owner lease ─ 保护 streaming placeholder
 PostgreSQL advisory lock ── 每轮只有一个实例做 recovery / retention</div>
 <div class="diagram" data-lang="en">instance A heartbeat ─┐
@@ -470,11 +471,12 @@ instance C heartbeat ─┘
                        ↓ clean expired owners only
               presence / browser / socket-room state
 
-PostgreSQL fenced lease ── protects a running Code Agent turn / sandbox
+PostgreSQL turn claim ───── roomId + turnId + ownerId + fence
+                           atomic start / fenced writes / atomic finish
 PostgreSQL AI owner lease ─ protects a streaming placeholder
 PostgreSQL advisory lock ── one recovery / retention runner per pass</div>
-<p data-lang="zh">因此滚动启动不再执行“清空全部 presence、把全部 running 标成 error”。每个进程生成唯一 instance ID 并续租；Redis Lua 清理会重新检查 heartbeat，只处理仍属于过期 owner 的 socket。Code Agent recovery 会排除未过期 fenced lease，AI recovery 会排除未过期 stream owner。所有副本都可以运行同一套维护 loop，但只有拿到 advisory lock 的实例真正执行。这是从单机可运行走向 ECS/EKS 滚动发布必须补齐的 ownership contract。不过首次引入 <code>0006</code>、<code>0007</code> 和 <code>0008</code> 时仍要停止旧 App/Worker：旧 binary 既不会写 owner lease，也不会用 generation fence 条件提交 AI 终态。所有副本跨过这条边界后，后续协议兼容版本才适合滚动。</p>
-<p data-lang="en">Rolling startup therefore no longer means clearing all presence or marking every running task failed. Each process gets a unique instance ID and renews its lease; Redis Lua cleanup rechecks the heartbeat and touches only sockets still owned by the expired instance. Code Agent recovery excludes unexpired fenced leases, and AI recovery excludes unexpired stream owners. Every replica may run the same maintenance loop, but only the advisory-lock holder performs a pass. This ownership contract is what turns a single-host design into one that can safely roll on ECS or EKS. The first <code>0006</code>/<code>0007</code>/<code>0008</code> deployment is still a stop-the-world boundary: old binaries neither write owner leases nor condition terminal AI writes on a generation fence. Later protocol-compatible releases may roll after every replica has crossed that boundary.</p>
+<p data-lang="zh">因此滚动启动不再执行“清空全部 presence、把全部 running 标成 error”。每个进程生成唯一 instance ID 并续租；Redis Lua 清理会重新检查 heartbeat，只处理仍属于过期 owner 的 socket。Code Agent 的权限不只来自“lease 行存在”：turn 自己保存同一 owner/fence，由执行过程产生的 phase、消息、steering materialization 和终态写入都同时校验 turn claim 与 live lease。Recovery 先锁定候选 room/turn，再确认没有 live lease，避免检查完后恰好发生 takeover、却仍把新 turn 标成 error。遗留 <code>starting</code>/<code>steering</code> 也只有超过 grace period 且没有 live lease 才回到 <code>queued</code>。所有副本都可以运行维护 loop，但只有 advisory-lock holder 真正执行。首次引入 <code>0011</code> 时旧 App 尚不会执行这些条件写，因此与 <code>0006</code>/<code>0007</code>/<code>0008</code> 一样需要维护窗口；跨过协议边界后，兼容版本才适合滚动。</p>
+<p data-lang="en">Rolling startup therefore no longer means clearing all presence or marking every running task failed. Each process gets a unique instance ID and renews its lease; Redis Lua cleanup rechecks the heartbeat and touches only sockets still owned by the expired instance. Code Agent authority is stronger than “a lease row exists”: the turn stores the same owner/fence, and each execution-produced phase, message, steering materialization, and terminal write validates both the turn claim and live lease. Recovery locks the candidate room/turn before rechecking the lease, so a takeover cannot land between the check and an erroneous recovery write. Abandoned <code>starting</code>/<code>steering</code> inputs return to <code>queued</code> only after a grace period and without a live lease. Every replica may run the maintenance loop, but only the advisory-lock holder performs a pass. The first <code>0011</code> deployment requires a maintenance cutover, like the earlier <code>0006</code>/<code>0007</code>/<code>0008</code> boundaries, because old Apps do not make these conditional writes. Compatible releases may roll after every replica crosses the protocol boundary.</p>
 
 <div class="card warn" data-lang="zh">
   <h4>追问：sticky session 为什么必须？</h4>
@@ -659,14 +661,15 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 <p data-lang="zh"><strong>问题</strong>：Agent 要读写文件、安装依赖、运行测试和启动服务，但这些命令不能进入拥有生产凭据的 RoomTalk 应用进程；同时房间成员、消息、权限、计费和恢复又必须由 RoomTalk 统一管理。</p>
 <p data-lang="en"><strong>Problem</strong>: The agent must edit files, install dependencies, run tests, and start services, but none of that can execute in the RoomTalk application process that owns production credentials. Room membership, messages, permissions, billing, and recovery still need one RoomTalk source of truth.</p>
 
-<p data-lang="zh"><strong>方案</strong>：安全边界拆成 control plane 与 execution plane，运行时链路拆成 RoomTalk → daemon/runner → Agent backend 三层。每个房间绑定一个 E2B sandbox；RoomTalk 的 <code>CodeAgentSessionService</code> 解析本轮 mode/backend、创建 durable turn、签发 scoped capability，再把版本化 JSONL request 发给 sandbox daemon。daemon 路由到自研 Coco，或使用当前成员通过 device authorization 连接的订阅启动 Codex app-server。</p>
-<p data-lang="en"><strong>Solution</strong>: Split the security boundary into control and execution planes, then split the runtime path into three layers: RoomTalk → daemon/runner → agent backend. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> resolves mode/backend, creates a durable turn, issues scoped capabilities, and sends a versioned JSONL request to the sandbox daemon. The daemon dispatches to the self-built Coco agent or starts Codex app-server with the current member's subscription connected through device authorization.</p>
+<p data-lang="zh"><strong>方案</strong>：安全边界拆成 control plane 与 execution plane，运行时链路拆成 RoomTalk → daemon/runner → Agent backend 三层。每个房间绑定一个 E2B sandbox。<code>CodeAgentSessionService</code> 先用一个 PostgreSQL 事务锁定 room、递增 lease fence、物化 prompt、创建 placeholder/turn 并把 room 标为 running；提交后才返回 ack。接着签发 scoped capability，把版本化 JSONL request 交给 daemon，由它路由到自研 Coco 或 Codex app-server。运行中由执行过程产生的 text/tool/model-step 与 steer materialization 都携带同一 turn claim，持久化成功后才广播。结束时再用一个事务收敛最终消息、费用、room/session、turn 与精确 lease release。</p>
+<p data-lang="en"><strong>Solution</strong>: Split the security boundary into control and execution planes, then split the runtime path into three layers: RoomTalk → daemon/runner → agent backend. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> first uses one PostgreSQL transaction to lock the room, increment the lease fence, materialize the prompt, create the placeholder/turn, and mark the room running; acknowledgement follows commit. It then issues scoped capabilities and hands the versioned JSONL request to the daemon, which routes it to the self-built Coco agent or Codex app-server. Every execution-produced text/tool/model-step write and steering materialization carries the same turn claim and is broadcast only after persistence succeeds. A second transaction converges the final message, cost, room/session, turn, and exact lease release.</p>
 
 <div class="diagram">1. Browser ──authenticated Socket.IO prompt──▶ RoomTalk control plane
-2. RoomTalk ──check room access/mode──▶ create durable turn
+2. RoomTalk ──one transaction──▶ prompt + placeholder + turn + fenced lease
 3. RoomTalk ──resume E2B + issue turn-scoped capabilities──▶ JSONL daemon
 4. Daemon ──route──▶ Coco (self-built CLI) | Codex app-server
-5. /workspace tools ──ordered text/tool events──▶ persist + broadcast</div>
+5. /workspace tools ──ordered events──▶ fenced persist ──▶ broadcast
+6. final/error ──one transaction──▶ message + cost + room/session + turn + lease</div>
 
 <blockquote data-lang="zh">这里按 ownership 划分职责：RoomTalk 不执行不可信命令，E2B 不决定房间权限，Agent 也拿不到数据库或 provider secret。E2B 提供隔离执行环境，权限和业务状态仍由 RoomTalk 管理。</blockquote>
 <blockquote data-lang="en">Ownership defines the boundary. RoomTalk does not execute untrusted commands, E2B does not decide room permissions, and the agent receives neither database nor provider secrets. E2B provides isolated execution, while RoomTalk keeps authority over permissions and application state.</blockquote>
@@ -1931,11 +1934,20 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>多个成员同时给 Agent 发消息，怎么避免同时修改 workspace？</summary>
-  <div class="answer">房间有一个 active-turn guard，真正执行的 mutating turn 串行化。后续 prompt 持久化为 queue，可以编辑、取消或提升为 steer。这样聊天仍是多人实时的，但共享文件系统不会被两个 Agent turn 并发修改。每个 turn 还持久化实际 mode/backend，retry 不会回退到默认权限。</div>
+  <div class="answer">进程内 active-turn map 只负责快速拒绝，不是最终锁。真正的所有权是 PostgreSQL 中的 <code>{roomId, turnId, ownerId, fence}</code>：启动事务锁定 room，取得下一代 fence，同时物化 prompt、创建 placeholder/turn、把 room 标为 running。每次 phase、text/tool、model-step、steering 和 terminal 写入都要证明这个 claim 仍对应未过期 lease。另一个进程只有在旧 lease 失效后才能取得更高 fence；从那一刻起，旧进程即使晚到也不能继续写或释放新 lease。后续 prompt 持久化为 queue，可以编辑、取消或提升为 steer，因此聊天仍是多人实时的，但共享 workspace 始终只有一个有写权限的 turn。</div>
 </details>
 <details data-lang="en">
   <summary>How do you prevent multiple room members from modifying the workspace concurrently?</summary>
-  <div class="answer">A room-level active-turn guard serializes mutating agent work. Later prompts become durable queue entries that can be edited, canceled, or promoted into steering input. Chat remains realtime and multi-user, while the shared filesystem never has two agent turns writing concurrently. Each turn persists its resolved mode/backend so retry cannot fall back to default permissions.</div>
+  <div class="answer">The in-process active-turn map is only a fast rejection path, not the final lock. PostgreSQL owns a <code>{roomId, turnId, ownerId, fence}</code> claim. The start transaction locks the room, obtains the next fence, materializes the prompt, creates the placeholder/turn, and marks the room running together. Every phase, text/tool, model-step, steering, and terminal write must prove that the claim still matches an unexpired lease. Another process can take a higher fence only after the old lease expires; from then on, late writes and lease release from the old process fail. Later prompts are durable queue entries that can be edited, canceled, or promoted to steering, so chat remains multi-user while only one turn has workspace write authority.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>Code Agent 为什么不和普通 Chat AI 一样走 BullMQ？</summary>
+  <div class="answer">两者的执行单位不同。普通 Chat AI 是“拿 request snapshot 调一次 Provider，再提交终态”的 portable job，任何 Worker 都能接管，BullMQ 很适合管理并发、retry 和 stalled recovery。Code Agent turn 则绑定一个房间的可变 E2B workspace、复用 daemon/backend thread，并在运行中接收 steer、interrupt、approval、terminal 与 preview 控制；把每个 event 拆成 queue job 会制造新的顺序和 ownership 问题。当前更小的模型是：PostgreSQL turn + fenced room lease 负责唯一执行权，App 内 session service 驱动交互协议，周期 recovery 只接管 lease 已失效的 turn。这里不是“永远不能用 MQ”；若以后把 sandbox control plane 做成独立可迁移 Worker，可以让 MQ 调度整个 room-turn，但 durable turn claim 仍必须保留，MQ 不能取代它。</div>
+</details>
+<details data-lang="en">
+  <summary>Why doesn't Code Agent use BullMQ like ordinary chat AI?</summary>
+  <div class="answer">The execution units differ. Ordinary chat AI is a portable job: read one request snapshot, call a Provider, and commit a terminal result. Any Worker can take it, so BullMQ naturally owns concurrency, retry, and stalled recovery. A Code Agent turn is attached to one room's mutable E2B workspace, reused daemon/backend thread, and live steering, interruption, approval, terminal, and preview controls. Splitting those events into queue jobs would introduce another ordering and ownership problem. The smaller current model is a PostgreSQL turn plus fenced room lease for exclusive authority, an App session service for the interactive protocol, and periodic recovery only after the lease is gone. An MQ could schedule a whole room turn if the sandbox control plane later becomes a portable worker, but the durable turn claim would still be required; the queue cannot replace it.</div>
 </details>
 
 <details data-lang="zh">
@@ -2003,11 +2015,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>实例 B 滚动启动时，为什么不会清掉实例 A 的 presence 和运行任务？</summary>
-  <div class="answer">因为恢复不再以“服务器启动”作为故障证据。A、B 各自有唯一 runtime instance ID，并在 Redis 续租 TTL heartbeat；socket session 还记录 owner instance。B 启动只注册自己，不执行全局清空。周期清理看到某个 owner heartbeat 过期后，才删除那个 owner 名下的 socket、room member socket set 和 browser presence。Running Code Agent turn/sandbox 还受 PostgreSQL fenced room lease 保护，AI streaming placeholder 受 stream-owner lease 保护；未过期的 owner 一律不恢复。Recovery 与 retention 都先抢 PostgreSQL advisory lock，同一轮只有一个实例执行。也就是说，startup 只是加入集群，lease expiry 才是 ownership 丢失的证据。</div>
+  <div class="answer">因为恢复不再以“服务器启动”作为故障证据。A、B 各自有唯一 runtime instance ID，并在 Redis 续租 TTL heartbeat；socket session 还记录 owner instance。B 启动只注册自己，不执行全局清空。周期清理看到某个 owner heartbeat 过期后，才删除那个 owner 名下的 socket、room member socket set 和 browser presence。Code Agent recovery 会在事务里锁定候选 room/turn，再检查 turn claim 对应的 fenced lease；只有 lease 已失效才写 error。这样即使 B 检查期间 A 恢复，或 C 正在取得更高 fence，也不会发生 check-then-save 覆盖。遗留 <code>starting</code>/<code>steering</code> 输入同样在超过两分钟且没有 live lease 后才回到 <code>queued</code>，并由周期 queue drain 继续执行。Recovery 与 retention 都先抢 PostgreSQL advisory lock，所以 startup 只是加入集群，lease expiry 才是 ownership 丢失的证据。</div>
 </details>
 <details data-lang="en">
   <summary>Why doesn't rolling instance B clear instance A's presence and running work?</summary>
-  <div class="answer">Startup is no longer treated as evidence that existing work failed. A and B have unique runtime instance IDs and renew Redis TTL heartbeats; every socket session records its owner instance. B registers itself but performs no global reset. Periodic cleanup removes socket, room-member socket sets, and browser presence only after that owner's heartbeat expires. Running Code Agent turns and sandboxes are protected by PostgreSQL fenced room leases, while streaming AI placeholders use stream-owner leases; unexpired owners are never recovered. Recovery and retention also acquire PostgreSQL advisory locks, so one instance performs each pass. Startup merely joins the cluster; lease expiry is the evidence that ownership was lost.</div>
+  <div class="answer">Startup is no longer treated as evidence that existing work failed. A and B have unique runtime instance IDs and renew Redis TTL heartbeats; every socket session records its owner instance. B registers itself but performs no global reset. Periodic cleanup removes socket, room-member socket sets, and browser presence only after that owner's heartbeat expires. Code Agent recovery locks each candidate room/turn in a transaction and then checks the fenced lease that matches its turn claim; it writes an error only after that lease is gone. If A recovers during the check, or C is taking a higher fence, there is no check-then-save window that can overwrite the new owner. Abandoned <code>starting</code>/<code>steering</code> inputs likewise return to <code>queued</code> only after two minutes without a live lease, and a periodic queue drain continues them. Recovery and retention acquire PostgreSQL advisory locks. Startup merely joins the cluster; lease expiry is the evidence that ownership was lost.</div>
 </details>
 
 <details data-lang="zh">

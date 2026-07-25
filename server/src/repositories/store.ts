@@ -126,6 +126,71 @@ export interface CodeAgentRoomLease {
   expiresAt: string;
 }
 
+export interface CodeAgentTurnClaim {
+  roomId: string;
+  turnId: string;
+  ownerId: string;
+  fence: number;
+}
+
+export interface CodeAgentTurnStartInput {
+  roomId: string;
+  turn: RoomAgentTurn;
+  placeholder: Message;
+  ownerId: string;
+  now: string;
+  leaseTtlMs: number;
+  queuedMessageId?: string;
+}
+
+export type CodeAgentTurnStartResult =
+  | {
+      outcome: 'started';
+      room: Room;
+      turn: RoomAgentTurn;
+      placeholder: Message;
+      lease: CodeAgentRoomLease;
+      materializedPrompt?: Message;
+    }
+  | {
+      outcome: 'busy' | 'missing_room' | 'queue_conflict';
+    };
+
+export type CodeAgentMessageMutationResult =
+  | {
+      outcome: 'applied';
+      room: Room;
+      message: Message;
+      roomCostTotal: RoomAICostTotal;
+    }
+  | {
+      outcome: 'stale' | 'obsolete';
+    };
+
+export interface CodeAgentTurnTerminalInput {
+  claim: CodeAgentTurnClaim;
+  outcome: 'complete' | 'error' | 'cancelled';
+  completedAt: string;
+  finalMessageId?: string;
+  message?: Message;
+  expectedMessageOwnership?: AIStreamOwnership;
+  deleteMessageIds?: string[];
+  sessionId?: string;
+  cost?: AICost | null;
+}
+
+export type CodeAgentTurnTerminalResult =
+  | {
+      outcome: 'applied' | 'obsolete';
+      room: Room;
+      turn: RoomAgentTurn;
+      message?: Message;
+      roomCostTotal: RoomAICostTotal;
+    }
+  | {
+      outcome: 'stale';
+    };
+
 export interface CodeAgentQueueMessageUpdate {
   expectedState: CodeAgentQueueState;
   queuedInput: CodeAgentQueuedInput | null;
@@ -475,6 +540,7 @@ export interface DurableRoomStore {
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   updateCodeAgentQueuedMessage?(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate): Promise<MessageUpdateResult | null>;
   materializeCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, turnId?: string, insertedAt?: string): Promise<MessageUpdateResult | null>;
+  materializeCodeAgentQueuedMessageForTurn?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, claim: CodeAgentTurnClaim, insertedAt?: string): Promise<MessageUpdateResult | null>;
   claimNextCodeAgentQueuedMessage?(roomId: string, updatedAt?: string): Promise<CodeAgentQueueClaimResult | null>;
   deleteCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState?: CodeAgentQueueState): Promise<MessageDeleteResult | null>;
   findRoomsWithQueuedCodeAgentMessages?(): Promise<string[]>;
@@ -495,10 +561,17 @@ export interface DurableRoomStore {
   pruneRoomEvents?(options: RoomEventRetentionOptions): Promise<number>;
   upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
   readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
+  beginCodeAgentTurn?(input: CodeAgentTurnStartInput): Promise<CodeAgentTurnStartResult>;
+  updateCodeAgentTurn?(turn: RoomAgentTurn, claim: CodeAgentTurnClaim): Promise<RoomAgentTurn | null>;
+  appendCodeAgentMessage?(message: Message, claim: CodeAgentTurnClaim, cost?: AICost | null): Promise<CodeAgentMessageMutationResult>;
+  finalizeCodeAgentMessage?(message: Message, expectedOwnership: AIStreamOwnership, claim: CodeAgentTurnClaim, cost?: AICost | null): Promise<CodeAgentMessageMutationResult>;
+  finishCodeAgentTurn?(input: CodeAgentTurnTerminalInput): Promise<CodeAgentTurnTerminalResult>;
+  recoverStaleCodeAgentQueuedMessages?(staleBefore: string, updatedAt?: string): Promise<number>;
+  recoverInterruptedCodeAgentRoomStates?(now?: string): Promise<number>;
   failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
   acquireCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
-  renewCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
-  releaseCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string): Promise<boolean>;
+  renewCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number): Promise<CodeAgentRoomLease | null>;
+  releaseCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, fence?: number): Promise<boolean>;
   saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
   replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset): Promise<MessageUpdateResult | null>;
   getMediaAsset(assetId: string): Promise<MediaAsset | null>;
@@ -741,6 +814,29 @@ export class CompositeRoomStore implements RoomStore {
     return result;
   }
 
+  async materializeCodeAgentQueuedMessageForTurn(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState,
+    claim: CodeAgentTurnClaim,
+    insertedAt?: string,
+  ) {
+    if (!this.durableStore.materializeCodeAgentQueuedMessageForTurn) {
+      throw new Error('The durable store does not support fenced code-agent queue materialization');
+    }
+    const result = await this.durableStore.materializeCodeAgentQueuedMessageForTurn(
+      roomId,
+      messageId,
+      expectedState,
+      claim,
+      insertedAt,
+    );
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
   async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt?: string) {
     if (!this.durableStore.claimNextCodeAgentQueuedMessage) {
       return null;
@@ -881,6 +977,70 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.readRoomAgentTurns?.(roomId, turnIds) || Promise.resolve([]);
   }
 
+  async beginCodeAgentTurn(input: CodeAgentTurnStartInput) {
+    if (!this.durableStore.beginCodeAgentTurn) {
+      throw new Error('The durable store does not support atomic code-agent turns');
+    }
+    const result = await this.durableStore.beginCodeAgentTurn(input);
+    if (result.outcome === 'started') {
+      await this.invalidateRoomMessagesCache(input.roomId);
+    }
+    return result;
+  }
+
+  updateCodeAgentTurn(turn: RoomAgentTurn, claim: CodeAgentTurnClaim) {
+    if (!this.durableStore.updateCodeAgentTurn) {
+      throw new Error('The durable store does not support fenced code-agent turn updates');
+    }
+    return this.durableStore.updateCodeAgentTurn(turn, claim);
+  }
+
+  async appendCodeAgentMessage(message: Message, claim: CodeAgentTurnClaim, cost?: AICost | null) {
+    if (!this.durableStore.appendCodeAgentMessage) {
+      throw new Error('The durable store does not support fenced code-agent messages');
+    }
+    const result = await this.durableStore.appendCodeAgentMessage(message, claim, cost);
+    if (result.outcome === 'applied') {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
+  }
+
+  async finalizeCodeAgentMessage(
+    message: Message,
+    expectedOwnership: AIStreamOwnership,
+    claim: CodeAgentTurnClaim,
+    cost?: AICost | null,
+  ) {
+    if (!this.durableStore.finalizeCodeAgentMessage) {
+      throw new Error('The durable store does not support fenced code-agent message finalization');
+    }
+    const result = await this.durableStore.finalizeCodeAgentMessage(message, expectedOwnership, claim, cost);
+    if (result.outcome === 'applied') {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
+  }
+
+  async finishCodeAgentTurn(input: CodeAgentTurnTerminalInput) {
+    if (!this.durableStore.finishCodeAgentTurn) {
+      throw new Error('The durable store does not support atomic code-agent completion');
+    }
+    const result = await this.durableStore.finishCodeAgentTurn(input);
+    if (result.outcome !== 'stale') {
+      await this.invalidateRoomMessagesCache(input.claim.roomId);
+    }
+    return result;
+  }
+
+  recoverStaleCodeAgentQueuedMessages(staleBefore: string, updatedAt?: string) {
+    return this.durableStore.recoverStaleCodeAgentQueuedMessages?.(staleBefore, updatedAt) || Promise.resolve(0);
+  }
+
+  recoverInterruptedCodeAgentRoomStates(now?: string) {
+    return this.durableStore.recoverInterruptedCodeAgentRoomStates?.(now) || Promise.resolve(0);
+  }
+
   failInterruptedRoomAgentTurns(completedAt?: string) {
     return this.durableStore.failInterruptedRoomAgentTurns?.(completedAt) || Promise.resolve(0);
   }
@@ -889,12 +1049,12 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.acquireCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
   }
 
-  renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
-    return this.durableStore.renewCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
+  renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number) {
+    return this.durableStore.renewCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs, fence) || Promise.resolve(null);
   }
 
-  releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string) {
-    return this.durableStore.releaseCodeAgentRoomLease?.(roomId, turnId, ownerId) || Promise.resolve(false);
+  releaseCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, fence?: number) {
+    return this.durableStore.releaseCodeAgentRoomLease?.(roomId, turnId, ownerId, fence) || Promise.resolve(false);
   }
 
   saveMediaAsset(asset: MediaAsset) {

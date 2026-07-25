@@ -3,7 +3,7 @@
 [English](code-agent-runtime-architecture.md)
 
 状态：当前
-已按 `master` 核对：2026-07-20
+已按 `master` 核对：2026-07-24
 
 本文描述当前实现。`docs/` 中的早期 phase、spike 和 migration plan 保留了演进证据；当前简明入口以本文为准，最终事实源仍是源码和测试。
 
@@ -55,13 +55,13 @@ flowchart TB
 
 1. Socket 已注册用户提交 `ask_ai` 或 send-and-ask。
 2. RoomTalk 校验 room type、membership、Code Agent access、mode、backend 和 rollout control。
-3. 用户 prompt 先以 durable message 保存，创建 preparing turn 并返回 ack。
-4. Scheduler 获取 durable fenced room lease，将边界上的 queued input 物化为下一个 turn。
+3. 一个 PostgreSQL 事务锁定 room、取得下一代 fenced lease、物化可选 queued prompt、创建 AI placeholder 与 durable turn，并把 room 标为 running；提交后才返回 ack。
+4. Session service 保存 `{ roomId, turnId, ownerId, fence }` claim，并在整个 turn 内续租；每次 durable write 都重新校验它。
 5. Lifecycle service 连接或创建固定 E2B sandbox，验证 artifact/source-ref，必要时迁移 workspace archive。
 6. Session service 发放 turn-scoped model/context/publish/asset credential，并注入房主的 Codex 与可选 GitHub secret。
 7. 可复用 daemon 串行执行 backend turn，同时接受 steer、interrupt 和 approval response。
-8. Text/tool/status/model-step/final event 被映射为 RoomTalk event，按真实顺序持久化后再广播。
-9. Finalization 关闭 pending tool call，保存 usage/cost/backend session ID，释放 lease，将 sandbox 回到 idle TTL。
+8. Text/tool/status/model-step event 被映射为 RoomTalk event；只有 fenced persistence 成功后才按真实顺序广播。
+9. 一个 terminal transaction 关闭 pending tool call/placeholder，结算 usage/cost，保存 backend session ID，更新 room/turn 并释放精确 lease；随后 sandbox 回到 idle TTL。
 
 Turn control 不会绕过 durable scheduler：Queue 保存下一个 prompt；Steer 只在 backend 确认插入后消费；Interrupt 先停止 owned runner，再完成持久状态。Retry/edit-and-ask 保留原 turn mode/backend 且按 durable history 截断。
 
@@ -106,18 +106,22 @@ Workspace UI 是 RoomTalk 对 sandbox 能力的授权视图：
 
 ## 状态与恢复
 
-Durable state 包括 room/config/membership、message/position、agent turn、queue、backend session ID、usage/cost、sandbox metadata、artifact manifest、用户 connection 和 fenced room lease。
+Durable state 包括 room/config/membership、message/position、agent turn、queue、backend session ID、usage/cost、sandbox metadata、artifact manifest、用户 connection 和 fenced room lease。一个执行中的 turn 由 `{ roomId, turnId, ownerId, fence }` 标识；Node 内存里的 active map 只是快速判断，不是写权限。
 
-Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、普通 Chat AI 的 BullMQ job、Node 内存 active-turn/daemon/terminal/preview handle，以及 E2B 内的 process。BullMQ 任务是可恢复的运维状态，但不解释业务结果；durable PostgreSQL state 用来解释并收敛。
+Runtime state 包括 socket presence/session、Redis pub/sub/cache/counter、普通 Chat AI 的 BullMQ job、Node 内存 active-turn/daemon/terminal/preview handle，以及 E2B 内的 process。BullMQ 任务是可恢复的运维状态，但不解释业务结果；durable PostgreSQL state 用来解释并收敛。Code Agent 不复用普通 Chat AI 的 BullMQ：它不是可搬到任意 Worker 的单次 Provider job，而是绑定一个房间 sandbox/daemon、持续接收 steer/interrupt/approval 的交互 turn。它的调度与 ownership 单位就是 PostgreSQL 中的 fenced room turn。
+
+Turn 启动不再由几次 best-effort save 拼接。一个事务锁定 room，校验待 claim 的 queued prompt，递增 room lease fence，物化 prompt，创建 AI placeholder 与 `room_agent_turn`，并把 room 标为 running；事务提交后才向 Socket 返回成功。之后每次由执行过程产生的 phase、segment、tool、model-step、steering materialization 与 terminal 写入，都必须用同一个 claim 对照仍未过期的 lease。新进程取得更高 fence 后，旧进程即使晚到，也不能追加 tool result、覆盖 room、重复结算费用或释放新 lease。
 
 恢复路径包括：
 
-- startup 将中断 streaming message 和 running turn 显式标记 error；
-- 修复 stale `creating`/`running` sandbox status；
+- 周期 singleton recovery 锁定候选 room/turn，再次确认不存在匹配的 live fenced lease，之后才把中断的 streaming message、running turn 或 room/sandbox state 标记为 error；启动本身不再等于故障证据；
+- `starting`/`steering` queue entry 超过 `CODE_AGENT_QUEUE_STALE_MS`（默认两分钟）且没有 live room lease 时，恢复为 `queued`；同一周期也继续 drain ready queue，不会只在冷启动时尝试一次；
 - reconnect/resume timed-out sandbox，缺失时 recreate；
 - artifact 不匹配时 archive migration，CAS 竞争失败时销毁 replacement 但保留 old sandbox；
 - daemon control/query/release 失败时丢弃 handle 并重建；
 - browser 重连时重新读 durable room/workspace snapshot，而不信任 local stale object。
+
+正常完成与失败也用一个 terminal transaction 收敛：校验精确 turn claim，条件更新仍归当前 turn 所有的 streaming message，删除未使用 placeholder，结算本轮适用费用，更新 room/backend session 与 turn 状态，最后只释放同一 fence 的 lease。任何一步失败都会整体回滚；placeholder 已删除或 fence 已被接管时，旧执行只会变成 obsolete，不会重新插入消息或覆盖新状态。
 
 ## 持久化模型
 
@@ -132,6 +136,6 @@ Runtime 强制使用 PostgreSQL 保存 durable business state，同时仍需 Red
 
 ## 验证与发布
 
-验证从变更风险出发：protocol/store/auth/ordering 用 focused contract/service test；client state 用 Vitest；跨 browser 流程用 Playwright；真实 sandbox/backend/artifact 边界用 E2B smoke。
+验证从变更风险出发：protocol/store/auth/ordering 用 focused contract/service test；真实 PostgreSQL 测试覆盖原子 turn start、任一步失败整体 rollback、stale fence 接管、所有中间写拒绝旧 claim、terminal projection rollback/幂等，以及 abandoned queue recovery；client state 用 Vitest；跨 browser 流程用 Playwright；真实 sandbox/backend/artifact 边界用 E2B smoke。
 
 RoomTalk 应用镜像发布和 E2B artifact 发布是两条不同链路。修改 runner、tool、prompt、sandbox Dockerfile/dependency 或 code-agent-engine source ref 时，必须更新 lock/version、构建新 template、同步生产 pin 并完成真实验证。只推送 Node 源码不会更新已存 sandbox artifact。
