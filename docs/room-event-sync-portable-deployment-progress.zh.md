@@ -176,6 +176,26 @@ Commit `46b4d48a` 补上首次 BullMQ 切换后仍有实际价值的恢复缺口
 
 维护窗口生成并校验了 `roomtalk-20260723T004010Z.dump` 与 `roomtalk-object-storage-20260723T004010Z.tar.gz`，随后部署生产镜像 `79b1e87ada299f8d1125bb6d756d5b38a9a2f91b6fda515dc2a53ac5ad1797b6`。完整 Server suite 为 114 个 suite、862 项通过；真实 PostgreSQL 17 测试 34 项通过且无 skip；真实 Redis/BullMQ 恢复测试 3 项通过；GitHub Server、Client CI 均通过。部署后六个服务全部运行，十个历史 run 全部 terminal，没有 active run 缺 dispatch，dispatch 与 queue 的各项 backlog 都是 0。本机回环、`room.ruit.me` 与 `roomtalk.ruit.me` 都返回 `online`、`ready=true`、`assistantQueue=ready`、`assistantWorker=ready`，Worker heartbeat 正常续期。本次没有调用付费 Provider。
 
+### Code Agent turn fencing 切换，2026-07-26
+
+Commit `790f23b4` 把 Code Agent 启动、执行期写入与终态收敛统一到 PostgreSQL turn claim `{ roomId, turnId, ownerId, fence }`。Turn 启动由一个事务同时取得 room lease、物化 queued prompt、创建 placeholder 与 durable turn；后续 transcript、tool、model-step、steering materialization 和 terminal write 都验证同一 live claim。完成或失败也由一个事务更新 Message、费用、room/session、turn，并只释放精确 fence。周期恢复会锁定并删除已过期 lease，再恢复中断 turn 或遗留 `starting` / `steering` 输入，旧进程不能续租后重新写入。
+
+首次部署遵守 maintenance boundary。发布前确认 14 个普通 AI run 全部 `complete`、Code Agent 没有 live lease、dispatch 没有 pending/processing。随后生成并校验配对备份 `roomtalk-20260726T080543Z.dump` 与 `roomtalk-object-storage-20260726T080543Z.tar.gz`；前者通过 `pg_restore --list`，后者通过 `gzip -t`。新镜像先在旧服务仍运行时完成构建，再停止旧 App、AI Worker 与两个 Tunnel，之后才让一次性 migrate service 执行 `0011_code_agent_turn_fencing`。旧 writer 与新 fenced writer 没有重叠。
+
+| 检查 | 结果 |
+| --- | --- |
+| Source / CI | `master`、`origin/master` 与生产源码均为 `790f23b4`；GitHub CI 成功 |
+| Server 验证 | 全量 825 项通过；真实 PostgreSQL 17 migration/transaction 38 项通过 |
+| Production build | Server、Client 与 Docker build 通过 |
+| Production image | `00933fffad61788f9aeca929bf3f2b0ea60a2e061205579b67323bfc0c42bfe0` |
+| Migration ledger | 12/12；`0011_code_agent_turn_fencing` 已记录 |
+| Durable AI / Code Agent | 14 个普通 AI run 全部 terminal；0 个 live Code Agent lease |
+| Dispatch / BullMQ | pending、processing、waiting、active、delayed、failed 全部为 0 |
+| Runtime | App、AI Worker、PostgreSQL、Redis、SeaweedFS 与两个 Tunnel 全部 running；有 healthcheck 的服务均 healthy |
+| Readiness | 本机回环、`room.ruit.me`、`roomtalk.ruit.me`、`ai-chat.wenlin.dev` 均为 `online`、`ready=true`，101 个 room |
+
+Migration、App 与 Worker 启动日志没有 error。Worker heartbeat 正常续期，对象存储与 Socket.IO Redis adapter 均为 ready。本次发布没有调用付费 Provider。
+
 ## 回滚与持续运维
 
 跨过任一生产边界后，回滚都是数据操作。Mac 已接受写入时，不能只重新启用 Fly 或切 DNS。应先停止或 gate 当前 writer，协调 PostgreSQL 与对象增量，恢复匹配的数据库和对象备份，验证目标，然后才切流量。

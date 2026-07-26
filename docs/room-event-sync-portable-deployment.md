@@ -111,7 +111,7 @@ Migration `0005_message_room_immutability_and_event_clock` enforces the message-
 
 Migration `0006_ai_stream_owner_leases` adds the PostgreSQL heartbeat/expiry table used for stream-owner takeover. It is additive and does not change the V1 room-event format.
 
-Migration `0011_code_agent_turn_fencing` binds each running Code Agent turn to its room-lease owner and generation. Because old App binaries do not condition transcript/terminal writes on that claim, the first `0011` release is a maintenance cutover rather than a mixed-version rolling release.
+Migration `0011_code_agent_turn_fencing` binds each running Code Agent turn to its room-lease owner and generation. Because old App binaries do not condition transcript/terminal writes on that claim, the first `0011` release required a maintenance cutover rather than a mixed-version rolling release. Production crossed this boundary on 2026-07-26 after every old App and Worker had stopped.
 
 Deleted rooms cannot be snapshotted. For those streams, the migration appends a new V1 `room.deleted` tombstone and preserves `deleted_reader_ids`, with the retention floor pointing at that tombstone. Even a cursor older than the discarded prefix receives this terminal event, and the client allows this single deletion-only sequence jump. This avoids a `CURSOR_EXPIRED` → impossible snapshot loop. There is no permanent dual-format decoder.
 

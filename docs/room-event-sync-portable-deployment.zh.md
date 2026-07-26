@@ -111,7 +111,7 @@ Migration `0005_message_room_immutability_and_event_clock` 强制 message-room i
 
 Migration `0006_ai_stream_owner_leases` 增加 stream-owner 接管所需的 PostgreSQL heartbeat/expiry 表。它是 additive migration，不改变 V1 room-event 格式。
 
-Migration `0011_code_agent_turn_fencing` 把 running Code Agent turn 绑定到 room-lease owner 与 generation。旧 App 不会用这个 claim 约束 transcript/terminal write，因此首次部署 `0011` 必须使用维护窗口，不能与旧版本混合滚动。
+Migration `0011_code_agent_turn_fencing` 把 running Code Agent turn 绑定到 room-lease owner 与 generation。旧 App 不会用这个 claim 约束 transcript/terminal write，因此首次部署 `0011` 必须使用维护窗口，不能与旧版本混合滚动。生产已在 2026-07-26 停止全部旧 App 与 Worker 后跨过这条边界。
 
 Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新的 V1 `room.deleted` tombstone，保留 `deleted_reader_ids`，并把 retention floor 指向 tombstone。即使 cursor 早于已清理前缀，服务端仍返回这个终态事件，客户端只对 deletion 允许这一次 seq 跳跃，从而避免 `CURSOR_EXPIRED → 无法取得 snapshot` 死循环。系统不长期维护双格式 decoder。
 
