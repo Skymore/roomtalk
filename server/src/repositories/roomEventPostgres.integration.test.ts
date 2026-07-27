@@ -4,7 +4,7 @@ import { MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { createPostgresPool } from './postgresPool';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { PostgresPool, PostgresStore } from './postgresStore';
-import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
+import { getAIStreamFence, getAIStreamOwnerId, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { PostgresMigrationTarget, RedisDurableGlobalData } from '../scripts/migrateRedisToPostgres';
 import {
   RoomEventCursorAheadError,
@@ -806,6 +806,90 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       completedAt: new Date().toISOString(),
     }), { outcome: 'stale' });
     assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'stale-tool'), false);
+  });
+
+  it('preserves AI stream ownership across code-agent continuation segments', async () => {
+    const roomId = 'code-agent-continuation-stream-room';
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const streamOwnerId = 'continuation-stream-owner';
+    const turnOwnerId = 'continuation-turn-owner';
+    const runningTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', now),
+      id: 'continuation-turn',
+      backend: 'codex-app-server',
+      assistantName: 'Codex',
+      startedAt: now,
+      updatedAt: now,
+    };
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+    }));
+    await store.heartbeatAIStreamOwner(streamOwnerId, 'continuation-instance', now, 30_000);
+
+    const started = await store.beginCodeAgentTurn({
+      roomId,
+      turn: runningTurn,
+      placeholder: withAIStreamRecoveryMetadata(message(roomId, 'continuation-placeholder', {
+        clientId: 'ai_assistant',
+        clientMessageId: undefined,
+        messageType: 'ai',
+        status: 'streaming',
+        content: 'First segment',
+        turnId: runningTurn.id,
+      }), streamOwnerId),
+      ownerId: turnOwnerId,
+      now,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(started.outcome, 'started');
+    if (started.outcome !== 'started') return;
+    assert.equal(getAIStreamOwnerId(started.placeholder), streamOwnerId);
+    assert.equal(getAIStreamFence(started.placeholder), 0);
+
+    const claim = {
+      roomId,
+      turnId: runningTurn.id,
+      ownerId: turnOwnerId,
+      fence: started.lease.fence,
+    };
+    const continuation = {
+      ...started.placeholder,
+      id: 'continuation-segment',
+      content: '',
+      status: 'streaming' as const,
+      timestamp: new Date(nowMs + 1_000).toISOString(),
+    };
+    const appended = await store.appendCodeAgentMessage(continuation, claim);
+    assert.equal(appended.outcome, 'applied');
+    assert.equal(
+      (await pool.query<{ ai_stream_owner_id: string | null }>(
+        'SELECT ai_stream_owner_id FROM room_messages WHERE id = $1',
+        [continuation.id],
+      )).rows[0]?.ai_stream_owner_id,
+      streamOwnerId,
+    );
+
+    assert.equal(
+      await store.failOrphanedStreamingMessages(
+        'Response interrupted.',
+        new Date(nowMs + 5_000).toISOString(),
+      ),
+      0,
+    );
+    const finalized = await store.finalizeCodeAgentMessage({
+      ...continuation,
+      content: 'Second segment',
+      status: 'complete',
+      timestamp: new Date(nowMs + 6_000).toISOString(),
+    }, {
+      ownerId: streamOwnerId,
+      fence: getAIStreamFence(continuation),
+    }, claim);
+    assert.equal(finalized.outcome, 'applied');
   });
 
   it('rolls back the whole code-agent terminal projection when any terminal write fails', async () => {
