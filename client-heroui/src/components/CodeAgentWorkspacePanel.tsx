@@ -199,7 +199,9 @@ const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> 
   fullAccess: 'Full',
 };
 
-const CODEX_CONTEXT_BASELINE_TOKENS = 12_000;
+const formatCompactTokenCount = (tokens: number) => (
+  tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens)
+);
 
 export const latestCodexContextUsage = (messages: readonly Message[]) => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -216,31 +218,18 @@ export const latestCodexContextUsage = (messages: readonly Message[]) => {
     ) {
       continue;
     }
-    const reservedTokens = Math.min(CODEX_CONTEXT_BASELINE_TOKENS, Math.max(contextWindow - 1, 0));
-    const usableContextWindow = contextWindow - reservedTokens;
-    // Allocate the fixed baseline to prompt/cache first so every displayed subtotal remains additive.
-    const effectiveInputTokens = Math.max(usage.promptTokens - reservedTokens, 0);
-    const usedContextTokens = Math.min(effectiveInputTokens + usage.completionTokens, usableContextWindow);
-    const inputTokens = Math.min(effectiveInputTokens, usedContextTokens);
-    const outputTokens = Math.min(usage.completionTokens, usedContextTokens - inputTokens);
-    const cachedInputTokens = typeof usage.cachedPromptTokens === 'number'
-      ? Math.min(Math.max(usage.cachedPromptTokens - reservedTokens, 0), inputTokens)
-      : null;
+    const reasoningOutputTokens = typeof usage.reasoningOutputTokens === 'number'
+      ? Math.min(Math.max(usage.reasoningOutputTokens, 0), usage.completionTokens)
+      : 0;
+    // The next turn reuses the latest input plus retained output. Hidden reasoning output is not retained.
+    const usedContextTokens = Math.min(
+      Math.max(usage.promptTokens + usage.completionTokens - reasoningOutputTokens, 0),
+      contextWindow
+    );
     return {
-      usedTokens,
       contextWindow,
-      reservedTokens,
-      usableContextWindow,
       usedContextTokens,
-      inputTokens,
-      outputTokens,
-      cachedInputTokens,
-      uncachedInputTokens: cachedInputTokens === null ? null : inputTokens - cachedInputTokens,
-      cacheHitPercent: cachedInputTokens === null || inputTokens <= 0
-        ? null
-        : Math.round((cachedInputTokens / inputTokens) * 100),
-      remainingTokens: usableContextWindow - usedContextTokens,
-      usedPercent: Math.round((usedContextTokens / usableContextWindow) * 100),
+      usedPercent: Math.round((usedContextTokens / contextWindow) * 100),
     };
   }
   return null;
@@ -699,79 +688,30 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   Context: {contextUsage.usedPercent}%
                 </button>
               </PopoverTrigger>
-              <PopoverContent className="w-72 items-stretch border border-[#dedbd0] bg-[#faf9f5] p-0 text-[#141413] shadow-lg dark:border-[#3a3a37] dark:bg-[#242421] dark:text-[#faf9f5]">
-                <div data-testid="code-agent-context-usage-details" className="p-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-xs font-semibold">{t('codeAgentContextUsage')}</span>
-                    <span className="text-sm font-semibold text-[#31533b] dark:text-[#9fd3aa]">
-                      {contextUsage.usedPercent}%
-                    </span>
-                  </div>
-                  <div
-                    role="progressbar"
-                    aria-label={t('codeAgentContextUsed')}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={contextUsage.usedPercent}
-                    className="h-1.5 overflow-hidden rounded-full bg-[#dfe7dc] dark:bg-[#39433b]"
+              <PopoverContent className="w-[212px] items-stretch rounded-[18px] border border-[#dedbd0] bg-[#faf9f5] p-0 text-[#141413] shadow-lg dark:border-[#4a4a47] dark:bg-[#2b2b2a] dark:text-[#faf9f5]">
+                <div data-testid="code-agent-context-usage-details" className="px-4 py-3 text-center">
+                  <p className="text-sm font-medium text-[#6b6a65] dark:text-[#aaa8a3]">
+                    {t('codeAgentContextWindow')}:
+                  </p>
+                  <p
+                    data-testid="code-agent-context-percent"
+                    data-percent={contextUsage.usedPercent}
+                    className="mt-0.5 text-base text-[#5e5d59] dark:text-[#b9b7b2]"
                   >
-                    <div
-                      aria-hidden="true"
-                      className="h-full rounded-full bg-[#4c7a56] dark:bg-[#78b985]"
-                      style={{ width: `${contextUsage.usedPercent}%` }}
-                    />
-                  </div>
-                  <dl className="mt-3 space-y-2 text-xs">
-                    <div data-testid="code-agent-context-used" className="flex items-baseline justify-between gap-4">
-                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextUsed')}</dt>
-                      <dd className="text-right font-medium tabular-nums">
-                        {contextUsage.usedContextTokens.toLocaleString(i18n.language)} / {contextUsage.usableContextWindow.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                      </dd>
-                    </div>
-                    <div data-testid="code-agent-context-input" className="flex items-baseline justify-between gap-4 border-t border-[#e2e0d8] pt-2 dark:border-[#383835]">
-                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextInput')}</dt>
-                      <dd className="text-right font-medium tabular-nums">
-                        {contextUsage.inputTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                      </dd>
-                    </div>
-                    {contextUsage.cachedInputTokens !== null && contextUsage.uncachedInputTokens !== null ? (
-                      <>
-                        <div data-testid="code-agent-context-cached" className="ml-2 flex items-baseline justify-between gap-4 border-l border-[#d7d5cc] pl-2 text-[11px] dark:border-[#454540]">
-                          <dt className="text-[#77756f] dark:text-[#9b9991]">{t('codeAgentContextCached')}</dt>
-                          <dd className="text-right tabular-nums text-[#5e5d59] dark:text-[#b0aea5]">
-                            {contextUsage.cachedInputTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                            {contextUsage.cacheHitPercent !== null ? ` (${contextUsage.cacheHitPercent}%)` : ''}
-                          </dd>
-                        </div>
-                        <div data-testid="code-agent-context-uncached" className="ml-2 flex items-baseline justify-between gap-4 border-l border-[#d7d5cc] pl-2 text-[11px] dark:border-[#454540]">
-                          <dt className="text-[#77756f] dark:text-[#9b9991]">{t('codeAgentContextUncached')}</dt>
-                          <dd className="text-right tabular-nums text-[#5e5d59] dark:text-[#b0aea5]">
-                            {contextUsage.uncachedInputTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                          </dd>
-                        </div>
-                      </>
-                    ) : null}
-                    <div data-testid="code-agent-context-output" className="flex items-baseline justify-between gap-4">
-                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextOutput')}</dt>
-                      <dd className="text-right font-medium tabular-nums">
-                        {contextUsage.outputTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                      </dd>
-                    </div>
-                    <div data-testid="code-agent-context-remaining" className="flex items-baseline justify-between gap-4 border-t border-[#e2e0d8] pt-2 dark:border-[#383835]">
-                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextRemaining')}</dt>
-                      <dd className="text-right font-medium tabular-nums">
-                        {contextUsage.remainingTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                      </dd>
-                    </div>
-                    <div data-testid="code-agent-context-window" className="flex items-baseline justify-between gap-4">
-                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextWindow')}</dt>
-                      <dd className="text-right font-medium tabular-nums">
-                        {contextUsage.contextWindow.toLocaleString(i18n.language)} {t('codeAgentTokens')}
-                      </dd>
-                    </div>
-                  </dl>
-                  <p className="mt-3 border-t border-[#dedbd0] pt-2 text-[11px] leading-4 text-[#6b6a65] dark:border-[#3a3a37] dark:text-[#aaa89f]">
-                    {contextUsage.reservedTokens.toLocaleString(i18n.language)} {t('codeAgentContextReserved')}
+                    {t('codeAgentContextPercentFull', { percent: contextUsage.usedPercent })}
+                  </p>
+                  <p
+                    data-testid="code-agent-context-tokens"
+                    data-used-tokens={contextUsage.usedContextTokens}
+                    data-window-tokens={contextUsage.contextWindow}
+                    data-used-display={formatCompactTokenCount(contextUsage.usedContextTokens)}
+                    data-window-display={formatCompactTokenCount(contextUsage.contextWindow)}
+                    className="mt-1 text-[17px] font-medium tabular-nums tracking-tight"
+                  >
+                    {t('codeAgentContextTokensUsed', {
+                      used: formatCompactTokenCount(contextUsage.usedContextTokens),
+                      total: formatCompactTokenCount(contextUsage.contextWindow),
+                    })}
                   </p>
                 </div>
               </PopoverContent>

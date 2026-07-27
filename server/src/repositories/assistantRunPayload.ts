@@ -52,7 +52,7 @@ const hasValidUsageAndCost = (value: unknown): boolean => {
     !hasOnlyKeys(
       usage,
       ['promptTokens', 'completionTokens', 'totalTokens', 'source'],
-      ['cachedPromptTokens', 'cacheHitRate', 'modelContextWindow'],
+      ['cachedPromptTokens', 'cacheHitRate', 'reasoningOutputTokens', 'modelContextWindow'],
     )
     || !isNonNegativeInteger(usage.promptTokens)
     || !isNonNegativeInteger(usage.completionTokens)
@@ -66,6 +66,10 @@ const hasValidUsageAndCost = (value: unknown): boolean => {
     || (usage.cacheHitRate !== undefined && (
       !isNonNegativeFinite(usage.cacheHitRate)
       || usage.cacheHitRate > 1
+    ))
+    || (usage.reasoningOutputTokens !== undefined && (
+      !isNonNegativeInteger(usage.reasoningOutputTokens)
+      || usage.reasoningOutputTokens > usage.completionTokens
     ))
     || (usage.modelContextWindow !== undefined && !isNonNegativeInteger(usage.modelContextWindow))
   ) return false;

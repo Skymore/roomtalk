@@ -24,6 +24,7 @@ export interface AIUsage {
   totalTokens: number;
   cachedPromptTokens?: number;
   cacheHitRate?: number;
+  reasoningOutputTokens?: number;
   modelContextWindow?: number;
   source: 'reported' | 'estimated';
 }

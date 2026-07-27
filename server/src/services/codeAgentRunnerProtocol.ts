@@ -361,6 +361,9 @@ const readOptionalUsage = (value: Record<string, unknown>): AIUsage | undefined 
   if (typeof usage.cacheHitRate === 'number') {
     parsed.cacheHitRate = usage.cacheHitRate;
   }
+  if (typeof usage.reasoningOutputTokens === 'number') {
+    parsed.reasoningOutputTokens = usage.reasoningOutputTokens;
+  }
   if (typeof usage.modelContextWindow === 'number') {
     parsed.modelContextWindow = usage.modelContextWindow;
   }

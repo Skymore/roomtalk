@@ -1051,6 +1051,9 @@ def _to_runner_usage(value: Any) -> dict[str, Any] | None:
     if isinstance(cached, int):
         result["cachedPromptTokens"] = cached
         result["cacheHitRate"] = cached / input_tokens if input_tokens > 0 else 0
+    reasoning_output_tokens = usage.get("reasoningOutputTokens")
+    if isinstance(reasoning_output_tokens, int):
+        result["reasoningOutputTokens"] = reasoning_output_tokens
     model_context_window = value.get("modelContextWindow")
     if isinstance(model_context_window, int) and model_context_window > 0:
         result["modelContextWindow"] = model_context_window

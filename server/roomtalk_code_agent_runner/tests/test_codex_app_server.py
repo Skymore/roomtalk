@@ -266,6 +266,7 @@ def test_codex_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Pat
     assert events[-1]["answer"] == "I read demo.txt"
     assert events[-1]["sessionId"] == "thread-sdk-1"
     assert events[-1]["usage"]["source"] == "reported"
+    assert events[-1]["usage"]["reasoningOutputTokens"] == 1
 
 
 def test_codex_app_server_resolves_relative_codex_bin_from_path(tmp_path: Path):

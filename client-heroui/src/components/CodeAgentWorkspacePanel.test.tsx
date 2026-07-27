@@ -232,6 +232,7 @@ describe('CodeAgentWorkspacePanel', () => {
         totalTokens: 90_832,
         cachedPromptTokens: 88_832,
         cacheHitRate: 0.9824,
+        reasoningOutputTokens: 406,
         modelContextWindow: 258_400,
         source: 'reported',
       },
@@ -247,22 +248,20 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 32%');
+    expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 35%');
     expect(screen.queryByTestId('code-agent-context-usage-details')).toBeNull();
 
     fireEvent.click(screen.getByTestId('code-agent-context-usage'));
 
     const details = await screen.findByTestId('code-agent-context-usage-details');
-    expect(details.textContent).toContain('codeAgentContextUsage');
-    expect(screen.getByTestId('code-agent-context-used').textContent).toContain('78,832 / 246,400 codeAgentTokens');
-    expect(screen.getByTestId('code-agent-context-input').textContent).toContain('78,426 codeAgentTokens');
-    expect(screen.getByTestId('code-agent-context-cached').textContent).toContain('76,832 codeAgentTokens (98%)');
-    expect(screen.getByTestId('code-agent-context-uncached').textContent).toContain('1,594 codeAgentTokens');
-    expect(screen.getByTestId('code-agent-context-output').textContent).toContain('406 codeAgentTokens');
-    expect(screen.getByTestId('code-agent-context-remaining').textContent).toContain('167,568 codeAgentTokens');
-    expect(screen.getByTestId('code-agent-context-window').textContent).toContain('258,400 codeAgentTokens');
-    expect(details.textContent).toContain('12,000 codeAgentContextReserved');
-    expect(screen.getByRole('progressbar', { name: 'codeAgentContextUsed' }).getAttribute('aria-valuenow')).toBe('32');
+    expect(details.textContent).toContain('codeAgentContextWindow:');
+    expect(screen.getByTestId('code-agent-context-percent').getAttribute('data-percent')).toBe('35');
+    expect(screen.getByTestId('code-agent-context-tokens').getAttribute('data-used-tokens')).toBe('90426');
+    expect(screen.getByTestId('code-agent-context-tokens').getAttribute('data-window-tokens')).toBe('258400');
+    expect(screen.getByTestId('code-agent-context-tokens').getAttribute('data-used-display')).toBe('90k');
+    expect(screen.getByTestId('code-agent-context-tokens').getAttribute('data-window-display')).toBe('258k');
+    expect(screen.getByTestId('code-agent-context-tokens').textContent).toBe('codeAgentContextTokensUsed');
+    expect(screen.queryByTestId('code-agent-context-cached')).toBeNull();
     expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost:$0.000000');
     for (const testId of [
       'code-agent-sandbox-status',
