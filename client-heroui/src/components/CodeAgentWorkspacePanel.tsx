@@ -1,5 +1,16 @@
 import React from 'react';
-import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Tab, Tabs } from '@heroui/react';
+import {
+  Button,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Tab,
+  Tabs,
+} from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
@@ -204,12 +215,20 @@ export const latestCodexContextUsage = (messages: readonly Message[]) => {
     ) {
       continue;
     }
-    const effectiveWindow = Math.max(contextWindow - CODEX_CONTEXT_BASELINE_TOKENS, 1);
-    const effectiveUsed = Math.max(usedTokens - CODEX_CONTEXT_BASELINE_TOKENS, 0);
+    const reservedTokens = Math.min(CODEX_CONTEXT_BASELINE_TOKENS, Math.max(contextWindow - 1, 0));
+    const usableContextWindow = contextWindow - reservedTokens;
+    const usedContextTokens = Math.min(
+      Math.max(usedTokens - reservedTokens, 0),
+      usableContextWindow
+    );
     return {
       usedTokens,
       contextWindow,
-      usedPercent: Math.min(100, Math.max(0, Math.round((effectiveUsed / effectiveWindow) * 100))),
+      reservedTokens,
+      usableContextWindow,
+      usedContextTokens,
+      remainingTokens: usableContextWindow - usedContextTokens,
+      usedPercent: Math.round((usedContextTokens / usableContextWindow) * 100),
     };
   }
   return null;
@@ -656,14 +675,66 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             )}
           </span>
           {contextUsage ? (
-            <span
-              data-testid="code-agent-context-usage"
-              title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.contextWindow.toLocaleString()}`}
-              className={`${statusPillClassName} border-[#b9c7ba] bg-[#f4f8f3] text-[#31533b] dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa]`}
-            >
-              <Icon icon="lucide:gauge" className="h-3 w-3 flex-shrink-0" />
-              Context: {contextUsage.usedPercent}%
-            </span>
+            <Popover placement="bottom-end" showArrow>
+              <PopoverTrigger>
+                <button
+                  type="button"
+                  data-testid="code-agent-context-usage"
+                  aria-label={`${t('codeAgentContextUsage')}: ${contextUsage.usedPercent}%`}
+                  className={`${statusPillClassName} cursor-pointer border-[#b9c7ba] bg-[#f4f8f3] text-[#31533b] transition-colors duration-200 hover:border-[#8fac94] hover:bg-[#eaf3e8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4c7a56] focus-visible:ring-offset-2 dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa] dark:hover:border-[#5c7c62] dark:hover:bg-[#24352a] dark:focus-visible:ring-[#78b985] dark:focus-visible:ring-offset-[#141413]`}
+                >
+                  <Icon icon="lucide:gauge" className="h-3 w-3 flex-shrink-0" />
+                  Context: {contextUsage.usedPercent}%
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 items-stretch border border-[#dedbd0] bg-[#faf9f5] p-0 text-[#141413] shadow-lg dark:border-[#3a3a37] dark:bg-[#242421] dark:text-[#faf9f5]">
+                <div data-testid="code-agent-context-usage-details" className="p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold">{t('codeAgentContextUsage')}</span>
+                    <span className="text-sm font-semibold text-[#31533b] dark:text-[#9fd3aa]">
+                      {contextUsage.usedPercent}%
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label={t('codeAgentContextUsed')}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={contextUsage.usedPercent}
+                    className="h-1.5 overflow-hidden rounded-full bg-[#dfe7dc] dark:bg-[#39433b]"
+                  >
+                    <div
+                      aria-hidden="true"
+                      className="h-full rounded-full bg-[#4c7a56] dark:bg-[#78b985]"
+                      style={{ width: `${contextUsage.usedPercent}%` }}
+                    />
+                  </div>
+                  <dl className="mt-3 space-y-2 text-xs">
+                    <div className="flex items-baseline justify-between gap-4">
+                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextUsed')}</dt>
+                      <dd className="text-right font-medium tabular-nums">
+                        {contextUsage.usedContextTokens.toLocaleString(i18n.language)} / {contextUsage.usableContextWindow.toLocaleString(i18n.language)} {t('codeAgentTokens')}
+                      </dd>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-4">
+                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextRemaining')}</dt>
+                      <dd className="text-right font-medium tabular-nums">
+                        {contextUsage.remainingTokens.toLocaleString(i18n.language)} {t('codeAgentTokens')}
+                      </dd>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-4">
+                      <dt className="text-[#5e5d59] dark:text-[#b0aea5]">{t('codeAgentContextWindow')}</dt>
+                      <dd className="text-right font-medium tabular-nums">
+                        {contextUsage.contextWindow.toLocaleString(i18n.language)} {t('codeAgentTokens')}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="mt-3 border-t border-[#dedbd0] pt-2 text-[11px] leading-4 text-[#6b6a65] dark:border-[#3a3a37] dark:text-[#aaa89f]">
+                    {contextUsage.reservedTokens.toLocaleString(i18n.language)} {t('codeAgentContextReserved')}
+                  </p>
+                </div>
+              </PopoverContent>
+            </Popover>
           ) : null}
         </div>
       </div>

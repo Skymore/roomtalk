@@ -217,7 +217,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(onBackendChange).toHaveBeenCalledWith('codex-app-server');
   });
 
-  it('shows the latest Codex context usage', () => {
+  it('shows the latest Codex context usage and opens its details', async () => {
     const aiMessage: Message = {
       id: 'ai-1',
       clientId: 'ai_assistant',
@@ -246,6 +246,17 @@ describe('CodeAgentWorkspacePanel', () => {
     );
 
     expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 50%');
+    expect(screen.queryByTestId('code-agent-context-usage-details')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('code-agent-context-usage'));
+
+    const details = await screen.findByTestId('code-agent-context-usage-details');
+    expect(details.textContent).toContain('codeAgentContextUsage');
+    expect(details.textContent).toContain('94,000 / 188,000 codeAgentTokens');
+    expect(details.textContent).toContain('94,000 codeAgentTokens');
+    expect(details.textContent).toContain('200,000 codeAgentTokens');
+    expect(details.textContent).toContain('12,000 codeAgentContextReserved');
+    expect(screen.getByRole('progressbar', { name: 'codeAgentContextUsed' }).getAttribute('aria-valuenow')).toBe('50');
     expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost:$0.000000');
     for (const testId of [
       'code-agent-sandbox-status',
