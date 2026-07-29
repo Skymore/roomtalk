@@ -109,6 +109,7 @@ const createHarness = (options: {
   publishedArtifacts?: any[];
   lifecycleSandboxId?: string;
   codeAgentSessionService?: any;
+  activeRoomLease?: boolean;
 } = {}) => {
   const socket = new FakeSocket(options.socketId);
   const currentRoom = options.currentRoom || room();
@@ -161,6 +162,7 @@ const createHarness = (options: {
       storeCallCounts.getRoomMember += 1;
       return members.find(item => item.roomId === roomId && item.clientId === clientId) || null;
     },
+    hasActiveCodeAgentRoomLease: async () => options.activeRoomLease === true || currentRoom.codeAgentStatus === 'running',
     readMessagesByRoom: async (roomId: string) => messages.filter(item => item.roomId === roomId),
   };
 
@@ -1129,6 +1131,51 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(createWorkspaceDirectoryCalls, [{ sandboxId: 'sandbox-1', path: 'src/components' }]);
     assert.deepEqual(renameWorkspaceEntryCalls, [{ sandboxId: 'sandbox-1', fromPath: 'src/App.tsx', toPath: 'src/Main.tsx' }]);
     assert.deepEqual(deleteWorkspaceEntryCalls, [{ sandboxId: 'sandbox-1', path: 'src/Main.tsx' }]);
+  });
+
+  it('blocks workspace writes while a checkpoint restore owns the room lease', async () => {
+    const { socket, writeWorkspaceFileCalls } = createHarness({ activeRoomLease: true });
+
+    const response = await socket.invoke<any>('write_code_workspace_file', {
+      roomId: 'room-1',
+      path: 'src/App.tsx',
+      content: 'blocked',
+    });
+
+    assert.deepEqual(response, {
+      success: false,
+      error: 'Workspace changes are locked while a checkpoint is being restored',
+    });
+    assert.deepEqual(writeWorkspaceFileCalls, []);
+  });
+
+  it('lets an owner restore a checkpoint and rejects a regular member', async () => {
+    const calls: unknown[][] = [];
+    const service = {
+      async restoreWorkspaceCheckpoint(...args: unknown[]) {
+        calls.push(args);
+        return { success: true, restoredPaths: ['src/App.tsx'], conflictPaths: [] };
+      },
+    };
+    const owner = createHarness({ codeAgentSessionService: service });
+    assert.deepEqual(await owner.socket.invoke<any>('restore_code_agent_checkpoint', {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+    }), { success: true, restoredPaths: ['src/App.tsx'], conflictPaths: [] });
+    assert.deepEqual(calls, [[{ roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1' }]]);
+
+    const regularMember = member('room-1', 'client-2');
+    regularMember.role = 'member';
+    const nonAdmin = createHarness({
+      clientId: 'client-2',
+      currentRoom: room({ codeAgentAccess: 'member' }),
+      members: [regularMember],
+      codeAgentSessionService: service,
+    });
+    assert.deepEqual(await nonAdmin.socket.invoke<any>('restore_code_agent_checkpoint', {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+    }), { success: false, error: 'Only the room owner or an admin can restore a workspace checkpoint' });
   });
 
   it('rejects workspace file writes larger than the bounded file payload', async () => {

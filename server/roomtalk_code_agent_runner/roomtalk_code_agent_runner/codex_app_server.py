@@ -176,6 +176,7 @@ def run_request(
             if not app_turn_id:
                 raise RunnerError("Codex SDK turn/start response did not include turn.id", code="codex_sdk_app_server_protocol_error", turn_id=request.turn_id)
             state.set_turn_id(app_turn_id)
+            mapper.backend_turn_id = app_turn_id
 
             _consume_turn_notifications(client, app_turn_id, mapper, emitter)
             emitter.emit(mapper.final_event())
@@ -232,7 +233,7 @@ def run_thread_query_request(
                 "nextCursor": result.get("nextCursor") if isinstance(result.get("nextCursor"), str) else None,
                 "backwardsCursor": result.get("backwardsCursor") if isinstance(result.get("backwardsCursor"), str) else None,
             })
-        else:
+        elif request.type == "thread_read":
             result = _response_to_dict(client.thread_read(str(request.thread_id), include_turns=request.include_turns))
             thread = result.get("thread")
             emitter.emit({
@@ -240,6 +241,20 @@ def run_thread_query_request(
                 "type": "thread_read_result",
                 "roomId": request.room_id,
                 "thread": thread if isinstance(thread, dict) else {},
+            })
+        else:
+            params: dict[str, Any] = {"cwd": str(workspace)}
+            if request.last_turn_id:
+                params["lastTurnId"] = request.last_turn_id
+            result = _response_to_dict(client.thread_fork(str(request.thread_id), params))
+            thread_id = _extract_nested_string(result, "thread", "id")
+            if not thread_id:
+                raise RunnerError("Codex SDK thread/fork response did not include thread.id", code="codex_sdk_app_server_protocol_error")
+            emitter.emit({
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "thread_fork_result",
+                "roomId": request.room_id,
+                "threadId": thread_id,
             })
 
         refreshed_auth = codex_home / "auth.json"

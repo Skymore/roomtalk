@@ -109,7 +109,7 @@ const reduceRoomEvents = (
       }
       case 'agent_turns.upserted': {
         const byId = new Map(nextTurns.map(turn => [turn.id, turn]));
-        (event.payload.turns || []).forEach(turn => byId.set(turn.id, turn));
+        (event.payload.turns || []).forEach(turn => byId.set(turn.id, { ...byId.get(turn.id), ...turn }));
         nextTurns = Array.from(byId.values()).sort((left, right) => (
           Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id)
         ));
@@ -761,6 +761,16 @@ export const useRoomMessageEvents = ({
     const handlePageResume = () => {
       if (document.visibilityState === 'visible') void syncFromCursor();
     };
+    const handleAgentTurnUpdated = (turn: RoomAgentTurn) => {
+      if (turn.roomId !== roomId) return;
+      const byId = new Map(canonicalTurns.map(current => [current.id, current]));
+      byId.set(turn.id, { ...byId.get(turn.id), ...turn });
+      canonicalTurns = Array.from(byId.values()).sort((left, right) => (
+        Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id)
+      ));
+      setAgentTurns(canonicalTurns);
+      cacheWindow(canonicalMessages, canonicalTurns);
+    };
 
     const handleAIChunk = (data: AIChunkEvent) => {
       if (data.roomId !== roomId) return;
@@ -896,6 +906,7 @@ export const useRoomMessageEvents = ({
     socket.on('ai_usage_update', handleAIUsageUpdate);
     socket.on('ai_cost_total', handleAICostTotal);
     socket.on('ai_stream_error', handleAIStreamError);
+    socket.on('agent_turn_updated', handleAgentTurnUpdated);
     window.addEventListener('focus', handlePageResume);
     window.addEventListener('pageshow', handlePageResume);
     document.addEventListener('visibilitychange', handlePageResume);
@@ -919,6 +930,7 @@ export const useRoomMessageEvents = ({
       socket.off('ai_usage_update', handleAIUsageUpdate);
       socket.off('ai_cost_total', handleAICostTotal);
       socket.off('ai_stream_error', handleAIStreamError);
+      socket.off('agent_turn_updated', handleAgentTurnUpdated);
       window.removeEventListener('focus', handlePageResume);
       window.removeEventListener('pageshow', handlePageResume);
       document.removeEventListener('visibilitychange', handlePageResume);

@@ -275,10 +275,22 @@ E2B owns the live filesystem, Git worktree, processes, terminals, and preview se
 - An incompatible pinned artifact triggers bounded archive export, replacement sandbox creation, import, Git initialization, atomic room swap, and old-sandbox cleanup.
 - Daemon startup removes stale local agent processes; server shutdown stops tracked daemons.
 - Static artifacts remain independent of sandbox lifetime.
+- A completed Codex app-server turn stores its pre-turn thread ID and `lastTurnId`, its post-turn backend turn ID, and a selective workspace checkpoint descriptor. The archive contains only changed regular-file before/after blobs. It is written to S3-compatible object storage; PostgreSQL owns the manifest, context boundary, and restore audit.
 
 Normal completion and failure also converge transactionally. The terminal transaction checks the exact turn claim, conditionally finalizes the still-owned streaming message, removes unused placeholders, settles the applicable turn cost, updates room and backend-session state, marks the turn terminal, and deletes only the matching lease. If any statement fails, PostgreSQL rolls back the whole projection. If the message was deleted or the fence was superseded, the old execution is obsolete and cannot recreate or overwrite state.
 
-The system does not yet claim a general immutable workspace-revision/rollback layer. Git and archive migration protect current workspace continuity, while published artifacts and room transcripts are separately durable.
+### Selective checkpoint restore
+
+Checkpoint restore is deliberately narrower than a general immutable workspace history. At turn start, the sandbox creates an isolated bare Git object database and index below `/tmp/roomtalk-checkpoints`; the user's `.git`, branch, index, and commit history are never changed. At turn completion, tree comparison identifies paths changed during that turn. RoomTalk packages only before/after blobs for regular files up to 8 MiB each and 64 MiB total logical data. Secret-like files, dependency/build/cache directories, symlinks and unsupported types are excluded or marked unavailable rather than copied.
+
+Restore has two independent targets that converge under one fenced operation:
+
+1. The workspace preview hashes each current path. A path is safe only when it still equals the selected turn's after-image. Safe paths return to their before-image; mismatches are conflicts and stay untouched. Deletions and creations are represented explicitly, and file modes are restored with the selected side.
+2. For Codex app-server, the runner calls `thread/fork` on the source thread with the exact pre-turn `lastTurnId`. The new thread drops the selected and later hidden turns without mutating the source thread.
+
+The restore owns the room's PostgreSQL lease, which also blocks browser file mutations and terminal input across App instances. Applying the safe-file batch keeps an in-sandbox rollback journal, so a write failure first reverses files already changed by that batch. After files and the Codex fork succeed, one transaction verifies the same lease, updates the room's backend session/cursor, writes `code_agent_checkpoint_restores`, and releases the lease. If the external fork or database commit fails, after-image blobs roll the already-restored files forward. An orphaned fork is harmless because the room never points at it. Coco has no equivalent exact hidden-context fork, so exact restore is currently exposed only for completed Codex app-server turns.
+
+This provides safe per-turn undo, not arbitrary historical checkout, branch rollback, or reversal of external side effects such as a pushed commit, deployment, email, or remote API mutation. The capture boundary is the fenced turn window: RoomTalk blocks its own interactive writers, while long-running sandbox processes remain part of the mutable execution environment and should keep generated output in excluded build/cache paths.
 
 ## Persistence Model
 
@@ -288,7 +300,7 @@ The system does not yet claim a general immutable workspace-revision/rollback la
 | --- | --- |
 | PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, `assistant_runs`/dispatch intent, code-agent turns, fenced room leases, sandbox metadata |
 | Redis realtime and queue store | Presence, socket sessions, pub/sub, locks/counters, optional short-TTL message cache, and BullMQ operational jobs for ordinary chat AI |
-| S3-compatible object storage | Private media, published-site versions/manifests, migration/object payloads; SeaweedFS in current production |
+| S3-compatible object storage | Private media, published-site versions/manifests, selective Code Agent checkpoint blobs, migration/object payloads; SeaweedFS in current production |
 
 Server-assigned message positions order canonical history, while the PostgreSQL-owned per-room event sequence is the synchronization authority. `updatedAt` is only a complete-room last-write guard. Browser timestamps are display metadata, not the consistency mechanism.
 

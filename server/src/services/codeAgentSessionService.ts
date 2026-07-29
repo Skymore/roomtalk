@@ -1,11 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { AIStreamOwnership, CodeAgentMessageMutationResult, CodeAgentTurnClaim, CodeAgentTurnTerminalResult, MessageUpdateResult, RoomStore } from '../repositories/store';
+import { AIStreamOwnership, CodeAgentMessageMutationResult, CodeAgentTurnClaim, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, MessageUpdateResult, RoomStore } from '../repositories/store';
 import { AICost, AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from './aiHistory';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
-import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
+import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess, CodeAgentWorkspaceCheckpointArchive } from './codeAgentSandboxService';
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
@@ -20,6 +20,8 @@ import {
   CodeAgentRunnerRunRequest,
   CodeAgentRunnerThreadListRequest,
   CodeAgentRunnerThreadListResultEvent,
+  CodeAgentRunnerThreadForkRequest,
+  CodeAgentRunnerThreadForkResultEvent,
   CodeAgentRunnerThreadReadRequest,
   CodeAgentRunnerThreadReadResultEvent,
 } from './codeAgentRunnerProtocol';
@@ -102,7 +104,7 @@ export interface CodeAgentSessionServiceOptions {
   staticSitePublisher?: PublishedStaticSiteService;
   roomContext?: CodeAgentRoomContextService;
   observability?: ObservabilityEventRecorder;
-  mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject'>;
+  mediaObjectStorage?: Pick<MediaObjectStorage, 'createReadUrl' | 'headObject' | 'putMediaObject' | 'getMediaObject'>;
   aiStreamOwnerId?: string;
   leaseOwnerId?: string;
   roomLeaseTtlMs?: number;
@@ -128,6 +130,15 @@ export type CodeAgentTurnAck = { success: boolean; messageId?: string; error?: s
 export type CodeAgentTurnAckCallback = (response: CodeAgentTurnAck) => void;
 
 export type CodeAgentControlAck = { success: boolean; error?: string };
+
+export type CodeAgentCheckpointRestoreResult = {
+  success: boolean;
+  error?: string;
+  restoredPaths?: string[];
+  conflictPaths?: string[];
+  unavailablePaths?: string[];
+  sessionId?: string;
+};
 
 export interface CodeAgentThreadListResult {
   threads: unknown[];
@@ -288,6 +299,8 @@ export class CodeAgentSessionService {
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let roomLeaseFence: number | undefined;
     let turnClaim: CodeAgentTurnClaim | undefined;
+    let checkpointStarted = false;
+    let workspaceCheckpoint: CodeAgentWorkspaceCheckpointRecord | undefined;
     let leaseLost = false;
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
@@ -367,6 +380,8 @@ export class CodeAgentSessionService {
         ownerId: this.leaseOwnerId,
         now: turnStartedAt,
         leaseTtlMs: this.roomLeaseTtlMs,
+        ...(room!.codeAgentSessionId ? { backendSessionIdBefore: room!.codeAgentSessionId } : {}),
+        ...(room!.codeAgentLastTurnId ? { backendLastTurnIdBefore: room!.codeAgentLastTurnId } : {}),
         ...(input.promptMessageId && input.promptMessage?.codeAgentQueuedInput?.state === 'starting'
           ? { queuedMessageId: input.promptMessageId }
           : {}),
@@ -509,6 +524,22 @@ export class CodeAgentSessionService {
       if (activeTurn) {
         activeTurn.sandbox = turnSandbox;
       }
+      if (turnBackend === 'codex-app-server') {
+        if (
+          this.sandboxService.beginWorkspaceCheckpoint
+          && this.sandboxService.finalizeWorkspaceCheckpoint
+          && this.options.mediaObjectStorage?.putMediaObject
+        ) {
+          await this.sandboxService.beginWorkspaceCheckpoint(turnSandbox, turnId);
+          checkpointStarted = true;
+        } else {
+          this.logger.warn('Workspace checkpoint capture is unavailable for Codex turn', {
+            roomId: input.roomId,
+            turnId,
+            sandboxId: turnSandbox.id,
+          });
+        }
+      }
       const turnImages = await this.createTurnImageUrls(
         input.roomId,
         promptContext.imageMessageIds,
@@ -628,6 +659,10 @@ export class CodeAgentSessionService {
         throw new Error('code agent runner exited without a final event');
       }
 
+      if (checkpointStarted && turnSandbox) {
+        workspaceCheckpoint = await this.finalizeTurnWorkspaceCheckpoint(input.roomId, turnId, turnSandbox);
+      }
+
       // An interrupted Codex turn can still arrive as a terminal `final` event.
       // Close any tool calls that never received a result so clients do not
       // render them as running forever after the turn has ended.
@@ -715,6 +750,8 @@ export class CodeAgentSessionService {
         ...(finalMessage ? { finalMessageId: finalMessage.id } : {}),
         ...(deleteMessageIds.length > 0 ? { deleteMessageIds } : {}),
         sessionId: runResult.finalEvent.sessionId,
+        backendTurnId: runResult.finalEvent.backendTurnId,
+        ...(workspaceCheckpoint ? { workspaceCheckpoint } : {}),
         cost: turnBackend === 'code-agent' ? null : (turnCost || null),
       });
       if (terminal.outcome === 'stale') {
@@ -813,12 +850,21 @@ export class CodeAgentSessionService {
               timestamp: this.now().toISOString(),
             };
         let terminal: CodeAgentTurnTerminalResult = { outcome: 'stale' };
+        if (checkpointStarted && turnSandbox && !workspaceCheckpoint) {
+          workspaceCheckpoint = await this.finalizeTurnWorkspaceCheckpoint(input.roomId, turnId, turnSandbox)
+            .catch(checkpointError => ({
+              schemaVersion: 1 as const,
+              status: 'unavailable' as const,
+              error: checkpointError instanceof Error ? checkpointError.message : String(checkpointError),
+            }));
+        }
         if (turnClaim && turnRecord && this.store.finishCodeAgentTurn) {
           terminal = await this.store.finishCodeAgentTurn({
             claim: turnClaim,
             outcome: 'error',
             completedAt: this.now().toISOString(),
             finalMessageId: alreadyCompleted?.id || errorMessage?.id,
+            ...(workspaceCheckpoint ? { workspaceCheckpoint } : {}),
             ...(errorMessage
               ? {
                   message: errorMessage,
@@ -872,6 +918,9 @@ export class CodeAgentSessionService {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
       }
       if (turnSandbox) {
+        if (checkpointStarted) {
+          await this.sandboxService.discardWorkspaceCheckpoint?.(turnSandbox, turnId).catch(() => undefined);
+        }
         await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox);
       }
       if (isCurrentTurn) {
@@ -1158,6 +1207,172 @@ export class CodeAgentSessionService {
     return { thread: event.thread };
   }
 
+  async restoreWorkspaceCheckpoint(input: {
+    roomId: string;
+    clientId: string;
+    turnId: string;
+  }): Promise<CodeAgentCheckpointRestoreResult> {
+    if (this.activeTurns.has(input.roomId)) {
+      return { success: false, error: 'Wait for the current agent turn to finish before restoring a checkpoint' };
+    }
+    const room = await this.store.getRoomById(input.roomId);
+    const member = room ? await this.store.getRoomMember(input.roomId, input.clientId) : null;
+    const validation = this.validateRoom(room, input.clientId, member?.role);
+    if (!validation.success || !room) return { success: false, error: validation.error || 'Room not found' };
+    if (this.resolveTurnBackend(room) !== 'codex-app-server') {
+      return { success: false, error: 'Exact checkpoint restore currently requires Codex app-server' };
+    }
+    const stored = await this.store.readCodeAgentWorkspaceCheckpoint?.(input.roomId, input.turnId);
+    if (!stored || stored.checkpoint.status !== 'ready' || !stored.checkpoint.manifest) {
+      return { success: false, error: 'This turn does not have a restorable workspace checkpoint' };
+    }
+    if (stored.backendSessionIdBefore && !stored.backendLastTurnIdBefore) {
+      return { success: false, error: 'This checkpoint predates the recorded Codex turn boundary and cannot restore context safely' };
+    }
+    if (
+      !this.store.acquireCodeAgentRoomLease
+      || !this.store.commitCodeAgentCheckpointRestore
+      || !this.sandboxService.previewWorkspaceCheckpoint
+      || !this.sandboxService.restoreWorkspaceCheckpoint
+    ) {
+      return { success: false, error: 'Workspace checkpoint restore is unavailable' };
+    }
+
+    const restoreId = this.createId();
+    const leaseTurnId = `checkpoint_restore_${restoreId}`;
+    const lease = await this.store.acquireCodeAgentRoomLease(
+      input.roomId,
+      leaseTurnId,
+      this.leaseOwnerId,
+      this.now().toISOString(),
+      Math.max(this.roomLeaseTtlMs, 5 * 60 * 1000),
+    );
+    if (!lease) return { success: false, error: 'The workspace is busy' };
+
+    let archive: CodeAgentWorkspaceCheckpointArchive | undefined;
+    let restoredPaths: string[] = [];
+    try {
+      const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
+      if (!sandbox.ok) return { success: false, error: this.describeSandboxFailure(sandbox) };
+      if (stored.checkpoint.manifest.files.length > 0) {
+        const objectKey = stored.checkpoint.objectKey;
+        const getObject = this.options.mediaObjectStorage?.getMediaObject;
+        if (!objectKey || !getObject) return { success: false, error: 'Workspace checkpoint archive is unavailable' };
+        const object = await getObject.call(this.options.mediaObjectStorage, objectKey);
+        archive = {
+          body: object.body,
+          byteSize: object.byteSize,
+          manifest: stored.checkpoint.manifest,
+        };
+      } else {
+        archive = { body: Buffer.from('{}'), byteSize: 2, manifest: stored.checkpoint.manifest };
+      }
+
+      const preview = stored.checkpoint.manifest.files.length > 0
+        ? await this.sandboxService.previewWorkspaceCheckpoint(sandbox.handle, archive)
+        : { safePaths: [], conflictPaths: [], unavailablePaths: [] };
+      restoredPaths = preview.safePaths;
+      if (restoredPaths.length > 0) {
+        await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'before');
+      }
+
+      let sessionId: string | undefined;
+      if (stored.backendSessionIdBefore) {
+        const request: CodeAgentRunnerThreadForkRequest = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'thread_fork',
+          roomId: input.roomId,
+          clientId: input.clientId,
+          workspace: sandbox.handle.workspace,
+          threadId: stored.backendSessionIdBefore,
+          lastTurnId: stored.backendLastTurnIdBefore,
+        };
+        const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadForkResultEvent>({
+          codexClientId: room.creatorId,
+          sandbox: sandbox.handle,
+          request,
+          expectedType: 'thread_fork_result',
+        });
+        sessionId = event.threadId;
+      }
+
+      const committed = await this.store.commitCodeAgentCheckpointRestore({
+        roomId: input.roomId,
+        checkpointTurnId: input.turnId,
+        restoreId,
+        restoredByClientId: input.clientId,
+        lease,
+        ...(sessionId ? { sessionId } : {}),
+        ...(stored.backendLastTurnIdBefore ? { lastTurnId: stored.backendLastTurnIdBefore } : {}),
+        restoredPaths,
+        conflictPaths: preview.conflictPaths,
+        unavailablePaths: preview.unavailablePaths,
+        restoredAt: this.now().toISOString(),
+      });
+      if (!committed) {
+        if (restoredPaths.length > 0) {
+          await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'after');
+        }
+        return { success: false, error: 'The checkpoint restore lost its workspace lease' };
+      }
+      this.emitter.to(committed.room.creatorId).emit('room_updated', committed.room);
+      return {
+        success: true,
+        restoredPaths,
+        conflictPaths: preview.conflictPaths,
+        unavailablePaths: preview.unavailablePaths,
+        ...(sessionId ? { sessionId } : {}),
+      };
+    } catch (error) {
+      if (archive && restoredPaths.length > 0) {
+        const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
+        if (sandbox.ok) {
+          await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'after').catch(rollbackError => {
+            this.logger.error('Failed to roll back workspace after checkpoint restore error', { rollbackError, roomId: input.roomId, turnId: input.turnId });
+          });
+        }
+      }
+      this.logger.error('Failed to restore code-agent workspace checkpoint', { error, roomId: input.roomId, turnId: input.turnId });
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to restore workspace checkpoint' };
+    } finally {
+      await this.store.releaseCodeAgentRoomLease?.(input.roomId, lease.turnId, lease.ownerId, lease.fence);
+    }
+  }
+
+  private async finalizeTurnWorkspaceCheckpoint(
+    roomId: string,
+    turnId: string,
+    sandbox: CodeAgentSandboxHandle
+  ): Promise<CodeAgentWorkspaceCheckpointRecord> {
+    try {
+      const archive = await this.sandboxService.finalizeWorkspaceCheckpoint!(sandbox, turnId);
+      if (archive.manifest.files.length === 0) {
+        return { schemaVersion: 1, status: 'ready', manifest: archive.manifest, archiveByteSize: 0 };
+      }
+      const objectKey = `code-agent-checkpoints/v1/${encodeURIComponent(roomId)}/${encodeURIComponent(turnId)}.tar.gz`;
+      await this.options.mediaObjectStorage!.putMediaObject({
+        objectKey,
+        body: archive.body,
+        mimeType: 'application/gzip',
+        byteSize: archive.byteSize,
+      });
+      return {
+        schemaVersion: 1,
+        status: 'ready',
+        objectKey,
+        archiveByteSize: archive.byteSize,
+        manifest: archive.manifest,
+      };
+    } catch (error) {
+      this.logger.error('Failed to finalize workspace checkpoint', { error, roomId, turnId, sandboxId: sandbox.id });
+      return {
+        schemaVersion: 1,
+        status: 'unavailable',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   private async stopRunnerProcess(runnerProcess: CodeAgentRunnerProcess, roomId: string) {
     await runnerProcess.stop().catch(error => {
       this.logger.warn('Failed to stop code agent runner process', { error, roomId });
@@ -1221,10 +1436,10 @@ export class CodeAgentSessionService {
     return { room, sandbox: sandbox.handle };
   }
 
-  private async runCodexThreadQuery<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(input: {
+  private async runCodexThreadQuery<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent | CodeAgentRunnerThreadForkResultEvent>(input: {
     codexClientId: string;
     sandbox: CodeAgentSandboxHandle;
-    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest;
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest | CodeAgentRunnerThreadForkRequest;
     expectedType: T['type'];
   }): Promise<T> {
     if (this.options.codexBackendEnabled === false) {
@@ -1318,9 +1533,9 @@ export class CodeAgentSessionService {
     });
   }
 
-  private async collectCodexDaemonThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(
+  private async collectCodexDaemonThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent | CodeAgentRunnerThreadForkResultEvent>(
     runnerProcess: CodeAgentRunnerProcess,
-    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest | CodeAgentRunnerThreadForkRequest,
     expectedType: T['type'],
     runnerEnv: Record<string, string>
   ): Promise<T> {
@@ -1330,9 +1545,9 @@ export class CodeAgentSessionService {
     return this.options.daemonRunnerClient.query<T>(runnerProcess, request, expectedType, runnerEnv);
   }
 
-  private async collectCodexThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(
+  private async collectCodexThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent | CodeAgentRunnerThreadForkResultEvent>(
     runnerProcess: CodeAgentRunnerProcess,
-    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest | CodeAgentRunnerThreadForkRequest,
     expectedType: T['type']
   ): Promise<T> {
     if (!runnerProcess.stdin || !runnerProcess.stdout || !runnerProcess.completed) {
@@ -2458,6 +2673,11 @@ export class CodeAgentSessionService {
         return {
           roomId: event.roomId,
           hasThread: Boolean(event.thread),
+        };
+      case 'thread_fork_result':
+        return {
+          roomId: event.roomId,
+          threadId: event.threadId,
         };
       case 'text_delta':
         return { deltaLength: event.delta.length };

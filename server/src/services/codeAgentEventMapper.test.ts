@@ -166,12 +166,14 @@ describe('code agent runner event mapper', () => {
       messageId: 'ai-1',
       answer: 'done',
       sessionId: 'session-1',
+      backendTurnId: 'codex-turn-1',
     }, context);
     assert.deepEqual(final, {
       kind: 'final',
       messageId: 'ai-1',
       answer: 'done',
       sessionId: 'session-1',
+      backendTurnId: 'codex-turn-1',
       usage: undefined,
     });
 

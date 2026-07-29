@@ -29,6 +29,7 @@ runtime/
 __pycache__/
 .pytest_cache/
 *.pyc
+*.egg-info/
 
 # Misc
 .DS_Store

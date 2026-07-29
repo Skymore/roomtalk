@@ -9,6 +9,7 @@ interface AgentTurnItemProps {
   messages: Message[];
   renderAgentMessage: (message: Message) => React.ReactNode;
   renderStandaloneMessage: (message: Message) => React.ReactNode;
+  onRestoreCheckpoint?: (turn: RoomAgentTurn) => unknown;
 }
 
 const phaseLabelKeys: Record<RoomAgentTurnPhase, string> = {
@@ -40,10 +41,13 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   messages,
   renderAgentMessage,
   renderStandaloneMessage,
+  onRestoreCheckpoint,
 }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
+  const [isRestoring, setIsRestoring] = React.useState(false);
+  const [restoreNotice, setRestoreNotice] = React.useState<string | null>(null);
   const ownMessages = React.useMemo(() => messages.filter(message => message.turnId === turn.id), [messages, turn.id]);
   const lastAIMessageId = [...ownMessages].reverse().find(message => message.messageType === 'ai')?.id;
   const fallbackFinalId = [...ownMessages].reverse().find(message => message.messageType !== 'tool_result')?.id || ownMessages.at(-1)?.id;
@@ -62,6 +66,26 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const completedAtMs = timestampMs(turn.completedAt) || Math.max(...ownMessages.map(message => timestampMs(message.timestamp)), startedAtMs);
   const totalDuration = formatAgentTurnDuration((turn.status === 'running' ? now : completedAtMs) - startedAtMs);
   const activePhaseLabel = turn.phase ? t(phaseLabelKeys[turn.phase]) : t('agentPhaseRunning');
+  const canRestore = Boolean(
+    onRestoreCheckpoint
+    && turn.backend === 'codex-app-server'
+    && turn.status !== 'running'
+    && turn.workspaceCheckpoint?.status === 'ready'
+  );
+
+  const restoreCheckpoint = async () => {
+    if (!onRestoreCheckpoint || isRestoring) return;
+    setIsRestoring(true);
+    setRestoreNotice(null);
+    try {
+      const notice = await onRestoreCheckpoint(turn);
+      setRestoreNotice(typeof notice === 'string' ? notice : t('agentCheckpointRestored', { count: 0 }));
+    } catch (error) {
+      setRestoreNotice(error instanceof Error ? error.message : t('agentCheckpointRestoreFailed'));
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
   const renderOwnMessage = (message: Message) => (
     <div key={message.id} className="ml-10 max-w-[82%] sm:max-w-[70%]">
@@ -92,6 +116,25 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
             <span>{t('agentWorkedFor', { duration: totalDuration })}</span>
             <Icon icon="lucide:chevron-right" className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
           </button>
+          {canRestore && (
+            <div className="mt-1 flex flex-wrap items-center gap-2 px-1">
+              <button
+                type="button"
+                disabled={isRestoring}
+                onClick={() => void restoreCheckpoint()}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-[#9f4d34] transition-colors hover:bg-[#eadfd8] disabled:cursor-wait disabled:opacity-60 dark:text-[#e18a6d] dark:hover:bg-[#2a201c]"
+              >
+                <Icon icon={isRestoring ? 'lucide:loader-circle' : 'lucide:rotate-ccw'} className={`h-3.5 w-3.5 ${isRestoring ? 'animate-spin' : ''}`} />
+                {isRestoring ? t('agentCheckpointRestoring') : t('agentCheckpointRestore')}
+              </button>
+              <span className="text-[11px] text-[#77746d] dark:text-[#96938b]">
+                {t('agentCheckpointFiles', { count: turn.workspaceCheckpoint?.restorableFileCount || 0 })}
+              </span>
+            </div>
+          )}
+          {restoreNotice && (
+            <div role="status" className="mt-1 px-1 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{restoreNotice}</div>
+          )}
         </div>
       )}
 

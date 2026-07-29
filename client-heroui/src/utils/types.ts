@@ -166,6 +166,11 @@ export interface RoomAgentTurn {
   phase?: RoomAgentTurnPhase;
   phaseMessage?: string;
   lastHeartbeatAt?: string;
+  workspaceCheckpoint?: {
+    status: 'ready' | 'unavailable';
+    fileCount: number;
+    restorableFileCount: number;
+  };
   updatedAt: string;
 }
 
@@ -181,6 +186,7 @@ export interface Room {
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
   codeAgentSessionId?: string;
+  codeAgentLastTurnId?: string;
   codeAgentStatus?: RoomCodeAgentStatus;
   codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;

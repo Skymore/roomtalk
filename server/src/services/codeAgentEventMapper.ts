@@ -46,7 +46,7 @@ export interface CodeAgentEventMapperContext {
 export type CodeAgentMappedRunnerEvent =
   | { kind: 'message'; message: CodeAgentMessageDraft }
   | { kind: 'ai_delta'; messageId: string; delta: string }
-  | { kind: 'final'; messageId: string; answer: string; sessionId: string; usage?: CodeAgentRunnerFinalEvent['usage'] }
+  | { kind: 'final'; messageId: string; answer: string; sessionId: string; backendTurnId?: string; usage?: CodeAgentRunnerFinalEvent['usage'] }
   | { kind: 'ignored' };
 
 const defaultCreateMessageId = (prefix: string) => `${prefix}_${Date.now()}`;
@@ -168,6 +168,7 @@ export const mapCodeAgentRunnerEvent = (
         messageId: event.messageId,
         answer: event.answer,
         sessionId: event.sessionId,
+        ...(event.backendTurnId ? { backendTurnId: event.backendTurnId } : {}),
         usage: event.usage,
       };
     case 'error': {
@@ -211,6 +212,7 @@ export const mapCodeAgentRunnerEvent = (
     }
     case 'thread_list_result':
     case 'thread_read_result':
+    case 'thread_fork_result':
     case 'control_result':
     case 'user_input_inserted':
     case 'model_step':

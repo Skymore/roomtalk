@@ -55,6 +55,7 @@ class CodexThreadQueryRequest:
     search_term: str | None = None
     thread_id: str | None = None
     include_turns: bool = False
+    last_turn_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,7 @@ class CodexAppServerJsonRpcMapper:
     workspace: Path
     fallback_session_id: str | None = None
     session_id: str | None = None
+    backend_turn_id: str | None = None
     answer_parts: list[str] = field(default_factory=list)
     streamed_agent_message_text: dict[str, str] = field(default_factory=dict)
     completed_agent_message_ids: set[str] = field(default_factory=set)
@@ -263,6 +265,8 @@ class CodexAppServerJsonRpcMapper:
             "answer": _normalize_workspace_text(self.workspace, "".join(self.answer_parts)),
             "sessionId": self.session_id or self.fallback_session_id or "codex-app-server-session",
         }
+        if self.backend_turn_id:
+            event["backendTurnId"] = self.backend_turn_id
         if self.usage:
             event["usage"] = self.usage
         return event
@@ -422,7 +426,7 @@ def parse_app_server_request(line: str) -> RunnerRequest | CodexThreadQueryReque
     request_type = raw.get("type")
     if request_type == "run":
         return parse_request(line)
-    if request_type in ("thread_list", "thread_read"):
+    if request_type in ("thread_list", "thread_read", "thread_fork"):
         return _parse_thread_query_request(raw)
     raise RunnerError(f"Unsupported request type: {request_type}", code="unsupported_type")
 
@@ -441,7 +445,7 @@ def _parse_thread_query_request(raw: dict[str, Any]) -> CodexThreadQueryRequest:
 
     thread_id = raw.get("threadId")
     request_type = string_field("type")
-    if request_type == "thread_read" and (not isinstance(thread_id, str) or not thread_id.strip()):
+    if request_type in ("thread_read", "thread_fork") and (not isinstance(thread_id, str) or not thread_id.strip()):
         raise RunnerError("Expected non-empty string field 'threadId'", code="invalid_request")
 
     client_id = raw.get("clientId")
@@ -457,6 +461,7 @@ def _parse_thread_query_request(raw: dict[str, Any]) -> CodexThreadQueryRequest:
         search_term=search_term.strip() if isinstance(search_term, str) and search_term.strip() else None,
         thread_id=thread_id.strip() if isinstance(thread_id, str) and thread_id.strip() else None,
         include_turns=raw.get("includeTurns") is True,
+        last_turn_id=raw.get("lastTurnId").strip() if isinstance(raw.get("lastTurnId"), str) and raw.get("lastTurnId").strip() else None,
     )
 
 

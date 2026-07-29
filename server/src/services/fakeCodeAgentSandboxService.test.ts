@@ -91,4 +91,28 @@ describe('FakeCodeAgentSandboxService', () => {
       ],
     });
   });
+
+  it('restores only unchanged agent-written files and preserves later user edits', async () => {
+    const service = new FakeCodeAgentSandboxService(() => new Date('2026-07-29T00:00:00.000Z'));
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    await service.writeWorkspaceFile(handle, { path: 'src/existing.txt', content: 'before' });
+    await service.beginWorkspaceCheckpoint(handle, 'turn-1');
+
+    await service.writeWorkspaceFile(handle, { path: 'src/existing.txt', content: 'agent after' });
+    await service.writeWorkspaceFile(handle, { path: 'src/new.txt', content: 'agent new' });
+    const checkpoint = await service.finalizeWorkspaceCheckpoint(handle, 'turn-1');
+    assert.deepEqual(checkpoint.manifest.files.map(file => file.path), ['src/existing.txt', 'src/new.txt']);
+
+    await service.writeWorkspaceFile(handle, { path: 'src/existing.txt', content: 'user after agent' });
+    const preview = await service.previewWorkspaceCheckpoint(handle, checkpoint);
+    assert.deepEqual(preview.safePaths, ['src/new.txt']);
+    assert.deepEqual(preview.conflictPaths, ['src/existing.txt']);
+
+    await service.restoreWorkspaceCheckpoint(handle, checkpoint, preview.safePaths, 'before');
+    assert.equal((await service.readWorkspaceFile(handle, 'src/existing.txt')).content, 'user after agent');
+    assert.equal((await service.listWorkspaceEntries(handle)).some(entry => entry.path === 'src/new.txt'), false);
+
+    await service.restoreWorkspaceCheckpoint(handle, checkpoint, preview.safePaths, 'after');
+    assert.equal((await service.readWorkspaceFile(handle, 'src/new.txt')).content, 'agent new');
+  });
 });

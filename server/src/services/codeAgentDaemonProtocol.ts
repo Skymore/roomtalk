@@ -5,6 +5,7 @@ import {
   CodeAgentRunnerProtocolError,
   CodeAgentRunnerRunRequest,
   CodeAgentRunnerThreadListRequest,
+  CodeAgentRunnerThreadForkRequest,
   CodeAgentRunnerThreadReadRequest,
   parseCodeAgentRunnerEventLine,
 } from './codeAgentRunnerProtocol';
@@ -38,9 +39,15 @@ export type CodeAgentDaemonThreadReadRequest = CodeAgentRunnerThreadReadRequest 
   env?: Record<string, string>;
 };
 
+export type CodeAgentDaemonThreadForkRequest = CodeAgentRunnerThreadForkRequest & {
+  backend?: 'codex-app-server';
+  env?: Record<string, string>;
+};
+
 export type CodeAgentDaemonThreadQueryRequest =
   | CodeAgentDaemonThreadListRequest
-  | CodeAgentDaemonThreadReadRequest;
+  | CodeAgentDaemonThreadReadRequest
+  | CodeAgentDaemonThreadForkRequest;
 
 export type CodeAgentDaemonRequest =
   | CodeAgentDaemonHealthRequest
@@ -100,7 +107,7 @@ export const createCodeAgentDaemonRunRequest = (
 });
 
 export const createCodeAgentDaemonThreadQueryRequest = (
-  request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+  request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest | CodeAgentRunnerThreadForkRequest,
   env?: Record<string, string>
 ): CodeAgentDaemonThreadQueryRequest => ({
   ...request,

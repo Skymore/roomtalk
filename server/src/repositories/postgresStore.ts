@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
+import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -65,6 +65,7 @@ type RoomRow = {
   sandbox_artifact_version?: string | null;
   sandbox_code_agent_source_ref?: string | null;
   code_agent_session_id?: string | null;
+  code_agent_last_turn_id?: string | null;
   code_agent_status?: RoomCodeAgentStatus | null;
   code_agent_access?: string | null;
   code_agent_mode?: string | null;
@@ -236,6 +237,11 @@ type RoomAgentTurnRow = {
   updated_at: string | Date;
   lease_owner?: string | null;
   lease_fence?: number | string | null;
+  backend_session_id_before?: string | null;
+  backend_last_turn_id_before?: string | null;
+  backend_session_id_after?: string | null;
+  backend_turn_id_after?: string | null;
+  workspace_checkpoint?: unknown;
 };
 
 type OutboxEventRow = {
@@ -294,7 +300,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -305,7 +311,7 @@ const CLAIMED_ASSISTANT_RUN_COLUMNS = ASSISTANT_RUN_COLUMNS
   .split(', ')
   .map(column => `run.${column}`)
   .join(', ');
-const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at';
+const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at, backend_session_id_before, backend_last_turn_id_before, backend_session_id_after, backend_turn_id_after, workspace_checkpoint';
 const OUTBOX_EVENT_COLUMNS = 'id, event_type, aggregate_type, aggregate_id, room_id, payload, status, attempts, available_at, locked_at, locked_by, processed_at, last_error, created_at, updated_at';
 const CLAIMED_OUTBOX_EVENT_COLUMNS = 'e.id, e.event_type, e.aggregate_type, e.aggregate_id, e.room_id, e.payload, e.status, e.attempts, e.available_at, e.locked_at, e.locked_by, e.processed_at, e.last_error, e.created_at, e.updated_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
@@ -399,6 +405,7 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.sandbox_artifact_version) room.sandboxArtifactVersion = row.sandbox_artifact_version;
   if (row.sandbox_code_agent_source_ref) room.sandboxCodeAgentSourceRef = row.sandbox_code_agent_source_ref;
   if (row.code_agent_session_id) room.codeAgentSessionId = row.code_agent_session_id;
+  if (row.code_agent_last_turn_id) room.codeAgentLastTurnId = row.code_agent_last_turn_id;
   if (row.code_agent_status) room.codeAgentStatus = row.code_agent_status;
   if (row.code_agent_access) room.codeAgentAccess = row.code_agent_access as Room['codeAgentAccess'];
   if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
@@ -570,20 +577,30 @@ const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
   return run;
 };
 
-const mapRoomAgentTurn = (row: RoomAgentTurnRow): RoomAgentTurn => ({
-  id: row.id,
-  roomId: row.room_id,
-  status: row.status,
-  startedAt: toIsoString(row.started_at),
-  ...(row.completed_at ? { completedAt: toIsoString(row.completed_at) } : {}),
-  ...(row.final_message_id ? { finalMessageId: row.final_message_id } : {}),
-  backend: row.backend,
-  assistantName: row.assistant_name,
-  ...(row.phase ? { phase: row.phase } : {}),
-  ...(row.phase_message ? { phaseMessage: row.phase_message } : {}),
-  ...(row.last_heartbeat_at ? { lastHeartbeatAt: toIsoString(row.last_heartbeat_at) } : {}),
-  updatedAt: toIsoString(row.updated_at),
-});
+const mapRoomAgentTurn = (row: RoomAgentTurnRow): RoomAgentTurn => {
+  const checkpoint = parseJsonValue<CodeAgentWorkspaceCheckpointRecord>(row.workspace_checkpoint);
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    status: row.status,
+    startedAt: toIsoString(row.started_at),
+    ...(row.completed_at ? { completedAt: toIsoString(row.completed_at) } : {}),
+    ...(row.final_message_id ? { finalMessageId: row.final_message_id } : {}),
+    backend: row.backend,
+    assistantName: row.assistant_name,
+    ...(row.phase ? { phase: row.phase } : {}),
+    ...(row.phase_message ? { phaseMessage: row.phase_message } : {}),
+    ...(row.last_heartbeat_at ? { lastHeartbeatAt: toIsoString(row.last_heartbeat_at) } : {}),
+    ...(checkpoint ? {
+      workspaceCheckpoint: {
+        status: checkpoint.status,
+        fileCount: checkpoint.manifest?.files.length || 0,
+        restorableFileCount: checkpoint.manifest?.files.filter(file => file.restorable).length || 0,
+      },
+    } : {}),
+    updatedAt: toIsoString(row.updated_at),
+  };
+};
 
 const mapOutboxEvent = (row: OutboxEventRow): OutboxEventRecord => {
   const event: OutboxEventRecord = {
@@ -2230,7 +2247,7 @@ export class PostgresStore implements DurableRoomStore {
             lease_owner,
             lease_fence
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
           )
           RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
           [
@@ -2246,6 +2263,11 @@ export class PostgresStore implements DurableRoomStore {
             input.turn.phaseMessage || null,
             input.turn.lastHeartbeatAt || null,
             input.turn.updatedAt,
+            input.backendSessionIdBefore || null,
+            input.backendLastTurnIdBefore || null,
+            null,
+            null,
+            null,
             input.ownerId,
             Number(leaseRow.fence),
           ],
@@ -2494,11 +2516,15 @@ export class PostgresStore implements DurableRoomStore {
             WHEN $2 = 'idle' AND $3::text IS NOT NULL THEN $3
             ELSE code_agent_session_id
           END,
-          last_activity_at = GREATEST(last_activity_at, $4::timestamptz),
+          code_agent_last_turn_id = CASE
+            WHEN $2 = 'idle' AND $3::text IS NOT NULL THEN $4
+            ELSE code_agent_last_turn_id
+          END,
+          last_activity_at = GREATEST(last_activity_at, $5::timestamptz),
           updated_at = clock_timestamp()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
-        [claim.roomId, roomStatus, input.sessionId || null, input.completedAt],
+        [claim.roomId, roomStatus, input.sessionId || null, input.backendTurnId || null, input.completedAt],
       );
       if (!room.rows[0]) throw new Error(`Code-agent terminal transition lost room ${claim.roomId}`);
 
@@ -2513,7 +2539,10 @@ export class PostgresStore implements DurableRoomStore {
           phase = NULL,
           phase_message = NULL,
           last_heartbeat_at = $6::timestamptz,
-          updated_at = $6::timestamptz
+          updated_at = $6::timestamptz,
+          backend_session_id_after = $8,
+          backend_turn_id_after = $9,
+          workspace_checkpoint = $10::jsonb
         WHERE id = $1
           AND room_id = $2
           AND status = 'running'
@@ -2528,6 +2557,9 @@ export class PostgresStore implements DurableRoomStore {
           actualOutcome,
           input.completedAt,
           finalMessageId,
+          input.sessionId || null,
+          input.backendTurnId || null,
+          toJsonb(input.workspaceCheckpoint),
         ],
       );
       if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
@@ -2555,7 +2587,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomAgentTurnRow>(
         `INSERT INTO room_agent_turns (${ROOM_AGENT_TURN_COLUMNS})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NULL, NULL, NULL, NULL)
         ON CONFLICT (id) DO UPDATE SET
           status = EXCLUDED.status,
           completed_at = EXCLUDED.completed_at,
@@ -2593,6 +2625,102 @@ export class PostgresStore implements DurableRoomStore {
       this.logger.error('Error reading PostgreSQL room agent turns', { error, roomId });
       return [];
     }
+  }
+
+  async readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string): Promise<{
+    turn: RoomAgentTurn;
+    backendSessionIdBefore?: string;
+    backendLastTurnIdBefore?: string;
+    checkpoint: CodeAgentWorkspaceCheckpointRecord;
+  } | null> {
+    const result = await this.pool.query<RoomAgentTurnRow>(
+      `SELECT ${ROOM_AGENT_TURN_COLUMNS}
+      FROM room_agent_turns
+      WHERE room_id = $1 AND id = $2
+      LIMIT 1`,
+      [roomId, turnId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const checkpoint = parseJsonValue<CodeAgentWorkspaceCheckpointRecord>(row.workspace_checkpoint);
+    if (!checkpoint || checkpoint.schemaVersion !== 1) return null;
+    return {
+      turn: mapRoomAgentTurn(row),
+      ...(row.backend_session_id_before ? { backendSessionIdBefore: row.backend_session_id_before } : {}),
+      ...(row.backend_last_turn_id_before ? { backendLastTurnIdBefore: row.backend_last_turn_id_before } : {}),
+      checkpoint,
+    };
+  }
+
+  async commitCodeAgentCheckpointRestore(
+    input: CodeAgentCheckpointRestoreCommitInput
+  ): Promise<CodeAgentCheckpointRestoreCommitResult | null> {
+    return this.transaction(async client => {
+      const room = await client.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+        [input.roomId],
+      );
+      if (!room.rows[0] || room.rows[0].code_agent_status === 'running') return null;
+      const lease = await client.query<CodeAgentRoomLeaseRow>(
+        `SELECT room_id, turn_id, owner_id, fence, expires_at
+        FROM code_agent_room_leases
+        WHERE room_id = $1
+          AND turn_id = $2
+          AND owner_id = $3
+          AND fence = $4
+          AND expires_at > clock_timestamp()
+        FOR UPDATE`,
+        [input.roomId, input.lease.turnId, input.lease.ownerId, input.lease.fence],
+      );
+      if (!lease.rows[0]) return null;
+      const turn = await client.query<RoomAgentTurnRow>(
+        `SELECT ${ROOM_AGENT_TURN_COLUMNS}
+        FROM room_agent_turns
+        WHERE room_id = $1
+          AND id = $2
+          AND workspace_checkpoint->>'status' = 'ready'
+        FOR UPDATE`,
+        [input.roomId, input.checkpointTurnId],
+      );
+      if (!turn.rows[0]) return null;
+
+      const updatedRoom = await client.query<RoomRow>(
+        `UPDATE rooms
+        SET code_agent_session_id = $2,
+          code_agent_last_turn_id = $3,
+          code_agent_status = 'idle',
+          updated_at = clock_timestamp()
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [input.roomId, input.sessionId || null, input.lastTurnId || null],
+      );
+      if (!updatedRoom.rows[0]) throw new Error(`Checkpoint restore lost room ${input.roomId}`);
+      await client.query(
+        `INSERT INTO code_agent_checkpoint_restores (
+          id, room_id, checkpoint_turn_id, restored_by_client_id,
+          backend_session_id_after, backend_last_turn_id_after,
+          restored_paths, conflict_paths, unavailable_paths, restored_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::timestamptz)`,
+        [
+          input.restoreId,
+          input.roomId,
+          input.checkpointTurnId,
+          input.restoredByClientId,
+          input.sessionId || null,
+          input.lastTurnId || null,
+          JSON.stringify(input.restoredPaths),
+          JSON.stringify(input.conflictPaths),
+          JSON.stringify(input.unavailablePaths),
+          input.restoredAt,
+        ],
+      );
+      await client.query(
+        `DELETE FROM code_agent_room_leases
+        WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3 AND fence = $4`,
+        [input.roomId, input.lease.turnId, input.lease.ownerId, input.lease.fence],
+      );
+      return { room: mapRoom(updatedRoom.rows[0]), turn: mapRoomAgentTurn(turn.rows[0]) };
+    });
   }
 
   async failInterruptedRoomAgentTurns(completedAt = new Date().toISOString()): Promise<number> {
@@ -2708,6 +2836,19 @@ export class PostgresStore implements DurableRoomStore {
       this.logger.error('Error acquiring PostgreSQL code-agent room lease', { error, roomId, turnId, ownerId });
       return null;
     }
+  }
+
+  async hasActiveCodeAgentRoomLease(roomId: string, now: string): Promise<boolean> {
+    const result = await this.pool.query<{ active: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1
+        FROM code_agent_room_leases
+        WHERE room_id = $1
+          AND expires_at > $2::timestamptz
+      ) AS active`,
+      [roomId, now],
+    );
+    return result.rows[0]?.active === true;
   }
 
   async renewCodeAgentRoomLease(

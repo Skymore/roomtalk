@@ -144,6 +144,13 @@ type CodeWorkspaceEntryAckResponse = SocketAckResponse & {
   entry?: unknown;
 };
 
+export type CodeAgentCheckpointRestoreResponse = SocketAckResponse & {
+  restoredPaths?: string[];
+  conflictPaths?: string[];
+  unavailablePaths?: string[];
+  sessionId?: string;
+};
+
 type CodeWorkspaceAssetUrlAckResponse = SocketAckResponse & {
   asset?: unknown;
 };
@@ -1576,6 +1583,16 @@ export const interruptCodeAgentTurn = (roomId: string, reason?: string): Promise
     'Timed out while interrupting the running agent',
     'Failed to interrupt the running agent',
   ).then(() => undefined)
+);
+
+export const restoreCodeAgentCheckpoint = (roomId: string, turnId: string): Promise<CodeAgentCheckpointRestoreResponse> => (
+  emitWithAck<CodeAgentCheckpointRestoreResponse>(
+    'restore_code_agent_checkpoint',
+    { roomId, turnId },
+    'Timed out while restoring the workspace checkpoint',
+    'Failed to restore the workspace checkpoint',
+    { timeoutMs: 2 * 60 * 1000 },
+  )
 );
 
 export const steerCodeAgentTurn = (roomId: string, prompt: string): Promise<void> => (

@@ -1659,4 +1659,37 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         WHERE status = 'running';
     `,
   },
+  {
+    // A completed Code Agent turn owns a selective workspace checkpoint and a
+    // backend conversation boundary. The archive contains only files changed
+    // by that turn; restore attempts are recorded separately for audit.
+    id: '0012_code_agent_workspace_checkpoints',
+    sql: `
+      ALTER TABLE rooms
+        ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT;
+
+      ALTER TABLE room_agent_turns
+        ADD COLUMN IF NOT EXISTS backend_session_id_before TEXT,
+        ADD COLUMN IF NOT EXISTS backend_last_turn_id_before TEXT,
+        ADD COLUMN IF NOT EXISTS backend_session_id_after TEXT,
+        ADD COLUMN IF NOT EXISTS backend_turn_id_after TEXT,
+        ADD COLUMN IF NOT EXISTS workspace_checkpoint JSONB;
+
+      CREATE TABLE IF NOT EXISTS code_agent_checkpoint_restores (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        checkpoint_turn_id TEXT NOT NULL REFERENCES room_agent_turns(id) ON DELETE CASCADE,
+        restored_by_client_id TEXT NOT NULL,
+        backend_session_id_after TEXT,
+        backend_last_turn_id_after TEXT,
+        restored_paths JSONB NOT NULL,
+        conflict_paths JSONB NOT NULL,
+        unavailable_paths JSONB NOT NULL,
+        restored_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_code_agent_checkpoint_restores_room_time
+        ON code_agent_checkpoint_restores (room_id, restored_at DESC);
+    `,
+  },
 ];

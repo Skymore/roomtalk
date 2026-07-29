@@ -724,6 +724,22 @@ export function registerCodeAgentWorkspaceHandlers({
     return { success: true, handle: await codeAgentSandboxService.connect(room.sandboxId) };
   };
 
+  const ensureWorkspaceMutationIdle = async (roomId: string) => {
+    if (store.hasActiveCodeAgentRoomLease) {
+      if (!await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString())) {
+        return null;
+      }
+      const latest = await store.getRoomById(roomId);
+      return latest?.codeAgentStatus === 'running'
+        ? 'Workspace changes are locked while the agent is running'
+        : 'Workspace changes are locked while a checkpoint is being restored';
+    }
+    const latest = await store.getRoomById(roomId);
+    return latest?.codeAgentStatus === 'running'
+      ? 'Workspace changes are locked while the agent is running'
+      : null;
+  };
+
   socket.on('interrupt_code_agent_turn', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
     const roomId = parseRoomId(payload);
     const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'interrupt code agent turn');
@@ -758,6 +774,44 @@ export function registerCodeAgentWorkspaceHandlers({
     }
     const response = await codeAgentSessionService.steerTurn(authorized.room.id, authorized.clientId, prompt);
     callback?.(response);
+  });
+
+  socket.on('restore_code_agent_checkpoint', async (
+    payload: unknown,
+    callback?: (response: {
+      success: boolean;
+      error?: string;
+      restoredPaths?: string[];
+      conflictPaths?: string[];
+      unavailablePaths?: string[];
+      sessionId?: string;
+    }) => void,
+  ) => {
+    const roomId = parseRoomId(payload);
+    const turnId = parseWorkspaceString(payload, 'turnId');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'restore code agent checkpoint');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!turnId) {
+      callback?.({ success: false, error: 'Agent turn ID is required' });
+      return;
+    }
+    const member = await store.getRoomMember(authorized.room.id, authorized.clientId);
+    if (authorized.room.creatorId !== authorized.clientId && member?.role !== 'owner' && member?.role !== 'admin') {
+      callback?.({ success: false, error: 'Only the room owner or an admin can restore a workspace checkpoint' });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Workspace is unavailable' });
+      return;
+    }
+    callback?.(await codeAgentSessionService.restoreWorkspaceCheckpoint({
+      roomId: authorized.room.id,
+      clientId: authorized.clientId,
+      turnId,
+    }));
   });
 
   socket.on('edit_queued_code_agent_input', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
@@ -1407,6 +1461,11 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Terminal id is invalid' });
         return;
       }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
+        return;
+      }
       if (!codeAgentSandboxService?.startWorkspaceTerminal) {
         callback?.({ success: false, error: 'Workspace terminal is unavailable' });
         return;
@@ -1504,6 +1563,11 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       if (!terminalId || data === null) {
         callback?.({ success: false, error: 'Terminal input is invalid' });
+        return;
+      }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
         return;
       }
       const session = getTerminalSessionsForRoom(access.room.id).get(terminalId);
@@ -1992,6 +2056,11 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'File content is too large' });
         return;
       }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
+        return;
+      }
       if (!codeAgentSandboxService?.writeWorkspaceFile) {
         callback?.({ success: false, error: 'Workspace file writing is unavailable' });
         return;
@@ -2036,6 +2105,11 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace directory creation is unavailable' });
         return;
       }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
+        return;
+      }
       const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
@@ -2073,6 +2147,11 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace entry rename is unavailable' });
         return;
       }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
+        return;
+      }
       const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
@@ -2107,6 +2186,11 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       if (!codeAgentSandboxService?.deleteWorkspaceEntry) {
         callback?.({ success: false, error: 'Workspace entry deletion is unavailable' });
+        return;
+      }
+      const runningError = await ensureWorkspaceMutationIdle(access.room.id);
+      if (runningError) {
+        callback?.({ success: false, error: runningError });
         return;
       }
       const workspace = await connectReadyWorkspace(access.room, access.clientId);

@@ -808,6 +808,129 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'stale-tool'), false);
   });
 
+  it('persists checkpoint boundaries and commits a fenced context restore atomically', async () => {
+    const roomId = 'checkpoint-restore-room';
+    const turnId = 'checkpoint-turn';
+    const now = new Date().toISOString();
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentBackend: 'codex-app-server',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+      codeAgentSessionId: 'thread-before',
+      codeAgentLastTurnId: 'codex-turn-before',
+    }));
+    const runningTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', now),
+      id: turnId,
+      backend: 'codex-app-server',
+      assistantName: 'Codex',
+      startedAt: now,
+      updatedAt: now,
+    };
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, 'checkpoint-ai', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId,
+    }), 'checkpoint-stream-owner');
+    const started = await store.beginCodeAgentTurn({
+      roomId,
+      turn: runningTurn,
+      placeholder,
+      ownerId: 'checkpoint-instance',
+      now,
+      leaseTtlMs: 60_000,
+      backendSessionIdBefore: 'thread-before',
+      backendLastTurnIdBefore: 'codex-turn-before',
+    });
+    assert.equal(started.outcome, 'started');
+    if (started.outcome !== 'started') return;
+    const checkpoint = {
+      schemaVersion: 1 as const,
+      status: 'ready' as const,
+      objectKey: `code-agent-checkpoints/v1/${roomId}/${turnId}.tar.gz`,
+      archiveByteSize: 123,
+      manifest: {
+        schemaVersion: 1 as const,
+        checkpointId: turnId,
+        createdAt: now,
+        totalArchiveBytes: 42,
+        files: [{
+          path: 'src/App.tsx',
+          beforeExists: true,
+          afterExists: true,
+          beforeSha256: 'a'.repeat(64),
+          afterSha256: 'b'.repeat(64),
+          beforeByteSize: 10,
+          afterByteSize: 12,
+          beforeMode: 0o644,
+          afterMode: 0o644,
+          restorable: true,
+        }],
+      },
+    };
+    const terminal = await store.finishCodeAgentTurn({
+      claim: {
+        roomId,
+        turnId,
+        ownerId: started.lease.ownerId,
+        fence: started.lease.fence,
+      },
+      outcome: 'complete',
+      completedAt: new Date().toISOString(),
+      sessionId: 'thread-after',
+      backendTurnId: 'codex-turn-after',
+      workspaceCheckpoint: checkpoint,
+    });
+    assert.equal(terminal.outcome, 'applied');
+    const stored = await store.readCodeAgentWorkspaceCheckpoint(roomId, turnId);
+    assert.equal(stored?.backendSessionIdBefore, 'thread-before');
+    assert.equal(stored?.backendLastTurnIdBefore, 'codex-turn-before');
+    assert.deepEqual(stored?.checkpoint, checkpoint);
+    assert.equal((await store.getRoomById(roomId))?.codeAgentLastTurnId, 'codex-turn-after');
+
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), false);
+    const restoreLease = await store.acquireCodeAgentRoomLease(
+      roomId,
+      'checkpoint_restore_1',
+      'restore-instance',
+      new Date().toISOString(),
+      60_000,
+    );
+    assert.ok(restoreLease);
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), true);
+    const committed = await store.commitCodeAgentCheckpointRestore({
+      roomId,
+      checkpointTurnId: turnId,
+      restoreId: 'restore-1',
+      restoredByClientId: 'event-test-owner',
+      lease: restoreLease!,
+      sessionId: 'thread-forked',
+      lastTurnId: 'codex-turn-before',
+      restoredPaths: ['src/App.tsx'],
+      conflictPaths: [],
+      unavailablePaths: [],
+      restoredAt: new Date().toISOString(),
+    });
+    assert.equal(committed?.room.codeAgentSessionId, 'thread-forked');
+    assert.equal(committed?.room.codeAgentLastTurnId, 'codex-turn-before');
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), false);
+    const audit = await pool.query<{
+      backend_session_id_after: string;
+      restored_paths: string[];
+    }>(
+      `SELECT backend_session_id_after, restored_paths
+      FROM code_agent_checkpoint_restores
+      WHERE id = 'restore-1'`,
+    );
+    assert.equal(audit.rows[0]?.backend_session_id_after, 'thread-forked');
+    assert.deepEqual(audit.rows[0]?.restored_paths, ['src/App.tsx']);
+  });
+
   it('preserves AI stream ownership across code-agent continuation segments', async () => {
     const roomId = 'code-agent-continuation-stream-room';
     const nowMs = Date.now();
@@ -1803,6 +1926,10 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       for (const migration of POSTGRES_MIGRATIONS.slice(0, aggregateMigrationIndex)) {
         await migrationPool.query(migration.sql);
       }
+      // This fixture intentionally stops before the 0009 cutover, while the
+      // current PostgresStore selects every additive room column. Add only the
+      // later nullable projection column needed to exercise that old boundary.
+      await migrationPool.query('ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT');
 
       const migrationStore = new PostgresStore(migrationPool, logger as any);
       const roomId = 'assistant-cutover-room';

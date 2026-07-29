@@ -8,6 +8,8 @@ import {
   CodeAgentRunnerRunRequest,
   CodeAgentRunnerThreadListRequest,
   CodeAgentRunnerThreadListResultEvent,
+  CodeAgentRunnerThreadForkRequest,
+  CodeAgentRunnerThreadForkResultEvent,
   CodeAgentRunnerThreadReadRequest,
   CodeAgentRunnerThreadReadResultEvent,
 } from './codeAgentRunnerProtocol';
@@ -36,7 +38,8 @@ const DAEMON_THREAD_QUERY_TIMEOUT_MS = 30_000;
 
 export type CodeAgentDaemonThreadQueryResult =
   | CodeAgentRunnerThreadListResultEvent
-  | CodeAgentRunnerThreadReadResultEvent;
+  | CodeAgentRunnerThreadReadResultEvent
+  | CodeAgentRunnerThreadForkResultEvent;
 
 export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
   private readonly connections = new WeakMap<CodeAgentRunnerProcess, DaemonConnection>();
@@ -74,7 +77,7 @@ export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
 
   async query<T extends CodeAgentDaemonThreadQueryResult>(
     process: CodeAgentRunnerProcess,
-    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest | CodeAgentRunnerThreadForkRequest,
     expectedType: T['type'],
     env?: Record<string, string>
   ): Promise<T> {

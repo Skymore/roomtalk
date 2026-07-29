@@ -1,5 +1,6 @@
 import { AICost, AIModelOption, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
+import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -140,7 +141,18 @@ export interface CodeAgentTurnStartInput {
   ownerId: string;
   now: string;
   leaseTtlMs: number;
+  backendSessionIdBefore?: string;
+  backendLastTurnIdBefore?: string;
   queuedMessageId?: string;
+}
+
+export interface CodeAgentWorkspaceCheckpointRecord {
+  schemaVersion: 1;
+  status: 'ready' | 'unavailable';
+  objectKey?: string;
+  archiveByteSize?: number;
+  manifest?: CodeAgentWorkspaceCheckpointManifest;
+  error?: string;
 }
 
 export type CodeAgentTurnStartResult =
@@ -176,7 +188,28 @@ export interface CodeAgentTurnTerminalInput {
   expectedMessageOwnership?: AIStreamOwnership;
   deleteMessageIds?: string[];
   sessionId?: string;
+  backendTurnId?: string;
+  workspaceCheckpoint?: CodeAgentWorkspaceCheckpointRecord;
   cost?: AICost | null;
+}
+
+export interface CodeAgentCheckpointRestoreCommitInput {
+  roomId: string;
+  checkpointTurnId: string;
+  restoreId: string;
+  restoredByClientId: string;
+  lease: CodeAgentRoomLease;
+  sessionId?: string;
+  lastTurnId?: string;
+  restoredPaths: string[];
+  conflictPaths: string[];
+  unavailablePaths: string[];
+  restoredAt: string;
+}
+
+export interface CodeAgentCheckpointRestoreCommitResult {
+  room: Room;
+  turn: RoomAgentTurn;
 }
 
 export type CodeAgentTurnTerminalResult =
@@ -566,10 +599,18 @@ export interface DurableRoomStore {
   appendCodeAgentMessage?(message: Message, claim: CodeAgentTurnClaim, cost?: AICost | null): Promise<CodeAgentMessageMutationResult>;
   finalizeCodeAgentMessage?(message: Message, expectedOwnership: AIStreamOwnership, claim: CodeAgentTurnClaim, cost?: AICost | null): Promise<CodeAgentMessageMutationResult>;
   finishCodeAgentTurn?(input: CodeAgentTurnTerminalInput): Promise<CodeAgentTurnTerminalResult>;
+  readCodeAgentWorkspaceCheckpoint?(roomId: string, turnId: string): Promise<{
+    turn: RoomAgentTurn;
+    backendSessionIdBefore?: string;
+    backendLastTurnIdBefore?: string;
+    checkpoint: CodeAgentWorkspaceCheckpointRecord;
+  } | null>;
+  commitCodeAgentCheckpointRestore?(input: CodeAgentCheckpointRestoreCommitInput): Promise<CodeAgentCheckpointRestoreCommitResult | null>;
   recoverStaleCodeAgentQueuedMessages?(staleBefore: string, updatedAt?: string): Promise<number>;
   recoverInterruptedCodeAgentRoomStates?(now?: string): Promise<number>;
   failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
   acquireCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
+  hasActiveCodeAgentRoomLease?(roomId: string, now: string): Promise<boolean>;
   renewCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number): Promise<CodeAgentRoomLease | null>;
   releaseCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, fence?: number): Promise<boolean>;
   saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
@@ -1033,6 +1074,17 @@ export class CompositeRoomStore implements RoomStore {
     return result;
   }
 
+  readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string) {
+    return this.durableStore.readCodeAgentWorkspaceCheckpoint?.(roomId, turnId) || Promise.resolve(null);
+  }
+
+  commitCodeAgentCheckpointRestore(input: CodeAgentCheckpointRestoreCommitInput) {
+    if (!this.durableStore.commitCodeAgentCheckpointRestore) {
+      throw new Error('The durable store does not support code-agent checkpoint restore');
+    }
+    return this.durableStore.commitCodeAgentCheckpointRestore(input);
+  }
+
   recoverStaleCodeAgentQueuedMessages(staleBefore: string, updatedAt?: string) {
     return this.durableStore.recoverStaleCodeAgentQueuedMessages?.(staleBefore, updatedAt) || Promise.resolve(0);
   }
@@ -1047,6 +1099,10 @@ export class CompositeRoomStore implements RoomStore {
 
   acquireCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number) {
     return this.durableStore.acquireCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
+  }
+
+  hasActiveCodeAgentRoomLease(roomId: string, now: string) {
+    return this.durableStore.hasActiveCodeAgentRoomLease?.(roomId, now) || Promise.resolve(false);
   }
 
   renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number) {

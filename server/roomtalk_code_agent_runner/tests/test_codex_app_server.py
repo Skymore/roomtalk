@@ -122,6 +122,10 @@ class FakeSdkClient:
         self.calls.append(("thread_read", {"thread_id": thread_id, "include_turns": include_turns}))
         return FakeModel(self.thread_read_result)
 
+    def thread_fork(self, thread_id: str, params: dict[str, Any]):
+        self.calls.append(("thread_fork", {"thread_id": thread_id, "params": params}))
+        return FakeModel({"thread": {"id": "thread-forked-1"}})
+
     def turn_interrupt(self, thread_id: str, turn_id: str):
         self.calls.append(("turn_interrupt", {"thread_id": thread_id, "turn_id": turn_id}))
         return FakeModel({})
@@ -265,6 +269,7 @@ def test_codex_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Pat
     assert events[4]["output"] == "demo.txt\n"
     assert events[-1]["answer"] == "I read demo.txt"
     assert events[-1]["sessionId"] == "thread-sdk-1"
+    assert events[-1]["backendTurnId"] == "turn-sdk-1"
     assert events[-1]["usage"]["source"] == "reported"
     assert events[-1]["usage"]["reasoningOutputTokens"] == 1
 
@@ -471,4 +476,41 @@ def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: py
         "threads": [{"id": "thread-1", "title": "Inspect project", "updatedAt": "2026-07-04T10:00:00Z"}],
         "nextCursor": "cursor-next",
         "backwardsCursor": None,
+    }]
+
+
+def test_codex_app_server_forks_thread_through_selected_turn(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    factory = FakeSdkClientFactory()
+    query = codex_app_server.parse_app_server_request(json.dumps({
+        "schemaVersion": 1,
+        "type": "thread_fork",
+        "roomId": "room-threads",
+        "clientId": "client-1",
+        "workspace": str(workspace),
+        "threadId": "thread-source-1",
+        "lastTurnId": "turn-before-1",
+    }))
+
+    codex_app_server.run_thread_query_request(
+        query,
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
+        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    assert next(call[1] for call in factory.clients[0].calls if call[0] == "thread_fork") == {
+        "thread_id": "thread-source-1",
+        "params": {"cwd": str(workspace), "lastTurnId": "turn-before-1"},
+    }
+    assert event_lines(stdout) == [{
+        "schemaVersion": 1,
+        "type": "thread_fork_result",
+        "roomId": "room-threads",
+        "threadId": "thread-forked-1",
     }]

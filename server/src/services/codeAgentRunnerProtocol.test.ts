@@ -180,6 +180,7 @@ describe('code agent runner protocol', () => {
       messageId: 'ai-1',
       answer: 'done',
       sessionId: 'session-1',
+      backendTurnId: 'codex-turn-1',
       usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, source: 'reported' },
     })), {
       schemaVersion: 1,
@@ -187,7 +188,20 @@ describe('code agent runner protocol', () => {
       messageId: 'ai-1',
       answer: 'done',
       sessionId: 'session-1',
+      backendTurnId: 'codex-turn-1',
       usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, source: 'reported' },
+    });
+
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'thread_fork_result',
+      roomId: 'room-1',
+      threadId: 'thread-forked',
+    })), {
+      schemaVersion: 1,
+      type: 'thread_fork_result',
+      roomId: 'room-1',
+      threadId: 'thread-forked',
     });
 
     assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({

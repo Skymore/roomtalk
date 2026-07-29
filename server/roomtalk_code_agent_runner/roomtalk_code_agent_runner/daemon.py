@@ -84,7 +84,7 @@ class SandboxDaemon:
             self._start_run(raw)
             return False
 
-        if request_type in ("thread_list", "thread_read"):
+        if request_type in ("thread_list", "thread_read", "thread_fork"):
             self._run_thread_query(raw)
             return False
 

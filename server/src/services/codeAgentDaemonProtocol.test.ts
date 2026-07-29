@@ -74,6 +74,30 @@ describe('code agent daemon protocol', () => {
     });
   });
 
+  it('serializes a Codex thread fork through an exact completed turn', () => {
+    const serialized = serializeCodeAgentDaemonRequest(createCodeAgentDaemonThreadQueryRequest({
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'thread_fork',
+      roomId: 'room-1',
+      clientId: 'client-1',
+      workspace: '/workspace',
+      threadId: 'thread-1',
+      lastTurnId: 'codex-turn-4',
+    }, {}));
+
+    assert.deepEqual(JSON.parse(serialized), {
+      schemaVersion: 1,
+      type: 'thread_fork',
+      roomId: 'room-1',
+      clientId: 'client-1',
+      workspace: '/workspace',
+      threadId: 'thread-1',
+      lastTurnId: 'codex-turn-4',
+      backend: 'codex-app-server',
+      env: {},
+    });
+  });
+
   it('parses daemon control events separately from runner turn events', () => {
     const ready = parseCodeAgentDaemonEventLine(JSON.stringify({
       schemaVersion: 1,

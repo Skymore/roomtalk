@@ -6,6 +6,9 @@ import {
   CodeAgentWorkspaceChanges,
   CodeAgentWorkspaceAsset,
   CodeAgentWorkspaceArchive,
+  CodeAgentWorkspaceCheckpointArchive,
+  CodeAgentWorkspaceCheckpointManifest,
+  CodeAgentWorkspaceCheckpointPreview,
   CodeAgentWorkspaceDiff,
   CodeAgentWorkspaceEntry,
   CodeAgentWorkspaceFile,
@@ -730,6 +733,367 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
       await connected.files.remove?.(archivePath).catch(error => {
         this.options.logger?.warn('Unable to delete E2B workspace import archive', { error, sandboxId: handle.id, archivePath });
       });
+    }
+  }
+
+  async beginWorkspaceCheckpoint(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run) {
+      throw new Error('E2B sandbox driver handle does not support workspace checkpoints');
+    }
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(checkpointId)) {
+      throw new Error('Workspace checkpoint id is invalid');
+    }
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const checkpointRoot = shellQuote(`/tmp/roomtalk-checkpoints/${checkpointId}`);
+    const command = [
+      'set -eu',
+      `workspace=${workspace}`,
+      `checkpoint=${checkpointRoot}`,
+      'rm -rf "$checkpoint"',
+      'mkdir -p "$checkpoint"',
+      'git init -q --bare "$checkpoint/repo.git"',
+      'cat > "$checkpoint/repo.git/info/exclude" <<\'EOF\'',
+      '.git/',
+      '.env',
+      '.env.*',
+      '*.pem',
+      '*.key',
+      'node_modules/',
+      '.next/',
+      '.nuxt/',
+      'dist/',
+      'build/',
+      'coverage/',
+      '.cache/',
+      '.venv/',
+      'venv/',
+      'target/',
+      '__pycache__/',
+      'EOF',
+      'export GIT_DIR="$checkpoint/repo.git"',
+      'export GIT_WORK_TREE="$workspace"',
+      'export GIT_INDEX_FILE="$checkpoint/index"',
+      'cd "$workspace"',
+      'git read-tree --empty',
+      'git add -A -- .',
+      'git write-tree > "$checkpoint/before-tree"',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 120_000 });
+    const stdoutPromise = collectReadableText(result.stdout, 64 * 1024);
+    const stderrPromise = collectReadableText(result.stderr, 64 * 1024);
+    const completed = await result.completed;
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(formatE2BCommandFailure('E2B workspace checkpoint start', completed.exitCode, stdout, stderr));
+    }
+  }
+
+  async finalizeWorkspaceCheckpoint(
+    handle: CodeAgentSandboxHandle,
+    checkpointId: string
+  ): Promise<CodeAgentWorkspaceCheckpointArchive> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run || !connected.files?.read) {
+      throw new Error('E2B sandbox driver handle does not support workspace checkpoint finalization');
+    }
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(checkpointId)) {
+      throw new Error('Workspace checkpoint id is invalid');
+    }
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const checkpointRootPath = `/tmp/roomtalk-checkpoints/${checkpointId}`;
+    const checkpointRoot = shellQuote(checkpointRootPath);
+    const command = [
+      'set -eu',
+      `workspace=${workspace}`,
+      `checkpoint=${checkpointRoot}`,
+      'test -s "$checkpoint/before-tree"',
+      'export GIT_DIR="$checkpoint/repo.git"',
+      'export GIT_WORK_TREE="$workspace"',
+      'export GIT_INDEX_FILE="$checkpoint/index"',
+      'cd "$workspace"',
+      'git read-tree --empty',
+      'git add -A -- .',
+      'git write-tree > "$checkpoint/after-tree"',
+      'export ROOMTALK_CHECKPOINT_ID=' + shellQuote(checkpointId),
+      'export ROOMTALK_CHECKPOINT_ROOT="$checkpoint"',
+      'python - <<\'PY\'',
+      'import hashlib',
+      'import io',
+      'import json',
+      'import os',
+      'import subprocess',
+      'import tarfile',
+      'from datetime import datetime, timezone',
+      'from pathlib import PurePosixPath',
+      '',
+      'root = os.environ["ROOMTALK_CHECKPOINT_ROOT"]',
+      'checkpoint_id = os.environ["ROOMTALK_CHECKPOINT_ID"]',
+      'before_tree = open(os.path.join(root, "before-tree"), encoding="utf-8").read().strip()',
+      'after_tree = open(os.path.join(root, "after-tree"), encoding="utf-8").read().strip()',
+      '',
+      'def git(*args: str) -> bytes:',
+      '    return subprocess.check_output(["git", f"--git-dir={root}/repo.git", *args])',
+      '',
+      'def entry(tree: str, path: str):',
+      '    raw = git("ls-tree", tree, "--", path).decode("utf-8", "surrogateescape").rstrip("\\n")',
+      '    if not raw:',
+      '        return None',
+      '    meta, _ = raw.split("\\t", 1)',
+      '    mode, kind, object_id = meta.split(" ", 2)',
+      '    return mode, kind, object_id',
+      '',
+      'def blob(object_id: str) -> bytes:',
+      '    return git("cat-file", "blob", object_id)',
+      '',
+      'changed_raw = git("diff-tree", "-r", "--no-commit-id", "--name-only", "--no-renames", "-z", before_tree, after_tree)',
+      'paths = [part.decode("utf-8", "surrogateescape") for part in changed_raw.split(b"\\0") if part]',
+      'files = []',
+      'stored = {}',
+      'total_bytes = 0',
+      'max_file_bytes = 8 * 1024 * 1024',
+      'max_total_bytes = 64 * 1024 * 1024',
+      '',
+      'for path in paths:',
+      '    pure = PurePosixPath(path)',
+      '    before = entry(before_tree, path)',
+      '    after = entry(after_tree, path)',
+      '    item = {',
+      '        "path": path,',
+      '        "beforeExists": before is not None,',
+      '        "afterExists": after is not None,',
+      '        "restorable": True,',
+      '    }',
+      '    if pure.is_absolute() or ".." in pure.parts:',
+      '        item.update(restorable=False, reason="excluded")',
+      '        files.append(item)',
+      '        continue',
+      '    entries = [value for value in (before, after) if value is not None]',
+      '    if any(kind != "blob" or mode not in ("100644", "100755") for mode, kind, _ in entries):',
+      '        item.update(restorable=False, reason="unsupported_type")',
+      '        files.append(item)',
+      '        continue',
+      '    payloads = []',
+      '    for label, value in (("before", before), ("after", after)):',
+      '        if value is None:',
+      '            continue',
+      '        mode, _, object_id = value',
+      '        body = blob(object_id)',
+      '        digest = hashlib.sha256(body).hexdigest()',
+      '        item[f"{label}Sha256"] = digest',
+      '        item[f"{label}ByteSize"] = len(body)',
+      '        item[f"{label}Mode"] = int(mode, 8)',
+      '        payloads.append((label, digest, body))',
+      '    logical_bytes = sum(len(body) for _, _, body in payloads)',
+      '    if any(len(body) > max_file_bytes for _, _, body in payloads) or total_bytes + logical_bytes > max_total_bytes:',
+      '        item.update(restorable=False, reason="too_large")',
+      '        files.append(item)',
+      '        continue',
+      '    total_bytes += logical_bytes',
+      '    for label, digest, body in payloads:',
+      '        stored[f"blobs/{digest}"] = body',
+      '    files.append(item)',
+      '',
+      'manifest = {',
+      '    "schemaVersion": 1,',
+      '    "checkpointId": checkpoint_id,',
+      '    "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),',
+      '    "files": files,',
+      '    "totalArchiveBytes": total_bytes,',
+      '}',
+      'manifest_body = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")',
+      'with open(os.path.join(root, "manifest.json"), "wb") as output:',
+      '    output.write(manifest_body)',
+      'with tarfile.open(os.path.join(root, "checkpoint.tar.gz"), "w:gz") as archive:',
+      '    info = tarfile.TarInfo("manifest.json")',
+      '    info.size = len(manifest_body)',
+      '    info.mode = 0o600',
+      '    archive.addfile(info, io.BytesIO(manifest_body))',
+      '    for name, body in stored.items():',
+      '        info = tarfile.TarInfo(name)',
+      '        info.size = len(body)',
+      '        info.mode = 0o600',
+      '        archive.addfile(info, io.BytesIO(body))',
+      'PY',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 120_000 });
+    const stdoutPromise = collectReadableText(result.stdout, 64 * 1024);
+    const stderrPromise = collectReadableText(result.stderr, 64 * 1024);
+    const completed = await result.completed;
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(formatE2BCommandFailure('E2B workspace checkpoint finalization', completed.exitCode, stdout, stderr));
+    }
+    const archive = await readWorkspaceFileBytes(connected.files.read, `${checkpointRootPath}/checkpoint.tar.gz`, 80 * 1024 * 1024);
+    if (archive.truncated) throw new Error('Workspace checkpoint archive is too large');
+    const manifestFile = await readWorkspaceFileBytes(connected.files.read, `${checkpointRootPath}/manifest.json`, 4 * 1024 * 1024);
+    if (manifestFile.truncated) throw new Error('Workspace checkpoint manifest is too large');
+    const manifest = JSON.parse(manifestFile.buffer.toString('utf8')) as CodeAgentWorkspaceCheckpointManifest;
+    if (manifest.schemaVersion !== 1 || manifest.checkpointId !== checkpointId || !Array.isArray(manifest.files)) {
+      throw new Error('Workspace checkpoint manifest is invalid');
+    }
+    return { body: archive.buffer, byteSize: archive.byteSize, manifest };
+  }
+
+  async previewWorkspaceCheckpoint(
+    handle: CodeAgentSandboxHandle,
+    archive: CodeAgentWorkspaceCheckpointArchive
+  ): Promise<CodeAgentWorkspaceCheckpointPreview> {
+    return this.runWorkspaceCheckpointOperation(handle, archive, [], 'preview');
+  }
+
+  async restoreWorkspaceCheckpoint(
+    handle: CodeAgentSandboxHandle,
+    archive: CodeAgentWorkspaceCheckpointArchive,
+    paths: string[],
+    target: 'before' | 'after'
+  ): Promise<void> {
+    await this.runWorkspaceCheckpointOperation(handle, archive, paths, target);
+  }
+
+  async discardWorkspaceCheckpoint(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(checkpointId)) return;
+    const connected = await this.driver.connect(handle.id);
+    await connected.files?.remove?.(`/tmp/roomtalk-checkpoints/${checkpointId}`).catch(() => undefined);
+  }
+
+  private async runWorkspaceCheckpointOperation(
+    handle: CodeAgentSandboxHandle,
+    archive: CodeAgentWorkspaceCheckpointArchive,
+    paths: string[],
+    operation: 'preview' | 'before' | 'after'
+  ): Promise<CodeAgentWorkspaceCheckpointPreview> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run || !connected.files?.write || !connected.files?.read) {
+      throw new Error('E2B sandbox driver handle does not support workspace checkpoint restore');
+    }
+    const operationId = `${archive.manifest.checkpointId}-${Date.now()}`;
+    const rootPath = `/tmp/roomtalk-checkpoint-restore/${operationId}`;
+    await connected.files.write(`${rootPath}.tar.gz`, archive.body);
+    await connected.files.write(`${rootPath}.paths.json`, Buffer.from(JSON.stringify(paths), 'utf8'));
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const command = [
+      'set -eu',
+      `workspace=${workspace}`,
+      `archive=${shellQuote(`${rootPath}.tar.gz`)}`,
+      `paths_file=${shellQuote(`${rootPath}.paths.json`)}`,
+      `result_file=${shellQuote(`${rootPath}.result.json`)}`,
+      `operation=${shellQuote(operation)}`,
+      'export ROOMTALK_WORKSPACE="$workspace" ROOMTALK_ARCHIVE="$archive" ROOMTALK_PATHS_FILE="$paths_file" ROOMTALK_RESULT_FILE="$result_file" ROOMTALK_OPERATION="$operation"',
+      'python - <<\'PY\'',
+      'import hashlib',
+      'import json',
+      'import os',
+      'import shutil',
+      'import tarfile',
+      'import tempfile',
+      'from pathlib import Path, PurePosixPath',
+      '',
+      'workspace = Path(os.environ["ROOMTALK_WORKSPACE"]).resolve()',
+      'selected = set(json.load(open(os.environ["ROOMTALK_PATHS_FILE"], encoding="utf-8")))',
+      'operation = os.environ["ROOMTALK_OPERATION"]',
+      '',
+      'with tarfile.open(os.environ["ROOMTALK_ARCHIVE"], "r:gz") as archive:',
+      '    manifest_member = archive.getmember("manifest.json")',
+      '    manifest = json.load(archive.extractfile(manifest_member))',
+      '    blobs = {}',
+      '    for member in archive.getmembers():',
+      '        if member.isfile() and member.name.startswith("blobs/"):',
+      '            blobs[member.name.removeprefix("blobs/")] = archive.extractfile(member).read()',
+      '',
+      'safe = []',
+      'conflicts = []',
+      'unavailable = []',
+      'items = {}',
+      'for item in manifest.get("files", []):',
+      '    path = item.get("path")',
+      '    if not isinstance(path, str):',
+      '        continue',
+      '    items[path] = item',
+      '    pure = PurePosixPath(path)',
+      '    target = (workspace / path).resolve()',
+      '    if pure.is_absolute() or ".." in pure.parts or (target != workspace and workspace not in target.parents) or not item.get("restorable"):',
+      '        unavailable.append(path)',
+      '        continue',
+      '    exists = target.is_file() and not target.is_symlink()',
+      '    compare_label = "before" if operation == "after" else "after"',
+      '    expected_exists = bool(item.get(f"{compare_label}Exists"))',
+      '    current_hash = hashlib.sha256(target.read_bytes()).hexdigest() if exists else None',
+      '    if exists == expected_exists and (not exists or current_hash == item.get(f"{compare_label}Sha256")):',
+      '        safe.append(path)',
+      '    else:',
+      '        conflicts.append(path)',
+      '',
+      'def apply_state(path, item, label):',
+      '    target = workspace / path',
+      '    desired_exists = bool(item.get(f"{label}Exists"))',
+      '    digest = item.get(f"{label}Sha256")',
+      '    if desired_exists:',
+      '        body = blobs.get(digest)',
+      '        if body is None or hashlib.sha256(body).hexdigest() != digest:',
+      '            raise RuntimeError(f"Checkpoint blob is missing or corrupt: {path}")',
+      '        target.parent.mkdir(parents=True, exist_ok=True)',
+      '        fd, temporary = tempfile.mkstemp(prefix=".roomtalk-restore-", dir=target.parent)',
+      '        try:',
+      '            with os.fdopen(fd, "wb") as output:',
+      '                output.write(body)',
+      '            os.chmod(temporary, int(item.get(f"{label}Mode") or 0o644) & 0o777)',
+      '            os.replace(temporary, target)',
+      '        finally:',
+      '            if os.path.exists(temporary):',
+      '                os.unlink(temporary)',
+      '    elif target.exists() or target.is_symlink():',
+      '        if target.is_dir() and not target.is_symlink():',
+      '            shutil.rmtree(target)',
+      '        else:',
+      '            target.unlink()',
+      '',
+      'if operation in ("before", "after"):',
+      '    for path in selected:',
+      '        if path not in safe:',
+      '            raise RuntimeError(f"Checkpoint path is no longer safe to restore: {path}")',
+      '    applied = []',
+      '    rollback_label = "before" if operation == "after" else "after"',
+      '    try:',
+      '        for path in sorted(selected):',
+      '            apply_state(path, items[path], operation)',
+      '            applied.append(path)',
+      '    except Exception as restore_error:',
+      '        rollback_errors = []',
+      '        for path in reversed(applied):',
+      '            try:',
+      '                apply_state(path, items[path], rollback_label)',
+      '            except Exception as rollback_error:',
+      '                rollback_errors.append(f"{path}: {rollback_error}")',
+      '        if rollback_errors:',
+      '            raise RuntimeError(f"{restore_error}; checkpoint rollback also failed: {\'; \'.join(rollback_errors)}") from restore_error',
+      '        raise',
+      '',
+      'json.dump({"safePaths": safe, "conflictPaths": conflicts, "unavailablePaths": unavailable}, open(os.environ["ROOMTALK_RESULT_FILE"], "w", encoding="utf-8"), ensure_ascii=False)',
+      'PY',
+    ].join('\n');
+    try {
+      const result = await connected.commands.run(command, { timeoutMs: 120_000 });
+      const stdoutPromise = collectReadableText(result.stdout, 64 * 1024);
+      const stderrPromise = collectReadableText(result.stderr, 64 * 1024);
+      const completed = await result.completed;
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+      if (completed && completed.exitCode !== 0) {
+        throw new Error(formatE2BCommandFailure('E2B workspace checkpoint operation', completed.exitCode, stdout, stderr));
+      }
+      const resultFile = await readWorkspaceFileBytes(connected.files.read, `${rootPath}.result.json`, 2 * 1024 * 1024);
+      const parsed = JSON.parse(resultFile.buffer.toString('utf8')) as CodeAgentWorkspaceCheckpointPreview;
+      return {
+        safePaths: Array.isArray(parsed.safePaths) ? parsed.safePaths : [],
+        conflictPaths: Array.isArray(parsed.conflictPaths) ? parsed.conflictPaths : [],
+        unavailablePaths: Array.isArray(parsed.unavailablePaths) ? parsed.unavailablePaths : [],
+      };
+    } finally {
+      await Promise.all([
+        connected.files.remove?.(`${rootPath}.tar.gz`).catch(() => undefined),
+        connected.files.remove?.(`${rootPath}.paths.json`).catch(() => undefined),
+        connected.files.remove?.(`${rootPath}.result.json`).catch(() => undefined),
+      ]);
     }
   }
 

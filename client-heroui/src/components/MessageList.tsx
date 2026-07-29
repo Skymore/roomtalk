@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { cancelQueuedCodeAgentInput, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
+import { cancelQueuedCodeAgentInput, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, restoreCodeAgentCheckpoint, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { AgentTurnItem } from './AgentTurnItem';
@@ -556,6 +556,23 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
     void refreshWorkspaceSnapshot();
   }, [presentation, refreshWorkspaceSnapshot]);
+
+  const handleRestoreAgentCheckpoint = useCallback(async (turn: RoomAgentTurn) => {
+    if (!roomPermissions?.canManageRoom) {
+      throw new Error(t('agentCheckpointManagerOnly'));
+    }
+    const confirmed = window.confirm(t('agentCheckpointConfirm'));
+    if (!confirmed) return t('agentCheckpointCancelled');
+    await ensureRoomOperationReady();
+    const result = await restoreCodeAgentCheckpoint(roomId, turn.id);
+    await refreshWorkspaceSnapshot();
+    const restored = result.restoredPaths?.length || 0;
+    const conflicts = result.conflictPaths?.length || 0;
+    const unavailable = result.unavailablePaths?.length || 0;
+    return conflicts > 0 || unavailable > 0
+      ? t('agentCheckpointRestoredPartial', { restored, conflicts, unavailable })
+      : t('agentCheckpointRestored', { count: restored });
+  }, [ensureRoomOperationReady, refreshWorkspaceSnapshot, roomId, roomPermissions?.canManageRoom, t]);
 
   useEffect(() => {
     if (presentation !== 'code-agent' || !currentRoomId) {
@@ -1216,6 +1233,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                         messages={item.messages}
                         renderAgentMessage={message => renderMessage(message, true)}
                         renderStandaloneMessage={message => renderMessage(message)}
+                        onRestoreCheckpoint={roomPermissions?.canManageRoom ? handleRestoreAgentCheckpoint : undefined}
                       />
                     );
                   }

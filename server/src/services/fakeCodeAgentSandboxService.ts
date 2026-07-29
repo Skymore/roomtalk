@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
   CodeAgentRunnerProcess,
   CodeAgentSandboxHandle,
@@ -9,6 +9,8 @@ import {
   CodeAgentWorkspaceEntry,
   CodeAgentWorkspaceFile,
   CodeAgentWorkspaceArchive,
+  CodeAgentWorkspaceCheckpointArchive,
+  CodeAgentWorkspaceCheckpointPreview,
   CodeAgentWorkspacePreviewServer,
   CodeAgentWorkspaceRef,
   CodeAgentWorkspaceRefs,
@@ -38,6 +40,11 @@ type FakeSandboxFailure = 'create' | 'connect' | 'initializeWorkspaceVersionCont
 interface FakeWorkspaceArchivePayload {
   entries: CodeAgentWorkspaceEntry[];
   files: Array<{ path: string; bodyBase64: string }>;
+}
+
+interface FakeCheckpointPayload {
+  before: Array<{ path: string; bodyBase64: string }>;
+  after: Array<{ path: string; bodyBase64: string }>;
 }
 
 export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
@@ -70,6 +77,7 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
   private readonly workspaceDiffBySandboxId = new Map<string, string>();
   private readonly workspacePreviewServersBySandboxId = new Map<string, CodeAgentWorkspacePreviewServer[]>();
   private readonly workspaceRefsBySandboxId = new Map<string, CodeAgentWorkspaceRefs>();
+  private readonly workspaceCheckpointBeforeBySandboxAndId = new Map<string, Map<string, Buffer>>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -424,6 +432,107 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
     this.workspaceFileContentsBySandboxId.set(handle.id, fileContents);
     this.workspaceFileBytesBySandboxId.set(handle.id, fileBytes);
     this.importedWorkspaceArchiveSandboxIds.push(handle.id);
+  }
+
+  async beginWorkspaceCheckpoint(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) throw new Error(`Fake code-agent sandbox not found: ${handle.id}`);
+    this.workspaceCheckpointBeforeBySandboxAndId.set(
+      `${handle.id}:${checkpointId}`,
+      new Map([...(this.workspaceFileBytesBySandboxId.get(handle.id) || new Map()).entries()].map(([path, body]) => [path, Buffer.from(body)])),
+    );
+  }
+
+  async finalizeWorkspaceCheckpoint(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<CodeAgentWorkspaceCheckpointArchive> {
+    this.consumeFailure('connect');
+    const before = this.workspaceCheckpointBeforeBySandboxAndId.get(`${handle.id}:${checkpointId}`);
+    if (!before) throw new Error(`Fake workspace checkpoint not found: ${checkpointId}`);
+    const after = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    const digest = (body: Buffer) => createHash('sha256').update(body).digest('hex');
+    const paths = [...new Set([...before.keys(), ...after.keys()])].sort();
+    const files = paths.flatMap(path => {
+      const beforeBody = before.get(path);
+      const afterBody = after.get(path);
+      if (beforeBody && afterBody && beforeBody.equals(afterBody)) return [];
+      return [{
+        path,
+        beforeExists: Boolean(beforeBody),
+        afterExists: Boolean(afterBody),
+        ...(beforeBody ? { beforeSha256: digest(beforeBody), beforeByteSize: beforeBody.byteLength, beforeMode: 0o644 } : {}),
+        ...(afterBody ? { afterSha256: digest(afterBody), afterByteSize: afterBody.byteLength, afterMode: 0o644 } : {}),
+        restorable: true,
+      }];
+    });
+    const payload: FakeCheckpointPayload = {
+      before: [...before.entries()].filter(([path]) => files.some(file => file.path === path)).map(([path, body]) => ({ path, bodyBase64: body.toString('base64') })),
+      after: [...after.entries()].filter(([path]) => files.some(file => file.path === path)).map(([path, body]) => ({ path, bodyBase64: body.toString('base64') })),
+    };
+    const body = Buffer.from(JSON.stringify(payload), 'utf8');
+    return {
+      body,
+      byteSize: body.byteLength,
+      manifest: {
+        schemaVersion: 1,
+        checkpointId,
+        createdAt: this.now().toISOString(),
+        files,
+        totalArchiveBytes: body.byteLength,
+      },
+    };
+  }
+
+  async previewWorkspaceCheckpoint(
+    handle: CodeAgentSandboxHandle,
+    archive: CodeAgentWorkspaceCheckpointArchive
+  ): Promise<CodeAgentWorkspaceCheckpointPreview> {
+    this.consumeFailure('connect');
+    const current = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    const digest = (body: Buffer) => createHash('sha256').update(body).digest('hex');
+    const preview: CodeAgentWorkspaceCheckpointPreview = { safePaths: [], conflictPaths: [], unavailablePaths: [] };
+    for (const file of archive.manifest.files) {
+      if (!file.restorable) {
+        preview.unavailablePaths.push(file.path);
+        continue;
+      }
+      const body = current.get(file.path);
+      const safe = Boolean(body) === file.afterExists && (!body || digest(body) === file.afterSha256);
+      (safe ? preview.safePaths : preview.conflictPaths).push(file.path);
+    }
+    return preview;
+  }
+
+  async restoreWorkspaceCheckpoint(
+    handle: CodeAgentSandboxHandle,
+    archive: CodeAgentWorkspaceCheckpointArchive,
+    paths: string[],
+    target: 'before' | 'after'
+  ): Promise<void> {
+    const payload = JSON.parse(archive.body.toString('utf8')) as FakeCheckpointPayload;
+    const source = new Map((target === 'before' ? payload.before : payload.after).map(file => [file.path, Buffer.from(file.bodyBase64, 'base64')]));
+    const current = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    const texts = this.workspaceFileContentsBySandboxId.get(handle.id) || new Map<string, string>();
+    const entries = this.workspaceEntriesBySandboxId.get(handle.id) || [];
+    const selected = new Set(paths);
+    for (const path of selected) {
+      const body = source.get(path);
+      if (body) {
+        current.set(path, body);
+        texts.set(path, body.toString('utf8'));
+        if (!entries.some(entry => entry.path === path)) entries.push({ path, name: path.split('/').pop() || path, type: 'file', size: body.byteLength });
+      } else {
+        current.delete(path);
+        texts.delete(path);
+        const index = entries.findIndex(entry => entry.path === path);
+        if (index >= 0) entries.splice(index, 1);
+      }
+    }
+    this.workspaceFileBytesBySandboxId.set(handle.id, current);
+    this.workspaceFileContentsBySandboxId.set(handle.id, texts);
+    this.workspaceEntriesBySandboxId.set(handle.id, entries);
+  }
+
+  async discardWorkspaceCheckpoint(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void> {
+    this.workspaceCheckpointBeforeBySandboxAndId.delete(`${handle.id}:${checkpointId}`);
   }
 
   setWorkspacePreviewServers(sandboxId: string, servers: CodeAgentWorkspacePreviewServer[]) {

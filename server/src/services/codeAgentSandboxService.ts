@@ -174,6 +174,40 @@ export interface CodeAgentWorkspaceArchive {
   byteSize: number;
 }
 
+export interface CodeAgentWorkspaceCheckpointFile {
+  path: string;
+  beforeExists: boolean;
+  afterExists: boolean;
+  beforeSha256?: string;
+  afterSha256?: string;
+  beforeByteSize?: number;
+  afterByteSize?: number;
+  beforeMode?: number;
+  afterMode?: number;
+  restorable: boolean;
+  reason?: 'too_large' | 'unsupported_type' | 'excluded';
+}
+
+export interface CodeAgentWorkspaceCheckpointManifest {
+  schemaVersion: 1;
+  checkpointId: string;
+  createdAt: string;
+  files: CodeAgentWorkspaceCheckpointFile[];
+  totalArchiveBytes: number;
+}
+
+export interface CodeAgentWorkspaceCheckpointArchive {
+  body: Buffer;
+  byteSize: number;
+  manifest: CodeAgentWorkspaceCheckpointManifest;
+}
+
+export interface CodeAgentWorkspaceCheckpointPreview {
+  safePaths: string[];
+  conflictPaths: string[];
+  unavailablePaths: string[];
+}
+
 export interface CodeAgentWorkspaceDiffSummary {
   files: number;
   additions: number;
@@ -231,6 +265,11 @@ export interface CodeAgentSandboxService {
   readWorkspaceAsset?(handle: CodeAgentSandboxHandle, path: string, options?: ReadCodeAgentWorkspaceAssetOptions): Promise<CodeAgentWorkspaceAsset>;
   exportWorkspaceArchive?(handle: CodeAgentSandboxHandle, options?: ExportCodeAgentWorkspaceArchiveOptions): Promise<CodeAgentWorkspaceArchive>;
   importWorkspaceArchive?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceArchive, options?: ImportCodeAgentWorkspaceArchiveOptions): Promise<void>;
+  beginWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void>;
+  finalizeWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<CodeAgentWorkspaceCheckpointArchive>;
+  previewWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceCheckpointArchive): Promise<CodeAgentWorkspaceCheckpointPreview>;
+  restoreWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceCheckpointArchive, paths: string[], target: 'before' | 'after'): Promise<void>;
+  discardWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void>;
   resolveWorkspacePreviewTarget?(handle: CodeAgentSandboxHandle, input: ResolveCodeAgentWorkspacePreviewTargetInput): Promise<CodeAgentWorkspacePreviewTargetResolution>;
   listWorkspacePreviewServers?(handle: CodeAgentSandboxHandle): Promise<CodeAgentWorkspacePreviewServer[]>;
   writeWorkspaceFile?(handle: CodeAgentSandboxHandle, input: WriteCodeAgentWorkspaceFileInput): Promise<CodeAgentWorkspaceEntry>;

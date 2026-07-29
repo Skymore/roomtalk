@@ -104,7 +104,7 @@ flowchart LR
 - Code Agent runner 在沙盒内部 import 或调用 `/opt/code-agent-engine` 中的 Code Agent 实现。
 - Code Agent 的所有 Read/Write/Shell 都落在沙盒工作区。
 - RoomTalk 可以作为受控 broker 通过 socket/API 读写、预览和 diff 沙盒文件，但浏览器不能直接访问 Code Agent、E2B、provider key 或原始沙盒凭据。
-- 沙盒磁盘是可变运行时状态，不是唯一历史真相。RoomTalk 必须拥有 workspace revision 语义，diff、review comment、publish 和 rollback 都要绑定到稳定 revision，而不是只绑定到“当前 sandbox 文件”。
+- 沙盒磁盘是可变运行时状态，不是唯一历史真相。当前 Codex app-server 已实现按 turn 的选择性 checkpoint：RoomTalk 保存该轮前后的 backend turn 边界和“本轮变化文件”的 before/after blob；恢复时只处理仍等于 Agent after-image 的文件，后续改动会成为 conflict。它不污染用户 Git history，也不等同于任意 revision checkout；diff/review 的完整 revision-pair 模型仍是更长期的边界。
 
 ### 3.2 沙盒提供方
 
@@ -335,9 +335,16 @@ changed files、diff、preview server 和 workspace asset preview。这个能力
 | --- | --- | --- |
 | Runner conversation | Code Agent/Codex 等 agent 的内部 messages、tool loop 和 provider context | 否。它只解释 agent 为什么这么做，不保证能还原文件 |
 | Sandbox filesystem | 当前可执行、可读写的工作区和进程运行时 | 否。它是 mutable runtime，沙盒过期、重建或后续 turn 都会改变它 |
-| RoomTalk workspace revision | RoomTalk 持久化的文件 manifest、content blobs、metadata、parent revision 和绑定事件 | 是。diff、review、publish、rollback 必须依赖这一层 |
+| RoomTalk workspace history | 当前已落地的是 Codex turn 级的选择性 checkpoint：pre/post context boundary、变化文件 before/after blob、hash 与 restore audit；完整 revision 方案还需要全树 manifest、parent revision 和绑定事件 | 选择性 checkpoint 只是真实的“撤销这一轮”边界；跨任意 revision 的 diff、review、publish 仍不能把它当成完整历史树 |
 
-设计规则：
+已经实现的窄边界：
+
+- 完成的 Codex app-server turn 会保存精确的 pre-turn `threadId + lastTurnId`，并只打包该轮改变的普通文件 before/after blob。恢复前比较当前 SHA-256；仍等于 Agent after-image 的文件才回到 before-image，后续被用户或进程修改的路径标记为 conflict 并保持原样。
+- checkpoint 使用 `/tmp` 下隔离的 bare Git object database/index 计算 tree 与 blob，不改用户仓库的 branch、index 或 commit history。单文件上限 8 MiB、单轮逻辑数据上限 64 MiB；secret-like、依赖、build/cache、symlink 与不支持的类型不会进入可恢复集合。
+- 文件批次在 sandbox 内带回滚日志：任一文件应用失败，先撤销本次已经应用的路径。随后才 fork Codex context，并用一个 PostgreSQL 事务验证 room lease、切换 room session/cursor、写 restore audit。fork 或数据库提交失败时，再用 after-image 把安全文件整体向前恢复。
+- 这已经是 RoomTalk-owned、可持久恢复的产品能力，但它只回答“撤销某个 Codex turn 自己留下的安全文件变化”，不是任意 revision checkout，也不负责恢复远端 push、部署或第三方 API 副作用。
+
+完整 revision 层的后续设计规则：
 
 - 每个稳定边界都应该能产生 revision：agent turn final、用户文件写入/上传、publish、显式 checkpoint、rollback restore。
 - revision metadata 至少包含 `roomId`、`revisionId`、`parentRevisionId`、`source`、`turnId`、`createdAt`、文件 manifest、content hash、workspace root、可选 git refs。
@@ -346,18 +353,18 @@ changed files、diff、preview server 和 workspace asset preview。这个能力
 - review comment 不能只保存 `filePath/start/end`。它还要绑定 `baseRevisionId`、`headRevisionId` 或等价 section id，并保存足够的 hunk/context，使后续文件变化后评论不会漂移。
 - preview session 可以打开 live workspace 文件，但“这个 tab 展示的是哪个文件/哪个 revision”要由 RoomTalk state 保留，server preview session 不能把用户打开的 workspace-file 身份覆盖成普通 URL 或空 Browser 首页。
 
-回退要区分两件事：
+恢复仍要区分两件事：
 
-1. **对话回退**：裁剪或重放 agent conversation。即使某个 CLI/TUI 支持 Esc/backtrack，它通常只影响对话上下文，不自动还原磁盘。
-2. **workspace 回退**：把工作区恢复到某个 RoomTalk revision。这个流程必须由 RoomTalk 编排：停止当前 turn、选择目标 revision、把 sandbox 文件系统恢复到该 revision、更新当前指针、记录 rollback 事件并广播 UI。
+1. **对话回退**：Codex app-server 通过 `thread/fork(threadId, lastTurnId)` 创建只保留到目标 turn boundary 的新 thread；Coco 尚无等价的隐藏上下文 fork，所以 UI 不宣称 Coco 可以精确回退。
+2. **workspace 回退**：当前选择性 checkpoint 只恢复该轮变化且没有后续冲突的文件。未来若加入任意 revision checkout，仍必须由 RoomTalk 编排完整 manifest、当前指针、rollback event 与 UI 广播，不能直接对用户仓库执行强制 checkout。
 
 外部副作用不能假装可逆。已经发出的网络请求、第三方 API 操作、支付、邮件、远端部署等必须记录为 effect/audit event；rollback 只能回退 RoomTalk 管理的 workspace 状态，并在 UI 上提示仍有不可撤销副作用。
 
-当前缺口：
+当前仍然存在的边界：
 
-- live E2B workspace 已有 git baseline 和 `git diff` 能力，但只覆盖当前 sandbox 状态。
-- RoomTalk 已持久化消息、tool events、preview session state 和部分 workspace UI state，但没有 workspace revision manifest/content store。
-- 因此旧 review comment、历史 diff、发布时文件集合、turn 结束时文件集合和真正 rollback 仍是 P0 架构缺口。
+- live E2B workspace 的 git baseline / `git diff` 仍只描述当前 sandbox；选择性 checkpoint 不提供任意两棵历史树之间的 diff。
+- RoomTalk 已持久化 turn checkpoint manifest、变化文件 content blob、Codex context boundary 与 restore audit，但还没有全 workspace revision lineage 或通用 revision browser。
+- 因此“撤销一个完成的 Codex turn”已经实现；旧 review comment 锚定、任意历史 diff、publish 输入固化和跨多个 revision 的 checkout 仍是后续能力，不应继续被写成同一个未完成项。
 
 ---
 

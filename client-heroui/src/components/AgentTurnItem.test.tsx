@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message, RoomAgentTurn } from '../utils/types';
 import { AgentTurnItem, formatAgentTurnDuration } from './AgentTurnItem';
@@ -78,6 +78,27 @@ describe('AgentTurnItem', () => {
 
     expect(screen.getByTestId('turn-avatar').getAttribute('data-agent-brand')).toBe('codex');
     expect(screen.getByTestId('turn-avatar').getAttribute('aria-label')).toBe('Codex');
+  });
+
+  it('offers selective restore only for a completed Codex checkpoint', async () => {
+    const restore = vi.fn().mockResolvedValue('1 file restored; 1 conflict kept');
+    render(
+      <AgentTurnItem
+        turn={turn({
+          backend: 'codex-app-server',
+          assistantName: 'Codex',
+          workspaceCheckpoint: { status: 'ready', fileCount: 2, restorableFileCount: 2 },
+        })}
+        messages={[message({ id: 'ai-final', content: 'done' })]}
+        renderAgentMessage={item => <div>{item.content}</div>}
+        renderStandaloneMessage={item => <div>{item.content}</div>}
+        onRestoreCheckpoint={restore}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestore' }));
+    await waitFor(() => expect(restore).toHaveBeenCalledOnce());
+    expect(screen.getByRole('status').textContent).toBe('1 file restored; 1 conflict kept');
   });
 
   it('shows the persisted preparation phase while a turn is starting', () => {

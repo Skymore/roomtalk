@@ -89,6 +89,16 @@ export interface CodeAgentRunnerThreadReadRequest {
   includeTurns?: boolean;
 }
 
+export interface CodeAgentRunnerThreadForkRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_fork';
+  roomId: string;
+  clientId?: string;
+  workspace: string;
+  threadId: string;
+  lastTurnId?: string;
+}
+
 export type CodeAgentRunnerControlRequest =
   | CodeAgentRunnerInterruptRequest
   | CodeAgentRunnerSteerRequest
@@ -98,7 +108,8 @@ export type CodeAgentRunnerRequest =
   | CodeAgentRunnerRunRequest
   | CodeAgentRunnerControlRequest
   | CodeAgentRunnerThreadListRequest
-  | CodeAgentRunnerThreadReadRequest;
+  | CodeAgentRunnerThreadReadRequest
+  | CodeAgentRunnerThreadForkRequest;
 
 export interface CodeAgentRunnerStatusEvent {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
@@ -171,6 +182,7 @@ export interface CodeAgentRunnerFinalEvent {
   messageId: string;
   answer: string;
   sessionId: string;
+  backendTurnId?: string;
   usage?: AIUsage;
 }
 
@@ -218,6 +230,13 @@ export interface CodeAgentRunnerThreadReadResultEvent {
   thread: unknown;
 }
 
+export interface CodeAgentRunnerThreadForkResultEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_fork_result';
+  roomId: string;
+  threadId: string;
+}
+
 export type CodeAgentRunnerEvent =
   | CodeAgentRunnerStatusEvent
   | CodeAgentRunnerControlResultEvent
@@ -231,7 +250,8 @@ export type CodeAgentRunnerEvent =
   | CodeAgentRunnerErrorEvent
   | CodeAgentRunnerApprovalRequestEvent
   | CodeAgentRunnerThreadListResultEvent
-  | CodeAgentRunnerThreadReadResultEvent;
+  | CodeAgentRunnerThreadReadResultEvent
+  | CodeAgentRunnerThreadForkResultEvent;
 
 export class CodeAgentRunnerProtocolError extends Error {
   constructor(message: string) {
@@ -484,15 +504,18 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         elapsedMs: readOptionalNumber(raw, 'elapsedMs'),
         truncated: readOptionalBoolean(raw, 'truncated'),
       };
-    case 'final':
+    case 'final': {
+      const backendTurnId = readOptionalString(raw, 'backendTurnId');
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         messageId: readRequiredString(raw, 'messageId'),
         answer: readString(raw, 'answer'),
         sessionId: readRequiredString(raw, 'sessionId'),
+        ...(backendTurnId ? { backendTurnId } : {}),
         usage: readOptionalUsage(raw),
       };
+    }
     case 'usage': {
       const usage = readOptionalUsage(raw);
       if (!usage) {
@@ -551,6 +574,13 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         type,
         roomId: readRequiredString(raw, 'roomId'),
         thread: raw.thread,
+      };
+    case 'thread_fork_result':
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        roomId: readRequiredString(raw, 'roomId'),
+        threadId: readRequiredString(raw, 'threadId'),
       };
     default:
       throw new CodeAgentRunnerProtocolError(`Unknown code agent runner event type: ${String(type)}.`);

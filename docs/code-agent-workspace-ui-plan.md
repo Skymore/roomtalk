@@ -113,9 +113,16 @@ but durable product semantics belong to RoomTalk:
   implementation details, but they are not a substitute for RoomTalk-owned
   revision metadata and content storage.
 
-Conversation rollback and workspace rollback are separate. A backend may support
-trimming conversation turns, but RoomTalk rollback must restore a workspace
-revision and record any non-reversible external side effects separately.
+Conversation rollback and workspace rollback are separate. The implemented Codex
+app-server path records the exact pre-turn thread/turn boundary and a selective
+workspace checkpoint. Restore forks the Codex thread through that boundary and
+restores only files whose current hash still matches the Agent after-image. Later
+edits become visible conflicts and are never silently overwritten. Checkpoints use
+an isolated temporary Git object database and changed-file blobs; they neither add
+commits to the user's repository nor upload a full workspace on every turn. This is
+safe per-turn undo, not a general revision browser, and external side effects remain
+non-reversible. Coco is intentionally excluded until it can offer an equivalent
+hidden-context boundary.
 
 ## Proposed Types
 

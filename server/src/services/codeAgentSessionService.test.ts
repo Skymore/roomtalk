@@ -65,6 +65,11 @@ class MemoryCodeAgentStore {
   agentTurns = new Map<string, RoomAgentTurn>();
   roomLeases = new Map<string, { roomId: string; turnId: string; ownerId: string; fence: number; expiresAt: string }>();
   roomLeaseFences = new Map<string, number>();
+  turnInternals = new Map<string, {
+    backendSessionIdBefore?: string;
+    backendLastTurnIdBefore?: string;
+    workspaceCheckpoint?: any;
+  }>();
   mediaAssetsByMessageId = new Map<string, MediaAsset>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
@@ -217,6 +222,10 @@ class MemoryCodeAgentStore {
     );
     if (!lease) return { outcome: 'busy' as const };
     this.agentTurns.set(input.turn.id, input.turn);
+    this.turnInternals.set(input.turn.id, {
+      ...(input.backendSessionIdBefore ? { backendSessionIdBefore: input.backendSessionIdBefore } : {}),
+      ...(input.backendLastTurnIdBefore ? { backendLastTurnIdBefore: input.backendLastTurnIdBefore } : {}),
+    });
     const placeholder = input.placeholder as Message;
     this.messages.set(input.roomId, [...(this.messages.get(input.roomId) || []), placeholder]);
     const updatedRoom = {
@@ -288,6 +297,7 @@ class MemoryCodeAgentStore {
       ...room,
       codeAgentStatus: actualOutcome === 'error' ? 'error' as const : 'idle' as const,
       ...(actualOutcome === 'complete' && input.sessionId ? { codeAgentSessionId: input.sessionId } : {}),
+      ...(actualOutcome === 'complete' && input.sessionId ? { codeAgentLastTurnId: input.backendTurnId } : {}),
       lastActivityAt: input.completedAt,
     };
     this.rooms.set(input.claim.roomId, updatedRoom);
@@ -301,8 +311,19 @@ class MemoryCodeAgentStore {
       phaseMessage: undefined,
       lastHeartbeatAt: input.completedAt,
       updatedAt: input.completedAt,
+      ...(input.workspaceCheckpoint ? {
+        workspaceCheckpoint: {
+          status: input.workspaceCheckpoint.status,
+          fileCount: input.workspaceCheckpoint.manifest?.files?.length || 0,
+          restorableFileCount: input.workspaceCheckpoint.manifest?.files?.filter((file: any) => file.restorable).length || 0,
+        },
+      } : {}),
     };
     this.agentTurns.set(turn.id, turn);
+    this.turnInternals.set(turn.id, {
+      ...(this.turnInternals.get(turn.id) || {}),
+      ...(input.workspaceCheckpoint ? { workspaceCheckpoint: input.workspaceCheckpoint } : {}),
+    });
     await this.releaseCodeAgentRoomLease(
       input.claim.roomId,
       input.claim.turnId,
@@ -356,6 +377,44 @@ class MemoryCodeAgentStore {
   async upsertRoomAgentTurn(turn: RoomAgentTurn) {
     this.agentTurns.set(turn.id, turn);
     return turn;
+  }
+
+  async hasActiveCodeAgentRoomLease(roomId: string, now: string) {
+    const lease = this.roomLeases.get(roomId);
+    return Boolean(lease && Date.parse(lease.expiresAt) > Date.parse(now));
+  }
+
+  async readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string) {
+    const turn = this.agentTurns.get(turnId);
+    const internal = this.turnInternals.get(turnId);
+    if (!turn || turn.roomId !== roomId || !internal?.workspaceCheckpoint) return null;
+    return {
+      turn,
+      ...(internal.backendSessionIdBefore ? { backendSessionIdBefore: internal.backendSessionIdBefore } : {}),
+      ...(internal.backendLastTurnIdBefore ? { backendLastTurnIdBefore: internal.backendLastTurnIdBefore } : {}),
+      checkpoint: internal.workspaceCheckpoint,
+    };
+  }
+
+  async commitCodeAgentCheckpointRestore(input: any) {
+    const lease = this.roomLeases.get(input.roomId);
+    const room = this.rooms.get(input.roomId);
+    const turn = this.agentTurns.get(input.checkpointTurnId);
+    if (
+      !lease || !room || !turn
+      || lease.turnId !== input.lease.turnId
+      || lease.ownerId !== input.lease.ownerId
+      || lease.fence !== input.lease.fence
+    ) return null;
+    const updatedRoom = {
+      ...room,
+      codeAgentSessionId: input.sessionId,
+      codeAgentLastTurnId: input.lastTurnId,
+      codeAgentStatus: 'idle' as const,
+    };
+    this.rooms.set(input.roomId, updatedRoom);
+    this.roomLeases.delete(input.roomId);
+    return { room: updatedRoom, turn };
   }
 
   async appendMessage(message: Message) {
@@ -825,6 +884,95 @@ const createService = (options: {
 };
 
 describe('CodeAgentSessionService', () => {
+  it('restores only safe files and forks Codex context at the pre-turn boundary', async () => {
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'codex-app-server',
+      codeAgentSessionId: 'thread-current',
+      codeAgentLastTurnId: 'turn-current',
+      codeAgentStatus: 'idle',
+    }));
+    const mediaObjectStorage = new MemoryMediaObjectStorage();
+    const { lifecycle, sandboxService, service } = createService({
+      store,
+      backend: 'codex-app-server',
+      codexBackendEnabled: true,
+      mediaObjectStorage,
+      ids: ['restore-1'],
+    });
+    const ready = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ready.ok, true);
+    if (!ready.ok) return;
+
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/safe.txt', content: 'before safe' });
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/conflict.txt', content: 'before conflict' });
+    await sandboxService.beginWorkspaceCheckpoint(ready.handle, 'turn-checkpoint');
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/safe.txt', content: 'agent safe' });
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/conflict.txt', content: 'agent conflict' });
+    const archive = await sandboxService.finalizeWorkspaceCheckpoint(ready.handle, 'turn-checkpoint');
+    const objectKey = 'code-agent-checkpoints/v1/room-1/turn-checkpoint.tar.gz';
+    await mediaObjectStorage.putMediaObject({
+      objectKey,
+      body: archive.body,
+      mimeType: 'application/gzip',
+      byteSize: archive.byteSize,
+    });
+    const checkpoint = {
+      schemaVersion: 1 as const,
+      status: 'ready' as const,
+      objectKey,
+      archiveByteSize: archive.byteSize,
+      manifest: archive.manifest,
+    };
+    const checkpointTurn: RoomAgentTurn = {
+      id: 'turn-checkpoint',
+      roomId: 'room-1',
+      status: 'complete',
+      startedAt: '2026-05-03T00:00:00.000Z',
+      completedAt: '2026-05-03T00:01:00.000Z',
+      backend: 'codex-app-server',
+      assistantName: 'Codex',
+      updatedAt: '2026-05-03T00:01:00.000Z',
+      workspaceCheckpoint: { status: 'ready', fileCount: 2, restorableFileCount: 2 },
+    };
+    store.agentTurns.set(checkpointTurn.id, checkpointTurn);
+    store.turnInternals.set(checkpointTurn.id, {
+      backendSessionIdBefore: 'thread-before',
+      backendLastTurnIdBefore: 'turn-before',
+      workspaceCheckpoint: checkpoint,
+    });
+
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/conflict.txt', content: 'user edit' });
+    let forkRequest: any;
+    (service as any).runCodexThreadQuery = async (input: any) => {
+      forkRequest = input.request;
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'thread_fork_result',
+        threadId: 'thread-forked',
+      };
+    };
+
+    const restored = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-checkpoint',
+    });
+
+    assert.deepEqual(restored, {
+      success: true,
+      restoredPaths: ['src/safe.txt'],
+      conflictPaths: ['src/conflict.txt'],
+      unavailablePaths: [],
+      sessionId: 'thread-forked',
+    });
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'src/safe.txt')).content, 'before safe');
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'src/conflict.txt')).content, 'user edit');
+    assert.equal(forkRequest.threadId, 'thread-before');
+    assert.equal(forkRequest.lastTurnId, 'turn-before');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'thread-forked');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentLastTurnId, 'turn-before');
+  });
+
   it('signs linked object-storage images for the runner without writing sandbox files', async () => {
     const imageMessage: Message = {
       id: 'image-message-1',

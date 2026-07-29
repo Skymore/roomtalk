@@ -447,6 +447,48 @@ describe('E2BCodeAgentSandboxService', () => {
     }
   });
 
+  it('builds checkpoint restore commands with an in-sandbox batch rollback journal', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    const checkpointId = 'turn-checkpoint';
+    const operationId = `${checkpointId}-42`;
+    driver.fileReadBodies.set(
+      `/tmp/roomtalk-checkpoint-restore/${operationId}.result.json`,
+      Buffer.from('{"safePaths":[],"conflictPaths":[],"unavailablePaths":[]}', 'utf8'),
+    );
+    const originalNow = Date.now;
+    Date.now = () => 42;
+    try {
+      await service.previewWorkspaceCheckpoint(handle, {
+        body: Buffer.from('checkpoint-archive', 'utf8'),
+        byteSize: 18,
+        manifest: {
+          schemaVersion: 1,
+          checkpointId,
+          createdAt: '2026-07-29T00:00:00.000Z',
+          files: [],
+          totalArchiveBytes: 0,
+        },
+      });
+    } finally {
+      Date.now = originalNow;
+    }
+
+    const command = driver.commands.at(-1) || '';
+    const syntaxCheck = spawnSync('bash', ['-n'], { input: command, encoding: 'utf8' });
+    assert.equal(syntaxCheck.status, 0, syntaxCheck.stderr);
+    const pythonBody = command.split("python - <<'PY'\n")[1]?.split('\nPY')[0] || '';
+    const pythonSyntaxCheck = spawnSync('python', ['-c', 'import sys; compile(sys.stdin.read(), "checkpoint_restore.py", "exec")'], {
+      input: pythonBody,
+      encoding: 'utf8',
+    });
+    assert.equal(pythonSyntaxCheck.status, 0, pythonSyntaxCheck.stderr);
+    assert.match(command, /applied = \[\]/);
+    assert.match(command, /for path in reversed\(applied\)/);
+    assert.match(command, /checkpoint rollback also failed/);
+  });
+
   it('writes, reads, and deletes secret files under the Codex secret root only', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
