@@ -27,6 +27,9 @@ describe('room diagnostics', () => {
       }),
     ]);
     expect(sessionStorage.getItem('roomtalk-room-diagnostics-v1')).not.toContain('message content');
+    expect(console.info).toHaveBeenCalledWith(expect.stringContaining(
+      '[room-messages] event-page-applied {"roomId":"room-1"',
+    ));
   });
 
   it('keeps only the latest bounded diagnostic window', () => {

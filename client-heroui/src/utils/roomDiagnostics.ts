@@ -46,7 +46,7 @@ const writeRoomDiagnostic = (
     timestamp: new Date().toISOString(),
   };
   persistRoomDiagnostic(record);
-  console.info(`[${scope}] ${event}`, record);
+  console.info(`[${scope}] ${event} ${JSON.stringify(record)}`);
 };
 
 export const logRoomSessionDiagnostic = (event: string, details: RoomDiagnosticDetails = {}) => {
