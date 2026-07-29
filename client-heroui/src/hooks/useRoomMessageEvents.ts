@@ -76,6 +76,26 @@ const mergeSnapshotWithOptimisticMessages = (snapshot: Message[], current: Messa
   return merged;
 };
 
+const hasTerminalTurnToolResultGap = (messages: Message[], turns: RoomAgentTurn[]) => {
+  const terminalTurnIds = new Set(turns
+    .filter(turn => turn.status !== 'running')
+    .map(turn => turn.id));
+  if (terminalTurnIds.size === 0) return false;
+
+  const resultCallIds = new Set(messages.flatMap(message => (
+    message.messageType === 'tool_result' && message.toolCallId
+      ? [message.toolCallId]
+      : []
+  )));
+  return messages.some(message => (
+    message.messageType === 'tool_call'
+    && Boolean(message.toolCallId)
+    && Boolean(message.turnId)
+    && terminalTurnIds.has(message.turnId!)
+    && !resultCallIds.has(message.toolCallId!)
+  ));
+};
+
 const reduceRoomEvents = (
   events: RoomEvent[],
   messages: Message[],
@@ -205,6 +225,7 @@ export const useRoomMessageEvents = ({
     const pendingAIEvents = new PendingAIEventBuffer();
     const transientStreamGate = new AITransientStreamGate();
     const unpersistedAIErrorByMessageId = new Map<string, string>();
+    const terminalToolGapRecoveryTurns = new Set<string>();
     const syncState = new RoomMessageSyncStateMachine();
 
     setSessionCostUsd(null);
@@ -675,9 +696,10 @@ export const useRoomMessageEvents = ({
     if (memoryWindow) {
       const messages = filterMessages(memoryWindow.messages);
       const turns = filterTurns(memoryWindow.turns || []);
+      const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
       canonicalMessages = messages;
       canonicalTurns = turns;
-      hasBaseline = true;
+      hasBaseline = !cacheHasTerminalToolGap;
       syncState.applyCursor(memoryWindow.lastAppliedSeq);
       hasMoreMessages = memoryWindow.hasMore;
       oldestMessageId = memoryWindow.oldestMessageId;
@@ -688,6 +710,10 @@ export const useRoomMessageEvents = ({
       setOldestMessageId(oldestMessageId);
       setIsLoading(false);
       scheduleScroll('auto', 0);
+      if (cacheHasTerminalToolGap) {
+        logRoomMessageDiagnostic('cached-terminal-tool-result-gap', { roomId, source: 'memory' });
+        void clearCachedRoomMessageWindow(roomId);
+      }
       cacheHydrationPromise = Promise.resolve();
     } else {
       canonicalMessages = filterMessages(getCurrentMessages()).filter(
@@ -701,9 +727,10 @@ export const useRoomMessageEvents = ({
           if (cancelled || !cachedWindow || hasBaseline) return;
           const messages = filterMessages(cachedWindow.messages);
           const turns = filterTurns(cachedWindow.turns || []);
+          const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
           canonicalMessages = drainPendingAIEvents(messages);
           canonicalTurns = turns;
-          hasBaseline = true;
+          hasBaseline = !cacheHasTerminalToolGap;
           syncState.applyCursor(cachedWindow.lastAppliedSeq);
           hasMoreMessages = cachedWindow.hasMore;
           oldestMessageId = cachedWindow.oldestMessageId;
@@ -714,6 +741,10 @@ export const useRoomMessageEvents = ({
           setOldestMessageId(oldestMessageId);
           setIsLoading(false);
           scheduleScroll('auto', 0);
+          if (cacheHasTerminalToolGap) {
+            logRoomMessageDiagnostic('cached-terminal-tool-result-gap', { roomId, source: 'persistent' });
+            void clearCachedRoomMessageWindow(roomId);
+          }
         })
         .catch(error => {
           logRoomMessageDiagnostic('persistent-cache-read-failed', {
@@ -769,6 +800,17 @@ export const useRoomMessageEvents = ({
         Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id)
       ));
       setAgentTurns(canonicalTurns);
+      if (
+        turn.status !== 'running'
+        && !terminalToolGapRecoveryTurns.has(turn.id)
+        && hasTerminalTurnToolResultGap(canonicalMessages, canonicalTurns)
+      ) {
+        terminalToolGapRecoveryTurns.add(turn.id);
+        syncState.markHistoryInvalidated();
+        void clearCachedRoomMessageWindow(roomId);
+        void syncFromCursor();
+        return;
+      }
       cacheWindow(canonicalMessages, canonicalTurns);
     };
 

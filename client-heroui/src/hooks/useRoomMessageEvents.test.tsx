@@ -724,6 +724,71 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.seq).toBe('2');
   });
 
+  it('replaces a cursor-current cache when a terminal turn is missing a tool result', async () => {
+    const toolCall = message({
+      id: 'tool-call',
+      clientId: 'code_agent_runner',
+      messageType: 'tool_call',
+      turnId: 'turn-1',
+      toolCallId: 'call-1',
+      toolName: 'file_change',
+    });
+    const toolResult = message({
+      id: 'tool-result',
+      clientId: 'code_agent_runner',
+      messageType: 'tool_result',
+      turnId: 'turn-1',
+      toolCallId: 'call-1',
+      toolName: 'file_change',
+    });
+    const completedTurn = turn({ status: 'complete' });
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [toolCall],
+      turns: [completedTurn],
+      lastAppliedSeq: 5,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [toolCall, toolResult],
+      turns: [completedTurn],
+      snapshotSeq: 5,
+    }));
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('tool-call,tool-result'));
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+    expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+    expect(screen.getByTestId('state').dataset.seq).toBe('5');
+  });
+
+  it('does not repair a missing tool result while its turn is still running', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({
+        id: 'tool-call',
+        clientId: 'code_agent_runner',
+        messageType: 'tool_call',
+        turnId: 'turn-1',
+        toolCallId: 'call-1',
+        toolName: 'file_change',
+      })],
+      turns: [turn({ status: 'running' })],
+      lastAppliedSeq: 5,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+
+    render(<Harness />);
+
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(cacheMock.clearCachedRoomMessageWindow).not.toHaveBeenCalled();
+  });
+
   it('applies canonical room metadata from the same event cursor', async () => {
     const onRoomUpdated = vi.fn();
     const updatedRoom = room({ name: 'Renamed room', updatedAt: '2026-07-20T00:01:00.000Z' });
