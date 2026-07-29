@@ -64,7 +64,8 @@ const mediaCacheMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../utils/mediaCache', () => mediaCacheMock);
-vi.mock('../utils/roomDiagnostics', () => ({ logRoomMessageDiagnostic: vi.fn() }));
+const diagnosticMock = vi.hoisted(() => ({ log: vi.fn() }));
+vi.mock('../utils/roomDiagnostics', () => ({ logRoomMessageDiagnostic: diagnosticMock.log }));
 
 const message = (overrides: Partial<Message> = {}): Message => ({
   id: 'message-1',
@@ -388,6 +389,93 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('3'));
     expect(screen.getByTestId('state').dataset.messages).toBe('message-2,message-3');
     expect(socketMock.requestEvents.mock.calls.map(call => call[0].afterSeq)).toEqual([1, 1]);
+  });
+
+  it('does not advance past a missing seq 21 before replay supplies it', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 20, hasMore: false, cachedAt: Date.now(),
+    };
+    let releaseReplay!: (page: RoomEventPagePayload) => void;
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, { headSeq: 20 }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        releaseReplay = resolve;
+      }));
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      deliveryId: 'delivery-gap',
+      headSeq: 22,
+      events: [event(22)],
+    }));
+
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('state').dataset.seq).toBe('20');
+    expect(screen.getByTestId('state').dataset.messages).toBe('');
+    expect(diagnosticMock.log).toHaveBeenCalledWith('event-sequence-gap', expect.objectContaining({
+      deliveryId: 'delivery-gap',
+      cursorBefore: 20,
+      expectedSeq: 21,
+      receivedSeq: 22,
+    }));
+
+    await act(async () => releaseReplay(eventPage('replay-21-22', 20, {
+      headSeq: 22,
+      events: [event(21), event(22)],
+    })));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('22'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('message-21,message-22');
+  });
+
+  it('keeps cursor 20 when seq 21 lacks its after-image and repairs by replay', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 20, hasMore: false, cachedAt: Date.now(),
+    };
+    let releaseReplay!: (page: RoomEventPagePayload) => void;
+    socketMock.requestEvents
+      .mockImplementationOnce(async request => eventPage(request.requestId, request.afterSeq, { headSeq: 20 }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        releaseReplay = resolve;
+      }));
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      deliveryId: 'delivery-invalid-21',
+      headSeq: 21,
+      events: [event(21, {
+        payload: { messageIds: ['tool-result-21'], messages: [] },
+      })],
+    }));
+
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('state').dataset.seq).toBe('20');
+    expect(diagnosticMock.log).toHaveBeenCalledWith('event-projection-rejected', expect.objectContaining({
+      deliveryId: 'delivery-invalid-21',
+      cursorBefore: 20,
+      seq: 21,
+      reason: 'message-after-image-missing',
+      messageId: 'tool-result-21',
+    }));
+
+    const toolResult = message({
+      id: 'tool-result-21',
+      messageType: 'tool_result',
+      turnId: 'turn-1',
+      toolCallId: 'call-1',
+      toolName: 'file_change',
+    });
+    await act(async () => releaseReplay(eventPage('replay-valid-21', 20, {
+      headSeq: 21,
+      events: [event(21, {
+        payload: { messageIds: [toolResult.id], messages: [toolResult] },
+      })],
+    })));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('21'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('tool-result-21');
   });
 
   it('switches a large retained gap to a consistent snapshot instead of replaying every page', async () => {

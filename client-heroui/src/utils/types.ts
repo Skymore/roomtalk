@@ -284,6 +284,7 @@ export interface RoomEventPagePayload {
 export interface RoomEventAvailable {
   roomId: string;
   headSeq: number;
+  deliveryId?: string;
   events?: RoomEvent[];
 }
 

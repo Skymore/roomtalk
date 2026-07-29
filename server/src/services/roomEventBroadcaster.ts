@@ -3,8 +3,10 @@ import { RoomStore } from '../repositories/store';
 import { RoomEvent } from '../types';
 import { RoomEventAvailable } from './roomEventNotifier';
 import type { Server } from 'socket.io';
+import { randomUUID } from 'crypto';
 
 export interface RoomEventBroadcast extends RoomEventAvailable {
+  deliveryId?: string;
   events?: RoomEvent[];
 }
 
@@ -123,7 +125,7 @@ export class RoomEventBroadcaster {
   private emitHeadOnly(event: RoomEventAvailable): void {
     this.metrics.headOnlyBroadcasts += 1;
     try {
-      this.options.emit(event);
+      this.options.emit({ ...event, deliveryId: randomUUID() });
     } catch (error) {
       this.options.logger.error('Failed to broadcast room event head fallback', {
         error,
@@ -164,7 +166,7 @@ export class RoomEventBroadcaster {
       return;
     }
 
-    const fastPath: RoomEventBroadcast = { ...event, events: committedEvents };
+    const fastPath: RoomEventBroadcast = { ...event, deliveryId: randomUUID(), events: committedEvents };
     const payloadBytes = Buffer.byteLength(JSON.stringify(fastPath), 'utf8');
     if (payloadBytes > this.options.maxPayloadBytes) {
       this.emitHeadOnly(event);
@@ -178,6 +180,29 @@ export class RoomEventBroadcaster {
     }
     this.metrics.fastPathEvents += committedEvents.length;
     this.metrics.fastPathBytes += payloadBytes;
+    const toolMessages = committedEvents.flatMap(candidate => (
+      candidate.type === 'messages.upserted'
+        ? (candidate.payload.messages || []).filter(message => (
+            message.messageType === 'tool_call' || message.messageType === 'tool_result'
+          ))
+        : []
+    ));
+    if (toolMessages.length > 0) {
+      this.options.logger.info('Broadcasting committed tool events', {
+        roomId,
+        deliveryId: fastPath.deliveryId,
+        minSeq,
+        headSeq,
+        eventSeqs: committedEvents.map(candidate => candidate.seq),
+        toolMessages: toolMessages.map(message => ({
+          id: message.id,
+          messageType: message.messageType,
+          toolCallId: message.toolCallId || null,
+          toolName: message.toolName || null,
+          turnId: message.turnId || null,
+        })),
+      });
+    }
     this.options.emit(fastPath);
   }
 }

@@ -56,6 +56,7 @@ describe('RoomEventBroadcaster', () => {
     assert.deepEqual(requests, [{ roomId: 'room-1', seq: 42 }]);
     assert.equal(emitted.length, 1);
     assert.equal(emitted[0].headSeq, 42);
+    assert.equal(typeof emitted[0].deliveryId, 'string');
     assert.equal(emitted[0].events?.[0].seq, 42);
   });
 
@@ -74,7 +75,11 @@ describe('RoomEventBroadcaster', () => {
     broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
     await waitUntil(() => emitted.length === 1);
 
-    assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].roomId, 'room-1');
+    assert.equal(emitted[0].headSeq, 42);
+    assert.equal(typeof emitted[0].deliveryId, 'string');
+    assert.equal(emitted[0].events, undefined);
   });
 
   it('falls back to a head-only hint when the exact PostgreSQL event read fails', async () => {
@@ -94,7 +99,11 @@ describe('RoomEventBroadcaster', () => {
     broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
     await waitUntil(() => emitted.length === 1);
 
-    assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].roomId, 'room-1');
+    assert.equal(emitted[0].headSeq, 42);
+    assert.equal(typeof emitted[0].deliveryId, 'string');
+    assert.equal(emitted[0].events, undefined);
   });
 
   it('serializes same-room exact reads so fast-path events stay ordered', async () => {
@@ -209,7 +218,11 @@ describe('RoomEventBroadcaster', () => {
     broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
     await waitUntil(() => emitted.length === 1);
 
-    assert.deepEqual(emitted, [{ roomId: 'room-1', headSeq: 42 }]);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].roomId, 'room-1');
+    assert.equal(emitted[0].headSeq, 42);
+    assert.equal(typeof emitted[0].deliveryId, 'string');
+    assert.equal(emitted[0].events, undefined);
     assert.equal(broadcaster.getMetrics().authorizationUnavailable, 1);
   });
 

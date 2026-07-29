@@ -96,6 +96,90 @@ const hasTerminalTurnToolResultGap = (messages: Message[], turns: RoomAgentTurn[
   ));
 };
 
+type RoomEventApplyContext = {
+  source: 'fast-path' | 'replay';
+  headSeq: number;
+  deliveryId?: string;
+  requestId?: string;
+};
+
+const findRoomEventProjectionMismatch = (
+  events: RoomEvent[],
+  messages: Message[],
+  turns: RoomAgentTurn[],
+): Record<string, unknown> | null => {
+  const messageById = new Map(messages.map(message => [message.id, message]));
+  const turnById = new Map(turns.map(turn => [turn.id, turn]));
+
+  for (const event of events) {
+    if (event.type === 'messages.upserted') {
+      const afterImageById = new Map((event.payload.messages || []).map(message => [message.id, message]));
+      const missingAfterImageId = (event.payload.messageIds || []).find(messageId => !afterImageById.has(messageId));
+      if (missingAfterImageId) {
+        return {
+          seq: event.seq,
+          eventType: event.type,
+          reason: 'message-after-image-missing',
+          messageId: missingAfterImageId,
+        };
+      }
+      for (const expected of event.payload.messages || []) {
+        const actual = messageById.get(expected.id);
+        if (!actual) {
+          return { seq: event.seq, eventType: event.type, reason: 'message-missing', messageId: expected.id };
+        }
+        if (
+          actual.roomId !== expected.roomId
+          || actual.messageType !== expected.messageType
+          || actual.toolCallId !== expected.toolCallId
+          || actual.turnId !== expected.turnId
+        ) {
+          return {
+            seq: event.seq,
+            eventType: event.type,
+            reason: 'message-identity-mismatch',
+            messageId: expected.id,
+            expectedMessageType: expected.messageType,
+            actualMessageType: actual.messageType,
+            expectedToolCallId: expected.toolCallId || null,
+            actualToolCallId: actual.toolCallId || null,
+          };
+        }
+      }
+    } else if (event.type === 'messages.deleted') {
+      const remainingId = (event.payload.messageIds || []).find(messageId => messageById.has(messageId));
+      if (remainingId) {
+        return { seq: event.seq, eventType: event.type, reason: 'deleted-message-remains', messageId: remainingId };
+      }
+    } else if (event.type === 'agent_turns.upserted') {
+      const afterImageById = new Map((event.payload.turns || []).map(turn => [turn.id, turn]));
+      const missingAfterImageId = (event.payload.turnIds || []).find(turnId => !afterImageById.has(turnId));
+      if (missingAfterImageId) {
+        return {
+          seq: event.seq,
+          eventType: event.type,
+          reason: 'turn-after-image-missing',
+          turnId: missingAfterImageId,
+        };
+      }
+      for (const expected of event.payload.turns || []) {
+        const actual = turnById.get(expected.id);
+        if (!actual || actual.roomId !== expected.roomId || actual.status !== expected.status) {
+          return { seq: event.seq, eventType: event.type, reason: 'turn-mismatch', turnId: expected.id };
+        }
+      }
+    } else if (event.type === 'agent_turns.deleted') {
+      const remainingId = (event.payload.turnIds || []).find(turnId => turnById.has(turnId));
+      if (remainingId) {
+        return { seq: event.seq, eventType: event.type, reason: 'deleted-turn-remains', turnId: remainingId };
+      }
+    } else if (event.type === 'room.deleted' && (messages.length > 0 || turns.length > 0)) {
+      return { seq: event.seq, eventType: event.type, reason: 'deleted-room-projection-not-empty' };
+    }
+  }
+  return null;
+};
+
 const reduceRoomEvents = (
   events: RoomEvent[],
   messages: Message[],
@@ -498,7 +582,8 @@ export const useRoomMessageEvents = ({
       }
     };
 
-    const applyEventPage = (events: RoomEvent[]) => {
+    const applyEventPage = (events: RoomEvent[], context: RoomEventApplyContext) => {
+      const cursorBefore = syncState.lastAppliedSeq;
       const accepted: RoomEvent[] = [];
       let expectedSeq = syncState.lastAppliedSeq + 1;
       for (const event of events) {
@@ -506,7 +591,17 @@ export const useRoomMessageEvents = ({
         if (event.seq !== expectedSeq) {
           // A retained room.deleted tombstone is terminal and can safely jump a
           // pruned prefix: the deleted room has no snapshot to load instead.
-          if (accepted.length > 0 || event.type !== 'room.deleted') return false;
+          if (accepted.length > 0 || event.type !== 'room.deleted') {
+            logRoomMessageDiagnostic('event-sequence-gap', {
+              roomId,
+              ...context,
+              cursorBefore,
+              expectedSeq,
+              receivedSeq: event.seq,
+              pageSeqs: events.map(candidate => candidate.seq),
+            });
+            return false;
+          }
           expectedSeq = event.seq;
         }
         accepted.push(event);
@@ -531,8 +626,46 @@ export const useRoomMessageEvents = ({
         .forEach(message => {
           eventBase = upsertMessage(eventBase, message);
         });
-      const reduced = reduceRoomEvents(accepted, eventBase, canonicalTurns);
       const nextSeq = accepted[accepted.length - 1].seq;
+      let projectionMessages = eventBase;
+      let projectionTurns = canonicalTurns;
+      const deletedMediaAssetIds: string[] = [];
+      let roomDeleted = false;
+      let updatedRoom: Room | undefined;
+      let roomMediaCacheInvalidated = false;
+      let membersChanged = false;
+      for (const event of accepted) {
+        const step = reduceRoomEvents([event], projectionMessages, projectionTurns);
+        const projectionMismatch = findRoomEventProjectionMismatch([event], step.messages, step.turns);
+        if (projectionMismatch) {
+          logRoomMessageDiagnostic('event-projection-rejected', {
+            roomId,
+            ...context,
+            cursorBefore,
+            nextSeq,
+            pageSeqs: accepted.map(candidate => candidate.seq),
+            eventTypes: accepted.map(candidate => candidate.type),
+            ...projectionMismatch,
+          });
+          return false;
+        }
+        projectionMessages = step.messages;
+        projectionTurns = step.turns;
+        deletedMediaAssetIds.push(...step.deletedMediaAssetIds);
+        roomDeleted ||= step.roomDeleted;
+        updatedRoom = step.updatedRoom || updatedRoom;
+        roomMediaCacheInvalidated ||= step.roomMediaCacheInvalidated;
+        membersChanged ||= step.membersChanged;
+      }
+      const reduced = {
+        messages: projectionMessages,
+        turns: projectionTurns,
+        deletedMediaAssetIds,
+        roomDeleted,
+        updatedRoom,
+        roomMediaCacheInvalidated,
+        membersChanged,
+      };
       canonicalMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents(reduced.messages));
       canonicalTurns = reduced.turns;
       reduced.deletedMediaAssetIds.forEach(assetId => void clearCachedMediaAsset(assetId));
@@ -549,6 +682,30 @@ export const useRoomMessageEvents = ({
       updateMessages(canonicalMessages);
       setAgentTurns(reduced.turns);
       setCursor(nextSeq);
+      const toolEvents = accepted.flatMap(event => (
+        event.type === 'messages.upserted'
+          ? (event.payload.messages || []).filter(message => (
+              message.messageType === 'tool_call' || message.messageType === 'tool_result'
+            ))
+          : []
+      ));
+      logRoomMessageDiagnostic('event-page-applied', {
+        roomId,
+        ...context,
+        cursorBefore,
+        cursorAfter: nextSeq,
+        pageSeqs: accepted.map(event => event.seq),
+        eventTypes: accepted.map(event => event.type),
+        messageCount: canonicalMessages.length,
+        turnCount: canonicalTurns.length,
+        toolMessages: toolEvents.map(message => ({
+          id: message.id,
+          messageType: message.messageType,
+          toolCallId: message.toolCallId || null,
+          toolName: message.toolName || null,
+          turnId: message.turnId || null,
+        })),
+      });
       setOldest(canonicalMessages[0]?.id);
       const hasMessageDeletion = accepted.some(event => event.type === 'messages.deleted');
       if (canonicalMessages.length === 0) {
@@ -620,7 +777,11 @@ export const useRoomMessageEvents = ({
                 if (!loaded) return;
                 continue;
               }
-              if (!applyEventPage(page.events)) {
+              if (!applyEventPage(page.events, {
+                source: 'replay',
+                headSeq: page.headSeq,
+                requestId,
+              })) {
                 const loaded = await loadSnapshot({ reason: 'event-sequence-gap' });
                 if (!loaded) return;
                 continue;
@@ -767,12 +928,24 @@ export const useRoomMessageEvents = ({
 
     const handleRoomEventAvailable = (event: RoomEventAvailable) => {
       if (event.roomId !== roomId || !Number.isSafeInteger(event.headSeq)) return;
+      logRoomMessageDiagnostic('event-notification-received', {
+        roomId,
+        deliveryId: event.deliveryId || null,
+        headSeq: event.headSeq,
+        cursorBefore: syncState.lastAppliedSeq,
+        eventSeqs: Array.isArray(event.events) ? event.events.map(candidate => candidate.seq) : [],
+        eventTypes: Array.isArray(event.events) ? event.events.map(candidate => candidate.type) : [],
+      });
       syncState.notifyHead(event.headSeq);
       const fastPathEvents = Array.isArray(event.events) ? event.events : [];
       const fastPathEndsAtHead = fastPathEvents.length > 0
         && fastPathEvents[fastPathEvents.length - 1].seq === event.headSeq;
       if (hasBaseline && fastPathEndsAtHead) syncState.beginRealtimeMutation();
-      if (hasBaseline && fastPathEndsAtHead && !applyEventPage(fastPathEvents)) {
+      if (hasBaseline && fastPathEndsAtHead && !applyEventPage(fastPathEvents, {
+        source: 'fast-path',
+        headSeq: event.headSeq,
+        deliveryId: event.deliveryId,
+      })) {
         logRoomMessageDiagnostic('event-fast-path-gap', {
           roomId,
           lastAppliedSeq: syncState.lastAppliedSeq,
