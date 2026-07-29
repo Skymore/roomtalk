@@ -176,15 +176,30 @@ const isShellTool = (toolName: string) => {
   return lower === 'bash' || lower.includes('shell') || lower.includes('terminal');
 };
 
+const shortenToolPath = (filePath: string) => {
+  const segments = filePath.split('/');
+  return segments.length > 2
+    ? `…/${segments.slice(-2).join('/')}`
+    : filePath;
+};
+
 const getToolSummary = (message: Message): string => {
   const args = message.toolArgs;
   if (!args) return '';
   const filePath = args.file_path || args.path || args.filename;
   if (typeof filePath === 'string') {
-    const segments = filePath.split('/');
-    return segments.length > 2
-      ? `…/${segments.slice(-2).join('/')}`
-      : filePath;
+    return shortenToolPath(filePath);
+  }
+  if (Array.isArray(args.changes)) {
+    const changedPaths = args.changes.flatMap(change => {
+      if (!change || typeof change !== 'object') return [];
+      const path = (change as Record<string, unknown>).path;
+      return typeof path === 'string' && path.trim() ? [path] : [];
+    });
+    if (changedPaths.length > 0) {
+      const firstPath = shortenToolPath(changedPaths[0]);
+      return changedPaths.length > 1 ? `${firstPath} +${changedPaths.length - 1}` : firstPath;
+    }
   }
   const command = args.command;
   if (typeof command === 'string') {
@@ -517,15 +532,26 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
           </span>
         )}
 
-        {isPending && (
-          <span className="ml-auto inline-block h-3 w-3 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-[#5e5d59] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />
-        )}
-        {isSuccess && (
-          <Icon icon="lucide:check" className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-emerald-500 dark:text-emerald-400" />
-        )}
-        {isError && (
-          <Icon icon="lucide:x" className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-danger-500 dark:text-danger-400" />
-        )}
+        <span className="ml-auto inline-flex flex-shrink-0 items-center gap-1 text-[10px] font-medium">
+          {isPending && (
+            <>
+              <span className="text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentCommandStarted')}</span>
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px] border-[#5e5d59] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />
+            </>
+          )}
+          {isSuccess && (
+            <>
+              <span className="text-emerald-600 dark:text-emerald-400">{t('codeAgentCommandSucceeded')}</span>
+              <Icon icon="lucide:check" className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+            </>
+          )}
+          {isError && (
+            <>
+              <span className="text-danger-600 dark:text-danger-400">{t('toolResultFailed')}</span>
+              <Icon icon="lucide:x" className="h-3.5 w-3.5 text-danger-500 dark:text-danger-400" />
+            </>
+          )}
+        </span>
         {typeof result?.exitCode === 'number' && result.exitCode !== 0 && (
           <span className="ml-0.5 text-[10px] font-mono text-danger-500 dark:text-danger-400">
             E{result.exitCode}

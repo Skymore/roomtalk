@@ -230,6 +230,29 @@ describe('RoomSessionController', () => {
     });
   });
 
+  it('does not accept a stale registration promise from the previous socket', async () => {
+    transport.establish('socket-2');
+
+    // Model the production race: the old transport's promise is settling while
+    // the new socket already needs its own registration acknowledgement.
+    (controller as any).registeredSocketId = 'socket-1';
+    let staleRegistration!: Promise<void>;
+    staleRegistration = Promise.resolve().finally(() => {
+      if ((controller as any).registrationPromise === staleRegistration) {
+        (controller as any).registrationPromise = null;
+      }
+    });
+    (controller as any).registrationPromise = staleRegistration;
+
+    const ensuring = controller.ensureRegistered();
+    await flushPromises();
+
+    expect(transport.registerCallbacks).toHaveLength(1);
+    transport.registerCallbacks[0]({ success: true });
+    await expect(ensuring).resolves.toBeUndefined();
+    expect((controller as any).registeredSocketId).toBe('socket-2');
+  });
+
   it('restarts the full session on a new socket after disconnecting during join', async () => {
     transport.establish('socket-1');
     const joining = controller.selectRoom({ roomId: 'room-1' });

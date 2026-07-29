@@ -1178,6 +1178,19 @@ describe('code-agent workspace socket handlers', () => {
     }), { success: false, error: 'Only the room owner or an admin can restore a workspace checkpoint' });
   });
 
+  it('returns a machine-readable code when checkpoint restore arrives before registration', async () => {
+    const { socket } = createHarness({ clientId: null });
+
+    assert.deepEqual(await socket.invoke<any>('restore_code_agent_checkpoint', {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+    }), {
+      success: false,
+      code: 'NOT_REGISTERED',
+      error: 'You are not registered',
+    });
+  });
+
   it('rejects workspace file writes larger than the bounded file payload', async () => {
     const { socket, writeWorkspaceFileCalls } = createHarness();
 

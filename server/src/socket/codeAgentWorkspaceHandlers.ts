@@ -618,12 +618,15 @@ export function registerCodeAgentWorkspaceHandlers({
   const loadAuthorizedCodeAgentRoom = async (
     roomId: string | null,
     action: string
-  ): Promise<{ success: true; clientId: string; room: Room } | { success: false; error: string; clientId?: string | null }> => {
+  ): Promise<
+    | { success: true; clientId: string; room: Room }
+    | { success: false; error: string; code?: string; clientId?: string | null }
+  > => {
     const clientId = await resolveClientId();
 
     if (!clientId) {
       socketLogger.warn(`Unregistered client tried to ${action}`, { socketId: socket.id, roomId });
-      return { success: false, error: 'You are not registered', clientId };
+      return { success: false, error: 'You are not registered', code: 'NOT_REGISTERED', clientId };
     }
 
     if (!roomId) {
@@ -780,6 +783,7 @@ export function registerCodeAgentWorkspaceHandlers({
     payload: unknown,
     callback?: (response: {
       success: boolean;
+      code?: string;
       error?: string;
       restoredPaths?: string[];
       conflictPaths?: string[];
@@ -791,7 +795,7 @@ export function registerCodeAgentWorkspaceHandlers({
     const turnId = parseWorkspaceString(payload, 'turnId');
     const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'restore code agent checkpoint');
     if (!authorized.success) {
-      callback?.({ success: false, error: authorized.error });
+      callback?.({ success: false, code: authorized.code, error: authorized.error });
       return;
     }
     if (!turnId) {

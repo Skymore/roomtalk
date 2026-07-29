@@ -47,6 +47,45 @@ describe('CodeAgentToolMessage', () => {
     expect(document.body.textContent).not.toContain('"file_path"');
   });
 
+  it('shows the changed file and an explicit pending status for file_change', () => {
+    render(
+      <CodeAgentToolMessage
+        message={{
+          ...baseMessage,
+          messageType: 'tool_call',
+          toolName: 'file_change',
+          toolArgs: { changes: [{ path: 'checkpoint-demo.txt', kind: 'add' }] },
+        }}
+      />
+    );
+
+    expect(screen.getByText('checkpoint-demo.txt')).toBeTruthy();
+    expect(screen.getByText('codeAgentCommandStarted')).toBeTruthy();
+  });
+
+  it('shows an explicit completed status when file_change has a result', () => {
+    render(
+      <CodeAgentToolMessage
+        message={{
+          ...baseMessage,
+          messageType: 'tool_call',
+          toolName: 'file_change',
+          toolArgs: { changes: [{ path: 'checkpoint-demo.txt', kind: 'add' }] },
+        }}
+        pairedResult={{
+          ...baseMessage,
+          id: 'result-1',
+          toolName: 'file_change',
+          toolOutputPreview: 'Done!',
+        }}
+      />
+    );
+
+    expect(screen.getByText('checkpoint-demo.txt')).toBeTruthy();
+    expect(screen.getByText('codeAgentCommandSucceeded')).toBeTruthy();
+    expect(screen.queryByText('codeAgentCommandStarted')).toBeNull();
+  });
+
   it('shows model and cost when a tool-only model step is billed on the tool card', () => {
     render(
       <CodeAgentToolMessage
@@ -147,11 +186,11 @@ describe('CodeAgentToolMessage', () => {
     );
 
     expect(screen.getByText('Shell')).toBeTruthy();
-    expect(screen.queryByText('toolResultFailed')).toBeNull();
+    expect(screen.getByText('toolResultFailed')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Shell'));
 
-    expect(screen.getByText('toolResultFailed')).toBeTruthy();
+    expect(screen.getAllByText('toolResultFailed')).toHaveLength(2);
     expect(screen.getByText('showMore')).toBeTruthy();
     expect(document.body.textContent).toContain(`${'x'.repeat(1200)}…`);
 

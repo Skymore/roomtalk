@@ -433,6 +433,7 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
 
 type EmitWithAckOptions = {
   retryOnSocketReconnect?: boolean;
+  retryOnNotRegistered?: boolean;
   timeoutMs?: number;
   onLateResponse?: (response: SocketAckResponse) => void;
 };
@@ -504,6 +505,14 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
 
   return emitOnce().catch((error) => {
     if (options.retryOnSocketReconnect && isRetryableSocketDisconnectError(error)) {
+      return emitOnce();
+    }
+    if (
+      options.retryOnNotRegistered
+      && error instanceof SocketRequestError
+      && error.code === 'NOT_REGISTERED'
+    ) {
+      roomSessionController.refreshRegistration();
       return emitOnce();
     }
     throw error;
@@ -1591,7 +1600,12 @@ export const restoreCodeAgentCheckpoint = (roomId: string, turnId: string): Prom
     { roomId, turnId },
     'Timed out while restoring the workspace checkpoint',
     'Failed to restore the workspace checkpoint',
-    { timeoutMs: 2 * 60 * 1000 },
+    {
+      timeoutMs: 2 * 60 * 1000,
+      // An explicit NOT_REGISTERED response proves the restore did not begin,
+      // so this one retry is safe. Do not retry an ambiguous timeout/disconnect.
+      retryOnNotRegistered: true,
+    },
   )
 );
 

@@ -281,21 +281,34 @@ export class RoomSessionController {
     && this.registeredSocketId === this.currentSocketId
   );
 
-  ensureRegistered = (acknowledgementTimeoutMs = this.registrationTimeoutMs): Promise<void> => {
-    const socketId = this.connectedSocketId();
-    if (socketId && this.registeredSocketId === socketId) {
-      return Promise.resolve();
-    }
-    if (this.registrationPromise) return this.registrationPromise;
+  ensureRegistered = async (acknowledgementTimeoutMs = this.registrationTimeoutMs): Promise<void> => {
+    while (true) {
+      const socketId = this.connectedSocketId();
+      if (socketId && this.registeredSocketId === socketId) return;
 
-    let promise: Promise<void>;
-    promise = this.runRegistrationLoop(acknowledgementTimeoutMs).finally(() => {
-      if (this.registrationPromise === promise) {
+      if (!this.registrationPromise) {
+        let promise: Promise<void>;
+        promise = this.runRegistrationLoop(acknowledgementTimeoutMs).finally(() => {
+          if (this.registrationPromise === promise) {
+            this.registrationPromise = null;
+          }
+        });
+        this.registrationPromise = promise;
+      }
+
+      const pendingRegistration = this.registrationPromise;
+      await pendingRegistration;
+
+      const currentSocketId = this.connectedSocketId();
+      if (currentSocketId && this.registeredSocketId === currentSocketId) return;
+
+      // A promise created for the previous transport can settle just after a
+      // reconnect. Never treat that stale completion as registration for the
+      // current Socket.IO connection.
+      if (this.registrationPromise === pendingRegistration) {
         this.registrationPromise = null;
       }
-    });
-    this.registrationPromise = promise;
-    return promise;
+    }
   };
 
   selectRoom = (input: {
