@@ -46,18 +46,18 @@ const currentRoom: Room = {
 describe('BottomNav', () => {
   afterEach(cleanup);
 
-  it('exposes labeled mobile navigation with full-size touch targets', () => {
+  it('keeps mobile navigation compact while preserving accessible labels', () => {
     render(<BottomNav view="chat" setView={vi.fn()} currentRoom={currentRoom} />);
 
     const nav = screen.getByRole('navigation', { name: 'menu' });
     expect(nav).toBeTruthy();
-    const chatButton = screen.getByRole('button', { name: 'chatNav: Room 1' });
-    expect(chatButton.className).toContain('h-12');
-    expect(chatButton.className).toContain('flex-1');
+    const chatButton = screen.getByRole('button', { name: 'chatRooms: Room 1' });
+    expect(chatButton.className).toContain('h-8');
+    expect(chatButton.className).toContain('w-11');
     expect(chatButton.className).toContain('bg-secondary');
     expect(chatButton.className).toContain('text-secondary-foreground');
     expect(chatButton.getAttribute('aria-current')).toBe('page');
-    expect(screen.getByText('chatNav')).toBeTruthy();
+    expect(screen.queryByText('chatNav')).toBeNull();
   });
 
   it('keeps chat unavailable until a room exists and navigates other destinations', () => {
