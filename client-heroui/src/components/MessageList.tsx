@@ -1104,7 +1104,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 isDisabled={isExporting || !canUseRetainedRoomAccess}
                 aria-busy={isExporting}
                 aria-label={isExporting ? t('exportingChat') : t('exportChat')}
-                className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
+                className="h-8 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] sm:h-7 sm:px-2"
                 startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
               >
                 {t('exportChat')}

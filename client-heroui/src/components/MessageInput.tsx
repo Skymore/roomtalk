@@ -1850,7 +1850,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             <button
               type="button"
               aria-label={t('dismissError')}
-              className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger sm:h-7 sm:w-7"
               onClick={dismissError}
             >
               <Icon icon="lucide:x" className="h-3.5 w-3.5" />
@@ -2076,7 +2076,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             /* ===== Text mode: normal editor ===== */
             <div
               key="text-input"
-              className="min-h-7 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-0.5 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
+              className="min-h-8 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-1 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
               contentEditable={canUseRetainedRoomAccess && !isSending && !isAIInputLocked && canPost}
               onInput={parseEditorContent}
               onPaste={handlePaste}
@@ -2094,18 +2094,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             ></div>
           )}
 
-          <div className="flex min-h-7 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
+          <div className="flex min-h-8 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
             {/* 语音/键盘切换按钮 */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
-              className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+              className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={handleToggleVoiceMode}
               isDisabled={isNonTextInputDisabled || attachmentDrafts.length > 0}
             >
-              <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+              <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
 
             {!isVoiceMode && (
@@ -2116,11 +2116,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   size="sm"
                   variant="light"
                   aria-label={t('uploadMedia')}
-                  className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                  className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => fileInputRef.current?.click()}
                   isDisabled={isNonTextInputDisabled}
                 >
-                  <Icon icon="lucide:image-plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                  <Icon icon="lucide:image-plus" className="h-4 w-4 sm:h-5 sm:w-5" />
                 </Button>
 
                 {/* 表情包按钮 */}
@@ -2136,10 +2136,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       size="sm"
                       variant="light"
                       aria-label={t('stickers')}
-                      className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                      className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                       isDisabled={isNonTextInputDisabled}
                     >
-                      <Icon icon="lucide:smile" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                      <Icon icon="lucide:smile" className="h-4 w-4 sm:h-5 sm:w-5" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-0">
@@ -2152,11 +2152,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   size="sm"
                   variant="light"
                   aria-label={t('attachFile')}
-                  className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                  className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => arbitraryFileInputRef.current?.click()}
                   isDisabled={isNonTextInputDisabled}
                 >
-                  <Icon icon="lucide:paperclip" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                  <Icon icon="lucide:paperclip" className="h-4 w-4 sm:h-5 sm:w-5" />
                 </Button>
 
                 {/* AI设置按钮 */}

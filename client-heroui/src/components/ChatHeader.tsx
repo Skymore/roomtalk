@@ -160,7 +160,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             setView("rooms");
             clearRoomUrlParam();
           }}
-          className="mr-1 h-7 w-7 min-w-7 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
+          className="mr-1 h-9 w-9 min-w-9 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
         >
           <Icon icon="lucide:chevron-left" className="h-4 w-4" />
         </Button>
@@ -175,7 +175,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               variant="flat"
               aria-label={t('retry')}
               onPress={onRetryRoomSession}
-              className="h-7 min-w-7 flex-shrink-0 px-1.5 text-xs"
+              className="h-8 min-w-8 flex-shrink-0 px-1.5 text-xs"
               startContent={<Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />}
             >
               <span className="hidden sm:inline">{t('retry')}</span>
@@ -201,7 +201,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 disabled={!canUseRetainedRoomAccess}
                 data-testid="room-member-count"
                 aria-label={t('onlineMembers')}
-                className="flex flex-shrink-0 items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] disabled:cursor-not-allowed disabled:opacity-50 dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+                className="flex min-h-8 flex-shrink-0 items-center rounded-md px-2 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] disabled:cursor-not-allowed disabled:opacity-50 dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
               >
                 <Icon icon="lucide:users" className="mr-1" width={14} />
                 {memberCount ?? "..."}
@@ -244,7 +244,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               role="button"
               tabIndex={0}
               aria-label={t('clickToCopyRoomId')}
-              className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+              className="flex min-h-8 min-w-0 cursor-pointer items-center rounded-md px-1.5 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
               onClick={handleCopyRoomId}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
@@ -286,7 +286,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </Tooltip>
         <Dropdown placement="top-end">
           <DropdownTrigger>
-            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')} className="h-7 w-7 min-w-7 rounded-lg text-[#5e5d59] dark:text-[#b0aea5] md:h-9 md:w-9 md:min-w-9">
+            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')} className="h-9 w-9 min-w-9 rounded-lg text-[#5e5d59] dark:text-[#b0aea5]">
               <Icon icon="lucide:more-vertical" className="h-4 w-4 md:h-5 md:w-5" />
             </Button>
           </DropdownTrigger>

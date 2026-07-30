@@ -102,11 +102,11 @@ export const MessageInputAISettingsButton: React.FC<MessageInputAISettingsButton
       size="sm"
       variant="light"
       aria-label={t('aiSettings')}
-      className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+      className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
       onPress={onOpen}
       isDisabled={isDisabled}
     >
-      <Icon icon="lucide:settings-2" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+      <Icon icon="lucide:settings-2" className="h-4 w-4" />
     </Button>
   );
 };
@@ -404,15 +404,15 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             onPress={() => onAskAI(askAction)}
             isDisabled={isAgentRunning ? isSending || isAiProcessing || isInputLocked || (hasQueueContent && !canPost) : isControlLocked}
             aria-label={askActionLabel}
-            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+            className="relative !h-8 !w-8 !min-w-8 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
             <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
-              <Icon icon={askActionIcon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <Icon icon={askActionIcon} className="h-4 w-4" />
               <span className="hidden sm:inline">{askActionLabel}</span>
             </span>
             {isAiProcessing && (
               <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
+                <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
               </span>
             )}
           </Button>
@@ -427,15 +427,15 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             isDisabled={isControlLocked || !hasInputContent}
             aria-label={t('send')}
             data-testid="send-button"
-            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-secondary px-0 text-secondary-foreground shadow-[0_0_0_1px_rgba(201,100,66,0.7)] hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+            className="relative !h-8 !w-8 !min-w-8 overflow-hidden rounded-full bg-secondary px-0 text-secondary-foreground shadow-[0_0_0_1px_rgba(201,100,66,0.7)] hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
             <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
-              <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <Icon icon="lucide:arrow-up" className="h-4 w-4" />
               <span className="hidden sm:inline">{t('send')}</span>
             </span>
             {isSending && (
               <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
+                <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
               </span>
             )}
           </Button>
