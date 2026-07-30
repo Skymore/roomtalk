@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message, RoomAgentTurn } from '../utils/types';
 import { AgentTurnItem, formatAgentTurnDuration } from './AgentTurnItem';
@@ -80,7 +80,7 @@ describe('AgentTurnItem', () => {
     expect(screen.getByTestId('turn-avatar').getAttribute('aria-label')).toBe('Codex');
   });
 
-  it('offers both revision boundaries for a completed Codex checkpoint', async () => {
+  it('confirms completed Codex checkpoint restores in an accessible app dialog', async () => {
     const restore = vi.fn().mockResolvedValue('1 file restored');
     render(
       <AgentTurnItem
@@ -97,8 +97,23 @@ describe('AgentTurnItem', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestore' }));
+    let dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('agentCheckpointDialogTitle')).toBeTruthy();
+    expect(within(dialog).getByText('agentCheckpointConfirm')).toBeTruthy();
+    expect(restore).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'agentCheckpointDialogConfirm' }));
     await waitFor(() => expect(restore).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }), 'before'));
+
     fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestoreAfter' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('agentCheckpointConfirmAfter')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(restore).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestoreAfter' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'agentCheckpointDialogConfirm' }));
     await waitFor(() => expect(restore).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'turn-1' }), 'after'));
     expect(screen.getByRole('status').textContent).toBe('1 file restored');
   });

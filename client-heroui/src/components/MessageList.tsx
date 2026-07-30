@@ -564,10 +564,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (!roomPermissions?.canManageRoom) {
       throw new Error(t('agentCheckpointManagerOnly'));
     }
-    const confirmed = window.confirm(t(
-      targetBoundary === 'before' ? 'agentCheckpointConfirm' : 'agentCheckpointConfirmAfter',
-    ));
-    if (!confirmed) return t('agentCheckpointCancelled');
     await ensureRoomOperationReady();
     const result = await restoreCodeAgentCheckpoint(roomId, turn.id, targetBoundary);
     await refreshWorkspaceSnapshot();

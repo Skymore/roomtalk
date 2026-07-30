@@ -1,15 +1,18 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
+import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { Message, RoomAgentTurn, RoomAgentTurnPhase } from '../utils/types';
 import { AgentBackendAvatar } from './AgentBackendAvatar';
+
+type CheckpointBoundary = 'before' | 'after';
 
 interface AgentTurnItemProps {
   turn: RoomAgentTurn;
   messages: Message[];
   renderAgentMessage: (message: Message) => React.ReactNode;
   renderStandaloneMessage: (message: Message) => React.ReactNode;
-  onRestoreCheckpoint?: (turn: RoomAgentTurn, targetBoundary: 'before' | 'after') => unknown;
+  onRestoreCheckpoint?: (turn: RoomAgentTurn, targetBoundary: CheckpointBoundary) => unknown;
 }
 
 const phaseLabelKeys: Record<RoomAgentTurnPhase, string> = {
@@ -46,8 +49,10 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
-  const [restoringBoundary, setRestoringBoundary] = React.useState<'before' | 'after' | null>(null);
-  const [restoreNotice, setRestoreNotice] = React.useState<string | null>(null);
+  const [restoreDialogBoundary, setRestoreDialogBoundary] = React.useState<CheckpointBoundary | null>(null);
+  const [isRestoreDialogOpen, setIsRestoreDialogOpen] = React.useState(false);
+  const [restoringBoundary, setRestoringBoundary] = React.useState<CheckpointBoundary | null>(null);
+  const [restoreNotice, setRestoreNotice] = React.useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const ownMessages = React.useMemo(() => messages.filter(message => message.turnId === turn.id), [messages, turn.id]);
   const lastAIMessageId = [...ownMessages].reverse().find(message => message.messageType === 'ai')?.id;
   const fallbackFinalId = [...ownMessages].reverse().find(message => message.messageType !== 'tool_result')?.id || ownMessages.at(-1)?.id;
@@ -73,18 +78,41 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
     && turn.workspaceCheckpoint?.status === 'ready'
   );
 
-  const restoreCheckpoint = async (targetBoundary: 'before' | 'after') => {
+  React.useEffect(() => {
+    if (!canRestore) setIsRestoreDialogOpen(false);
+  }, [canRestore]);
+
+  const restoreCheckpoint = async (targetBoundary: CheckpointBoundary) => {
     if (!onRestoreCheckpoint || restoringBoundary) return;
     setRestoringBoundary(targetBoundary);
     setRestoreNotice(null);
     try {
       const notice = await onRestoreCheckpoint(turn, targetBoundary);
-      setRestoreNotice(typeof notice === 'string' ? notice : t('agentCheckpointRestored', { count: 0 }));
+      setRestoreNotice({
+        message: typeof notice === 'string' ? notice : t('agentCheckpointRestored', { count: 0 }),
+        tone: 'success',
+      });
     } catch (error) {
-      setRestoreNotice(error instanceof Error ? error.message : t('agentCheckpointRestoreFailed'));
+      setRestoreNotice({
+        message: error instanceof Error ? error.message : t('agentCheckpointRestoreFailed'),
+        tone: 'error',
+      });
     } finally {
       setRestoringBoundary(null);
     }
+  };
+
+  const openRestoreDialog = (targetBoundary: CheckpointBoundary) => {
+    if (restoringBoundary) return;
+    setRestoreNotice(null);
+    setRestoreDialogBoundary(targetBoundary);
+    setIsRestoreDialogOpen(true);
+  };
+
+  const confirmRestore = () => {
+    const targetBoundary = restoreDialogBoundary;
+    setIsRestoreDialogOpen(false);
+    if (targetBoundary) void restoreCheckpoint(targetBoundary);
   };
 
   const renderOwnMessage = (message: Message) => (
@@ -123,8 +151,9 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
                   key={targetBoundary}
                   type="button"
                   disabled={Boolean(restoringBoundary)}
-                  onClick={() => void restoreCheckpoint(targetBoundary)}
-                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-[#9f4d34] transition-colors hover:bg-[#eadfd8] disabled:cursor-wait disabled:opacity-60 dark:text-[#e18a6d] dark:hover:bg-[#2a201c]"
+                  aria-haspopup="dialog"
+                  onClick={() => openRestoreDialog(targetBoundary)}
+                  className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[#9f4d34] transition-colors duration-200 hover:bg-[#eadfd8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f4ed] disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none dark:text-[#e18a6d] dark:hover:bg-[#2a201c] dark:focus-visible:ring-[#d97757] dark:focus-visible:ring-offset-[#141413]"
                 >
                   <Icon
                     icon={restoringBoundary === targetBoundary ? 'lucide:loader-circle' : targetBoundary === 'before' ? 'lucide:rotate-ccw' : 'lucide:rotate-cw'}
@@ -141,7 +170,19 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
             </div>
           )}
           {restoreNotice && (
-            <div role="status" className="mt-1 px-1 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{restoreNotice}</div>
+            <div
+              role={restoreNotice.tone === 'error' ? 'alert' : 'status'}
+              className={`mt-1 flex items-start gap-1.5 px-1 text-xs ${restoreNotice.tone === 'error'
+                ? 'text-danger-600 dark:text-danger-400'
+                : 'text-success-700 dark:text-success-400'}`}
+            >
+              <Icon
+                icon={restoreNotice.tone === 'error' ? 'lucide:circle-alert' : 'lucide:circle-check'}
+                className="mt-px h-3.5 w-3.5 flex-none"
+                aria-hidden="true"
+              />
+              <span>{restoreNotice.message}</span>
+            </div>
           )}
         </div>
       )}
@@ -155,6 +196,64 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
           return null;
         })}
       </div>
+
+      <Modal
+        isOpen={isRestoreDialogOpen}
+        onClose={() => setIsRestoreDialogOpen(false)}
+        size="sm"
+        placement="center"
+        scrollBehavior="inside"
+        classNames={{
+          wrapper: 'roomtalk-modal-viewport px-3',
+          backdrop: 'bg-[#141413]/50 backdrop-blur-sm',
+        }}
+      >
+        <ModalContent className="mx-3 border border-[#dedbd0] bg-[#faf9f5] text-[#141413] shadow-2xl dark:border-[#3a3936] dark:bg-[#1d1d1b] dark:text-[#faf9f5] sm:mx-0">
+          <ModalHeader className="flex items-center gap-3 px-5 pb-2 pt-5">
+            <span className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-[#eadfd8] text-[#9f4d34] dark:bg-[#2a201c] dark:text-[#e18a6d]">
+              <Icon icon="lucide:history" className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="block font-serif text-lg font-medium leading-6">
+                {t('agentCheckpointDialogTitle')}
+              </span>
+              {restoreDialogBoundary && (
+                <span className="mt-0.5 block text-xs font-normal text-[#77746d] dark:text-[#aaa79f]">
+                  {t(restoreDialogBoundary === 'before' ? 'agentCheckpointRestore' : 'agentCheckpointRestoreAfter')}
+                </span>
+              )}
+            </span>
+          </ModalHeader>
+          <ModalBody className="gap-4 px-5 py-3">
+            <p className="text-sm leading-6 text-[#4d4c48] dark:text-[#d7d5cd]">
+              {restoreDialogBoundary && t(restoreDialogBoundary === 'before' ? 'agentCheckpointConfirm' : 'agentCheckpointConfirmAfter')}
+            </p>
+            <div className="flex items-center gap-3 rounded-xl border border-[#dedbd0] bg-[#f0eee6] px-3.5 py-3 dark:border-[#3a3936] dark:bg-[#242421]">
+              <Icon icon="lucide:files" className="h-[18px] w-[18px] flex-none text-[#9f4d34] dark:text-[#e18a6d]" aria-hidden="true" />
+              <span className="text-sm font-medium text-[#34332f] dark:text-[#e7e5dd]">
+                {t('agentCheckpointFiles', { count: turn.workspaceCheckpoint?.restorableFileCount || 0 })}
+              </span>
+            </div>
+          </ModalBody>
+          <ModalFooter className="gap-2 border-t border-[#e5e2d9] px-5 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 dark:border-[#30302e]">
+            <Button
+              autoFocus
+              variant="flat"
+              onPress={() => setIsRestoreDialogOpen(false)}
+              className="min-h-11 cursor-pointer bg-[#e8e6dc] text-[#4d4c48] transition-colors duration-200 hover:bg-[#dedbd0] motion-reduce:transition-none dark:bg-[#30302e] dark:text-[#d7d5cd] dark:hover:bg-[#3a3936]"
+            >
+              {t('cancel')}
+            </Button>
+            <Button
+              onPress={confirmRestore}
+              startContent={<Icon icon="lucide:history" className="h-4 w-4" aria-hidden="true" />}
+              className="min-h-11 cursor-pointer bg-[#c96442] font-medium text-white shadow-sm transition-colors duration-200 hover:bg-[#b7593d] motion-reduce:transition-none dark:bg-[#d97757] dark:hover:bg-[#c96442]"
+            >
+              {t('agentCheckpointDialogConfirm')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 };
