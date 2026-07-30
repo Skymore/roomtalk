@@ -292,7 +292,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const { t, i18n } = useTranslation();
   const resolvedTheme = useResolvedTheme();
   const isMobileWorkspaceLayout = useMobileWorkspaceLayout();
-  const [isCollapsed, setIsCollapsed] = React.useState(false);
+  const [isCollapsed, setIsCollapsed] = React.useState(readIsMobileWorkspaceLayout);
+  const previousMobileWorkspaceLayoutRef = React.useRef(isMobileWorkspaceLayout);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const [codexThreads, setCodexThreads] = React.useState<unknown[]>([]);
   const [codexThreadsNextCursor, setCodexThreadsNextCursor] = React.useState<string | null | undefined>(null);
@@ -417,6 +418,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     : 'flex min-h-0 flex-1 flex-col gap-2';
 
   React.useEffect(() => {
+    if (!previousMobileWorkspaceLayoutRef.current && isMobileWorkspaceLayout) {
+      setIsCollapsed(true);
+    }
+    previousMobileWorkspaceLayoutRef.current = isMobileWorkspaceLayout;
+  }, [isMobileWorkspaceLayout]);
+
+  React.useEffect(() => {
     const hasResolvedChangedFiles = hasActiveDiffFileSummaries || changedFiles.length > 0 || workspaceChanges?.available === true;
     if (hasResolvedChangedFiles && selectedDiffFilePath && !normalizedChangedFilePathSet.has(selectedDiffFilePath)) {
       clearCodeAgentDiffFile(room.id);
@@ -525,7 +533,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   return (
     <section
       data-testid="code-agent-workspace"
-      className="sticky top-0 z-30 max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-2.5rem)] min-w-0 max-w-full flex-shrink-0 overflow-x-hidden overflow-y-auto border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)] lg:max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-4rem)]"
+      className="sticky top-0 z-30 max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-2.5rem)] min-w-0 max-w-full flex-shrink-0 overflow-x-hidden overflow-y-auto border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 py-2 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)] sm:pb-3 sm:pt-3 lg:max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-4rem)]"
       aria-label={t('codeAgentWorkspace')}
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -667,13 +675,15 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             className={`${statusPillClassName} border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]`}
           >
             <Icon icon="lucide:coins" className="h-3 w-3 flex-shrink-0" />
-            {t('sessionCost')}:
+            <span>{t('sessionCost')}</span>
+            <span className="font-mono tabular-nums">
             {sessionCostUsd !== null ? formatUsdCost(sessionCostUsd) : isSessionCostUnavailable ? t('costUnavailable') : (
               <>
                 <span className="sr-only">{t('loadingSessionCost')}</span>
                 <span aria-hidden="true" className="inline-block h-2 w-8 animate-pulse rounded-full bg-[#c2c0b6] dark:bg-[#4d4c48]" />
               </>
             )}
+            </span>
           </span>
           {contextUsage ? (
             <Popover placement="bottom-end" showArrow>
@@ -750,9 +760,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               </span>
             }
           >
-            <div className="grid divide-y divide-[#dedbd0] dark:divide-[#30302e] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <div className="grid grid-cols-3 divide-x divide-[#dedbd0] dark:divide-[#30302e]">
               {stats.map((item) => (
-                <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 px-3 py-2.5">
+                <div key={item.label} className="flex min-w-0 flex-col items-start gap-1 px-2 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-3 sm:py-2.5">
                   <div className="flex min-w-0 items-center gap-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                     <Icon icon={item.icon} className="h-3.5 w-3.5 flex-shrink-0" />
                     <span className="truncate">{item.label}</span>

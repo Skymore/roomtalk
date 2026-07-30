@@ -21,6 +21,11 @@ const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendStickerMock = vi.hoisted(() => vi.fn());
 const editMessageMock = vi.hoisted(() => vi.fn());
 const deleteMessageMock = vi.hoisted(() => vi.fn());
+const getRoomRoleMembersMock = vi.hoisted(() => vi.fn());
+const setRoomAdminMock = vi.hoisted(() => vi.fn());
+const removeRoomAdminMock = vi.hoisted(() => vi.fn());
+const removeRoomMemberMock = vi.hoisted(() => vi.fn());
+const transferRoomOwnershipMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
   const pendingHistory: Array<{
@@ -192,6 +197,11 @@ vi.mock('../utils/socket', () => ({
   sendSticker: sendStickerMock,
   editMessage: editMessageMock,
   deleteMessage: deleteMessageMock,
+  getRoomRoleMembers: getRoomRoleMembersMock,
+  setRoomAdmin: setRoomAdminMock,
+  removeRoomAdmin: removeRoomAdminMock,
+  removeRoomMember: removeRoomMemberMock,
+  transferRoomOwnership: transferRoomOwnershipMock,
   requestRoomSnapshot: socketMock.requestHistory,
   requestRoomEvents: socketMock.requestEvents,
   SocketRequestError: socketMock.SocketRequestError,
@@ -237,6 +247,7 @@ vi.mock('./MessageItem', () => ({
     onCancelQueuedMessage,
     onDeleteMessage,
     onOpenWorkspaceFile,
+    onUserAction,
     isInteractionDisabled,
   }: {
     message: Message;
@@ -249,6 +260,7 @@ vi.mock('./MessageItem', () => ({
     onCancelQueuedMessage?: (messageId: string) => void;
     onDeleteMessage?: (messageId: string) => void;
     onOpenWorkspaceFile?: (path: string) => void;
+    onUserAction?: (action: 'transferOwnership', message: Message) => void;
     isInteractionDisabled?: boolean;
   }) => (
     <div
@@ -270,6 +282,7 @@ vi.mock('./MessageItem', () => ({
       <button type="button" onClick={() => onCancelQueuedMessage?.(message.id)}>cancel-queued-{message.id}</button>
       <button type="button" onClick={() => onDeleteMessage?.(message.id)}>delete-{message.id}</button>
       <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
+      <button type="button" onClick={() => onUserAction?.('transferOwnership', message)}>transfer-{message.id}</button>
     </div>
   ),
   preloadMarkdownContent: () => {},
@@ -367,6 +380,11 @@ describe('MessageList optimistic messages', () => {
     sendStickerMock.mockReset();
     editMessageMock.mockResolvedValue(message({ content: 'edited content' }));
     deleteMessageMock.mockResolvedValue(undefined);
+    getRoomRoleMembersMock.mockResolvedValue([]);
+    setRoomAdminMock.mockResolvedValue(undefined);
+    removeRoomAdminMock.mockResolvedValue(undefined);
+    removeRoomMemberMock.mockResolvedValue(undefined);
+    transferRoomOwnershipMock.mockResolvedValue(undefined);
     loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'code-agent',
@@ -1244,6 +1262,43 @@ describe('MessageList optimistic messages', () => {
 
     await act(async () => resolveRecovery());
     await waitFor(() => expect(deleteMessageMock).toHaveBeenCalledWith('room-1', 'modal-message'));
+  });
+
+  it('confirms ownership transfer inside the app before mutating the room', async () => {
+    const ownerPermissions: RoomPermissions = {
+      ...postingPermissions,
+      role: 'owner',
+      canManageRoom: true,
+      canManageAdmins: true,
+      canManageMembers: true,
+      canTransferOwnership: true,
+    };
+    render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={ownerPermissions}
+      />
+    );
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'target-message', clientId: 'client-2', username: 'Alex' })],
+        snapshotSeq: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('transfer-target-message'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(transferRoomOwnershipMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'transferOwnership' }));
+    await waitFor(() => {
+      expect(transferRoomOwnershipMock).toHaveBeenCalledWith('room-1', 'client-2');
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
   });
 
   it('keeps the code workspace panel outside the message scroll container', () => {

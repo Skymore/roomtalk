@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import Modal from 'react-modal';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
@@ -29,7 +28,6 @@ const createAppRoot = () => {
   const root = document.createElement('div');
   root.id = 'root';
   document.body.appendChild(root);
-  Modal.setAppElement(root);
   return root;
 };
 

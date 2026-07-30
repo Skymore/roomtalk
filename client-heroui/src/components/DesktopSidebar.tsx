@@ -354,74 +354,57 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
         <span className="sr-only">{t('room')}</span>
       </button>
 
-      <span className="mt-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-80 transition-opacity group-hover:opacity-100">
-        <HoverTooltip content={t('copyRoomId')}>
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            aria-label={`${t('copyRoomId')} ${room.id}`}
-            className="h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
-            onPress={() => onCopyRoomId(room.id)}
-          >
-            <Icon icon="lucide:copy" className="h-3.5 w-3.5" />
-          </Button>
-        </HoverTooltip>
-        <HoverTooltip content={t('share')}>
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            aria-label={`${t('share')} ${room.id}`}
-            className="h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
-            onPress={() => onShareRoom(room)}
-          >
-            <Icon icon="lucide:share-2" className="h-3.5 w-3.5" />
-          </Button>
-        </HoverTooltip>
-        {onUnsaveRoom && (
-          <HoverTooltip content={t('unsave')}>
+      <span className="mt-1.5 flex flex-shrink-0 items-center opacity-55 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <Dropdown placement="bottom-end">
+          <DropdownTrigger>
             <Button
               isIconOnly
               size="sm"
               variant="light"
-              aria-label={`${t('unsave')} ${room.id}`}
-              className="h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
-              onPress={() => onUnsaveRoom(room)}
+              aria-label={`${t('moreActions')} ${room.name}`}
+              className="h-8 w-8 min-w-8 rounded-md text-[#5e5d59] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
             >
-              <Icon icon="lucide:bookmark-minus" className="h-3.5 w-3.5" />
+              <Icon icon="lucide:ellipsis" className="h-4 w-4" />
             </Button>
-          </HoverTooltip>
-        )}
-        {canManageRoom && !onUnsaveRoom && onRenameRoom && onDeleteRoom && (
-          <>
-            <HoverTooltip content={t('editRoomName')}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                aria-label={`${t('editRoomName')} ${room.id}`}
-                className="h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
-                onPress={() => onRenameRoom(room)}
-              >
-                <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
-              </Button>
-            </HoverTooltip>
-            <HoverTooltip content={t('deleteRoom')}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={`${t('moreActions')} ${room.name}`}
+            onAction={(key) => {
+              if (key === 'copy') onCopyRoomId(room.id);
+              if (key === 'share') onShareRoom(room);
+              if (key === 'unsave') onUnsaveRoom?.(room);
+              if (key === 'rename') onRenameRoom?.(room);
+              if (key === 'delete') onDeleteRoom?.(room);
+            }}
+          >
+            <DropdownItem key="copy" startContent={<Icon icon="lucide:copy" className="h-4 w-4" />}>
+              {t('copyRoomId')}
+            </DropdownItem>
+            <DropdownItem key="share" startContent={<Icon icon="lucide:share-2" className="h-4 w-4" />}>
+              {t('share')}
+            </DropdownItem>
+            {onUnsaveRoom ? (
+              <DropdownItem key="unsave" startContent={<Icon icon="lucide:bookmark-minus" className="h-4 w-4" />}>
+                {t('unsave')}
+              </DropdownItem>
+            ) : null}
+            {canManageRoom && !onUnsaveRoom && onRenameRoom ? (
+              <DropdownItem key="rename" startContent={<Icon icon="lucide:pencil" className="h-4 w-4" />}>
+                {t('editRoomName')}
+              </DropdownItem>
+            ) : null}
+            {canManageRoom && !onUnsaveRoom && onDeleteRoom ? (
+              <DropdownItem
+                key="delete"
                 color="danger"
-                aria-label={`${t('removeRoomFromSidebar')} ${room.id}`}
-                className="h-7 w-7 min-w-7 rounded-md text-danger-500"
-                onPress={() => onDeleteRoom(room)}
+                className="text-danger"
+                startContent={<Icon icon="lucide:trash-2" className="h-4 w-4" />}
               >
-                <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
-              </Button>
-            </HoverTooltip>
-          </>
-        )}
+                {t('deleteRoom')}
+              </DropdownItem>
+            ) : null}
+          </DropdownMenu>
+        </Dropdown>
       </span>
     </div>
   );

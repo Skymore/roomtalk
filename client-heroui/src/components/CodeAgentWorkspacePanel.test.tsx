@@ -262,7 +262,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByTestId('code-agent-context-tokens').getAttribute('data-window-display')).toBe('258k');
     expect(screen.getByTestId('code-agent-context-tokens').textContent).toBe('codeAgentContextTokensUsed');
     expect(screen.queryByTestId('code-agent-context-cached')).toBeNull();
-    expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost:$0.000000');
+    expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost$0.000000');
     for (const testId of [
       'code-agent-sandbox-status',
       'code-agent-agent-status',
@@ -430,6 +430,28 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(details.getAttribute('hidden')).toBeNull();
     expect(screen.getByText('codeAgentOverview')).toBeTruthy();
+  });
+
+  it('starts collapsed on mobile so the conversation remains visible', () => {
+    mockWorkspacePanelMobileLayout(true);
+
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[toolCall]}
+        mode="plan"
+        sessionCostUsd={0.1}
+      />
+    );
+
+    const toggle = screen.getByTestId('code-agent-workspace-toggle');
+    const details = screen.getByTestId('code-agent-workspace-details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(details.getAttribute('hidden')).toBe('');
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(details.getAttribute('hidden')).toBeNull();
   });
 
   it('renders command history and switches published artifact versions', async () => {

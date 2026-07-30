@@ -8,7 +8,7 @@ import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getRoomAIRequestSettingsForKind, type AIRequestRoomKind } from '../utils/aiRequestSettings';
 import { formatUsdCost } from '../utils/formatters';
-import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from '@heroui/react';
+import { addToast, Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from '@heroui/react';
 import { downloadTranscriptHtml, downloadTranscriptZip, type ExportMediaResolver } from '../utils/chatExport';
 import {
   addOptimisticMessage,
@@ -33,6 +33,7 @@ import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
+import { AppConfirmDialog } from './AppActionDialog';
 
 const LOAD_MORE_MESSAGE_COUNT = 80;
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 240;
@@ -108,10 +109,6 @@ const buildAccessibleMessageSummary = (content: string) => {
   }
   return `${characters.slice(0, AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS).join('')}…`;
 };
-
-// Reminder: Set the app element for react-modal for accessibility
-// Ideally in your root component file (e.g., App.tsx or main.tsx)
-// Modal.setAppElement('#root');
 
 interface MessageListProps {
   roomId: string;
@@ -227,6 +224,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
+  const [pendingOwnershipTransfer, setPendingOwnershipTransfer] = useState<Message | null>(null);
+  const [isOwnershipTransferPending, setIsOwnershipTransferPending] = useState(false);
   const [sessionCostUsd, setSessionCostUsd] = useState<number | null>(null);
   const [isSessionCostUnavailable, setIsSessionCostUnavailable] = useState(false);
   const [exportNotice, setExportNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
@@ -263,6 +262,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const getAIRequestSettingsForRoom = useCallback(() => (
     getRoomAIRequestSettingsForKind(roomId, aiRequestRoomKind)
   ), [aiRequestRoomKind, roomId]);
+
+  const notifyActionError = useCallback((message: string) => {
+    addToast({
+      title: message,
+      severity: 'danger',
+      timeout: 6000,
+      shouldShowTimeoutProgress: true,
+    });
+    announcementSequenceRef.current += 1;
+    setErrorAnnouncement({ id: announcementSequenceRef.current, text: message });
+  }, []);
 
   const roleMemberByClientId = React.useMemo(() => {
     const map = new Map<string, RoomRoleMember>();
@@ -708,6 +718,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (canUseRetainedRoomAccess) return;
     handleCloseDeleteModal();
     handleCloseEditModal();
+    setPendingOwnershipTransfer(null);
+    setIsOwnershipTransferPending(false);
   }, [canUseRetainedRoomAccess, handleCloseDeleteModal, handleCloseEditModal]);
 
   // --- Edit/Delete Logic ---
@@ -716,7 +728,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     try {
       await ensureRoomOperationReady();
     } catch (error) {
-      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       return;
     }
     console.log('Saving edit (from modal):', messageId, newContent);
@@ -730,7 +742,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         console.error('Failed to edit queued agent input:', error);
         updateMessages(originalMessages);
         void requestHistoryRef.current?.({ reason: 'queued-edit-recovery' });
-        alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+        notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       });
       return;
     }
@@ -741,9 +753,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       }).catch((error) => {
         console.error('Failed to save edit on server:', error);
         updateMessages(originalMessages);
-        alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+        notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       });
-  }, [ensureRoomOperationReady, roomId, updateMessages, t]);
+  }, [ensureRoomOperationReady, notifyActionError, roomId, updateMessages, t]);
 
   const handleSteerQueuedMessage = useCallback(async (messageId: string) => {
     if (!retainedRoomAccessRef.current) return;
@@ -753,9 +765,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     } catch (error) {
       console.error('Failed to steer with queued agent input:', error);
       void requestHistoryRef.current?.({ reason: 'queued-steer-recovery' });
-      alert(t('codeAgentQueuedActionFailed'));
+      notifyActionError(t('codeAgentQueuedActionFailed'));
     }
-  }, [ensureRoomOperationReady, roomId, t]);
+  }, [ensureRoomOperationReady, notifyActionError, roomId, t]);
 
   const handleCancelQueuedMessage = useCallback(async (messageId: string) => {
     if (!retainedRoomAccessRef.current) return;
@@ -765,16 +777,16 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     } catch (error) {
       console.error('Failed to cancel queued agent input:', error);
       void requestHistoryRef.current?.({ reason: 'queued-cancel-recovery' });
-      alert(t('codeAgentQueuedActionFailed'));
+      notifyActionError(t('codeAgentQueuedActionFailed'));
     }
-  }, [ensureRoomOperationReady, roomId, t]);
+  }, [ensureRoomOperationReady, notifyActionError, roomId, t]);
 
   const handleSaveEditAndAskAI = useCallback(async (messageId: string, newContent: string) => {
     if (!retainedRoomAccessRef.current) return;
     try {
       await ensureRoomOperationReady();
     } catch (error) {
-      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       return;
     }
     console.log('Saving edit and triggering AI (from modal):', messageId, newContent);
@@ -800,9 +812,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
-      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [ensureRoomOperationReady, roomId, updateMessages, getAIRequestSettingsForRoom, t]);
+  }, [ensureRoomOperationReady, roomId, updateMessages, getAIRequestSettingsForRoom, notifyActionError, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
   const handleConfirmDelete = useCallback(async () => {
@@ -815,7 +827,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     try {
       await ensureRoomOperationReady();
     } catch (error) {
-      alert(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      notifyActionError(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       return;
     }
 
@@ -824,11 +836,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     deleteMessage(roomId, messageIdToDelete).catch((error) => {
         console.error('Failed to delete message on server:', error);
         void requestHistoryRef.current?.({ reason: 'delete-recovery' });
-        alert(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+        notifyActionError(t('errorDeletingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [ensureRoomOperationReady, roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
+  }, [ensureRoomOperationReady, roomId, messageToDelete, handleCloseDeleteModal, notifyActionError, updateMessages, t]);
 
-  const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
+  const performUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
     if (!retainedRoomAccessRef.current) return;
     try {
       await ensureRoomOperationReady();
@@ -839,20 +851,32 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       } else if (action === 'removeMember') {
         await removeRoomMember(roomId, message.clientId);
       } else if (action === 'transferOwnership') {
-        const senderName = message.username?.trim() || message.clientId.slice(-4);
-        const confirmed = typeof window.confirm !== 'function'
-          || window.confirm(t('confirmTransferToUser', { name: senderName }));
-        if (!confirmed) {
-          return;
-        }
         await transferRoomOwnership(roomId, message.clientId);
       }
       await loadRoleMembers();
+      return true;
     } catch (error) {
       console.error('Failed to perform member action:', error);
-      alert(error instanceof Error ? error.message : t('unknownError'));
+      notifyActionError(error instanceof Error ? error.message : t('unknownError'));
+      return false;
     }
-  }, [ensureRoomOperationReady, loadRoleMembers, roomId, t]);
+  }, [ensureRoomOperationReady, loadRoleMembers, notifyActionError, roomId, t]);
+
+  const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
+    if (action === 'transferOwnership') {
+      setPendingOwnershipTransfer(message);
+      return;
+    }
+    await performUserAction(action, message);
+  }, [performUserAction]);
+
+  const handleConfirmOwnershipTransfer = useCallback(async () => {
+    if (!pendingOwnershipTransfer || isOwnershipTransferPending) return;
+    setIsOwnershipTransferPending(true);
+    const transferred = await performUserAction('transferOwnership', pendingOwnershipTransfer);
+    setIsOwnershipTransferPending(false);
+    if (transferred) setPendingOwnershipTransfer(null);
+  }, [isOwnershipTransferPending, pendingOwnershipTransfer, performUserAction]);
 
   const handleRetryDelivery = useCallback(async (failedMessage: Message) => {
     const clientMessageId = failedMessage.clientMessageId;
@@ -1299,6 +1323,20 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         onSave={handleSaveEdit}
         onSaveAndAskAI={handleSaveEditAndAskAI}
         showSaveAndAskAI={!messageToEdit?.codeAgentQueuedInput}
+      />
+      <AppConfirmDialog
+        isOpen={pendingOwnershipTransfer !== null}
+        title={t('transferOwnership')}
+        description={t('confirmTransferToUser', {
+          name: pendingOwnershipTransfer?.username?.trim() || pendingOwnershipTransfer?.clientId.slice(-4) || '',
+        })}
+        confirmLabel={t('transferOwnership')}
+        tone="danger"
+        isPending={isOwnershipTransferPending}
+        onClose={() => {
+          if (!isOwnershipTransferPending) setPendingOwnershipTransfer(null);
+        }}
+        onConfirm={() => void handleConfirmOwnershipTransfer()}
       />
     </>
   );

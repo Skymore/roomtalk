@@ -601,8 +601,6 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
       encoding: 'utf-8',
     });
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('src/New.tsx');
-
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" workspaceEditable={false} />);
 
     await screen.findByText('1 files');
@@ -628,7 +626,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(button.title).toBe('codeAgentReadOnlyDescription');
     }
     fireEvent.click(writeButtons[0]);
-    expect(prompt).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('resizes the file explorer against the looser preview-preserving cap', async () => {
@@ -2309,8 +2307,6 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
       encoding: 'utf-8',
     });
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null);
-
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
@@ -2323,7 +2319,8 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export default function App() {}');
     fireEvent.click(screen.getByLabelText('codeAgentNewFile'));
-    expect(prompt).toHaveBeenCalledWith('codeAgentNewFilePrompt', 'src/components/untitled.txt');
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect((screen.getByLabelText('codeAgentWorkspacePath') as HTMLInputElement).value).toBe('src/components/untitled.txt');
   });
 
   it('toggles T3-style file source line wrapping and persists the preference', async () => {
@@ -4274,25 +4271,26 @@ describe('CodeAgentFileBrowserPanel', () => {
       workspaceEntries = workspaceEntries.filter((candidate) => candidate.path !== path);
       return Promise.resolve(undefined);
     });
-    vi.spyOn(window, 'prompt')
-      .mockReturnValueOnce('src/New.tsx')
-      .mockReturnValueOnce('src/components')
-      .mockReturnValueOnce('src/Main.tsx');
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     fireEvent.click(screen.getByLabelText('codeAgentNewFile'));
+    fireEvent.change(screen.getByLabelText('codeAgentWorkspacePath'), { target: { value: 'src/New.tsx' } });
+    fireEvent.click(screen.getByRole('button', { name: 'createItem' }));
+    await waitFor(() => expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/New.tsx', '', 'utf-8'));
+
     fireEvent.click(screen.getByLabelText('codeAgentNewFolder'));
+    fireEvent.change(screen.getByLabelText('codeAgentWorkspacePath'), { target: { value: 'src/components' } });
+    fireEvent.click(screen.getByRole('button', { name: 'createItem' }));
     await waitFor(() => {
-      expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/New.tsx', '', 'utf-8');
       expect(createCodeWorkspaceDirectoryMock).toHaveBeenCalledWith('room-1', 'src/components');
     });
 
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     fireEvent.click(screen.getByLabelText('codeAgentRenameFile'));
+    fireEvent.change(screen.getByLabelText('codeAgentWorkspacePath'), { target: { value: 'src/Main.tsx' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
     await waitFor(() => {
       expect(renameCodeWorkspaceEntryMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', 'src/Main.tsx');
     });
@@ -4301,6 +4299,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
 
     fireEvent.click(screen.getByLabelText('codeAgentDeleteFile'));
+    expect(screen.getByRole('dialog').textContent).toContain('codeAgentDeleteConfirm:src/Main.tsx');
+    fireEvent.click(screen.getByRole('button', { name: 'delete' }));
 
     await waitFor(() => {
       expect(deleteCodeWorkspaceEntryMock).toHaveBeenCalledWith('room-1', 'src/Main.tsx');

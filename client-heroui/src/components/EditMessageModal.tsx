@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, KeyboardEventHandler } from 'react';
-import Modal from 'react-modal';
-import { Button, Textarea } from '@heroui/react';
+import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Message } from '../utils/types'; // Import Message type
 import { useTranslation } from 'react-i18next'; // Import useTranslation
@@ -121,19 +120,21 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
   return (
     <Modal
       isOpen={isOpen}
-      onRequestClose={onClose}
-      // Apply overlay classes directly
-      overlayClassName="fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000] flex items-center justify-center"
-      // Apply content classes directly
-      className="relative m-4 w-full max-w-lg rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 text-[#141413] shadow-xl outline-none transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
-      contentLabel={t('editMessage')}
+      onClose={onClose}
+      size="lg"
+      placement="center"
+      classNames={{
+        wrapper: 'roomtalk-modal-viewport px-3 sm:px-6',
+        backdrop: 'bg-[#141413]/55 backdrop-blur-[2px]',
+      }}
     >
-      {message && ( // Only render content if message exists
-        <div className="flex flex-col">
-          {/* Use Tailwind classes */}
-          <h2 className="mb-3 font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">
+      <ModalContent className="border border-[#dedbd0] bg-[#faf9f5] text-[#141413] shadow-2xl dark:border-[#3a3936] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
+        {message ? (
+          <>
+          <ModalHeader className="px-5 pb-2 pt-5 font-serif text-lg font-semibold">
             {t('editMessage')}
-          </h2>
+          </ModalHeader>
+          <ModalBody className="px-5 py-3">
           <Textarea
             ref={editInputRef}
             value={editedContent}
@@ -146,47 +147,45 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             maxRows={10}
             size="sm"
             variant="bordered"
-            className="text-sm mb-4" // Use text-sm for consistency
+            className="text-sm"
             classNames={{
               input: "text-[#141413] dark:text-[#faf9f5] text-sm leading-normal placeholder:text-[#5e5d59]",
               inputWrapper: "p-2 bg-[#e8e6dc] dark:bg-[#30302e] border-[#dedbd0] dark:border-[#4d4c48] focus-within:border-[#c96442] transition-colors",
             }}
             placeholder={t('enterYourMessage')} // Use translation for placeholder
           />
-          <div className="flex justify-end gap-2 mt-2">
-            {/* Use t function for buttons */}
+          </ModalBody>
+          <ModalFooter className="flex-wrap gap-2 border-t border-[#e5e2d9] px-5 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 dark:border-[#30302e]">
             <Button
-              variant="flat"
-              size="sm"
+              variant="light"
               onPress={onClose}
-              className="text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+              className="min-h-11 text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e] sm:min-h-9"
             >
               {t('cancel')}
             </Button>
             <Button
               variant="light"
               color="primary"
-              size="sm"
               onPress={handleSaveClick}
               title={t('saveTitle')}
-              className="text-[#30302e] transition-colors hover:bg-[#e8e6dc] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+              className="min-h-11 text-[#30302e] transition-colors hover:bg-[#e8e6dc] dark:text-[#faf9f5] dark:hover:bg-[#30302e] sm:min-h-9"
             >
               <Icon icon="lucide:save" className="mr-1" width={14} height={14}/> {t('save')}
             </Button>
             {showSaveAndAskAI && (
               <Button
-                color="primary"
-                size="sm"
+                color="secondary"
                 onPress={handleSaveAndAskAIClick}
                 title={t('saveAndAskAITitle')}
-                className="bg-secondary text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#e08a6a]"
+                className="min-h-11 bg-secondary font-semibold text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:min-h-9"
               >
                 <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
               </Button>
             )}
-          </div>
-        </div>
-      )}
+          </ModalFooter>
+          </>
+        ) : null}
+      </ModalContent>
     </Modal>
   );
 };

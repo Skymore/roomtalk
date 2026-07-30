@@ -133,6 +133,7 @@ import {
   resolveResponsiveCodeAgentBrowserViewportSize,
 } from '../utils/codeAgentBrowserViewportLayout';
 import { CodeAgentTerminalSurface } from './CodeAgentTerminalSurface';
+import { AppConfirmDialog, AppTextInputDialog } from './AppActionDialog';
 
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
@@ -198,6 +199,11 @@ type WorkspaceRemoteSearchState = {
   truncated: boolean;
   isPending: boolean;
   error: string | null;
+};
+
+type WorkspaceEntryDialogState = {
+  kind: 'create-file' | 'create-directory' | 'rename';
+  value: string;
 };
 
 interface CodeAgentRightPanelEmptyStateProps {
@@ -2169,6 +2175,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [workspaceEntryDialog, setWorkspaceEntryDialog] = useState<WorkspaceEntryDialogState | null>(null);
+  const [workspaceDeletePath, setWorkspaceDeletePath] = useState<string | null>(null);
   const [externallySelectedFilePath, setExternallySelectedFilePath] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({
     path: null,
@@ -2880,39 +2888,61 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
 
   const handleCreateFile = useCallback(() => {
     if (!workspaceEditable) return;
-    const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
-    const normalizedPath = path ? normalizeWorkspacePath(path) : '';
-    if (!normalizedPath) return;
-    void mutate(() => writeCodeWorkspaceFile(roomId, normalizedPath, '', 'utf-8'), normalizedPath, normalizedPath);
-  }, [mutate, roomId, selectedDirectory, t, workspaceEditable]);
+    setWorkspaceEntryDialog({
+      kind: 'create-file',
+      value: joinWorkspacePath(selectedDirectory, 'untitled.txt'),
+    });
+  }, [selectedDirectory, workspaceEditable]);
 
   const handleCreateDirectory = useCallback(() => {
     if (!workspaceEditable) return;
-    const path = window.prompt(t('codeAgentNewFolderPrompt'), joinWorkspacePath(selectedDirectory, 'new-folder'));
-    const normalizedPath = path ? normalizeWorkspacePath(path) : '';
-    if (!normalizedPath) return;
-    void mutate(() => createCodeWorkspaceDirectory(roomId, normalizedPath), normalizedPath);
-  }, [mutate, roomId, selectedDirectory, t, workspaceEditable]);
+    setWorkspaceEntryDialog({
+      kind: 'create-directory',
+      value: joinWorkspacePath(selectedDirectory, 'new-folder'),
+    });
+  }, [selectedDirectory, workspaceEditable]);
 
   const handleRename = useCallback(() => {
     if (!workspaceEditable) return;
     if (!selectedPath) return;
-    const path = window.prompt(t('codeAgentRenamePrompt'), selectedPath);
-    const normalizedPath = path ? normalizeWorkspacePath(path) : '';
-    if (!normalizedPath || normalizedPath === selectedPath) return;
-    const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath)
-      ? replacePathPrefix(relativePath, selectedPath, normalizedPath)
-      : undefined;
-    void mutate(() => renameCodeWorkspaceEntry(roomId, selectedPath, normalizedPath), normalizedPath, nextPreviewPath);
-  }, [mutate, relativePath, roomId, selectedPath, t, workspaceEditable]);
+    setWorkspaceEntryDialog({ kind: 'rename', value: selectedPath });
+  }, [selectedPath, workspaceEditable]);
 
   const handleDelete = useCallback(() => {
     if (!workspaceEditable) return;
     if (!selectedPath) return;
-    if (!window.confirm(t('codeAgentDeleteConfirm', { path: selectedPath }))) return;
-    const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath) ? null : undefined;
-    void mutate(() => deleteCodeWorkspaceEntry(roomId, selectedPath), null, nextPreviewPath);
-  }, [mutate, relativePath, roomId, selectedPath, t, workspaceEditable]);
+    setWorkspaceDeletePath(selectedPath);
+  }, [selectedPath, workspaceEditable]);
+
+  const handleWorkspaceEntryConfirm = useCallback(() => {
+    if (!workspaceEntryDialog) return;
+    const normalizedPath = normalizeWorkspacePath(workspaceEntryDialog.value);
+    if (!normalizedPath) return;
+
+    const dialog = workspaceEntryDialog;
+    setWorkspaceEntryDialog(null);
+    if (dialog.kind === 'create-file') {
+      void mutate(() => writeCodeWorkspaceFile(roomId, normalizedPath, '', 'utf-8'), normalizedPath, normalizedPath);
+      return;
+    }
+    if (dialog.kind === 'create-directory') {
+      void mutate(() => createCodeWorkspaceDirectory(roomId, normalizedPath), normalizedPath);
+      return;
+    }
+    if (!selectedPath || normalizedPath === selectedPath) return;
+    const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath)
+      ? replacePathPrefix(relativePath, selectedPath, normalizedPath)
+      : undefined;
+    void mutate(() => renameCodeWorkspaceEntry(roomId, selectedPath, normalizedPath), normalizedPath, nextPreviewPath);
+  }, [mutate, relativePath, roomId, selectedPath, workspaceEntryDialog]);
+
+  const handleDeleteConfirm = useCallback(() => {
+    if (!workspaceDeletePath) return;
+    const path = workspaceDeletePath;
+    setWorkspaceDeletePath(null);
+    const nextPreviewPath = relativePath && pathContains(path, relativePath) ? null : undefined;
+    void mutate(() => deleteCodeWorkspaceEntry(roomId, path), null, nextPreviewPath);
+  }, [mutate, relativePath, roomId, workspaceDeletePath]);
 
   const handleUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (!workspaceEditable) {
@@ -3935,6 +3965,29 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         </div>
       ) : null}
       <input ref={uploadInputRef} type="file" className="hidden" multiple disabled={!workspaceEditable} onChange={handleUpload} />
+      <AppTextInputDialog
+        isOpen={workspaceEntryDialog !== null}
+        title={workspaceEntryDialog?.kind === 'create-file'
+          ? t('codeAgentNewFilePrompt')
+          : workspaceEntryDialog?.kind === 'create-directory'
+            ? t('codeAgentNewFolderPrompt')
+            : t('codeAgentRenamePrompt')}
+        label={t('codeAgentWorkspacePath')}
+        value={workspaceEntryDialog?.value ?? ''}
+        confirmLabel={workspaceEntryDialog?.kind === 'rename' ? t('save') : t('createItem')}
+        onValueChange={(value) => setWorkspaceEntryDialog((current) => current ? { ...current, value } : current)}
+        onClose={() => setWorkspaceEntryDialog(null)}
+        onConfirm={handleWorkspaceEntryConfirm}
+      />
+      <AppConfirmDialog
+        isOpen={workspaceDeletePath !== null}
+        title={t('codeAgentDeleteFile')}
+        description={t('codeAgentDeleteConfirm', { path: workspaceDeletePath ?? '' })}
+        confirmLabel={t('delete')}
+        tone="danger"
+        onClose={() => setWorkspaceDeletePath(null)}
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   );
 };

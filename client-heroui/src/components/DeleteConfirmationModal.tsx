@@ -1,14 +1,12 @@
 import React from 'react';
-import Modal from 'react-modal';
-import { Button } from '@heroui/react';
-import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
+import { AppConfirmDialog } from './AppActionDialog';
 
 interface DeleteConfirmationModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  messageContent?: string; // Optional: show snippet
+  messageContent?: string;
 }
 
 export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({
@@ -20,46 +18,23 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
   const { t } = useTranslation();
 
   return (
-    <Modal
+    <AppConfirmDialog
       isOpen={isOpen}
-      onRequestClose={onClose}
-      overlayClassName="fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000] flex items-center justify-center"
-      className="relative m-4 w-full max-w-md rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 text-[#141413] shadow-xl outline-none transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
-      contentLabel={t('confirmDeletion')}
-    >
-      <div className="flex flex-col">
-        <h2 className="mb-3 font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">
-          {t('confirmDeletion')}
-        </h2>
-        <p className="mb-4 text-sm text-[#5e5d59] dark:text-[#b0aea5]">
-          {t('confirmDeleteMessagePrompt')}
-        </p>
-        {/* Optional: Show a snippet of the message */}
-        {messageContent && (
-          <div className="mb-4 max-h-20 overflow-y-auto overflow-hidden text-ellipsis rounded-lg border border-[#dedbd0] bg-[#e8e6dc] p-3 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#30302e] dark:text-[#faf9f5]">
-            "{messageContent}"
-          </div>
-        )}
-        <div className="flex justify-end gap-2 mt-2">
-          <Button
-            variant="flat"
-            size="sm"
-            onPress={onClose}
-            className="text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
-          >
-            {t('cancel')}
-          </Button>
-          <Button
-            color="danger"
-            size="sm"
-            onPress={onConfirm}
-            className="bg-danger-500 hover:bg-danger-600 text-white transition-colors"
-          >
-            <Icon icon="lucide:trash-2" className="mr-1" width={14} height={14} />
-            {t('delete')}
-          </Button>
+      title={t('confirmDeletion')}
+      description={(
+        <div className="space-y-3">
+          <p>{t('confirmDeleteMessagePrompt')}</p>
+          {messageContent ? (
+            <blockquote className="max-h-24 overflow-y-auto break-words rounded-xl border border-[#dedbd0] bg-[#f0eee6] px-3 py-2 text-xs leading-5 text-[#4d4c48] dark:border-[#3a3936] dark:bg-[#242421] dark:text-[#e8e6dc]">
+              “{messageContent}”
+            </blockquote>
+          ) : null}
         </div>
-      </div>
-    </Modal>
+      )}
+      confirmLabel={t('delete')}
+      tone="danger"
+      onClose={onClose}
+      onConfirm={onConfirm}
+    />
   );
 };
