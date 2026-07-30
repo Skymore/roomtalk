@@ -196,6 +196,36 @@ Commit `790f23b4` 把 Code Agent 启动、执行期写入与终态收敛统一�
 
 Migration、App 与 Worker 启动日志没有 error。Worker heartbeat 正常续期，对象存储与 Socket.IO Redis adapter 均为 ready。本次发布没有调用付费 Provider。
 
+### Code Agent workspace revision DAG，2026-07-30
+
+Commit `fb1f98eb` 把 Codex checkpoint 从单次 selective undo 升级为 RoomTalk-owned revision DAG。房间由确定性的 root revision 锚定；每个完成 turn 记录开始时的 parent、结束后的 revision、pre/post Codex boundary 与 selective before/after archive。恢复从 current/target 向上寻找 LCA，先逆序 undo source turn，再正序 redo target turn。UI 同时暴露“此轮之前”和“此轮之后”：因此旧分支最后一个 turn 即使没有 successor，也不会成为只能审计、不能回去的叶子。
+
+恢复全过程持有并续租同一个 fenced room lease。每一步先验证即将离开一侧的 SHA-256；任何人工 overlay、缺失 archive 或不可恢复路径都会中止整条路径，并反向撤销已经应用的 step。所有文件到达目标后才 fork 精确的 before/after Codex context；最后一个 PostgreSQL 事务再次验证 source head 与 lease，同时插入 restore revision/audit、记录 `target_boundary`、切换 session/cursor/head 并释放 lease。清空历史或删除房间后，checkpoint object 在数据库提交完成后清理。
+
+上线先生成成对备份：
+
+- `backups/roomtalk-20260730T082549Z.dump`，7.8 MiB；
+- `backups/roomtalk-object-storage-20260730T082549Z.tar.gz`，1.2 GiB。
+
+新镜像 `5e750601c63d89f1485258e0ad82e1a2d00e4832b1e154dfd655cd2b9c5fb00c` 在旧服务在线时完成构建。第二次活动门禁确认 Code Agent running turn、live room lease、active assistant run 与 pending dispatch 全部为 0；随后停止旧 App、AI Worker 与两个 Tunnel，移除旧 App/Worker/Migrate 容器，再由新镜像执行 `0013_code_agent_workspace_revision_dag`。旧 writer 与新 revision writer 没有重叠。
+
+| 检查 | 结果 |
+| --- | --- |
+| Server 全量测试 | 114 个 suite、835 项通过 |
+| Client 全量测试 | 98 个文件、1,039 项通过 |
+| 真实 PostgreSQL 17 migration/transaction | 41 项通过，无 skip；before/after target 都实际提交 |
+| 定向 DAG / store / Socket / UI 回归 | 56 + 70 + 28 + 52 项通过 |
+| Production build | Server、Client、Docker 均通过；i18n 覆盖检查通过 |
+| GitHub | CI 与 Pages deployment 均成功 |
+| Migration ledger | 14/14；`0013_code_agent_workspace_revision_dag` 已记录一次 |
+| DAG 回填 | 14 root、79 turn、8 restore；0 个 turn 缺 revision link，0 个 room head 悬空 |
+| 历史 barrier | 76 个旧 turn 没有 checkpoint，故明确不可遍历；3 个 ready turn 可遍历。旧 restore 中 2 个精确、6 个不完整 |
+| Runtime | App 与 AI Worker 使用同一新镜像且 healthy；PostgreSQL、Redis、SeaweedFS healthy；两个 Tunnel running |
+| Readiness | 本机回环、`room.ruit.me`、`roomtalk.ruit.me`、`ai-chat.wenlin.dev` 全部 `online`、`ready=true`，102 个 room |
+| 上线后队列 | running Code Agent turn、live lease、active assistant run、dispatch/BullMQ backlog 全部为 0 |
+
+Migration、App 与 Worker 启动日志没有 error。0013 回填没有伪造旧 checkpoint：缺失历史保留为显式 barrier，新 turn 从现有 head 继续形成可逆边。此次验证没有调用付费 Provider，也没有在生产执行一次真实 restore；恢复算法由 fake sandbox 的 `C → A → B → C` 跨分支用例、E2B restore batch 测试和 PostgreSQL 事务提交共同覆盖。
+
 ## 回滚与持续运维
 
 跨过任一生产边界后，回滚都是数据操作。Mac 已接受写入时，不能只重新启用 Fly 或切 DNS。应先停止或 gate 当前 writer，协调 PostgreSQL 与对象增量，恢复匹配的数据库和对象备份，验证目标，然后才切流量。
