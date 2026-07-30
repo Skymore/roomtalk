@@ -22,8 +22,7 @@ import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { PostingScheduleDetails } from './PostingScheduleDetails';
-import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
-import { getCodeAgentStatusClassName, getCodeAgentStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/codeAgentRoom';
+import { getCodeAgentBackend } from '../utils/codeAgent';
 import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
 
 interface ChatHeaderProps {
@@ -91,8 +90,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
   const codeAgentBackend = getCodeAgentBackend(currentRoom);
   const isCodeAgent = codeAgentBackend !== null;
-  const isSupportedCodeAgent = isSupportedCodeAgentBackend(codeAgentBackend);
-  const agentStatus = getCodeAgentStatus(currentRoom);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -267,18 +264,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               />
             </div>
           </Tooltip>
-          {isSupportedCodeAgent && (
-            <div className="hidden min-w-0 flex-wrap items-center gap-1 md:flex">
-              <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getSandboxStatusClassName(currentRoom.sandboxStatus)}`}>
-                <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate">{t(getSandboxStatusLabelKey(currentRoom.sandboxStatus))}</span>
-              </span>
-              <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getCodeAgentStatusClassName(agentStatus)}`}>
-                <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate">{t(getCodeAgentStatusLabelKey(agentStatus))}</span>
-              </span>
-            </div>
-          )}
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-2">

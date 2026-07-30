@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { RoomCard } from './RoomCard';
@@ -53,13 +53,22 @@ describe('RoomCard', () => {
     expect(props.onSelect).toHaveBeenCalledWith(room);
   });
 
-  it('does not select the room when action buttons are clicked', () => {
+  it('keeps secondary room actions in one menu without selecting the room', async () => {
     const props = renderRoomCard();
 
-    fireEvent.click(screen.getByLabelText('copyRoomId'));
-    fireEvent.click(screen.getByLabelText('share'));
-    fireEvent.click(screen.getByLabelText('editRoomName'));
-    fireEvent.click(screen.getByLabelText('deleteRoom'));
+    const openMenu = () => fireEvent.click(screen.getByLabelText('moreActions Test Room'));
+
+    openMenu();
+    fireEvent.click(await screen.findByText('copyRoomId'));
+    await waitFor(() => expect(screen.queryByText('share')).toBeNull());
+    openMenu();
+    fireEvent.click(await screen.findByText('share'));
+    await waitFor(() => expect(screen.queryByText('editRoomName')).toBeNull());
+    openMenu();
+    fireEvent.click(await screen.findByText('editRoomName'));
+    await waitFor(() => expect(screen.queryByText('deleteRoom')).toBeNull());
+    openMenu();
+    fireEvent.click(await screen.findByText('deleteRoom'));
 
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onCopyRoomId).toHaveBeenCalledWith('room-1');

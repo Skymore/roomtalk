@@ -1,11 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  addToast,
   Button,
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
   useDisclosure,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
@@ -17,6 +13,7 @@ import { RoomCard } from './RoomCard';
 import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomJoinControl } from './RoomJoinControl';
 import { RoomRenameModal } from './RoomRenameModal';
+import { AppConfirmDialog } from './AppActionDialog';
 
 interface RoomListProps {
   rooms: Room[];
@@ -46,11 +43,6 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   const [nameError, setNameError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const {
-    isOpen: isDeleteConfirmOpen,
-    onOpen: onOpenDeleteConfirm,
-    onClose: onCloseDeleteConfirm,
-  } = useDisclosure();
 
   const clearCopyFeedbackTimer = () => {
     if (copyFeedbackTimerRef.current) {
@@ -133,7 +125,6 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   const openDeleteModal = (room: Room) => {
     onModalTaskStart?.();
     setRoomToDelete(room);
-    onOpenDeleteConfirm();
   };
 
   const openRenameModal = (room: Room) => {
@@ -145,7 +136,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     if (roomToDelete) {
       handleDeleteRoom(roomToDelete.id);
     }
-    onCloseDeleteConfirm();
+    setRoomToDelete(null);
   };
 
   const handleCopyRoomLink = (roomId: string) => {
@@ -155,6 +146,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
       .then(() => showCopiedLink(roomId))
       .catch(err => {
         console.error('Could not copy URL:', err);
+        addToast({ title: t('shareFailed'), severity: 'danger', timeout: 4500 });
       });
   };
 
@@ -163,6 +155,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
       .then(() => showCopiedRoomId(roomId))
       .catch(err => {
         console.error('Could not copy Room ID:', err);
+        addToast({ title: t('copyFailed'), severity: 'danger', timeout: 4500 });
       });
   };
 
@@ -192,10 +185,11 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
 
   if (isLoading && rooms.length === 0) {
     return (
-      <div className="flex h-full flex-col p-4 md:p-6">
+      <div className="flex h-full flex-col p-4 md:p-6" role="status" aria-live="polite" aria-busy="true">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
           <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
-          <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin text-[#c96442] dark:text-[#d97757]" />
+          <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin text-[#c96442] dark:text-[#d97757]" aria-hidden="true" />
+          <span className="sr-only">{t('loading')}</span>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, index) => (
@@ -221,7 +215,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           {t('noRoomsDescription')}
         </p>
 
-        <div className="flex w-full max-w-md flex-row gap-2">
+        <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
           <RoomJoinControl
             value={joinRoomId}
             onValueChange={setJoinRoomId}
@@ -233,7 +227,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-12 min-w-[88px] bg-secondary px-3 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
+            className="h-12 w-full bg-secondary px-4 text-sm font-medium text-secondary-foreground shadow-[0_0_0_1px_#c96442] sm:w-auto sm:min-w-[104px]"
           >
             {t('create')}
           </Button>
@@ -248,7 +242,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     <div className="p-4 md:p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
-        <div className="flex w-full flex-nowrap items-center gap-2 md:w-auto">
+        <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
           <RoomJoinControl
             value={joinRoomId}
             onValueChange={setJoinRoomId}
@@ -259,7 +253,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-10 min-w-[88px] bg-secondary px-3 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
+            className="h-10 w-full bg-secondary px-4 text-sm font-medium text-secondary-foreground shadow-[0_0_0_1px_#c96442] sm:w-auto sm:min-w-[104px]"
           >
             {t('create')}
           </Button>
@@ -283,22 +277,15 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
         ))}
       </div>
 
-      <Modal isOpen={isDeleteConfirmOpen} onClose={onCloseDeleteConfirm}>
-        <ModalContent>
-          <ModalHeader>{t('confirmDeleteRoomTitle')}</ModalHeader>
-          <ModalBody>
-            <p>{t('confirmDeleteRoomDescription', { roomName: roomToDelete?.name })}</p>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={onCloseDeleteConfirm}>
-              {t('cancel')}
-            </Button>
-            <Button color="danger" onPress={confirmRoomDelete}>
-              {t('delete')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <AppConfirmDialog
+        isOpen={roomToDelete !== null}
+        title={t('confirmDeleteRoomTitle')}
+        description={t('confirmDeleteRoomDescription', { roomName: roomToDelete?.name })}
+        confirmLabel={t('delete')}
+        tone="danger"
+        onClose={() => setRoomToDelete(null)}
+        onConfirm={confirmRoomDelete}
+      />
 
       {createModal}
       <RoomRenameModal

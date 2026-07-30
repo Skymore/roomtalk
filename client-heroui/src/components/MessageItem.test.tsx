@@ -295,7 +295,7 @@ describe('MessageItem replies', () => {
 
     expect(screen.queryByLabelText('editMessage')).toBeNull();
     expect(screen.queryByLabelText('deleteMessage')).toBeNull();
-    expect((screen.getByLabelText('retry') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('moreActions') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByLabelText('replyToMessage') as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -318,7 +318,7 @@ describe('MessageItem replies', () => {
     expect(bubble?.style.getPropertyValue('--roomtalk-sender-outline-dark')).toBe(theme.outlineDark);
   });
 
-  it('treats messageType ai as an assistant message even when clientId differs', () => {
+  it('treats messageType ai as an assistant message even when clientId differs', async () => {
     const onRefreshAI = vi.fn();
     render(
       <MessageItem
@@ -343,7 +343,8 @@ describe('MessageItem replies', () => {
     expect(item.getAttribute('data-message-id')).toBe('ai-message');
     expect(screen.getByText('Coco')).toBeTruthy();
     expect(screen.getByText('assistant response')).toBeTruthy();
-    expect(screen.getByLabelText('retry')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    expect(await screen.findByText('retry')).toBeTruthy();
   });
 
   it('renders the legacy CodexApp assistant name as Codex', () => {
@@ -586,7 +587,7 @@ describe('MessageItem replies', () => {
     });
   });
 
-  it('hides edit and delete actions unless the viewer owns the message or can manage all messages', () => {
+  it('hides edit and delete menu actions unless the viewer owns the message or can manage all messages', async () => {
     const { rerender } = render(
       <MessageItem
         message={message}
@@ -623,8 +624,9 @@ describe('MessageItem replies', () => {
       />
     );
 
-    expect(screen.getByLabelText('editMessage')).toBeTruthy();
-    expect(screen.getByLabelText('deleteMessage')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    expect(await screen.findByText('editMessage')).toBeTruthy();
+    expect(await screen.findByText('deleteMessage')).toBeTruthy();
   });
 
   it('shows queued state and routes queued message actions separately', async () => {

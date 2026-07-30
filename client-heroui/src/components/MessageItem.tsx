@@ -1387,7 +1387,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               {aiCostLabel && ` • ${aiCostLabel}`}
             </span>
 
-            <div className="ml-1 flex items-center gap-0.5">
+            <div className="ml-1 flex items-center gap-0.5 opacity-100 transition-opacity md:opacity-55 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
               {isMine && isQueuedInput && (
                 <Dropdown placement="top-end">
                   <DropdownTrigger>
@@ -1474,34 +1474,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   <Icon icon="lucide:reply" width={12} height={12}/>
                 </Button>
               </Tooltip>
-              {canEditMessage && (
-                <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    aria-label={t('editMessage')}
-                    className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
-                    onPress={() => onStartEdit(message.id)}
-                  >
-                    <Icon icon="lucide:pencil" width={12} height={12}/>
-                  </Button>
-                </Tooltip>
-              )}
-              {canDeleteMessage && (
-                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    aria-label={t('deleteMessage')}
-                    className="h-5 w-5 min-w-0 text-danger-500"
-                    onPress={() => onDeleteMessage(message.id)}
-                  >
-                    <Icon icon="lucide:trash-2" width={12} height={12}/>
-                  </Button>
-                </Tooltip>
-              )}
               {showsDeliveryRetry && (
                 <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                   <Button
@@ -1514,22 +1486,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     isDisabled={isInteractionDisabled || roomPermissions?.canPost !== true}
                   >
                     <Icon icon="lucide:rotate-ccw" width={12} height={12}/>
-                  </Button>
-                </Tooltip>
-              )}
-              {/* 刷新按钮 - 仅对AI消息显示 */}
-              {isAI && !isStreaming && onRefreshAI && (
-                <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    aria-label={t('retry')}
-                    className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
-                    onPress={handleRefreshAIClick}
-                    isDisabled={isStreaming || isInteractionDisabled}
-                  >
-                    <Icon icon="lucide:refresh-cw" width={12} height={12}/>
                   </Button>
                 </Tooltip>
               )}
@@ -1547,6 +1503,24 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu aria-label={t('moreActions')}>
+                  {canEditMessage ? (
+                    <DropdownItem
+                      key="edit"
+                      startContent={<Icon icon="lucide:pencil" />}
+                      onPress={() => onStartEdit(message.id)}
+                    >
+                      {t('editMessage')}
+                    </DropdownItem>
+                  ) : null}
+                  {isAI && !isStreaming && onRefreshAI ? (
+                    <DropdownItem
+                      key="retry-ai"
+                      startContent={<Icon icon="lucide:refresh-cw" />}
+                      onPress={handleRefreshAIClick}
+                    >
+                      {t('retry')}
+                    </DropdownItem>
+                  ) : null}
                   <DropdownItem
                     key="like"
                     startContent={<Icon icon="lucide:thumbs-up" />}
@@ -1563,6 +1537,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   >
                     {disliked ? t('cancelDislike') : t('dislike')}
                   </DropdownItem>
+                  {canDeleteMessage ? (
+                    <DropdownItem
+                      key="delete"
+                      color="danger"
+                      className="text-danger"
+                      startContent={<Icon icon="lucide:trash-2" />}
+                      onPress={() => onDeleteMessage(message.id)}
+                    >
+                      {t('deleteMessage')}
+                    </DropdownItem>
+                  ) : null}
                 </DropdownMenu>
               </Dropdown>
             </div>

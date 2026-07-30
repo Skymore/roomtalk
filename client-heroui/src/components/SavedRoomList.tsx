@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Modal, ModalContent, ModalBody, ModalFooter, Button, Card } from '@heroui/react';
+import { Button, Card } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { HoverTooltip } from './HoverTooltip';
 import { Room } from '../utils/types';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../utils/formatters';
+import { AppConfirmDialog } from './AppActionDialog';
 
 interface SavedRoomListProps {
   rooms: Room[];
@@ -48,10 +49,11 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
 
   if (isLoading && rooms.length === 0) {
     return (
-      <div className="flex h-full flex-col p-4 md:p-6">
+      <div className="flex h-full flex-col p-4 md:p-6" role="status" aria-live="polite" aria-busy="true">
         <div className="mb-5 flex items-center justify-between">
           <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('savedRooms')}</h2>
-          <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin text-[#c96442] dark:text-[#d97757]" />
+          <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin text-[#c96442] dark:text-[#d97757]" aria-hidden="true" />
+          <span className="sr-only">{t('loading')}</span>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, index) => (
@@ -114,47 +116,33 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                 </div>
               </button>
               <div className="ml-2 flex flex-shrink-0 items-center gap-1">
-                    <HoverTooltip content={t('unsave')}>
-                      <Button
-                        size="sm"
-                        variant="light"
-                        color="warning"
-                        className="h-8 rounded-md px-2 text-secondary"
-                        onPress={() => openDeleteConfirm(room.id)}
-                        aria-label={t('unsave')}
-                        startContent={<Icon icon="lucide:bookmark-minus" className="h-4 w-4" />}
-                      >
-                        {t('unsave')}
-                      </Button>
-                    </HoverTooltip>
+                <HoverTooltip content={t('unsave')}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    color="warning"
+                    className="h-9 w-9 min-w-9 rounded-lg text-secondary"
+                    onPress={() => openDeleteConfirm(room.id)}
+                    aria-label={`${t('unsave')} ${room.name}`}
+                  >
+                    <Icon icon="lucide:bookmark-minus" className="h-4 w-4" />
+                  </Button>
+                </HoverTooltip>
               </div>
             </div>
           </Card>
         ))}
       </div>
 
-      {/* 删除确认对话框 */}
-      <Modal isOpen={!!roomToDelete} onClose={closeDeleteConfirm}>
-        <ModalContent>
-          <ModalBody className="py-5">
-            <div className="flex flex-col items-center gap-2">
-              <Icon icon="lucide:alert-triangle" className="text-danger w-10 h-10" />
-              <h3 className="text-xl font-medium">{t('confirmUnsave')}</h3>
-              <p className="text-center text-[#5e5d59] dark:text-[#b0aea5]">
-                {t('confirmUnsaveDescription')}
-              </p>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={closeDeleteConfirm}>
-              {t('cancel')}
-            </Button>
-            <Button color="warning" onPress={confirmDelete}>
-              {t('unsave')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      <AppConfirmDialog
+        isOpen={!!roomToDelete}
+        title={t('confirmUnsave')}
+        description={t('confirmUnsaveDescription')}
+        confirmLabel={t('unsave')}
+        onClose={closeDeleteConfirm}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 };

@@ -367,6 +367,7 @@ const resources: Record<string, { translation: Record<string, string> }> = {
       "quickAccess": "Quickly access rooms you've saved",
       "welcomeMessage": "Welcome to RoomTalk",
       "welcomeDescription": "Select a room to join or create a new one to get started.",
+      "browseRooms": "Browse rooms",
       
       // 房间详情
       "roomName": "Room Name",
@@ -1236,6 +1237,7 @@ const resources: Record<string, { translation: Record<string, string> }> = {
       "quickAccess": "快速访问你保存的房间",
       "welcomeMessage": "欢迎使用 RoomTalk",
       "welcomeDescription": "选择一个房间加入或创建一个新的房间开始使用。",
+      "browseRooms": "浏览房间",
       
       // 房间详情
       "roomName": "房间名称",
@@ -2104,6 +2106,7 @@ const resources: Record<string, { translation: Record<string, string> }> = {
       "quickAccess": "सेव किए गए रूम तक जल्दी पहुंचें",
       "welcomeMessage": "RoomTalk में आपका स्वागत है",
       "welcomeDescription": "शुरू करने के लिए किसी रूम में शामिल हों या एक नया बनाएं।",
+      "browseRooms": "रूम देखें",
       
       // 房间详情
       "roomName": "रूम का नाम",
@@ -2967,6 +2970,7 @@ resources.ja = {
     "quickAccess": "保存したルームに素早くアクセス",
     "welcomeMessage": "RoomTalkへようこそ",
     "welcomeDescription": "参加するルームを選ぶか、新しいルームを作成して始めましょう。",
+    "browseRooms": "ルームを見る",
     "roomName": "ルーム名",
     "roomNameMaxLength": "ルーム名は20文字までです",
     "roomNameCharactersRemaining": "あと {{count}} 文字（最大 20 文字）",
@@ -3805,6 +3809,7 @@ resources.ko = {
     "quickAccess": "저장한 방에 빠르게 접근",
     "welcomeMessage": "RoomTalk에 오신 것을 환영합니다",
     "welcomeDescription": "참여할 방을 선택하거나 새 방을 만들어 시작하세요.",
+    "browseRooms": "방 둘러보기",
     "roomName": "방 이름",
     "roomNameMaxLength": "방 이름은 최대 20자까지 입력할 수 있습니다",
     "roomNameCharactersRemaining": "{{count}}자 남음(최대 20자)",

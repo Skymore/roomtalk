@@ -1,7 +1,13 @@
 import React from 'react';
-import { Button, Card } from '@heroui/react';
+import {
+  Button,
+  Card,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
+} from '@heroui/react';
 import { Icon } from '@iconify/react';
-import { HoverTooltip } from './HoverTooltip';
 import { useTranslation } from 'react-i18next';
 import { Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
@@ -36,22 +42,6 @@ export const RoomCard: React.FC<RoomCardProps> = ({
   const codeAgentBackend = getCodeAgentBackend(room);
   const isCodeAgent = codeAgentBackend !== null;
 
-  const copyRoomId = () => {
-    onCopyRoomId(room.id);
-  };
-
-  const copyRoomLink = () => {
-    onCopyRoomLink(room.id);
-  };
-
-  const deleteRoom = () => {
-    onDelete(room);
-  };
-
-  const renameRoom = () => {
-    onRename(room);
-  };
-
   return (
     <Card
       data-testid="room-card"
@@ -78,9 +68,16 @@ export const RoomCard: React.FC<RoomCardProps> = ({
               <p className="mb-2 line-clamp-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
             )}
             <div className="mt-2 flex min-w-0 items-center gap-2">
-              <p className="min-w-0 break-all text-xs text-[#5e5d59] dark:text-[#b0aea5]">
-                <span className="hidden md:inline">ID: </span>
-                <span>{room.id}</span>
+              <p
+                className="flex min-w-0 items-center gap-1 text-xs text-[#5e5d59] dark:text-[#b0aea5]"
+                title={room.id}
+                aria-label={`ID: ${room.id}`}
+              >
+                <Icon icon="lucide:hash" className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+                <span className="truncate" aria-hidden="true">
+                  {room.id.length > 12 ? `${room.id.slice(0, 10)}…` : room.id}
+                </span>
+                <span className="sr-only">{room.id}</span>
               </p>
 
               {activityAt && (
@@ -91,61 +88,58 @@ export const RoomCard: React.FC<RoomCardProps> = ({
             </div>
           </div>
         </button>
-        <div className="ml-2 flex flex-shrink-0 items-center gap-0.5">
-              <HoverTooltip content={copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId')}>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  className="text-[#5e5d59] dark:text-[#b0aea5]"
-                  onPress={copyRoomId}
-                  aria-label={t('copyRoomId')}
+        <div className="ml-1 flex flex-shrink-0 items-center">
+          <Dropdown placement="bottom-end">
+            <DropdownTrigger>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                aria-label={`${t('moreActions')} ${room.name}`}
+                className="h-9 w-9 min-w-9 rounded-lg text-[#5e5d59] data-[hover=true]:bg-[#e8e6dc] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#30302e]"
+              >
+                <Icon icon="lucide:ellipsis" className="h-4 w-4" />
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={`${t('moreActions')} ${room.name}`}
+              onAction={(key) => {
+                if (key === 'copy') onCopyRoomId(room.id);
+                if (key === 'share') onCopyRoomLink(room.id);
+                if (key === 'rename') onRename(room);
+                if (key === 'delete') onDelete(room);
+              }}
+            >
+              <DropdownItem
+                key="copy"
+                startContent={<Icon icon={copiedRoomId === room.id ? 'lucide:check' : 'lucide:copy'} className="h-4 w-4" />}
+              >
+                {copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId')}
+              </DropdownItem>
+              <DropdownItem
+                key="share"
+                startContent={<Icon icon={copiedLinkId === room.id ? 'lucide:check' : 'lucide:share-2'} className="h-4 w-4" />}
+              >
+                {copiedLinkId === room.id ? t('shareSuccess') : t('share')}
+              </DropdownItem>
+              {room.creatorId === clientId ? (
+                <DropdownItem key="rename" startContent={<Icon icon="lucide:pencil" className="h-4 w-4" />}>
+                  {t('editRoomName')}
+                </DropdownItem>
+              ) : null}
+              {room.creatorId === clientId ? (
+                <DropdownItem
+                  key="delete"
+                  color="danger"
+                  className="text-danger"
+                  startContent={<Icon icon="lucide:trash-2" className="h-4 w-4" />}
                 >
-                  <Icon icon={copiedRoomId === room.id ? 'lucide:check' : 'lucide:copy'} className="h-3.5 w-3.5" />
-                </Button>
-              </HoverTooltip>
-              <HoverTooltip content={copiedLinkId === room.id ? t('shareSuccess') : t('share')}>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  className="text-[#5e5d59] dark:text-[#b0aea5]"
-                  onPress={copyRoomLink}
-                  aria-label={t('share')}
-                >
-                  <Icon icon={copiedLinkId === room.id ? 'lucide:check' : 'lucide:share-2'} className="h-3.5 w-3.5" />
-                </Button>
-              </HoverTooltip>
-              {room.creatorId === clientId && (
-                <>
-                  <HoverTooltip content={t('editRoomName')}>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      className="text-[#5e5d59] dark:text-[#b0aea5]"
-                      onPress={renameRoom}
-                      aria-label={t('editRoomName')}
-                    >
-                      <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
-                    </Button>
-                  </HoverTooltip>
-                  <HoverTooltip content={t('deleteRoom')}>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      color="danger"
-                      className="text-danger-500"
-                      onPress={deleteRoom}
-                      aria-label={t('deleteRoom')}
-                    >
-                      <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
-                    </Button>
-                  </HoverTooltip>
-                </>
-              )}
-            </div>
+                  {t('deleteRoom')}
+                </DropdownItem>
+              ) : null}
+            </DropdownMenu>
+          </Dropdown>
+        </div>
       </div>
     </Card>
   );
