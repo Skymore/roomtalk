@@ -21,7 +21,7 @@ vi.mock('@heroui/react', () => ({
     onPress?: () => void;
     [key: string]: unknown;
   }) => {
-    const { size: _size, variant: _variant, color: _color, ...buttonProps } = props;
+    const { size: _size, variant: _variant, color: _color, isIconOnly: _isIconOnly, ...buttonProps } = props;
     return <button type="button" onClick={onPress} {...buttonProps}>{children}</button>;
   },
 }));

@@ -481,10 +481,10 @@ export function CodeAgentWorkspaceFileTreePanel({
     ? t('codeAgentWorkspaceIndexing')
     : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
   const headerRowClassName = mobileLayout
-    ? 'flex h-9 min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-0 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
+    ? 'flex h-10 min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-0 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
     : 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden';
   const toolbarButtonClassName = mobileLayout
-    ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
+    ? 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
     : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const fileCountClassName = mobileLayout
     ? 'max-w-[7rem] shrink-0 truncate text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5]'
@@ -643,7 +643,7 @@ export function CodeAgentWorkspaceFileTreePanel({
                 />
                 <button
                   type="button"
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
                   aria-label={t('close')}
                   onClick={() => {
                     setMobileSearchQuery('');

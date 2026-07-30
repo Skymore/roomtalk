@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Room, RoomPermissions } from '../utils/types';
+import { Room, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { RoomSettingsModal } from './RoomSettingsModal';
 
 const socketMocks = vi.hoisted(() => ({
-  getRoomRoleMembers: vi.fn(async () => []),
+  getRoomRoleMembers: vi.fn<() => Promise<RoomRoleMember[]>>(async () => []),
+  removeRoomMember: vi.fn(async () => undefined),
   on: vi.fn(),
   off: vi.fn(),
 }));
@@ -29,7 +30,7 @@ vi.mock('../utils/socket', () => ({
   getRoomRoleMembers: socketMocks.getRoomRoleMembers,
   lookupRoomClient: vi.fn(),
   removeRoomAdmin: vi.fn(),
-  removeRoomMember: vi.fn(),
+  removeRoomMember: socketMocks.removeRoomMember,
   setRoomAdmin: vi.fn(),
   transferRoomOwnership: vi.fn(),
   updateRoomSettings: vi.fn(),
@@ -135,5 +136,38 @@ describe('RoomSettingsModal tabs', () => {
     expect(input.getAttribute('maxlength')).toBe('20');
     expect(await screen.findByText('errorRoomNameTooLong')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'save' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('groups member actions and confirms removal in an app dialog', async () => {
+    socketMocks.getRoomRoleMembers.mockResolvedValueOnce([
+      {
+        roomId: room.id,
+        clientId: 'client-1',
+        role: 'owner',
+        nickname: 'Owner',
+        joinedAt: room.createdAt,
+      },
+      {
+        roomId: room.id,
+        clientId: 'client-2',
+        role: 'member',
+        nickname: 'Bob',
+        joinedAt: room.createdAt,
+      },
+    ]);
+    renderModal();
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'membersTab' }));
+    const actions = await screen.findByRole('button', { name: 'moreActions Bob' });
+    fireEvent.click(actions);
+    fireEvent.click(await screen.findByText('removeMember'));
+
+    expect(socketMocks.removeRoomMember).not.toHaveBeenCalled();
+    const dialogs = screen.getAllByRole('dialog');
+    const confirmation = dialogs[dialogs.length - 1];
+    expect(within(confirmation).getByText('confirmRemoveMemberDescription')).toBeTruthy();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'removeMember' }));
+
+    await waitFor(() => expect(socketMocks.removeRoomMember).toHaveBeenCalledWith('room-1', 'client-2'));
   });
 });

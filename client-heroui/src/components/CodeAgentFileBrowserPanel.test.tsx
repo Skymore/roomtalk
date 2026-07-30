@@ -756,13 +756,13 @@ describe('CodeAgentFileBrowserPanel', () => {
     const tabList = screen.getByTestId('code-agent-file-surface-tabs');
     const appCloseButton = screen.getByLabelText('close src/App.tsx');
     expect(appCloseButton.className).toContain('opacity-100');
-    expect(appCloseButton.className).toContain('h-6');
-    expect(appCloseButton.className).toContain('w-6');
+    expect(appCloseButton.className).toContain('h-8');
+    expect(appCloseButton.className).toContain('w-8');
     expect(appCloseButton.className).not.toContain('opacity-0');
 
     const guideTab = within(tabList).getByText('Guide.md').closest('[role="tab"]') as HTMLElement;
     const guideActions = within(guideTab).getByTestId('code-agent-mobile-file-tab-actions');
-    expect(guideActions.className).toContain('h-6');
+    expect(guideActions.className).toContain('h-8');
     fireEvent.click(guideActions);
 
     const firstMenu = screen.getByTestId('code-agent-file-surface-menu');
@@ -839,8 +839,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByLabelText('codeAgentResizeFileExplorer')).toBeNull();
     let mobileFileTreeHeader = screen.getByTestId('code-agent-mobile-file-tree-header');
     let mobileFileTreeActions = screen.getByTestId('code-agent-mobile-file-tree-actions');
-    expect(mobileFileTreeHeader.className).toContain('h-9');
-    expect(mobileFileTreeHeader.className).toContain('min-h-9');
+    expect(mobileFileTreeHeader.className).toContain('h-10');
+    expect(mobileFileTreeHeader.className).toContain('min-h-10');
     expect(mobileFileTreeHeader.className).toContain('py-0');
     expect(mobileFileTreeHeader.className).not.toContain('py-1');
     expect(mobileFileTreeHeader.className).toContain('overflow-x-auto');
@@ -848,8 +848,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(within(mobileFileTreeHeader).queryByText('Code Agent')).toBeNull();
     expect(within(mobileFileTreeHeader).getByText('2 files')).toBeTruthy();
     const mobileBackToPreview = within(mobileFileTreeHeader).getByLabelText('codeAgentBackToFilePreview');
-    expect(mobileBackToPreview.className).toContain('h-8');
-    expect(mobileBackToPreview.className).toContain('w-8');
+    expect(mobileBackToPreview.className).toContain('h-9');
+    expect(mobileBackToPreview.className).toContain('w-9');
     fireEvent.click(mobileBackToPreview);
     await waitFor(() => {
       expect(previewBody.dataset.mobileView).toBe('preview');
@@ -866,10 +866,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     mobileFileTreeActions = screen.getByTestId('code-agent-mobile-file-tree-actions');
     expect(mobileFileTreeHeader.contains(mobileFileTreeActions)).toBe(true);
     expect(mobileFileTreeActions.className).toContain('min-w-max');
-    expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('h-8');
-    expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('w-8');
-    expect(screen.getByLabelText('codeAgentNewFile').className).toContain('h-8');
-    expect(screen.getByLabelText('codeAgentRenameFile').className).toContain('h-8');
+    expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('h-9');
+    expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('w-9');
+    expect(screen.getByLabelText('codeAgentNewFile').className).toContain('h-9');
+    expect(screen.getByLabelText('codeAgentRenameFile').className).toContain('h-9');
     fireEvent.click(screen.getByLabelText('codeAgentSearchWorkspaceFiles'));
     expect(openSearchMock).not.toHaveBeenCalled();
     const mobileSearchRow = screen.getByTestId('code-agent-mobile-file-tree-search-row');

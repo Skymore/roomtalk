@@ -86,7 +86,7 @@ export const FeatureIntro: React.FC<FeatureIntroProps> = ({
           isIconOnly
           size="sm"
           variant="light"
-          className="h-7 w-7 min-w-7 flex-shrink-0 text-[#5e5d59] dark:text-[#b0aea5]"
+          className="h-9 w-9 min-w-9 flex-shrink-0 text-[#5e5d59] dark:text-[#b0aea5] sm:h-7 sm:w-7 sm:min-w-7"
           onPress={handleDismiss}
           aria-label={t('dismissIntro')}
         >
@@ -122,7 +122,7 @@ export const FeatureIntro: React.FC<FeatureIntroProps> = ({
           isIconOnly
           size="sm"
           variant="light"
-          className="h-7 w-7 min-w-7 flex-shrink-0 text-[#5e5d59] dark:text-[#b0aea5]"
+          className="h-9 w-9 min-w-9 flex-shrink-0 text-[#5e5d59] dark:text-[#b0aea5] sm:h-7 sm:w-7 sm:min-w-7"
           onPress={handleDismiss}
           aria-label={t('dismissIntro')}
         >

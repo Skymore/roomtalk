@@ -22,55 +22,55 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
       className="mobile-bottom-nav z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
     >
       <div className="flex justify-center">
-        <div className="flex h-10 w-full max-w-md items-center justify-between px-4">
+        <div className="flex h-14 w-full max-w-md items-center justify-between gap-1 px-2">
           <Button
-            isIconOnly
             variant={view === "rooms" ? "solid" : "light"}
             color="default"
             onPress={() => setView("rooms")}
-            className={`h-7 w-7 min-w-0 rounded-xl ${view === "rooms" ? activeClass : inactiveClass}`}
+            className={`h-12 min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-1 ${view === "rooms" ? activeClass : inactiveClass}`}
             aria-label={t("home")}
             aria-current={view === "rooms" ? "page" : undefined}
           >
-            <Icon icon="lucide:home" className="text-base" />
+            <Icon icon="lucide:home" className="h-4 w-4" />
+            <span className="text-[10px] font-medium leading-none">{t("home")}</span>
           </Button>
 
           <Button
-            isIconOnly
             variant={view === "saved" ? "solid" : "light"}
             color="default"
             onPress={() => setView("saved")}
-            className={`h-7 w-7 min-w-0 rounded-xl ${view === "saved" ? activeClass : inactiveClass}`}
+            className={`h-12 min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-1 ${view === "saved" ? activeClass : inactiveClass}`}
             aria-label={t("savedRooms")}
             aria-current={view === "saved" ? "page" : undefined}
           >
-            <Icon icon="lucide:bookmark" className="text-base" />
+            <Icon icon="lucide:bookmark" className="h-4 w-4" />
+            <span className="max-w-full truncate text-[10px] font-medium leading-none">{t("savedRooms")}</span>
           </Button>
 
           {/* 聊天按钮 - 无论是否在房间中都显示，但样式会不同 */}
           <Button
-            isIconOnly
             variant={view === "chat" ? "solid" : "light"}
             color="default"
             onPress={() => currentRoom ? setView("chat") : null}
             isDisabled={!currentRoom}
-            className={`h-7 w-7 min-w-0 rounded-xl ${view === "chat" ? "bg-secondary text-secondary-foreground shadow-[0_0_0_1px_hsl(var(--heroui-secondary))]" : inactiveClass}`}
-            aria-label={currentRoom ? currentRoom.name : t("chatRooms")}
+            className={`h-12 min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-1 ${view === "chat" ? "bg-secondary text-secondary-foreground shadow-[0_0_0_1px_hsl(var(--heroui-secondary))]" : inactiveClass}`}
+            aria-label={currentRoom ? `${t("chatNav")}: ${currentRoom.name}` : t("chatRooms")}
             aria-current={view === "chat" ? "page" : undefined}
           >
-            <Icon icon="lucide:message-circle" className="text-sm" />
+            <Icon icon="lucide:message-circle" className="h-4 w-4" />
+            <span className="text-[10px] font-medium leading-none">{t("chatNav")}</span>
           </Button>
 
           <Button
-            isIconOnly
             variant={view === "settings" ? "solid" : "light"}
             color="default"
             onPress={() => setView("settings")}
-            className={`h-7 w-7 min-w-0 rounded-xl ${view === "settings" ? activeClass : inactiveClass}`}
+            className={`h-12 min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-1 ${view === "settings" ? activeClass : inactiveClass}`}
             aria-label={t("settings")}
             aria-current={view === "settings" ? "page" : undefined}
           >
-            <Icon icon="lucide:settings" className="text-base" />
+            <Icon icon="lucide:settings" className="h-4 w-4" />
+            <span className="text-[10px] font-medium leading-none">{t("settings")}</span>
           </Button>
         </div>
       </div>

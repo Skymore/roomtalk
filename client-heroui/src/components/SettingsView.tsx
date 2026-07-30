@@ -822,12 +822,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {t("googleAccount")}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
-              <FeatureIntro
-                featureKey="google-account-login"
-                title={t("googleAccountIntroTitle")}
-                description={t("googleAccountIntroDescription")}
-                compact
-              />
+              {!accountStatus?.account && (
+                <FeatureIntro
+                  featureKey="google-account-login"
+                  title={t("googleAccountIntroTitle")}
+                  description={t("googleAccountIntroDescription")}
+                  compact
+                />
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Chip
                   size="sm"

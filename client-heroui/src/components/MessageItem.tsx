@@ -1370,7 +1370,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         </div>
         {/* Timestamp and Actions Area - Below the bubble/image */}
         <div
-            className={`mt-0.5 flex min-h-5 max-w-full flex-wrap items-center ${isMine ? 'justify-end' : 'justify-start'}`}
+            className={`mt-0.5 flex min-h-8 max-w-full flex-wrap items-center md:min-h-5 ${isMine ? 'justify-end' : 'justify-start'}`}
         >
             {isMine && isQueuedInput && (
               <span className="mr-1 inline-flex items-center gap-1 text-tiny font-medium text-[#87867f] dark:text-[#b0aea5]">
@@ -1396,10 +1396,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                       size="sm"
                       variant="light"
                       aria-label={t('codeAgentQueuedActions')}
-                      className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                      className="h-8 w-8 min-w-8 text-[#5e5d59] dark:text-[#b0aea5] md:h-5 md:w-5 md:min-w-0"
                       isDisabled={isInteractionDisabled}
                     >
-                      <Icon icon="lucide:more-horizontal" width={12} height={12} />
+                      <Icon icon="lucide:more-horizontal" className="h-3.5 w-3.5 md:h-3 md:w-3" />
                     </Button>
                   </DropdownTrigger>
                   <DropdownMenu aria-label={t('codeAgentQueuedActions')}>
@@ -1451,11 +1451,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   size="sm"
                   variant="light"
                   aria-label={copyStatus === 'success' ? t('copied') : copyStatus === 'error' ? t('copyFailed') : isImage ? t('copyImage') : t('copy')}
-                  className={`h-5 w-5 min-w-0 ${copyStatus === 'success' ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+                  className={`h-8 w-8 min-w-8 md:h-5 md:w-5 md:min-w-0 ${copyStatus === 'success' ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
                   onPress={handleCopyMessage}
                   isDisabled={isInteractionDisabled || (isMedia && (!isImage || !signedMediaUrl || mediaError))}
                 >
-                  <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} width={12} height={12}/>
+                  <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} className="h-3.5 w-3.5 md:h-3 md:w-3" />
                 </Button>
               </Tooltip>
               <span className="sr-only" role={copyStatus === 'error' ? 'alert' : 'status'} aria-atomic="true">
@@ -1467,11 +1467,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   size="sm"
                   variant="light"
                   aria-label={t('replyToMessage')}
-                  className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                  className="h-8 w-8 min-w-8 text-[#5e5d59] dark:text-[#b0aea5] md:h-5 md:w-5 md:min-w-0"
                   onPress={() => onReply(message)}
                   isDisabled={isStreaming || isInteractionDisabled}
                 >
-                  <Icon icon="lucide:reply" width={12} height={12}/>
+                  <Icon icon="lucide:reply" className="h-3.5 w-3.5 md:h-3 md:w-3" />
                 </Button>
               </Tooltip>
               {showsDeliveryRetry && (
@@ -1481,11 +1481,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     size="sm"
                     variant="light"
                     aria-label={t('retry')}
-                    className="h-5 w-5 min-w-0 text-danger-600 dark:text-danger-300"
+                    className="h-8 w-8 min-w-8 text-danger-600 dark:text-danger-300 md:h-5 md:w-5 md:min-w-0"
                     onPress={() => onRetryDelivery?.(message)}
                     isDisabled={isInteractionDisabled || roomPermissions?.canPost !== true}
                   >
-                    <Icon icon="lucide:rotate-ccw" width={12} height={12}/>
+                    <Icon icon="lucide:rotate-ccw" className="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </Button>
                 </Tooltip>
               )}
@@ -1496,10 +1496,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     size="sm"
                     variant="light"
                     aria-label={t('moreActions')}
-                    className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                    className="h-8 w-8 min-w-8 text-[#5e5d59] dark:text-[#b0aea5] md:h-5 md:w-5 md:min-w-0"
                     isDisabled={isStreaming || isInteractionDisabled}
                   >
-                    <Icon icon="lucide:more-horizontal" width={12} height={12}/>
+                    <Icon icon="lucide:more-horizontal" className="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu aria-label={t('moreActions')}>

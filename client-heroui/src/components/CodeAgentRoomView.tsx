@@ -608,7 +608,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             variant="solid"
             size="sm"
             radius="full"
-            className="absolute right-3 top-3 z-40 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
+            className="absolute right-3 top-3 z-40 h-10 w-10 min-w-10 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
             aria-label={mobileFileManagerTitle}
             title={mobileFileManagerTitle}
             isDisabled={!canUseRetainedRoomAccess}
@@ -719,14 +719,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           hidden={!isMobileFileManagerOpen}
           aria-hidden={!isMobileFileManagerOpen}
         >
-          <div className="safe-top flex min-h-10 items-center gap-2 border-b border-[#dedbd0] px-3 py-1 dark:border-[#30302e]">
+          <div className="safe-top flex min-h-12 items-center gap-2 border-b border-[#dedbd0] px-2 py-1 dark:border-[#30302e]">
             <Button
               isIconOnly
               variant="light"
               size="sm"
               aria-label={t('close')}
               onPress={() => setIsMobileFileManagerOpen(false)}
-              className="h-8 w-8 min-w-8 rounded-lg text-[#141413] dark:text-[#faf9f5]"
+              className="h-10 w-10 min-w-10 rounded-lg text-[#141413] dark:text-[#faf9f5]"
             >
               <Icon icon="lucide:x" className="h-4 w-4" />
             </Button>

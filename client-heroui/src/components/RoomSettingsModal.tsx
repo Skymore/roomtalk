@@ -1,6 +1,10 @@
 import React from 'react';
 import {
   Button,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
   Input,
   Modal,
   ModalBody,
@@ -44,6 +48,7 @@ import {
 import { PostingScheduleEditor } from './PostingScheduleEditor';
 import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 import { validateRoomName } from '../utils/roomState';
+import { AppConfirmDialog } from './AppActionDialog';
 
 const backendIcons: Record<CodeAgentBackend, string> = {
   'code-agent': 'lucide:sparkles',
@@ -145,6 +150,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = React.useState(false);
   const [roleMembers, setRoleMembers] = React.useState<RoomRoleMember[]>([]);
   const [pendingTransfer, setPendingTransfer] = React.useState<RoomClientLookup | null>(null);
+  const [pendingMemberRemoval, setPendingMemberRemoval] = React.useState<RoomRoleMember | null>(null);
   const [status, setStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isLoadingMembers, setIsLoadingMembers] = React.useState(false);
@@ -202,6 +208,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setIsClearConfirmOpen(false);
     setIsDeleteConfirmOpen(false);
     setPendingTransfer(null);
+    setPendingMemberRemoval(null);
     setStatus(null);
     setActiveTab(canManageGeneral ? 'general' : canManageMembers ? 'members' : 'transfer');
   }, [canManageGeneral, canManageMembers, canManageSettings, isOpen, resetSchedule, room.name, room.hasPassword]);
@@ -370,13 +377,14 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }, t('adminUpdated'));
   };
 
-  const handleRemoveMember = (targetClientId: string) => {
-    const target = targetClientId.trim();
+  const handleRemoveMember = () => {
+    const target = pendingMemberRemoval?.clientId.trim();
     if (!target) return;
 
     void runAction(async () => {
       await removeRoomMember(room.id, target);
       await loadRoleMembers();
+      setPendingMemberRemoval(null);
     }, t('memberRemoved'));
   };
 
@@ -512,81 +520,82 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     (isOwner || member.role === 'member')
   );
 
-  const renderMemberRow = (member: RoomRoleMember) => (
-    <div
-      key={`${member.role}-${member.clientId}`}
-      className="flex items-center justify-between gap-3 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
-    >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full ${roleClassName[member.role]}`}>
-          <Icon icon={roleIcon[member.role]} className="h-4 w-4" aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
-            {displayUser(member)}
+  const renderMemberRow = (member: RoomRoleMember) => {
+    const canPromote = member.role === 'member' && canManageAdmins;
+    const canDemote = member.role === 'admin' && canManageAdmins;
+    const canTransfer = canTransferOwnership && member.role !== 'owner' && member.clientId !== clientId;
+    const canRemove = canRemoveMember(member);
+    const hasActions = canPromote || canDemote || canTransfer || canRemove;
+    const memberName = displayUser(member);
+
+    return (
+      <div
+        key={`${member.role}-${member.clientId}`}
+        className="flex items-center justify-between gap-3 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
+      >
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full ${roleClassName[member.role]}`}>
+            <Icon icon={roleIcon[member.role]} className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
+              {memberName}
+            </div>
+            <div className="truncate text-[11px] text-[#5e5d59] dark:text-[#b0aea5]">{displayUserId(member)}</div>
           </div>
-          <div className="truncate text-[11px] text-[#5e5d59] dark:text-[#b0aea5]">{displayUserId(member)}</div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${roleClassName[member.role]}`}>
+            {t(roleLabelKey[member.role])}
+          </span>
+          {hasActions ? (
+            <Dropdown placement="bottom-end">
+              <DropdownTrigger>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={`${t('moreActions')} ${memberName}`}
+                  isDisabled={isSaving}
+                  className="h-10 w-10 min-w-10 rounded-lg text-[#5e5d59] dark:text-[#b0aea5] sm:h-8 sm:w-8 sm:min-w-8"
+                >
+                  <Icon icon="lucide:ellipsis" className="h-4 w-4" />
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu aria-label={`${t('moreActions')} ${memberName}`}>
+                {canPromote ? (
+                  <DropdownItem key="promote" startContent={<Icon icon="lucide:shield-plus" />} onPress={() => handlePromoteMember(member)}>
+                    {t('addAdmin')}
+                  </DropdownItem>
+                ) : null}
+                {canDemote ? (
+                  <DropdownItem key="demote" startContent={<Icon icon="lucide:shield-minus" />} onPress={() => handleRemoveAdmin(member.clientId)}>
+                    {t('removeAdmin')}
+                  </DropdownItem>
+                ) : null}
+                {canTransfer ? (
+                  <DropdownItem key="transfer" startContent={<Icon icon="lucide:crown" />} onPress={() => handleReviewTransferMember(member)}>
+                    {t('transferOwnership')}
+                  </DropdownItem>
+                ) : null}
+                {canRemove ? (
+                  <DropdownItem
+                    key="remove"
+                    color="danger"
+                    className="text-danger"
+                    startContent={<Icon icon="lucide:user-x" />}
+                    onPress={() => setPendingMemberRemoval(member)}
+                  >
+                    {t('removeMember')}
+                  </DropdownItem>
+                ) : null}
+              </DropdownMenu>
+            </Dropdown>
+          ) : null}
         </div>
       </div>
-      <div className="flex flex-shrink-0 items-center gap-1.5">
-        <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${roleClassName[member.role]}`}>
-          {t(roleLabelKey[member.role])}
-        </span>
-        {member.role === 'member' && canManageAdmins && (
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            color="primary"
-            aria-label={t('addAdmin')}
-            isDisabled={isSaving}
-            onPress={() => handlePromoteMember(member)}
-          >
-            <Icon icon="lucide:shield-plus" className="h-4 w-4" />
-          </Button>
-        )}
-        {member.role === 'admin' && canManageAdmins && (
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            color="warning"
-            aria-label={t('removeAdmin')}
-            isDisabled={isSaving}
-            onPress={() => handleRemoveAdmin(member.clientId)}
-          >
-            <Icon icon="lucide:shield-minus" className="h-4 w-4" />
-          </Button>
-        )}
-        {canTransferOwnership && member.role !== 'owner' && member.clientId !== clientId && (
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            color="danger"
-            aria-label={t('transferOwnership')}
-            isDisabled={isSaving}
-            onPress={() => handleReviewTransferMember(member)}
-          >
-            <Icon icon="lucide:crown" className="h-4 w-4" />
-          </Button>
-        )}
-        {canRemoveMember(member) && (
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            color="danger"
-            aria-label={t('removeMember')}
-            isDisabled={isSaving}
-            onPress={() => handleRemoveMember(member.clientId)}
-          >
-            <Icon icon="lucide:user-x" className="h-4 w-4" />
-          </Button>
-        )}
-      </div>
-    </div>
-  );
+    );
+  };
 
   const renderTabPanel = (tabKey: SettingsTabKey) => {
     if (tabKey === 'general' && canManageGeneral) {
@@ -917,9 +926,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 {renderMemberRow(ownerMember)}
                 {adminMembers.map(renderMemberRow)}
                 {regularMembers.map(renderMemberRow)}
-                {roleMembers.length === 0 && (
+                {adminMembers.length === 0 && regularMembers.length === 0 && (
                   <div className="rounded-lg border border-dashed border-[#dedbd0] px-3 py-2 text-sm text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
-                    {t('noMembers')}
+                    {t('noOtherMembers')}
                   </div>
                 )}
               </>
@@ -1007,7 +1016,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       aria-label={tab.label}
                       aria-controls={tabPanelId(tab.key)}
                       aria-selected={selected}
-                      className={`flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg transition-all ${
+                      className={`flex h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 transition-all ${
                         selected
                           ? 'bg-[#faf9f5] text-secondary shadow-sm dark:bg-[#1d1d1b]'
                           : 'text-[#6f6e68] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:text-[#faf9f5]'
@@ -1018,7 +1027,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       onClick={() => setActiveTab(tab.key)}
                       onKeyDown={(event) => handleTabKeyDown(event, tab.key)}
                     >
-                      <Icon icon={tab.icon} className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+                      <Icon icon={tab.icon} className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                      <span className="max-w-full truncate text-[10px] font-semibold leading-none">{tab.label}</span>
                     </button>
                   );
                 })}
@@ -1169,6 +1179,21 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <AppConfirmDialog
+        isOpen={Boolean(pendingMemberRemoval)}
+        title={t('removeMember')}
+        description={t('confirmRemoveMemberDescription', {
+          name: pendingMemberRemoval ? displayUser(pendingMemberRemoval) : '',
+        })}
+        confirmLabel={t('removeMember')}
+        tone="danger"
+        isPending={isSaving}
+        onClose={() => {
+          if (!isSaving) setPendingMemberRemoval(null);
+        }}
+        onConfirm={handleRemoveMember}
+      />
     </>
   );
 };

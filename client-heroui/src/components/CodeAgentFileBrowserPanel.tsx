@@ -3550,7 +3550,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     >
       {rightPanelSurfaces.length > 0 ? (
         <div
-          className="relative h-8 shrink-0 border-b border-[#dedbd0] bg-[#f0eee6] text-xs dark:border-[#30302e] dark:bg-[#242422]"
+          className={`relative shrink-0 border-b border-[#dedbd0] bg-[#f0eee6] text-xs dark:border-[#30302e] dark:bg-[#242422] ${isMobileSurface ? 'h-10' : 'h-8'}`}
           data-testid="code-agent-file-surface-tabs-frame"
         >
           <div
@@ -3600,7 +3600,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                   >
                     <button
                       type="button"
-                      className={`flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 text-left ${isMobileSurface ? 'min-h-7 py-1.5' : 'py-1'}`}
+                      className={`flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 text-left ${isMobileSurface ? 'min-h-9 py-1.5' : 'py-1'}`}
                       title={fullTitle}
                       onClick={() => activateFileSurface(surface.id)}
                     >
@@ -3625,7 +3625,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     {isMobileSurface ? (
                       <button
                         type="button"
-                        className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                        className="mr-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
                         aria-label={`${t('moreActions')} ${fullTitle}`}
                         title={t('moreActions')}
                         data-testid="code-agent-mobile-file-tab-actions"
@@ -3637,7 +3637,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     <button
                       type="button"
                       className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-                        isMobileSurface ? 'h-6 w-6 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
+                        isMobileSurface ? 'h-8 w-8 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
                       }`}
                       aria-label={`${t('close')} ${fullTitle}`}
                       onClick={() => {
@@ -3665,7 +3665,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 <button
                   ref={fileSurfaceAddMenuButtonRef}
                   type="button"
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+                  className={`inline-flex shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5] ${isMobileSurface ? 'h-8 w-8' : 'h-6 w-6'}`}
                   aria-label={t('codeAgentAddWorkspaceSurface')}
                   aria-haspopup="menu"
                   aria-expanded={fileSurfaceAddMenuOpen}

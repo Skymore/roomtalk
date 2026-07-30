@@ -15,6 +15,9 @@ const githubApiMock = vi.hoisted(() => ({
   connectGitHub: vi.fn(),
   disconnectGitHub: vi.fn(),
 }));
+const accountApiMock = vi.hoisted(() => ({
+  getClientAccountStatus: vi.fn(),
+}));
 const i18nMock = vi.hoisted(() => ({
   t: (key: string) => key,
 }));
@@ -33,12 +36,7 @@ vi.mock('@iconify/react', () => ({
 
 vi.mock('../utils/socket', () => ({
   getClientAuthStatus: vi.fn(async (clientId: string) => ({ clientId, hasPassword: false })),
-  getClientAccountStatus: vi.fn(async (clientId: string) => ({
-    clientId,
-    hasPassword: false,
-    googleConfigured: false,
-    account: null,
-  })),
+  getClientAccountStatus: accountApiMock.getClientAccountStatus,
   loginWithClientPassword: vi.fn(),
   loginWithGoogleCredential: vi.fn(),
   setClientPassword: vi.fn(),
@@ -112,6 +110,12 @@ describe('SettingsView Codex connection controls', () => {
       authVersion: 0,
       createdAt: '',
       updatedAt: '',
+    });
+    accountApiMock.getClientAccountStatus.mockResolvedValue({
+      clientId: 'client-1',
+      hasPassword: false,
+      googleConfigured: false,
+      account: null,
     });
     githubApiMock.connectGitHub.mockResolvedValue({
       clientId: 'client-1',
@@ -254,6 +258,25 @@ describe('SettingsView Codex connection controls', () => {
 
     expect(googleHelp.open).toBe(false);
     expect(userIdHelp.open).toBe(false);
+  });
+
+  it('removes Google connection guidance after the account is linked', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: false,
+      googleConfigured: true,
+      account: {
+        id: 'account-1',
+        email: 'ada@example.com',
+        displayName: 'Ada',
+        emailVerified: true,
+      },
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    expect(await screen.findByText('ada@example.com')).toBeTruthy();
+    expect(screen.queryByText('googleAccountIntroTitle')).toBeNull();
   });
 
   it('places high-frequency preferences before account login forms', () => {
