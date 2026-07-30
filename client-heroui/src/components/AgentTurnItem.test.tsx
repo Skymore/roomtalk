@@ -80,8 +80,8 @@ describe('AgentTurnItem', () => {
     expect(screen.getByTestId('turn-avatar').getAttribute('aria-label')).toBe('Codex');
   });
 
-  it('offers selective restore only for a completed Codex checkpoint', async () => {
-    const restore = vi.fn().mockResolvedValue('1 file restored; 1 conflict kept');
+  it('offers both revision boundaries for a completed Codex checkpoint', async () => {
+    const restore = vi.fn().mockResolvedValue('1 file restored');
     render(
       <AgentTurnItem
         turn={turn({
@@ -97,8 +97,10 @@ describe('AgentTurnItem', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestore' }));
-    await waitFor(() => expect(restore).toHaveBeenCalledOnce());
-    expect(screen.getByRole('status').textContent).toBe('1 file restored; 1 conflict kept');
+    await waitFor(() => expect(restore).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }), 'before'));
+    fireEvent.click(screen.getByRole('button', { name: 'agentCheckpointRestoreAfter' }));
+    await waitFor(() => expect(restore).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'turn-1' }), 'after'));
+    expect(screen.getByRole('status').textContent).toBe('1 file restored');
   });
 
   it('shows the persisted preparation phase while a turn is starting', () => {

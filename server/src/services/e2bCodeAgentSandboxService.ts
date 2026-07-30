@@ -937,9 +937,10 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
 
   async previewWorkspaceCheckpoint(
     handle: CodeAgentSandboxHandle,
-    archive: CodeAgentWorkspaceCheckpointArchive
+    archive: CodeAgentWorkspaceCheckpointArchive,
+    target: 'before' | 'after' = 'before',
   ): Promise<CodeAgentWorkspaceCheckpointPreview> {
-    return this.runWorkspaceCheckpointOperation(handle, archive, [], 'preview');
+    return this.runWorkspaceCheckpointOperation(handle, archive, [], target === 'before' ? 'preview-before' : 'preview-after');
   }
 
   async restoreWorkspaceCheckpoint(
@@ -961,7 +962,7 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     handle: CodeAgentSandboxHandle,
     archive: CodeAgentWorkspaceCheckpointArchive,
     paths: string[],
-    operation: 'preview' | 'before' | 'after'
+    operation: 'preview-before' | 'preview-after' | 'before' | 'after'
   ): Promise<CodeAgentWorkspaceCheckpointPreview> {
     const connected = await this.driver.connect(handle.id);
     if (!connected.commands?.run || !connected.files?.write || !connected.files?.read) {
@@ -1016,7 +1017,8 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
       '        unavailable.append(path)',
       '        continue',
       '    exists = target.is_file() and not target.is_symlink()',
-      '    compare_label = "before" if operation == "after" else "after"',
+      '    target_label = "after" if operation in ("after", "preview-after") else "before"',
+      '    compare_label = "before" if target_label == "after" else "after"',
       '    expected_exists = bool(item.get(f"{compare_label}Exists"))',
       '    current_hash = hashlib.sha256(target.read_bytes()).hexdigest() if exists else None',
       '    if exists == expected_exists and (not exists or current_hash == item.get(f"{compare_label}Sha256")):',

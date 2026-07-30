@@ -19,6 +19,7 @@ import { ObservabilityEventInput } from './observabilityEvents';
 import { CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { CodexConnectionError } from './codexConnection';
 import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata } from './aiStreamRecovery';
+import { CodeAgentCheckpointBoundary, CodeAgentCheckpointRestorePlan, CodeAgentWorkspaceRevisionRecord } from '../repositories/store';
 
 type RoomEmit = {
   roomId: string;
@@ -69,7 +70,11 @@ class MemoryCodeAgentStore {
     backendSessionIdBefore?: string;
     backendLastTurnIdBefore?: string;
     workspaceCheckpoint?: any;
+    workspaceParentRevisionId?: string;
+    workspaceRevisionId?: string;
   }>();
+  workspaceRevisions = new Map<string, CodeAgentWorkspaceRevisionRecord>();
+  roomRevisionHeads = new Map<string, string>();
   mediaAssetsByMessageId = new Map<string, MediaAsset>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
@@ -82,6 +87,15 @@ class MemoryCodeAgentStore {
     this.members.set(initialRoom.id, [
       { roomId: initialRoom.id, clientId: initialRoom.creatorId, role: 'owner', joinedAt: initialRoom.createdAt },
     ]);
+    const rootRevisionId = `root:${initialRoom.id}`;
+    this.workspaceRevisions.set(rootRevisionId, {
+      id: rootRevisionId,
+      roomId: initialRoom.id,
+      kind: 'root',
+      traversable: true,
+      createdAt: initialRoom.createdAt,
+    });
+    this.roomRevisionHeads.set(initialRoom.id, rootRevisionId);
   }
 
   async getRoomById(roomId: string) {
@@ -225,6 +239,9 @@ class MemoryCodeAgentStore {
     this.turnInternals.set(input.turn.id, {
       ...(input.backendSessionIdBefore ? { backendSessionIdBefore: input.backendSessionIdBefore } : {}),
       ...(input.backendLastTurnIdBefore ? { backendLastTurnIdBefore: input.backendLastTurnIdBefore } : {}),
+      ...(input.turn.backend === 'codex-app-server'
+        ? { workspaceParentRevisionId: this.roomRevisionHeads.get(input.roomId)! }
+        : {}),
     });
     const placeholder = input.placeholder as Message;
     this.messages.set(input.roomId, [...(this.messages.get(input.roomId) || []), placeholder]);
@@ -324,6 +341,27 @@ class MemoryCodeAgentStore {
       ...(this.turnInternals.get(turn.id) || {}),
       ...(input.workspaceCheckpoint ? { workspaceCheckpoint: input.workspaceCheckpoint } : {}),
     });
+    if (turn.backend === 'codex-app-server') {
+      const internal = this.turnInternals.get(turn.id)!;
+      const revisionId = `turn:${turn.id}`;
+      const parentRevisionId = internal.workspaceParentRevisionId || this.roomRevisionHeads.get(turn.roomId)!;
+      this.workspaceRevisions.set(revisionId, {
+        id: revisionId,
+        roomId: turn.roomId,
+        parentRevisionId,
+        kind: 'turn',
+        turnId: turn.id,
+        ...(input.sessionId ? { backendSessionId: input.sessionId } : {}),
+        ...(input.backendTurnId ? { backendLastTurnId: input.backendTurnId } : {}),
+        traversable: Boolean(
+          input.workspaceCheckpoint?.status === 'ready'
+          && input.workspaceCheckpoint?.manifest?.files?.every((file: any) => file.restorable),
+        ),
+        createdAt: input.completedAt,
+      });
+      internal.workspaceRevisionId = revisionId;
+      this.roomRevisionHeads.set(turn.roomId, revisionId);
+    }
     await this.releaseCodeAgentRoomLease(
       input.claim.roomId,
       input.claim.turnId,
@@ -396,6 +434,70 @@ class MemoryCodeAgentStore {
     };
   }
 
+  async readCodeAgentCheckpointRestorePlan(
+    roomId: string,
+    turnId: string,
+    targetBoundary: CodeAgentCheckpointBoundary = 'before',
+  ): Promise<CodeAgentCheckpointRestorePlan | null> {
+    const selected = this.turnInternals.get(turnId);
+    const selectedRevision = selected?.workspaceRevisionId
+      ? this.workspaceRevisions.get(selected.workspaceRevisionId)
+      : undefined;
+    const currentRevisionId = this.roomRevisionHeads.get(roomId);
+    const targetRevisionId = targetBoundary === 'after'
+      ? selectedRevision?.id
+      : selectedRevision?.parentRevisionId;
+    if (!selected || !selectedRevision || !currentRevisionId || !targetRevisionId) return null;
+
+    const sourcePath: CodeAgentWorkspaceRevisionRecord[] = [];
+    const sourceIndex = new Map<string, number>();
+    let cursor: string | undefined = currentRevisionId;
+    while (cursor) {
+      const revision = this.workspaceRevisions.get(cursor);
+      if (!revision) throw new Error(`missing revision ${cursor}`);
+      sourceIndex.set(cursor, sourcePath.length);
+      sourcePath.push(revision);
+      cursor = revision.parentRevisionId;
+    }
+    const targetBranch: CodeAgentWorkspaceRevisionRecord[] = [];
+    cursor = targetRevisionId;
+    while (cursor && !sourceIndex.has(cursor)) {
+      const revision = this.workspaceRevisions.get(cursor);
+      if (!revision) throw new Error(`missing revision ${cursor}`);
+      targetBranch.push(revision);
+      cursor = revision.parentRevisionId;
+    }
+    if (!cursor) throw new Error('missing common revision ancestor');
+    const undo = sourcePath.slice(0, sourceIndex.get(cursor)!);
+    const redo = targetBranch.reverse();
+    const traversed = [...undo, ...redo];
+    if (traversed.some(revision => !revision.traversable)) throw new Error('incomplete workspace revision');
+    const steps = [
+      ...undo.map(revision => ({ revision, direction: 'before' as const })),
+      ...redo.map(revision => ({ revision, direction: 'after' as const })),
+    ].flatMap(({ revision, direction }) => {
+      if (!revision.turnId) return [];
+      const checkpoint = this.turnInternals.get(revision.turnId)?.workspaceCheckpoint;
+      if (!checkpoint) throw new Error(`missing checkpoint ${revision.turnId}`);
+      return [{ revisionId: revision.id, turnId: revision.turnId, direction, checkpoint }];
+    });
+    return {
+      roomId,
+      checkpointTurnId: turnId,
+      targetBoundary,
+      currentRevisionId,
+      targetRevisionId,
+      alreadyAtTarget: traversed.every(revision => revision.kind === 'restore'),
+      ...((targetBoundary === 'before' ? selected.backendSessionIdBefore : selectedRevision.backendSessionId)
+        ? { targetBackendSessionId: targetBoundary === 'before' ? selected.backendSessionIdBefore : selectedRevision.backendSessionId }
+        : {}),
+      ...((targetBoundary === 'before' ? selected.backendLastTurnIdBefore : selectedRevision.backendLastTurnId)
+        ? { targetBackendLastTurnId: targetBoundary === 'before' ? selected.backendLastTurnIdBefore : selectedRevision.backendLastTurnId }
+        : {}),
+      steps,
+    };
+  }
+
   async commitCodeAgentCheckpointRestore(input: any) {
     const lease = this.roomLeases.get(input.roomId);
     const room = this.rooms.get(input.roomId);
@@ -405,6 +507,7 @@ class MemoryCodeAgentStore {
       || lease.turnId !== input.lease.turnId
       || lease.ownerId !== input.lease.ownerId
       || lease.fence !== input.lease.fence
+      || this.roomRevisionHeads.get(input.roomId) !== input.sourceRevisionId
     ) return null;
     const updatedRoom = {
       ...room,
@@ -413,8 +516,23 @@ class MemoryCodeAgentStore {
       codeAgentStatus: 'idle' as const,
     };
     this.rooms.set(input.roomId, updatedRoom);
+    const revision: CodeAgentWorkspaceRevisionRecord = {
+      id: input.resultRevisionId,
+      roomId: input.roomId,
+      parentRevisionId: input.targetRevisionId,
+      kind: 'restore',
+      restoreId: input.restoreId,
+      restoredFromRevisionId: input.sourceRevisionId,
+      restoreTargetRevisionId: input.targetRevisionId,
+      ...(input.sessionId ? { backendSessionId: input.sessionId } : {}),
+      ...(input.lastTurnId ? { backendLastTurnId: input.lastTurnId } : {}),
+      traversable: true,
+      createdAt: input.restoredAt,
+    };
+    this.workspaceRevisions.set(revision.id, revision);
+    this.roomRevisionHeads.set(input.roomId, revision.id);
     this.roomLeases.delete(input.roomId);
-    return { room: updatedRoom, turn };
+    return { room: updatedRoom, turn, revision };
   }
 
   async appendMessage(message: Message) {
@@ -884,7 +1002,7 @@ const createService = (options: {
 };
 
 describe('CodeAgentSessionService', () => {
-  it('restores only safe files and forks Codex context at the pre-turn boundary', async () => {
+  it('restores a workspace revision atomically and forks Codex context at the pre-turn boundary', async () => {
     const store = new MemoryCodeAgentStore(room({
       codeAgentBackend: 'codex-app-server',
       codeAgentSessionId: 'thread-current',
@@ -939,9 +1057,22 @@ describe('CodeAgentSessionService', () => {
       backendSessionIdBefore: 'thread-before',
       backendLastTurnIdBefore: 'turn-before',
       workspaceCheckpoint: checkpoint,
+      workspaceParentRevisionId: 'root:room-1',
+      workspaceRevisionId: 'turn:turn-checkpoint',
     });
+    store.workspaceRevisions.set('turn:turn-checkpoint', {
+      id: 'turn:turn-checkpoint',
+      roomId: 'room-1',
+      parentRevisionId: 'root:room-1',
+      kind: 'turn',
+      turnId: 'turn-checkpoint',
+      backendSessionId: 'thread-current',
+      backendLastTurnId: 'turn-current',
+      traversable: true,
+      createdAt: checkpointTurn.completedAt!,
+    });
+    store.roomRevisionHeads.set('room-1', 'turn:turn-checkpoint');
 
-    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'src/conflict.txt', content: 'user edit' });
     let forkRequest: any;
     (service as any).runCodexThreadQuery = async (input: any) => {
       forkRequest = input.request;
@@ -960,17 +1091,251 @@ describe('CodeAgentSessionService', () => {
 
     assert.deepEqual(restored, {
       success: true,
-      restoredPaths: ['src/safe.txt'],
-      conflictPaths: ['src/conflict.txt'],
+      restoredPaths: ['src/conflict.txt', 'src/safe.txt'],
+      conflictPaths: [],
       unavailablePaths: [],
       sessionId: 'thread-forked',
+      sourceRevisionId: 'turn:turn-checkpoint',
+      targetRevisionId: 'root:room-1',
+      resultRevisionId: 'restore:restore-1',
     });
     assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'src/safe.txt')).content, 'before safe');
-    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'src/conflict.txt')).content, 'user edit');
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'src/conflict.txt')).content, 'before conflict');
     assert.equal(forkRequest.threadId, 'thread-before');
     assert.equal(forkRequest.lastTurnId, 'turn-before');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'thread-forked');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentLastTurnId, 'turn-before');
+  });
+
+  it('moves backward and forward across workspace revision branches', async () => {
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'codex-app-server',
+      codeAgentSessionId: 'thread-after-c',
+      codeAgentLastTurnId: 'backend-c',
+      codeAgentStatus: 'idle',
+    }));
+    const mediaObjectStorage = new MemoryMediaObjectStorage();
+    const { lifecycle, sandboxService, service } = createService({
+      store,
+      backend: 'codex-app-server',
+      codexBackendEnabled: true,
+      mediaObjectStorage,
+      ids: ['restore-back', 'restore-noop', 'restore-forward', 'restore-leaf'],
+    });
+    const ready = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ready.ok, true);
+    if (!ready.ok) return;
+
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content: 'S0' });
+    const checkpoints: any[] = [];
+    for (const [turnId, content] of [['turn-a', 'A'], ['turn-b', 'B'], ['turn-c', 'C']] as const) {
+      await sandboxService.beginWorkspaceCheckpoint(ready.handle, turnId);
+      await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content });
+      const archive = await sandboxService.finalizeWorkspaceCheckpoint(ready.handle, turnId);
+      const objectKey = `code-agent-checkpoints/v1/room-1/${turnId}.tar.gz`;
+      await mediaObjectStorage.putMediaObject({
+        objectKey,
+        body: archive.body,
+        mimeType: 'application/gzip',
+        byteSize: archive.byteSize,
+      });
+      checkpoints.push({ ...archive, objectKey });
+    }
+
+    const turnIds = ['turn-a', 'turn-b', 'turn-c'];
+    const backendBefore = [
+      ['thread-root', 'backend-root'],
+      ['thread-after-a', 'backend-a'],
+      ['thread-after-b', 'backend-b'],
+    ];
+    let parentRevisionId = 'root:room-1';
+    turnIds.forEach((turnId, index) => {
+      const revisionId = `turn:${turnId}`;
+      const checkpoint = {
+        schemaVersion: 1 as const,
+        status: 'ready' as const,
+        objectKey: checkpoints[index].objectKey,
+        archiveByteSize: checkpoints[index].byteSize,
+        manifest: checkpoints[index].manifest,
+      };
+      const turnRecord: RoomAgentTurn = {
+        id: turnId,
+        roomId: 'room-1',
+        status: 'complete',
+        startedAt: `2026-05-03T00:0${index}:00.000Z`,
+        completedAt: `2026-05-03T00:0${index}:30.000Z`,
+        backend: 'codex-app-server',
+        assistantName: 'Codex',
+        updatedAt: `2026-05-03T00:0${index}:30.000Z`,
+        workspaceCheckpoint: { status: 'ready', fileCount: 1, restorableFileCount: 1 },
+      };
+      store.agentTurns.set(turnId, turnRecord);
+      store.turnInternals.set(turnId, {
+        backendSessionIdBefore: backendBefore[index][0],
+        backendLastTurnIdBefore: backendBefore[index][1],
+        workspaceCheckpoint: checkpoint,
+        workspaceParentRevisionId: parentRevisionId,
+        workspaceRevisionId: revisionId,
+      });
+      store.workspaceRevisions.set(revisionId, {
+        id: revisionId,
+        roomId: 'room-1',
+        parentRevisionId,
+        kind: 'turn',
+        turnId,
+        backendSessionId: `thread-after-${turnId.at(-1)}`,
+        backendLastTurnId: `backend-${turnId.at(-1)}`,
+        traversable: true,
+        createdAt: turnRecord.completedAt!,
+      });
+      parentRevisionId = revisionId;
+    });
+    store.roomRevisionHeads.set('room-1', 'turn:turn-c');
+
+    const forkRequests: any[] = [];
+    (service as any).runCodexThreadQuery = async (input: any) => {
+      forkRequests.push(input.request);
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'thread_fork_result',
+        threadId: `fork-${forkRequests.length}`,
+      };
+    };
+
+    const backward = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-b',
+    });
+    assert.equal(backward.success, true);
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'state.txt')).content, 'A');
+    assert.equal(backward.sourceRevisionId, 'turn:turn-c');
+    assert.equal(backward.targetRevisionId, 'turn:turn-a');
+    assert.equal(store.workspaceRevisions.get('restore:restore-back')?.parentRevisionId, 'turn:turn-a');
+    assert.equal(forkRequests[0].threadId, 'thread-after-a');
+    assert.equal(forkRequests[0].lastTurnId, 'backend-a');
+
+    const noOp = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-b',
+    });
+    assert.equal(noOp.success, true);
+    assert.equal(noOp.alreadyAtTarget, true);
+    assert.equal(forkRequests.length, 1);
+
+    const forward = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-c',
+    });
+    assert.equal(forward.success, true);
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'state.txt')).content, 'B');
+    assert.equal(forward.sourceRevisionId, 'restore:restore-back');
+    assert.equal(forward.targetRevisionId, 'turn:turn-b');
+    assert.equal(store.workspaceRevisions.get('restore:restore-forward')?.parentRevisionId, 'turn:turn-b');
+    assert.equal(forkRequests[1].threadId, 'thread-after-b');
+    assert.equal(forkRequests[1].lastTurnId, 'backend-b');
+
+    const leaf = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-c',
+      targetBoundary: 'after',
+    });
+    assert.equal(leaf.success, true);
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'state.txt')).content, 'C');
+    assert.equal(leaf.sourceRevisionId, 'restore:restore-forward');
+    assert.equal(leaf.targetRevisionId, 'turn:turn-c');
+    assert.equal(store.workspaceRevisions.get('restore:restore-leaf')?.parentRevisionId, 'turn:turn-c');
+    assert.equal(forkRequests[2].threadId, 'thread-after-c');
+    assert.equal(forkRequests[2].lastTurnId, 'backend-c');
+  });
+
+  it('rolls back an earlier DAG step when an intermediate user edit makes the target ambiguous', async () => {
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'codex-app-server',
+      codeAgentSessionId: 'thread-after-b',
+      codeAgentLastTurnId: 'backend-b',
+      codeAgentStatus: 'idle',
+    }));
+    const mediaObjectStorage = new MemoryMediaObjectStorage();
+    const { lifecycle, sandboxService, service } = createService({
+      store,
+      backend: 'codex-app-server',
+      codexBackendEnabled: true,
+      mediaObjectStorage,
+      ids: ['restore-conflict'],
+    });
+    const ready = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ready.ok, true);
+    if (!ready.ok) return;
+
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content: 'S0' });
+    await sandboxService.beginWorkspaceCheckpoint(ready.handle, 'turn-a');
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content: 'A' });
+    const archiveA = await sandboxService.finalizeWorkspaceCheckpoint(ready.handle, 'turn-a');
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content: 'USER' });
+    await sandboxService.beginWorkspaceCheckpoint(ready.handle, 'turn-b');
+    await sandboxService.writeWorkspaceFile(ready.handle, { path: 'state.txt', content: 'B' });
+    const archiveB = await sandboxService.finalizeWorkspaceCheckpoint(ready.handle, 'turn-b');
+
+    for (const [turnId, archive] of [['turn-a', archiveA], ['turn-b', archiveB]] as const) {
+      const objectKey = `code-agent-checkpoints/v1/room-1/${turnId}.tar.gz`;
+      await mediaObjectStorage.putMediaObject({ objectKey, body: archive.body, mimeType: 'application/gzip', byteSize: archive.byteSize });
+      const parentRevisionId = turnId === 'turn-a' ? 'root:room-1' : 'turn:turn-a';
+      const revisionId = `turn:${turnId}`;
+      store.agentTurns.set(turnId, {
+        id: turnId,
+        roomId: 'room-1',
+        status: 'complete',
+        startedAt: '2026-05-03T00:00:00.000Z',
+        completedAt: '2026-05-03T00:01:00.000Z',
+        backend: 'codex-app-server',
+        assistantName: 'Codex',
+        updatedAt: '2026-05-03T00:01:00.000Z',
+        workspaceCheckpoint: { status: 'ready', fileCount: 1, restorableFileCount: 1 },
+      });
+      store.turnInternals.set(turnId, {
+        backendSessionIdBefore: turnId === 'turn-a' ? 'thread-root' : 'thread-after-a',
+        backendLastTurnIdBefore: turnId === 'turn-a' ? 'backend-root' : 'backend-a',
+        workspaceCheckpoint: {
+          schemaVersion: 1,
+          status: 'ready',
+          objectKey,
+          archiveByteSize: archive.byteSize,
+          manifest: archive.manifest,
+        },
+        workspaceParentRevisionId: parentRevisionId,
+        workspaceRevisionId: revisionId,
+      });
+      store.workspaceRevisions.set(revisionId, {
+        id: revisionId,
+        roomId: 'room-1',
+        parentRevisionId,
+        kind: 'turn',
+        turnId,
+        traversable: true,
+        createdAt: '2026-05-03T00:01:00.000Z',
+      });
+    }
+    store.roomRevisionHeads.set('room-1', 'turn:turn-b');
+    let forked = false;
+    (service as any).runCodexThreadQuery = async () => {
+      forked = true;
+      throw new Error('must not fork on conflict');
+    };
+
+    const result = await service.restoreWorkspaceCheckpoint({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-a',
+    });
+    assert.equal(result.success, false);
+    assert.deepEqual(result.conflictPaths, ['state.txt']);
+    assert.equal((await sandboxService.readWorkspaceFile(ready.handle, 'state.txt')).content, 'B');
+    assert.equal(store.roomRevisionHeads.get('room-1'), 'turn:turn-b');
+    assert.equal(forked, false);
   });
 
   it('signs linked object-storage images for the runner without writing sandbox files', async () => {

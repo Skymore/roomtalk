@@ -483,7 +483,8 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
 
   async previewWorkspaceCheckpoint(
     handle: CodeAgentSandboxHandle,
-    archive: CodeAgentWorkspaceCheckpointArchive
+    archive: CodeAgentWorkspaceCheckpointArchive,
+    target: 'before' | 'after' = 'before',
   ): Promise<CodeAgentWorkspaceCheckpointPreview> {
     this.consumeFailure('connect');
     const current = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
@@ -495,7 +496,9 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
         continue;
       }
       const body = current.get(file.path);
-      const safe = Boolean(body) === file.afterExists && (!body || digest(body) === file.afterSha256);
+      const expectedExists = target === 'before' ? file.afterExists : file.beforeExists;
+      const expectedSha256 = target === 'before' ? file.afterSha256 : file.beforeSha256;
+      const safe = Boolean(body) === expectedExists && (!body || digest(body) === expectedSha256);
       (safe ? preview.safePaths : preview.conflictPaths).push(file.path);
     }
     return preview;

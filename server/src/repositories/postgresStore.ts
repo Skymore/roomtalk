@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
+import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -66,6 +66,7 @@ type RoomRow = {
   sandbox_code_agent_source_ref?: string | null;
   code_agent_session_id?: string | null;
   code_agent_last_turn_id?: string | null;
+  code_agent_workspace_revision_id?: string | null;
   code_agent_status?: RoomCodeAgentStatus | null;
   code_agent_access?: string | null;
   code_agent_mode?: string | null;
@@ -242,6 +243,23 @@ type RoomAgentTurnRow = {
   backend_session_id_after?: string | null;
   backend_turn_id_after?: string | null;
   workspace_checkpoint?: unknown;
+  workspace_parent_revision_id?: string | null;
+  workspace_revision_id?: string | null;
+};
+
+type CodeAgentWorkspaceRevisionRow = {
+  id: string;
+  room_id: string;
+  parent_revision_id: string | null;
+  kind: CodeAgentWorkspaceRevisionRecord['kind'];
+  turn_id: string | null;
+  restore_id: string | null;
+  restored_from_revision_id: string | null;
+  restore_target_revision_id: string | null;
+  backend_session_id: string | null;
+  backend_last_turn_id: string | null;
+  traversable: boolean;
+  created_at: string | Date;
 };
 
 type OutboxEventRow = {
@@ -300,7 +318,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -311,7 +329,8 @@ const CLAIMED_ASSISTANT_RUN_COLUMNS = ASSISTANT_RUN_COLUMNS
   .split(', ')
   .map(column => `run.${column}`)
   .join(', ');
-const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at, backend_session_id_before, backend_last_turn_id_before, backend_session_id_after, backend_turn_id_after, workspace_checkpoint';
+const ROOM_AGENT_TURN_COLUMNS = 'id, room_id, status, started_at, completed_at, final_message_id, backend, assistant_name, phase, phase_message, last_heartbeat_at, updated_at, backend_session_id_before, backend_last_turn_id_before, backend_session_id_after, backend_turn_id_after, workspace_checkpoint, workspace_parent_revision_id, workspace_revision_id';
+const CODE_AGENT_WORKSPACE_REVISION_COLUMNS = 'id, room_id, parent_revision_id, kind, turn_id, restore_id, restored_from_revision_id, restore_target_revision_id, backend_session_id, backend_last_turn_id, traversable, created_at';
 const OUTBOX_EVENT_COLUMNS = 'id, event_type, aggregate_type, aggregate_id, room_id, payload, status, attempts, available_at, locked_at, locked_by, processed_at, last_error, created_at, updated_at';
 const CLAIMED_OUTBOX_EVENT_COLUMNS = 'e.id, e.event_type, e.aggregate_type, e.aggregate_id, e.room_id, e.payload, e.status, e.attempts, e.available_at, e.locked_at, e.locked_by, e.processed_at, e.last_error, e.created_at, e.updated_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
@@ -427,6 +446,23 @@ const mapCodeAgentRoomLease = (row: CodeAgentRoomLeaseRow): CodeAgentRoomLease =
   ownerId: row.owner_id,
   fence: Number(row.fence),
   expiresAt: toIsoString(row.expires_at),
+});
+
+const mapCodeAgentWorkspaceRevision = (
+  row: CodeAgentWorkspaceRevisionRow,
+): CodeAgentWorkspaceRevisionRecord => ({
+  id: row.id,
+  roomId: row.room_id,
+  ...(row.parent_revision_id ? { parentRevisionId: row.parent_revision_id } : {}),
+  kind: row.kind,
+  ...(row.turn_id ? { turnId: row.turn_id } : {}),
+  ...(row.restore_id ? { restoreId: row.restore_id } : {}),
+  ...(row.restored_from_revision_id ? { restoredFromRevisionId: row.restored_from_revision_id } : {}),
+  ...(row.restore_target_revision_id ? { restoreTargetRevisionId: row.restore_target_revision_id } : {}),
+  ...(row.backend_session_id ? { backendSessionId: row.backend_session_id } : {}),
+  ...(row.backend_last_turn_id ? { backendLastTurnId: row.backend_last_turn_id } : {}),
+  traversable: row.traversable,
+  createdAt: toIsoString(row.created_at),
 });
 
 const toOptionalNumber = (value: number | string | null): number | undefined => {
@@ -978,6 +1014,20 @@ export class PostgresStore implements DurableRoomStore {
         } catch (error) {
           this.logger.error('Failed to delete orphaned media object', { error, objectKey: derivedObjectKey });
         }
+      }
+    }
+  }
+
+  private async deleteOrphanedCheckpointObjects(objectKeys: string[]): Promise<void> {
+    if (objectKeys.length === 0 || !this.mediaObjectStorage?.deleteMediaObject) {
+      return;
+    }
+
+    for (const objectKey of Array.from(new Set(objectKeys))) {
+      try {
+        await this.mediaObjectStorage.deleteMediaObject(objectKey);
+      } catch (error) {
+        this.logger.error('Failed to delete orphaned workspace checkpoint object', { error, objectKey });
       }
     }
   }
@@ -1917,6 +1967,7 @@ export class PostgresStore implements DurableRoomStore {
 
   async clearRoomMessages(roomId: string): Promise<number> {
     let orphanedObjectKeys: string[] = [];
+    let orphanedCheckpointObjectKeys: string[] = [];
     try {
       const deleted = await this.transaction(async client => {
         // Clearing removes every message, so every asset in the room is orphaned.
@@ -1925,7 +1976,20 @@ export class PostgresStore implements DurableRoomStore {
           [roomId]
         );
         orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+        const checkpoints = await client.query<{ object_key: string }>(
+          `SELECT DISTINCT workspace_checkpoint->>'objectKey' AS object_key
+          FROM room_agent_turns
+          WHERE room_id = $1
+            AND workspace_checkpoint->>'objectKey' IS NOT NULL`,
+          [roomId],
+        );
+        orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);
 
+        await client.query(
+          'UPDATE rooms SET code_agent_workspace_revision_id = NULL WHERE id = $1',
+          [roomId],
+        );
+        await client.query('DELETE FROM code_agent_workspace_revisions WHERE room_id = $1', [roomId]);
         await client.query('DELETE FROM room_agent_turns WHERE room_id = $1', [roomId]);
         const result = await client.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
         const removed = result.rowCount || 0;
@@ -1942,6 +2006,7 @@ export class PostgresStore implements DurableRoomStore {
       });
 
       await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      await this.deleteOrphanedCheckpointObjects(orphanedCheckpointObjectKeys);
       return deleted;
     } catch (error) {
       this.logger.error('Error clearing PostgreSQL room messages', { error, roomId });
@@ -2168,6 +2233,19 @@ export class PostgresStore implements DurableRoomStore {
         );
         if (!room.rows[0]) return { outcome: 'missing_room' as const };
 
+        let workspaceParentRevisionId: string | null = null;
+        if (input.turn.backend === 'codex-app-server') {
+          const rootRevisionId = `root:${input.roomId}`;
+          await client.query(
+            `INSERT INTO code_agent_workspace_revisions (
+              id, room_id, kind, traversable, created_at
+            ) VALUES ($1, $2, 'root', TRUE, $3::timestamptz)
+            ON CONFLICT (id) DO NOTHING`,
+            [rootRevisionId, input.roomId, room.rows[0].created_at],
+          );
+          workspaceParentRevisionId = room.rows[0].code_agent_workspace_revision_id || rootRevisionId;
+        }
+
         let queuedMessage: MessageRow | undefined;
         if (input.queuedMessageId) {
           const queued = await client.query<MessageRow>(
@@ -2247,7 +2325,7 @@ export class PostgresStore implements DurableRoomStore {
             lease_owner,
             lease_fence
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
           )
           RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
           [
@@ -2268,6 +2346,8 @@ export class PostgresStore implements DurableRoomStore {
             null,
             null,
             null,
+            workspaceParentRevisionId,
+            null,
             input.ownerId,
             Number(leaseRow.fence),
           ],
@@ -2277,11 +2357,12 @@ export class PostgresStore implements DurableRoomStore {
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
           SET code_agent_status = 'running',
+            code_agent_workspace_revision_id = COALESCE(code_agent_workspace_revision_id, $3),
             last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
             updated_at = clock_timestamp()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
-          [input.roomId, input.now],
+          [input.roomId, input.now, workspaceParentRevisionId],
         );
         if (!updatedRoom.rows[0]) throw new Error('Failed to mark code-agent room running');
 
@@ -2509,7 +2590,7 @@ export class PostgresStore implements DurableRoomStore {
       const roomStatus = actualOutcome === 'complete' || actualOutcome === 'cancelled'
         ? 'idle'
         : 'error';
-      const room = await client.query<RoomRow>(
+      let room = await client.query<RoomRow>(
         `UPDATE rooms
         SET code_agent_status = $2,
           code_agent_session_id = CASE
@@ -2531,7 +2612,7 @@ export class PostgresStore implements DurableRoomStore {
       const finalMessageId = actualOutcome === 'cancelled'
         ? null
         : (savedMessage?.id || input.finalMessageId || null);
-      const turn = await client.query<RoomAgentTurnRow>(
+      let turn = await client.query<RoomAgentTurnRow>(
         `UPDATE room_agent_turns
         SET status = $5,
           completed_at = $6::timestamptz,
@@ -2564,6 +2645,58 @@ export class PostgresStore implements DurableRoomStore {
       );
       if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
 
+      if (turn.rows[0].backend === 'codex-app-server') {
+        const parentRevisionId = turn.rows[0].workspace_parent_revision_id;
+        if (!parentRevisionId) {
+          throw new Error(`Code-agent turn ${claim.turnId} has no workspace parent revision`);
+        }
+        const revisionId = `turn:${claim.turnId}`;
+        const checkpoint = input.workspaceCheckpoint;
+        const traversable = Boolean(
+          checkpoint?.status === 'ready'
+          && checkpoint.manifest
+          && checkpoint.manifest.files.every(file => file.restorable)
+          && (checkpoint.manifest.files.length === 0 || Boolean(checkpoint.objectKey))
+        );
+        await client.query(
+          `INSERT INTO code_agent_workspace_revisions (
+            id, room_id, parent_revision_id, kind, turn_id,
+            backend_session_id, backend_last_turn_id, traversable, created_at
+          ) VALUES ($1, $2, $3, 'turn', $4, $5, $6, $7, $8::timestamptz)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            revisionId,
+            claim.roomId,
+            parentRevisionId,
+            claim.turnId,
+            input.sessionId || null,
+            input.backendTurnId || null,
+            traversable,
+            input.completedAt,
+          ],
+        );
+        turn = await client.query<RoomAgentTurnRow>(
+          `UPDATE room_agent_turns
+          SET workspace_revision_id = $3
+          WHERE id = $1 AND room_id = $2
+          RETURNING ${ROOM_AGENT_TURN_COLUMNS}`,
+          [claim.turnId, claim.roomId, revisionId],
+        );
+        if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its workspace revision`);
+        room = await client.query<RoomRow>(
+          `UPDATE rooms
+          SET code_agent_workspace_revision_id = $3,
+            updated_at = clock_timestamp()
+          WHERE id = $1
+            AND code_agent_workspace_revision_id = $2
+          RETURNING ${ROOM_COLUMNS}`,
+          [claim.roomId, parentRevisionId, revisionId],
+        );
+        if (!room.rows[0]) {
+          throw new Error(`Code-agent turn ${claim.turnId} lost the workspace revision head`);
+        }
+      }
+
       await client.query(
         `DELETE FROM code_agent_room_leases
         WHERE room_id = $1
@@ -2587,7 +2720,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomAgentTurnRow>(
         `INSERT INTO room_agent_turns (${ROOM_AGENT_TURN_COLUMNS})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NULL, NULL, NULL, NULL)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
         ON CONFLICT (id) DO UPDATE SET
           status = EXCLUDED.status,
           completed_at = EXCLUDED.completed_at,
@@ -2652,6 +2785,138 @@ export class PostgresStore implements DurableRoomStore {
     };
   }
 
+  async readCodeAgentCheckpointRestorePlan(
+    roomId: string,
+    turnId: string,
+    targetBoundary: CodeAgentCheckpointBoundary = 'before',
+  ): Promise<CodeAgentCheckpointRestorePlan | null> {
+    const [roomResult, turnResult, revisionResult, checkpointResult] = await Promise.all([
+      this.pool.query<Pick<RoomRow, 'code_agent_workspace_revision_id'>>(
+        `SELECT code_agent_workspace_revision_id FROM rooms WHERE id = $1 LIMIT 1`,
+        [roomId],
+      ),
+      this.pool.query<RoomAgentTurnRow>(
+        `SELECT ${ROOM_AGENT_TURN_COLUMNS}
+        FROM room_agent_turns
+        WHERE room_id = $1 AND id = $2
+        LIMIT 1`,
+        [roomId, turnId],
+      ),
+      this.pool.query<CodeAgentWorkspaceRevisionRow>(
+        `SELECT ${CODE_AGENT_WORKSPACE_REVISION_COLUMNS}
+        FROM code_agent_workspace_revisions
+        WHERE room_id = $1`,
+        [roomId],
+      ),
+      this.pool.query<Pick<RoomAgentTurnRow, 'id' | 'workspace_checkpoint'>>(
+        `SELECT id, workspace_checkpoint
+        FROM room_agent_turns
+        WHERE room_id = $1 AND backend = 'codex-app-server'`,
+        [roomId],
+      ),
+    ]);
+    const selectedTurn = turnResult.rows[0];
+    const currentRevisionId = roomResult.rows[0]?.code_agent_workspace_revision_id;
+    if (!selectedTurn || !currentRevisionId || !selectedTurn.workspace_revision_id) return null;
+
+    const revisions = new Map(
+      revisionResult.rows.map(row => [row.id, row] as const),
+    );
+    const selectedRevision = revisions.get(selectedTurn.workspace_revision_id);
+    const targetRevisionId = targetBoundary === 'after'
+      ? selectedRevision?.id
+      : selectedRevision?.parent_revision_id;
+    if (!selectedRevision || selectedRevision.turn_id !== turnId || !targetRevisionId) return null;
+    if (!revisions.has(currentRevisionId) || !revisions.has(targetRevisionId)) {
+      throw new Error('Workspace revision graph is incomplete');
+    }
+
+    const sourcePath: CodeAgentWorkspaceRevisionRow[] = [];
+    const sourceIndex = new Map<string, number>();
+    const sourceVisited = new Set<string>();
+    let cursor: string | null = currentRevisionId;
+    while (cursor) {
+      if (sourceVisited.has(cursor)) throw new Error('Workspace revision graph contains a cycle');
+      sourceVisited.add(cursor);
+      const revision = revisions.get(cursor);
+      if (!revision) throw new Error(`Workspace revision ${cursor} is missing`);
+      sourceIndex.set(cursor, sourcePath.length);
+      sourcePath.push(revision);
+      cursor = revision.parent_revision_id;
+    }
+
+    const targetBranch: CodeAgentWorkspaceRevisionRow[] = [];
+    const targetVisited = new Set<string>();
+    cursor = targetRevisionId;
+    while (cursor && !sourceIndex.has(cursor)) {
+      if (targetVisited.has(cursor)) throw new Error('Workspace revision graph contains a cycle');
+      targetVisited.add(cursor);
+      const revision = revisions.get(cursor);
+      if (!revision) throw new Error(`Workspace revision ${cursor} is missing`);
+      targetBranch.push(revision);
+      cursor = revision.parent_revision_id;
+    }
+    if (!cursor) throw new Error('Workspace revision branches do not share a root');
+
+    const commonAncestorIndex = sourceIndex.get(cursor);
+    if (commonAncestorIndex === undefined) throw new Error('Workspace revision common ancestor is missing');
+    const undoRevisions = sourcePath.slice(0, commonAncestorIndex);
+    const redoRevisions = targetBranch.reverse();
+    const traversedRevisions = [...undoRevisions, ...redoRevisions];
+    const blockedRevision = traversedRevisions.find(revision => !revision.traversable);
+    if (blockedRevision) {
+      throw new Error(`Workspace history crosses incomplete revision ${blockedRevision.id}`);
+    }
+
+    const checkpointByTurnId = new Map<string, CodeAgentWorkspaceCheckpointRecord>();
+    checkpointResult.rows.forEach(row => {
+      const checkpoint = parseJsonValue<CodeAgentWorkspaceCheckpointRecord>(row.workspace_checkpoint);
+      if (checkpoint?.schemaVersion === 1) checkpointByTurnId.set(row.id, checkpoint);
+    });
+    const toStep = (
+      revision: CodeAgentWorkspaceRevisionRow,
+      direction: CodeAgentCheckpointRestoreStep['direction'],
+    ): CodeAgentCheckpointRestoreStep | null => {
+      if (revision.kind !== 'turn') return null;
+      if (!revision.turn_id) throw new Error(`Workspace revision ${revision.id} has no turn`);
+      const checkpoint = checkpointByTurnId.get(revision.turn_id);
+      if (
+        !checkpoint
+        || checkpoint.status !== 'ready'
+        || !checkpoint.manifest
+        || checkpoint.manifest.files.some(file => !file.restorable)
+      ) {
+        throw new Error(`Workspace revision ${revision.id} has no complete checkpoint`);
+      }
+      return {
+        revisionId: revision.id,
+        turnId: revision.turn_id,
+        direction,
+        checkpoint,
+      };
+    };
+    const steps = [
+      ...undoRevisions.map(revision => toStep(revision, 'before')),
+      ...redoRevisions.map(revision => toStep(revision, 'after')),
+    ].filter((step): step is CodeAgentCheckpointRestoreStep => Boolean(step));
+
+    return {
+      roomId,
+      checkpointTurnId: turnId,
+      targetBoundary,
+      currentRevisionId,
+      targetRevisionId,
+      alreadyAtTarget: traversedRevisions.every(revision => revision.kind === 'restore'),
+      ...((targetBoundary === 'before' ? selectedTurn.backend_session_id_before : selectedRevision.backend_session_id)
+        ? { targetBackendSessionId: (targetBoundary === 'before' ? selectedTurn.backend_session_id_before : selectedRevision.backend_session_id)! }
+        : {}),
+      ...((targetBoundary === 'before' ? selectedTurn.backend_last_turn_id_before : selectedRevision.backend_last_turn_id)
+        ? { targetBackendLastTurnId: (targetBoundary === 'before' ? selectedTurn.backend_last_turn_id_before : selectedRevision.backend_last_turn_id)! }
+        : {}),
+      steps,
+    };
+  }
+
   async commitCodeAgentCheckpointRestore(
     input: CodeAgentCheckpointRestoreCommitInput
   ): Promise<CodeAgentCheckpointRestoreCommitResult | null> {
@@ -2660,7 +2925,11 @@ export class PostgresStore implements DurableRoomStore {
         `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
         [input.roomId],
       );
-      if (!room.rows[0] || room.rows[0].code_agent_status === 'running') return null;
+      if (
+        !room.rows[0]
+        || room.rows[0].code_agent_status === 'running'
+        || room.rows[0].code_agent_workspace_revision_id !== input.sourceRevisionId
+      ) return null;
       const lease = await client.query<CodeAgentRoomLeaseRow>(
         `SELECT room_id, turn_id, owner_id, fence, expires_at
         FROM code_agent_room_leases
@@ -2679,28 +2948,54 @@ export class PostgresStore implements DurableRoomStore {
         WHERE room_id = $1
           AND id = $2
           AND workspace_checkpoint->>'status' = 'ready'
+          AND (
+            ($4 = 'before' AND workspace_parent_revision_id = $3)
+            OR ($4 = 'after' AND workspace_revision_id = $3)
+          )
         FOR UPDATE`,
-        [input.roomId, input.checkpointTurnId],
+        [input.roomId, input.checkpointTurnId, input.targetRevisionId, input.targetBoundary],
       );
       if (!turn.rows[0]) return null;
+
+      const revision = await client.query<CodeAgentWorkspaceRevisionRow>(
+        `INSERT INTO code_agent_workspace_revisions (
+          id, room_id, parent_revision_id, kind, restore_id,
+          restored_from_revision_id, restore_target_revision_id,
+          backend_session_id, backend_last_turn_id, traversable, created_at
+        ) VALUES ($1, $2, $3, 'restore', $4, $5, $3, $6, $7, TRUE, $8::timestamptz)
+        RETURNING ${CODE_AGENT_WORKSPACE_REVISION_COLUMNS}`,
+        [
+          input.resultRevisionId,
+          input.roomId,
+          input.targetRevisionId,
+          input.restoreId,
+          input.sourceRevisionId,
+          input.sessionId || null,
+          input.lastTurnId || null,
+          input.restoredAt,
+        ],
+      );
+      if (!revision.rows[0]) throw new Error(`Checkpoint restore lost revision ${input.resultRevisionId}`);
 
       const updatedRoom = await client.query<RoomRow>(
         `UPDATE rooms
         SET code_agent_session_id = $2,
           code_agent_last_turn_id = $3,
+          code_agent_workspace_revision_id = $4,
           code_agent_status = 'idle',
           updated_at = clock_timestamp()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
-        [input.roomId, input.sessionId || null, input.lastTurnId || null],
+        [input.roomId, input.sessionId || null, input.lastTurnId || null, input.resultRevisionId],
       );
       if (!updatedRoom.rows[0]) throw new Error(`Checkpoint restore lost room ${input.roomId}`);
       await client.query(
         `INSERT INTO code_agent_checkpoint_restores (
           id, room_id, checkpoint_turn_id, restored_by_client_id,
           backend_session_id_after, backend_last_turn_id_after,
-          restored_paths, conflict_paths, unavailable_paths, restored_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::timestamptz)`,
+          restored_paths, conflict_paths, unavailable_paths, restored_at,
+          source_revision_id, target_revision_id, result_revision_id, target_boundary
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::timestamptz, $11, $12, $13, $14)`,
         [
           input.restoreId,
           input.roomId,
@@ -2712,6 +3007,10 @@ export class PostgresStore implements DurableRoomStore {
           JSON.stringify(input.conflictPaths),
           JSON.stringify(input.unavailablePaths),
           input.restoredAt,
+          input.sourceRevisionId,
+          input.targetRevisionId,
+          input.resultRevisionId,
+          input.targetBoundary,
         ],
       );
       await client.query(
@@ -2719,7 +3018,11 @@ export class PostgresStore implements DurableRoomStore {
         WHERE room_id = $1 AND turn_id = $2 AND owner_id = $3 AND fence = $4`,
         [input.roomId, input.lease.turnId, input.lease.ownerId, input.lease.fence],
       );
-      return { room: mapRoom(updatedRoom.rows[0]), turn: mapRoomAgentTurn(turn.rows[0]) };
+      return {
+        room: mapRoom(updatedRoom.rows[0]),
+        turn: mapRoomAgentTurn(turn.rows[0]),
+        revision: mapCodeAgentWorkspaceRevision(revision.rows[0]),
+      };
     });
   }
 
@@ -4683,6 +4986,7 @@ export class PostgresStore implements DurableRoomStore {
 
   async deleteRoom(roomId: string, creatorId: string): Promise<boolean> {
     let orphanedObjectKeys: string[] = [];
+    let orphanedCheckpointObjectKeys: string[] = [];
     let deleted = false;
     try {
       await this.transaction(async client => {
@@ -4703,6 +5007,14 @@ export class PostgresStore implements DurableRoomStore {
           [roomId]
         );
         orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+        const checkpoints = await client.query<{ object_key: string }>(
+          `SELECT DISTINCT workspace_checkpoint->>'objectKey' AS object_key
+          FROM room_agent_turns
+          WHERE room_id = $1
+            AND workspace_checkpoint->>'objectKey' IS NOT NULL`,
+          [roomId],
+        );
+        orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);
 
         const removed = await client.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
         deleted = (removed.rowCount || 0) > 0;
@@ -4712,6 +5024,7 @@ export class PostgresStore implements DurableRoomStore {
         return false;
       }
       await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      await this.deleteOrphanedCheckpointObjects(orphanedCheckpointObjectKeys);
       this.logger.debug('Room deleted from PostgreSQL', { roomId, creatorId });
       return true;
     } catch (error) {

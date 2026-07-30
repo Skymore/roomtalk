@@ -1162,7 +1162,30 @@ describe('code-agent workspace socket handlers', () => {
       roomId: 'room-1',
       turnId: 'turn-1',
     }), { success: true, restoredPaths: ['src/App.tsx'], conflictPaths: [] });
-    assert.deepEqual(calls, [[{ roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1' }]]);
+    assert.deepEqual(calls, [[{
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      targetBoundary: 'before',
+    }]]);
+
+    await owner.socket.invoke<any>('restore_code_agent_checkpoint', {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      targetBoundary: 'after',
+    });
+    assert.deepEqual(calls[1], [{
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      targetBoundary: 'after',
+    }]);
+    assert.deepEqual(await owner.socket.invoke<any>('restore_code_agent_checkpoint', {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      targetBoundary: 'middle',
+    }), { success: false, error: 'Checkpoint boundary must be before or after' });
+    assert.equal(calls.length, 2);
 
     const regularMember = member('room-1', 'client-2');
     regularMember.role = 'member';

@@ -892,6 +892,11 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(stored?.backendLastTurnIdBefore, 'codex-turn-before');
     assert.deepEqual(stored?.checkpoint, checkpoint);
     assert.equal((await store.getRoomById(roomId))?.codeAgentLastTurnId, 'codex-turn-after');
+    const restorePlan = await store.readCodeAgentCheckpointRestorePlan(roomId, turnId);
+    assert.ok(restorePlan);
+    assert.equal(restorePlan?.currentRevisionId, `turn:${turnId}`);
+    assert.equal(restorePlan?.targetRevisionId, `root:${roomId}`);
+    assert.deepEqual(restorePlan?.steps.map(step => [step.turnId, step.direction]), [[turnId, 'before']]);
 
     assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), false);
     const restoreLease = await store.acquireCodeAgentRoomLease(
@@ -909,6 +914,10 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       restoreId: 'restore-1',
       restoredByClientId: 'event-test-owner',
       lease: restoreLease!,
+      sourceRevisionId: restorePlan!.currentRevisionId,
+      targetRevisionId: restorePlan!.targetRevisionId,
+      resultRevisionId: 'restore:restore-1',
+      targetBoundary: 'before',
       sessionId: 'thread-forked',
       lastTurnId: 'codex-turn-before',
       restoredPaths: ['src/App.tsx'],
@@ -922,13 +931,186 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const audit = await pool.query<{
       backend_session_id_after: string;
       restored_paths: string[];
+      source_revision_id: string;
+      target_revision_id: string;
+      result_revision_id: string;
+      target_boundary: string;
     }>(
-      `SELECT backend_session_id_after, restored_paths
+      `SELECT backend_session_id_after, restored_paths,
+        source_revision_id, target_revision_id, result_revision_id, target_boundary
       FROM code_agent_checkpoint_restores
       WHERE id = 'restore-1'`,
     );
     assert.equal(audit.rows[0]?.backend_session_id_after, 'thread-forked');
     assert.deepEqual(audit.rows[0]?.restored_paths, ['src/App.tsx']);
+    assert.equal(audit.rows[0]?.source_revision_id, `turn:${turnId}`);
+    assert.equal(audit.rows[0]?.target_revision_id, `root:${roomId}`);
+    assert.equal(audit.rows[0]?.result_revision_id, 'restore:restore-1');
+    assert.equal(audit.rows[0]?.target_boundary, 'before');
+    const repeatedPlan = await store.readCodeAgentCheckpointRestorePlan(roomId, turnId);
+    assert.equal(repeatedPlan?.currentRevisionId, 'restore:restore-1');
+    assert.equal(repeatedPlan?.targetRevisionId, `root:${roomId}`);
+    assert.equal(repeatedPlan?.alreadyAtTarget, true);
+    assert.deepEqual(repeatedPlan?.steps, []);
+
+    const leafPlan = await store.readCodeAgentCheckpointRestorePlan(roomId, turnId, 'after');
+    assert.equal(leafPlan?.targetBoundary, 'after');
+    assert.equal(leafPlan?.currentRevisionId, 'restore:restore-1');
+    assert.equal(leafPlan?.targetRevisionId, `turn:${turnId}`);
+    assert.equal(leafPlan?.targetBackendSessionId, 'thread-after');
+    assert.equal(leafPlan?.targetBackendLastTurnId, 'codex-turn-after');
+    assert.deepEqual(leafPlan?.steps.map(step => [step.turnId, step.direction]), [[turnId, 'after']]);
+
+    const leafLease = await store.acquireCodeAgentRoomLease(
+      roomId,
+      'checkpoint_restore_2',
+      'restore-instance',
+      new Date().toISOString(),
+      60_000,
+    );
+    assert.ok(leafLease);
+    const leafCommitted = await store.commitCodeAgentCheckpointRestore({
+      roomId,
+      checkpointTurnId: turnId,
+      restoreId: 'restore-2',
+      restoredByClientId: 'event-test-owner',
+      lease: leafLease!,
+      sourceRevisionId: leafPlan!.currentRevisionId,
+      targetRevisionId: leafPlan!.targetRevisionId,
+      resultRevisionId: 'restore:restore-2',
+      targetBoundary: 'after',
+      sessionId: 'thread-leaf-forked',
+      lastTurnId: 'codex-turn-after',
+      restoredPaths: ['src/App.tsx'],
+      conflictPaths: [],
+      unavailablePaths: [],
+      restoredAt: new Date().toISOString(),
+    });
+    assert.equal(leafCommitted?.revision.parentRevisionId, `turn:${turnId}`);
+    assert.equal(leafCommitted?.room.codeAgentSessionId, 'thread-leaf-forked');
+    assert.equal(leafCommitted?.room.codeAgentLastTurnId, 'codex-turn-after');
+    const leafAudit = await pool.query<{ target_boundary: string }>(
+      `SELECT target_boundary FROM code_agent_checkpoint_restores WHERE id = 'restore-2'`,
+    );
+    assert.equal(leafAudit.rows[0]?.target_boundary, 'after');
+  });
+
+  it('backfills legacy turns and exact restores into an honest workspace revision graph', async () => {
+    const schemaName = `workspace_revision_backfill_${Date.now()}`;
+    await pool.query(`CREATE SCHEMA ${schemaName}`);
+    const scopedUrl = new URL(databaseUrl!);
+    scopedUrl.searchParams.set('options', `-csearch_path=${schemaName}`);
+    const migrationPool = createPostgresPool(scopedUrl.toString(), logger as any);
+    try {
+      for (const sql of POSTGRES_SCHEMA_SQL) await migrationPool.query(sql);
+      const revisionMigrationIndex = POSTGRES_MIGRATIONS.findIndex(
+        migration => migration.id === '0013_code_agent_workspace_revision_dag',
+      );
+      assert.ok(revisionMigrationIndex >= 0);
+      for (const migration of POSTGRES_MIGRATIONS.slice(0, revisionMigrationIndex)) {
+        await migrationPool.query(migration.sql);
+      }
+
+      const roomId = 'legacy-workspace-revision-room';
+      await migrationPool.query(
+        `INSERT INTO rooms (
+          id, name, description, created_at, last_activity_at, creator_id,
+          type, code_agent_backend, code_agent_status
+        ) VALUES ($1, 'Legacy revisions', '', $2, $2, 'event-test-owner',
+          'codeAgent', 'codex-app-server', 'idle')`,
+        [roomId, '2026-07-20T00:00:00.000Z'],
+      );
+      const readyCheckpoint = (checkpointId: string, createdAt: string) => JSON.stringify({
+        schemaVersion: 1,
+        status: 'ready',
+        manifest: {
+          schemaVersion: 1,
+          checkpointId,
+          createdAt,
+          totalArchiveBytes: 0,
+          files: [],
+        },
+      });
+      const turnRows = [
+        ['legacy-turn-a', 'complete', '2026-07-20T00:01:00.000Z', 'thread-a', 'codex-a', readyCheckpoint('legacy-turn-a', '2026-07-20T00:01:00.000Z')],
+        ['legacy-turn-b', 'complete', '2026-07-20T00:02:00.000Z', 'thread-b', 'codex-b', readyCheckpoint('legacy-turn-b', '2026-07-20T00:02:00.000Z')],
+        ['legacy-turn-c', 'complete', '2026-07-20T00:04:00.000Z', 'thread-c', 'codex-c', readyCheckpoint('legacy-turn-c', '2026-07-20T00:04:00.000Z')],
+        ['legacy-turn-running', 'running', '2026-07-20T00:05:00.000Z', null, null, null],
+      ];
+      for (const [turnId, status, at, sessionAfter, turnAfter, checkpoint] of turnRows) {
+        await migrationPool.query(
+          `INSERT INTO room_agent_turns (
+            id, room_id, status, started_at, completed_at, backend, assistant_name,
+            updated_at, backend_session_id_after, backend_turn_id_after, workspace_checkpoint
+          ) VALUES (
+            $1, $2, $3, $4::timestamptz - interval '30 seconds',
+            CASE WHEN $3 = 'running' THEN NULL ELSE $4::timestamptz END,
+            'codex-app-server', 'Codex', $4, $5, $6, $7::jsonb
+          )`,
+          [turnId, roomId, status, at, sessionAfter, turnAfter, checkpoint],
+        );
+      }
+      await migrationPool.query(
+        `INSERT INTO code_agent_checkpoint_restores (
+          id, room_id, checkpoint_turn_id, restored_by_client_id,
+          backend_session_id_after, backend_last_turn_id_after,
+          restored_paths, conflict_paths, unavailable_paths, restored_at
+        ) VALUES (
+          'legacy-restore-b', $1, 'legacy-turn-b', 'event-test-owner',
+          'thread-a-fork', 'codex-a', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+          '2026-07-20T00:03:00.000Z'
+        )`,
+        [roomId],
+      );
+
+      await migrationPool.query(POSTGRES_MIGRATIONS[revisionMigrationIndex].sql);
+
+      const revisions = await migrationPool.query<{
+        id: string;
+        parent_revision_id: string | null;
+        kind: string;
+        restored_from_revision_id: string | null;
+        restore_target_revision_id: string | null;
+        traversable: boolean;
+      }>(
+        `SELECT id, parent_revision_id, kind, restored_from_revision_id,
+          restore_target_revision_id, traversable
+        FROM code_agent_workspace_revisions
+        WHERE room_id = $1
+        ORDER BY created_at, id`,
+        [roomId],
+      );
+      assert.deepEqual(revisions.rows.map(row => ({
+        id: row.id,
+        parent: row.parent_revision_id,
+        kind: row.kind,
+        source: row.restored_from_revision_id,
+        target: row.restore_target_revision_id,
+        traversable: row.traversable,
+      })), [
+        { id: `root:${roomId}`, parent: null, kind: 'root', source: null, target: null, traversable: true },
+        { id: 'turn:legacy-turn-a', parent: `root:${roomId}`, kind: 'turn', source: null, target: null, traversable: true },
+        { id: 'turn:legacy-turn-b', parent: 'turn:legacy-turn-a', kind: 'turn', source: null, target: null, traversable: true },
+        { id: 'restore:legacy-restore-b', parent: 'turn:legacy-turn-a', kind: 'restore', source: 'turn:legacy-turn-b', target: 'turn:legacy-turn-a', traversable: true },
+        { id: 'turn:legacy-turn-c', parent: 'restore:legacy-restore-b', kind: 'turn', source: null, target: null, traversable: true },
+        { id: 'turn:legacy-turn-running', parent: 'turn:legacy-turn-c', kind: 'turn', source: null, target: null, traversable: false },
+      ]);
+      assert.equal((await migrationPool.query(
+        'SELECT code_agent_workspace_revision_id FROM rooms WHERE id = $1',
+        [roomId],
+      )).rows[0]?.code_agent_workspace_revision_id, 'turn:legacy-turn-running');
+      assert.deepEqual((await migrationPool.query(
+        `SELECT source_revision_id, target_revision_id, result_revision_id
+        FROM code_agent_checkpoint_restores WHERE id = 'legacy-restore-b'`,
+      )).rows[0], {
+        source_revision_id: 'turn:legacy-turn-b',
+        target_revision_id: 'turn:legacy-turn-a',
+        result_revision_id: 'restore:legacy-restore-b',
+      });
+    } finally {
+      await migrationPool.end?.();
+      await pool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+    }
   });
 
   it('preserves AI stream ownership across code-agent continuation segments', async () => {
@@ -1929,7 +2111,9 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       // This fixture intentionally stops before the 0009 cutover, while the
       // current PostgresStore selects every additive room column. Add only the
       // later nullable projection column needed to exercise that old boundary.
-      await migrationPool.query('ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT');
+      await migrationPool.query(`ALTER TABLE rooms
+        ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT,
+        ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT`);
 
       const migrationStore = new PostgresStore(migrationPool, logger as any);
       const roomId = 'assistant-cutover-room';

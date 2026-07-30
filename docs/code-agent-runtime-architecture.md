@@ -279,18 +279,25 @@ E2B owns the live filesystem, Git worktree, processes, terminals, and preview se
 
 Normal completion and failure also converge transactionally. The terminal transaction checks the exact turn claim, conditionally finalizes the still-owned streaming message, removes unused placeholders, settles the applicable turn cost, updates room and backend-session state, marks the turn terminal, and deletes only the matching lease. If any statement fails, PostgreSQL rolls back the whole projection. If the message was deleted or the fence was superseded, the old execution is obsolete and cannot recreate or overwrite state.
 
-### Selective checkpoint restore
+### Agent-owned workspace revision DAG
 
-Checkpoint restore is deliberately narrower than a general immutable workspace history. At turn start, the sandbox creates an isolated bare Git object database and index below `/tmp/roomtalk-checkpoints`; the user's `.git`, branch, index, and commit history are never changed. At turn completion, tree comparison identifies paths changed during that turn. RoomTalk packages only before/after blobs for regular files up to 8 MiB each and 64 MiB total logical data. Secret-like files, dependency/build/cache directories, symlinks and unsupported types are excluded or marked unavailable rather than copied.
+Checkpoint files remain selective, but their history is no longer modeled as a one-off undo. At turn start, the sandbox creates an isolated bare Git object database and index below `/tmp/roomtalk-checkpoints`; the user's `.git`, branch, index and commit history are never changed. At completion, tree comparison packages only changed regular-file before/after blobs, capped at 8 MiB per file and 64 MiB of logical data per turn. Secret-like files, dependency/build/cache directories, symlinks and unsupported types are excluded. PostgreSQL then commits a `turn` revision whose parent is the room head captured when the fenced turn began. A room starts at a deterministic `root:<roomId>` revision.
 
-Restore has two independent targets that converge under one fenced operation:
+`code_agent_workspace_revisions` stores three node kinds:
 
-1. The workspace preview hashes each current path. A path is safe only when it still equals the selected turn's after-image. Safe paths return to their before-image; mismatches are conflicts and stay untouched. Deletions and creations are represented explicitly, and file modes are restored with the selected side.
-2. For Codex app-server, the runner calls `thread/fork` on the source thread with the exact pre-turn `lastTurnId`. The new thread drops the selected and later hidden turns without mutating the source thread.
+- `root` anchors a room and has no file delta;
+- `turn` names one reversible before/after checkpoint edge and its post-turn Codex boundary;
+- `restore` creates a new branch at the selected target. Its `parent_revision_id` is the target state, while `restored_from_revision_id` keeps the abandoned source head reachable for audit and later branch traversal.
 
-The restore owns the room's PostgreSQL lease, which also blocks browser file mutations and terminal input across App instances. Applying the safe-file batch keeps an in-sandbox rollback journal, so a write failure first reverses files already changed by that batch. After files and the Codex fork succeed, one transaction verifies the same lease, updates the room's backend session/cursor, writes `code_agent_checkpoint_restores`, and releases the lease. If the external fork or database commit fails, after-image blobs roll the already-restored files forward. An orphaned fork is harmless because the room never points at it. Coco has no equivalent exact hidden-context fork, so exact restore is currently exposed only for completed Codex app-server turns.
+The current revision is a pointer on `rooms`. Each completed turn exposes two explicit targets: `before` selects the turn's parent and pre-turn Codex boundary, while `after` selects the turn revision and post-turn boundary. The second target is essential for returning to an abandoned branch tip when no later turn exists. The planner walks current and target ancestors, finds their lowest common ancestor, emits `before` steps for source-branch turn revisions, then `after` steps for the target branch. Restore nodes carry no file step because their parent already names the state they represent. This makes repeated backward and forward restores coherent: an old branch is retained instead of being rewritten, and every completed turn boundary remains addressable.
 
-This provides safe per-turn undo, not arbitrary historical checkout, branch rollback, or reversal of external side effects such as a pushed commit, deployment, email, or remote API mutation. The capture boundary is the fenced turn window: RoomTalk blocks its own interactive writers, while long-running sandbox processes remain part of the mutable execution environment and should keep generated output in excluded build/cache paths.
+The live workspace may also contain edits that RoomTalk did not create. Those edits are overlays, not DAG nodes. Every step therefore compares the current SHA-256 with the side it is leaving: undo requires the turn's after-image; redo requires its before-image. A mismatch, missing archive or non-restorable path aborts the entire plan. Previously applied steps are reversed in the opposite order, the Codex fork is not started, and the room head remains unchanged. This is intentionally stricter than partial restore: the product never presents a workspace from one branch with hidden Codex context from another.
+
+The operation owns and renews the fenced PostgreSQL room lease for its full duration, blocking Agent turns, browser mutations and terminal input across App instances. Each in-sandbox file batch has its own rollback journal. Once every edge has applied, the runner calls Codex app-server `thread/fork(threadId, lastTurnId)` at the selected before/after boundary. One final transaction locks the room, proves the same live lease and unchanged source head, inserts the `restore` revision and audit row including `target_boundary`, switches the room's backend session/cursor and revision head, then releases the lease. If the fork or commit fails, inverse checkpoint steps restore the original branch. A fork created before a failed commit is merely orphaned because no room points to it.
+
+Migration `0013_code_agent_workspace_revision_dag` backfills historical Codex turns in timestamp order. An old restore is marked traversable only when it exactly undid the then-current turn and recorded no conflict or unavailable path; legacy hybrid restores and incomplete/running turns become explicit non-traversable barriers rather than invented history. Room-history clear and room deletion remove checkpoint objects after the durable delete commits.
+
+This is a persistent DAG for Agent-owned file changes and exact Codex context, not a full filesystem time machine or a general revision browser. Unrecorded user edits remain protected overlays. Live Git diff still describes the current sandbox, and external effects such as push, deployment, email or third-party API calls are not reversible. Coco has no exact hidden-context fork, so DAG restore is exposed only for completed Codex app-server turns.
 
 ## Persistence Model
 
@@ -298,7 +305,7 @@ This provides safe per-turn undo, not arbitrary historical checkout, branch roll
 
 | Store | Responsibilities |
 | --- | --- |
-| PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, `assistant_runs`/dispatch intent, code-agent turns, fenced room leases, sandbox metadata |
+| PostgreSQL durable store | Rooms, messages, room events, members, auth, media metadata, `assistant_runs`/dispatch intent, code-agent turns, workspace revision DAG/restore audit, fenced room leases, sandbox metadata |
 | Redis realtime and queue store | Presence, socket sessions, pub/sub, locks/counters, optional short-TTL message cache, and BullMQ operational jobs for ordinary chat AI |
 | S3-compatible object storage | Private media, published-site versions/manifests, selective Code Agent checkpoint blobs, migration/object payloads; SeaweedFS in current production |
 

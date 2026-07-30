@@ -557,21 +557,23 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     void refreshWorkspaceSnapshot();
   }, [presentation, refreshWorkspaceSnapshot]);
 
-  const handleRestoreAgentCheckpoint = useCallback(async (turn: RoomAgentTurn) => {
+  const handleRestoreAgentCheckpoint = useCallback(async (
+    turn: RoomAgentTurn,
+    targetBoundary: 'before' | 'after',
+  ) => {
     if (!roomPermissions?.canManageRoom) {
       throw new Error(t('agentCheckpointManagerOnly'));
     }
-    const confirmed = window.confirm(t('agentCheckpointConfirm'));
+    const confirmed = window.confirm(t(
+      targetBoundary === 'before' ? 'agentCheckpointConfirm' : 'agentCheckpointConfirmAfter',
+    ));
     if (!confirmed) return t('agentCheckpointCancelled');
     await ensureRoomOperationReady();
-    const result = await restoreCodeAgentCheckpoint(roomId, turn.id);
+    const result = await restoreCodeAgentCheckpoint(roomId, turn.id, targetBoundary);
     await refreshWorkspaceSnapshot();
+    if (result.alreadyAtTarget) return t('agentCheckpointAlreadyCurrent');
     const restored = result.restoredPaths?.length || 0;
-    const conflicts = result.conflictPaths?.length || 0;
-    const unavailable = result.unavailablePaths?.length || 0;
-    return conflicts > 0 || unavailable > 0
-      ? t('agentCheckpointRestoredPartial', { restored, conflicts, unavailable })
-      : t('agentCheckpointRestored', { count: restored });
+    return t('agentCheckpointRestored', { count: restored });
   }, [ensureRoomOperationReady, refreshWorkspaceSnapshot, roomId, roomPermissions?.canManageRoom, t]);
 
   useEffect(() => {

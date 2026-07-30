@@ -267,7 +267,7 @@ export interface CodeAgentSandboxService {
   importWorkspaceArchive?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceArchive, options?: ImportCodeAgentWorkspaceArchiveOptions): Promise<void>;
   beginWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void>;
   finalizeWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<CodeAgentWorkspaceCheckpointArchive>;
-  previewWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceCheckpointArchive): Promise<CodeAgentWorkspaceCheckpointPreview>;
+  previewWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceCheckpointArchive, target?: 'before' | 'after'): Promise<CodeAgentWorkspaceCheckpointPreview>;
   restoreWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, archive: CodeAgentWorkspaceCheckpointArchive, paths: string[], target: 'before' | 'after'): Promise<void>;
   discardWorkspaceCheckpoint?(handle: CodeAgentSandboxHandle, checkpointId: string): Promise<void>;
   resolveWorkspacePreviewTarget?(handle: CodeAgentSandboxHandle, input: ResolveCodeAgentWorkspacePreviewTargetInput): Promise<CodeAgentWorkspacePreviewTargetResolution>;

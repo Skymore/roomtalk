@@ -789,10 +789,15 @@ export function registerCodeAgentWorkspaceHandlers({
       conflictPaths?: string[];
       unavailablePaths?: string[];
       sessionId?: string;
+      sourceRevisionId?: string;
+      targetRevisionId?: string;
+      resultRevisionId?: string;
+      alreadyAtTarget?: boolean;
     }) => void,
   ) => {
     const roomId = parseRoomId(payload);
     const turnId = parseWorkspaceString(payload, 'turnId');
+    const targetBoundary = parseWorkspaceString(payload, 'targetBoundary') || 'before';
     const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'restore code agent checkpoint');
     if (!authorized.success) {
       callback?.({ success: false, code: authorized.code, error: authorized.error });
@@ -800,6 +805,10 @@ export function registerCodeAgentWorkspaceHandlers({
     }
     if (!turnId) {
       callback?.({ success: false, error: 'Agent turn ID is required' });
+      return;
+    }
+    if (targetBoundary !== 'before' && targetBoundary !== 'after') {
+      callback?.({ success: false, error: 'Checkpoint boundary must be before or after' });
       return;
     }
     const member = await store.getRoomMember(authorized.room.id, authorized.clientId);
@@ -815,6 +824,7 @@ export function registerCodeAgentWorkspaceHandlers({
       roomId: authorized.room.id,
       clientId: authorized.clientId,
       turnId,
+      targetBoundary,
     }));
   });
 

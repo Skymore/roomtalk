@@ -1692,4 +1692,231 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON code_agent_checkpoint_restores (room_id, restored_at DESC);
     `,
   },
+  {
+    // Workspace history is a persistent DAG. Turn revisions are reversible
+    // edges, while restore revisions create a new branch at the selected
+    // before/after turn boundary and retain the abandoned head for audit.
+    id: '0013_code_agent_workspace_revision_dag',
+    sql: `
+      ALTER TABLE room_agent_turns
+        ADD COLUMN IF NOT EXISTS workspace_parent_revision_id TEXT,
+        ADD COLUMN IF NOT EXISTS workspace_revision_id TEXT;
+
+      CREATE TABLE IF NOT EXISTS code_agent_workspace_revisions (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        parent_revision_id TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('root', 'turn', 'restore')),
+        turn_id TEXT REFERENCES room_agent_turns(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
+        restore_id TEXT REFERENCES code_agent_checkpoint_restores(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
+        restored_from_revision_id TEXT,
+        restore_target_revision_id TEXT,
+        backend_session_id TEXT,
+        backend_last_turn_id TEXT,
+        traversable BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        UNIQUE (room_id, id)
+      );
+
+      ALTER TABLE code_agent_workspace_revisions
+        ADD CONSTRAINT code_agent_workspace_revisions_parent_fk
+        FOREIGN KEY (room_id, parent_revision_id)
+        REFERENCES code_agent_workspace_revisions(room_id, id)
+        DEFERRABLE INITIALLY DEFERRED;
+      ALTER TABLE code_agent_workspace_revisions
+        ADD CONSTRAINT code_agent_workspace_revisions_source_fk
+        FOREIGN KEY (room_id, restored_from_revision_id)
+        REFERENCES code_agent_workspace_revisions(room_id, id)
+        DEFERRABLE INITIALLY DEFERRED;
+      ALTER TABLE code_agent_workspace_revisions
+        ADD CONSTRAINT code_agent_workspace_revisions_target_fk
+        FOREIGN KEY (room_id, restore_target_revision_id)
+        REFERENCES code_agent_workspace_revisions(room_id, id)
+        DEFERRABLE INITIALLY DEFERRED;
+
+      ALTER TABLE rooms
+        ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT;
+      ALTER TABLE rooms
+        ADD CONSTRAINT rooms_code_agent_workspace_revision_fk
+        FOREIGN KEY (code_agent_workspace_revision_id)
+        REFERENCES code_agent_workspace_revisions(id)
+        ON DELETE SET NULL
+        DEFERRABLE INITIALLY DEFERRED;
+
+      ALTER TABLE room_agent_turns
+        ADD CONSTRAINT room_agent_turns_workspace_parent_revision_fk
+        FOREIGN KEY (workspace_parent_revision_id)
+        REFERENCES code_agent_workspace_revisions(id)
+        ON DELETE SET NULL
+        DEFERRABLE INITIALLY DEFERRED;
+      ALTER TABLE room_agent_turns
+        ADD CONSTRAINT room_agent_turns_workspace_revision_fk
+        FOREIGN KEY (workspace_revision_id)
+        REFERENCES code_agent_workspace_revisions(id)
+        ON DELETE SET NULL
+        DEFERRABLE INITIALLY DEFERRED;
+
+      ALTER TABLE code_agent_checkpoint_restores
+        ADD COLUMN IF NOT EXISTS source_revision_id TEXT,
+        ADD COLUMN IF NOT EXISTS target_revision_id TEXT,
+        ADD COLUMN IF NOT EXISTS result_revision_id TEXT,
+        ADD COLUMN IF NOT EXISTS target_boundary TEXT NOT NULL DEFAULT 'before';
+
+      ALTER TABLE code_agent_checkpoint_restores
+        ADD CONSTRAINT code_agent_checkpoint_restores_target_boundary_check
+        CHECK (target_boundary IN ('before', 'after'));
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_code_agent_workspace_revisions_turn
+        ON code_agent_workspace_revisions (room_id, turn_id)
+        WHERE turn_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_code_agent_workspace_revisions_restore
+        ON code_agent_workspace_revisions (room_id, restore_id)
+        WHERE restore_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_code_agent_workspace_revisions_parent
+        ON code_agent_workspace_revisions (room_id, parent_revision_id);
+      CREATE INDEX IF NOT EXISTS idx_code_agent_workspace_revisions_time
+        ON code_agent_workspace_revisions (room_id, created_at DESC);
+
+      DO $$
+      DECLARE
+        room_record RECORD;
+        event_record RECORD;
+        current_revision_id TEXT;
+        root_revision_id TEXT;
+        next_revision_id TEXT;
+        target_revision_value TEXT;
+        checkpoint_revision_id TEXT;
+        restore_is_exact BOOLEAN;
+      BEGIN
+        FOR room_record IN
+          SELECT room.id, room.created_at
+          FROM rooms AS room
+          WHERE room.type = 'codeAgent'
+             OR EXISTS (
+               SELECT 1 FROM room_agent_turns AS turn
+               WHERE turn.room_id = room.id AND turn.backend = 'codex-app-server'
+             )
+          ORDER BY room.id
+        LOOP
+          root_revision_id := 'root:' || room_record.id;
+          INSERT INTO code_agent_workspace_revisions (
+            id, room_id, kind, traversable, created_at
+          ) VALUES (
+            root_revision_id, room_record.id, 'root', TRUE, room_record.created_at
+          ) ON CONFLICT (id) DO NOTHING;
+          current_revision_id := root_revision_id;
+
+          FOR event_record IN
+            SELECT event_kind, event_id, event_at
+            FROM (
+              SELECT 'turn'::TEXT AS event_kind,
+                turn.id AS event_id,
+                COALESCE(turn.completed_at, turn.updated_at) AS event_at
+              FROM room_agent_turns AS turn
+              WHERE turn.room_id = room_record.id
+                AND turn.backend = 'codex-app-server'
+              UNION ALL
+              SELECT 'restore'::TEXT AS event_kind,
+                restore.id AS event_id,
+                restore.restored_at AS event_at
+              FROM code_agent_checkpoint_restores AS restore
+              WHERE restore.room_id = room_record.id
+            ) AS history
+            ORDER BY event_at, CASE event_kind WHEN 'turn' THEN 0 ELSE 1 END, event_id
+          LOOP
+            IF event_record.event_kind = 'turn' THEN
+              next_revision_id := 'turn:' || event_record.event_id;
+              INSERT INTO code_agent_workspace_revisions (
+                id, room_id, parent_revision_id, kind, turn_id,
+                backend_session_id, backend_last_turn_id, traversable, created_at
+              )
+              SELECT next_revision_id,
+                turn.room_id,
+                current_revision_id,
+                'turn',
+                turn.id,
+                turn.backend_session_id_after,
+                turn.backend_turn_id_after,
+                COALESCE(turn.workspace_checkpoint->>'status' = 'ready', FALSE)
+                  AND jsonb_typeof(turn.workspace_checkpoint->'manifest') = 'object'
+                  AND CASE
+                    WHEN jsonb_typeof(turn.workspace_checkpoint->'manifest'->'files') = 'array' THEN
+                      (
+                        jsonb_array_length(turn.workspace_checkpoint->'manifest'->'files') = 0
+                        OR COALESCE(turn.workspace_checkpoint->>'objectKey', '') <> ''
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(turn.workspace_checkpoint->'manifest'->'files') AS file
+                        WHERE COALESCE((file->>'restorable')::boolean, FALSE) = FALSE
+                      )
+                    ELSE FALSE
+                  END,
+                event_record.event_at
+              FROM room_agent_turns AS turn
+              WHERE turn.id = event_record.event_id
+              ON CONFLICT (id) DO NOTHING;
+
+              UPDATE room_agent_turns
+              SET workspace_parent_revision_id = current_revision_id,
+                workspace_revision_id = next_revision_id
+              WHERE id = event_record.event_id;
+              current_revision_id := next_revision_id;
+            ELSE
+              SELECT turn.workspace_parent_revision_id,
+                turn.workspace_revision_id
+              INTO target_revision_value, checkpoint_revision_id
+              FROM code_agent_checkpoint_restores AS restore
+              JOIN room_agent_turns AS turn ON turn.id = restore.checkpoint_turn_id
+              WHERE restore.id = event_record.event_id;
+
+              IF target_revision_value IS NULL OR checkpoint_revision_id IS NULL THEN
+                CONTINUE;
+              END IF;
+
+              SELECT current_revision_id = checkpoint_revision_id
+                AND jsonb_array_length(COALESCE(restore.conflict_paths, '[]'::jsonb)) = 0
+                AND jsonb_array_length(COALESCE(restore.unavailable_paths, '[]'::jsonb)) = 0
+              INTO restore_is_exact
+              FROM code_agent_checkpoint_restores AS restore
+              WHERE restore.id = event_record.event_id;
+
+              next_revision_id := 'restore:' || event_record.event_id;
+              INSERT INTO code_agent_workspace_revisions (
+                id, room_id, parent_revision_id, kind, restore_id,
+                restored_from_revision_id, restore_target_revision_id,
+                backend_session_id, backend_last_turn_id, traversable, created_at
+              )
+              SELECT next_revision_id,
+                restore.room_id,
+                CASE WHEN restore_is_exact THEN target_revision_value ELSE current_revision_id END,
+                'restore',
+                restore.id,
+                current_revision_id,
+                target_revision_value,
+                restore.backend_session_id_after,
+                restore.backend_last_turn_id_after,
+                restore_is_exact,
+                restore.restored_at
+              FROM code_agent_checkpoint_restores AS restore
+              WHERE restore.id = event_record.event_id
+              ON CONFLICT (id) DO NOTHING;
+
+              UPDATE code_agent_checkpoint_restores
+              SET source_revision_id = current_revision_id,
+                target_revision_id = target_revision_value,
+                result_revision_id = next_revision_id
+              WHERE id = event_record.event_id;
+              current_revision_id := next_revision_id;
+            END IF;
+          END LOOP;
+
+          UPDATE rooms
+          SET code_agent_workspace_revision_id = current_revision_id
+          WHERE id = room_record.id;
+        END LOOP;
+      END;
+      $$;
+    `,
+  },
 ];

@@ -104,7 +104,7 @@ flowchart LR
 - Code Agent runner 在沙盒内部 import 或调用 `/opt/code-agent-engine` 中的 Code Agent 实现。
 - Code Agent 的所有 Read/Write/Shell 都落在沙盒工作区。
 - RoomTalk 可以作为受控 broker 通过 socket/API 读写、预览和 diff 沙盒文件，但浏览器不能直接访问 Code Agent、E2B、provider key 或原始沙盒凭据。
-- 沙盒磁盘是可变运行时状态，不是唯一历史真相。当前 Codex app-server 已实现按 turn 的选择性 checkpoint：RoomTalk 保存该轮前后的 backend turn 边界和“本轮变化文件”的 before/after blob；恢复时只处理仍等于 Agent after-image 的文件，后续改动会成为 conflict。它不污染用户 Git history，也不等同于任意 revision checkout；diff/review 的完整 revision-pair 模型仍是更长期的边界。
+- 沙盒磁盘是可变运行时状态，不是唯一历史真相。Codex app-server turn 已进入 RoomTalk-owned workspace revision DAG：每轮保存 backend boundary 和变化文件 before/after blob，restore 节点保留 source/target 分支，跨分支恢复按 LCA 依次 undo/redo。用户后续修改仍是受 hash 保护的 overlay，不会被旧 revision 无声覆盖。它不污染用户 Git history；通用 revision browser 与 revision-pair review 仍是另一层产品能力。
 
 ### 3.2 沙盒提供方
 
@@ -325,9 +325,10 @@ Code Agent 的 provider context 不应该复用普通聊天的 `selectAIHistory(
 
 ### 5.4 Workspace revision 和回退语义
 
-当前实现已经能通过 RoomTalk socket/service 读取 live sandbox 的文件树、文件内容、
-changed files、diff、preview server 和 workspace asset preview。这个能力解决的是“现在
-沙盒里有什么”，但它还不是可版本化 workspace 架构。
+RoomTalk 一方面通过 socket/service 读取 live sandbox 的文件树、文件内容、changed files、
+diff、preview server 和 workspace asset preview；另一方面用 PostgreSQL revision DAG 与
+S3-compatible checkpoint blob 保存 Agent 自己产生的可逆历史。前者回答“现在沙盒里有什么”，
+后者回答“当前 workspace/Codex context 来自哪条 Agent revision 分支”。两者不能混成一个概念。
 
 必须把下面三层分开：
 
@@ -335,20 +336,21 @@ changed files、diff、preview server 和 workspace asset preview。这个能力
 | --- | --- | --- |
 | Runner conversation | Code Agent/Codex 等 agent 的内部 messages、tool loop 和 provider context | 否。它只解释 agent 为什么这么做，不保证能还原文件 |
 | Sandbox filesystem | 当前可执行、可读写的工作区和进程运行时 | 否。它是 mutable runtime，沙盒过期、重建或后续 turn 都会改变它 |
-| RoomTalk workspace history | 当前已落地的是 Codex turn 级的选择性 checkpoint：pre/post context boundary、变化文件 before/after blob、hash 与 restore audit；完整 revision 方案还需要全树 manifest、parent revision 和绑定事件 | 选择性 checkpoint 只是真实的“撤销这一轮”边界；跨任意 revision 的 diff、review、publish 仍不能把它当成完整历史树 |
+| RoomTalk Agent revision DAG | `root` / `turn` / `restore` 节点、房间 head、pre/post context boundary、变化文件 before/after blob、hash 和 restore audit | 是 Agent-owned 文件变化与 Codex context 的历史真相；不是所有用户写入和外部副作用的完整历史 |
 
-已经实现的窄边界：
+已经实现的 revision 边界：
 
-- 完成的 Codex app-server turn 会保存精确的 pre-turn `threadId + lastTurnId`，并只打包该轮改变的普通文件 before/after blob。恢复前比较当前 SHA-256；仍等于 Agent after-image 的文件才回到 before-image，后续被用户或进程修改的路径标记为 conflict 并保持原样。
+- 房间从确定性的 `root:<roomId>` 开始。完成的 Codex app-server turn 在终态事务中创建 `turn:<turnId>`，parent 是该轮开始时捕获的 room head；节点同时保存 post-turn backend boundary 与 checkpoint 可遍历性。
 - checkpoint 使用 `/tmp` 下隔离的 bare Git object database/index 计算 tree 与 blob，不改用户仓库的 branch、index 或 commit history。单文件上限 8 MiB、单轮逻辑数据上限 64 MiB；secret-like、依赖、build/cache、symlink 与不支持的类型不会进入可恢复集合。
-- 文件批次在 sandbox 内带回滚日志：任一文件应用失败，先撤销本次已经应用的路径。随后才 fork Codex context，并用一个 PostgreSQL 事务验证 room lease、切换 room session/cursor、写 restore audit。fork 或数据库提交失败时，再用 after-image 把安全文件整体向前恢复。
-- 这已经是 RoomTalk-owned、可持久恢复的产品能力，但它只回答“撤销某个 Codex turn 自己留下的安全文件变化”，不是任意 revision checkout，也不负责恢复远端 push、部署或第三方 API 副作用。
+- 每个已完成 turn 提供两个明确目标：“此轮之前”指向 parent 和 pre-turn context，“此轮之后”指向 turn revision 和 post-turn context。后者保证旧分支最后一个 turn 即使没有 successor，也仍能直接恢复。Planner 从 current head 与 target 向上查找 LCA：source 分支的 turn 按 `before` 逆序撤销，target 分支的 turn 按 `after` 正序重放。Restore 节点本身没有文件 delta，它的 parent 就是恢复后的状态。
+- 恢复成功后创建 `restore:<restoreId>`。它的 parent 指向 target，`restored_from_revision_id` 记录旧 head；因此旧分支不会被改写，之后可以从新 head 重新走回另一条分支。房间只保存一个当前 head，但 PostgreSQL 保留完整分叉拓扑和 source/target/result audit。
+- 每一步离开当前状态前都校验 hash：undo 要求当前内容等于该 turn 的 after-image，redo 要求等于 before-image。用户或其他进程的后续修改作为 overlay 保留；只要路径上有一个 conflict、archive 缺失或不可恢复文件，本次操作就撤销已经应用的前置步骤，且不 fork Codex、不移动数据库 head。这里不再有“部分文件恢复成功但 context 已切换”的合法状态。
+- Restore 持续续租同一个 fenced PostgreSQL room lease，跨 App 阻止 Agent turn、浏览器写入和 terminal input。每个 sandbox 文件批次另有回滚日志；全部文件到达 target 后才调用 `thread/fork(threadId, lastTurnId)`。最后一个事务重新验证 source head 与 lease，插入 restore revision/audit、切换 room session/cursor/head 并释放 lease。fork 或数据库提交失败时，所有文件 step 按相反方向回到 source；未被房间引用的 fork 只是 orphan。
+- Migration `0013_code_agent_workspace_revision_dag` 会回填旧 Codex turn。只有“当时撤销的正是当前 turn 且没有 conflict/unavailable”的旧 restore 才能成为 traversable branch；历史 hybrid restore、缺 checkpoint 和 running turn 会成为明确的不可遍历 barrier。删除房间或清空房间历史后，checkpoint object 在数据库提交后清理。
 
-完整 revision 层的后续设计规则：
+仍可继续扩展的 revision 产品层：
 
-- 每个稳定边界都应该能产生 revision：agent turn final、用户文件写入/上传、publish、显式 checkpoint、rollback restore。
-- revision metadata 至少包含 `roomId`、`revisionId`、`parentRevisionId`、`source`、`turnId`、`createdAt`、文件 manifest、content hash、workspace root、可选 git refs。
-- 文件内容应进入 RoomTalk 控制的持久层，例如 object storage + DB manifest；provider volume 或 sandbox disk 只能作为加速/运行时载体。
+- 当前 DAG 只把 Agent turn 与 restore 建成节点；用户文件写入/上传继续作为安全 overlay。若未来要把用户写入、publish 或显式 checkpoint 也做成可浏览 revision，需要为这些 source 定义相同的 parent、manifest、授权和 retention 规则，而不是复用一个模糊的 `version` 字段。
 - diff viewer 的稳定输入是 revision pair，例如 `baseRevisionId` + `headRevisionId`。live working-tree diff 可以继续作为“当前工作区”视图，但保存 review 或 publish 时必须固化到 revision。
 - review comment 不能只保存 `filePath/start/end`。它还要绑定 `baseRevisionId`、`headRevisionId` 或等价 section id，并保存足够的 hunk/context，使后续文件变化后评论不会漂移。
 - preview session 可以打开 live workspace 文件，但“这个 tab 展示的是哪个文件/哪个 revision”要由 RoomTalk state 保留，server preview session 不能把用户打开的 workspace-file 身份覆盖成普通 URL 或空 Browser 首页。
@@ -356,15 +358,16 @@ changed files、diff、preview server 和 workspace asset preview。这个能力
 恢复仍要区分两件事：
 
 1. **对话回退**：Codex app-server 通过 `thread/fork(threadId, lastTurnId)` 创建只保留到目标 turn boundary 的新 thread；Coco 尚无等价的隐藏上下文 fork，所以 UI 不宣称 Coco 可以精确回退。
-2. **workspace 回退**：当前选择性 checkpoint 只恢复该轮变化且没有后续冲突的文件。未来若加入任意 revision checkout，仍必须由 RoomTalk 编排完整 manifest、当前指针、rollback event 与 UI 广播，不能直接对用户仓库执行强制 checkout。
+2. **workspace 回退**：RoomTalk 根据 DAG path 组合多个 turn 的 selective checkpoint，并以 room head 记录结果。它只改变 Agent-owned 文件边，不会强制 checkout 用户仓库，也不会吞掉 path 外的人工修改。
 
 外部副作用不能假装可逆。已经发出的网络请求、第三方 API 操作、支付、邮件、远端部署等必须记录为 effect/audit event；rollback 只能回退 RoomTalk 管理的 workspace 状态，并在 UI 上提示仍有不可撤销副作用。
 
 当前仍然存在的边界：
 
-- live E2B workspace 的 git baseline / `git diff` 仍只描述当前 sandbox；选择性 checkpoint 不提供任意两棵历史树之间的 diff。
-- RoomTalk 已持久化 turn checkpoint manifest、变化文件 content blob、Codex context boundary 与 restore audit，但还没有全 workspace revision lineage 或通用 revision browser。
-- 因此“撤销一个完成的 Codex turn”已经实现；旧 review comment 锚定、任意历史 diff、publish 输入固化和跨多个 revision 的 checkout 仍是后续能力，不应继续被写成同一个未完成项。
+- live E2B workspace 的 git baseline / `git diff` 仍只描述当前 sandbox；DAG 已能跨多个 Agent turn 移动状态，但 UI 还不是任意 revision-pair diff/browser。
+- 用户编辑不是自动创建的 revision 节点，而是通过 before/after hash 保护的 overlay；遇到歧义会整次拒绝，不做语义 merge。
+- Coco 尚无精确 hidden-context fork，因此只读 DAG 记录不能让 Coco 获得与 Codex 相同的可恢复上下文语义。
+- 远端 push、部署、邮件、支付和第三方 API 副作用仍不可逆。产品只能记录 effect/audit 并明确提示，不能把 workspace restore 包装成全系统 rollback。
 
 ---
 

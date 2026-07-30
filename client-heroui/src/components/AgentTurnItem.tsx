@@ -9,7 +9,7 @@ interface AgentTurnItemProps {
   messages: Message[];
   renderAgentMessage: (message: Message) => React.ReactNode;
   renderStandaloneMessage: (message: Message) => React.ReactNode;
-  onRestoreCheckpoint?: (turn: RoomAgentTurn) => unknown;
+  onRestoreCheckpoint?: (turn: RoomAgentTurn, targetBoundary: 'before' | 'after') => unknown;
 }
 
 const phaseLabelKeys: Record<RoomAgentTurnPhase, string> = {
@@ -46,7 +46,7 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
-  const [isRestoring, setIsRestoring] = React.useState(false);
+  const [restoringBoundary, setRestoringBoundary] = React.useState<'before' | 'after' | null>(null);
   const [restoreNotice, setRestoreNotice] = React.useState<string | null>(null);
   const ownMessages = React.useMemo(() => messages.filter(message => message.turnId === turn.id), [messages, turn.id]);
   const lastAIMessageId = [...ownMessages].reverse().find(message => message.messageType === 'ai')?.id;
@@ -73,17 +73,17 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
     && turn.workspaceCheckpoint?.status === 'ready'
   );
 
-  const restoreCheckpoint = async () => {
-    if (!onRestoreCheckpoint || isRestoring) return;
-    setIsRestoring(true);
+  const restoreCheckpoint = async (targetBoundary: 'before' | 'after') => {
+    if (!onRestoreCheckpoint || restoringBoundary) return;
+    setRestoringBoundary(targetBoundary);
     setRestoreNotice(null);
     try {
-      const notice = await onRestoreCheckpoint(turn);
+      const notice = await onRestoreCheckpoint(turn, targetBoundary);
       setRestoreNotice(typeof notice === 'string' ? notice : t('agentCheckpointRestored', { count: 0 }));
     } catch (error) {
       setRestoreNotice(error instanceof Error ? error.message : t('agentCheckpointRestoreFailed'));
     } finally {
-      setIsRestoring(false);
+      setRestoringBoundary(null);
     }
   };
 
@@ -118,15 +118,23 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
           </button>
           {canRestore && (
             <div className="mt-1 flex flex-wrap items-center gap-2 px-1">
-              <button
-                type="button"
-                disabled={isRestoring}
-                onClick={() => void restoreCheckpoint()}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-[#9f4d34] transition-colors hover:bg-[#eadfd8] disabled:cursor-wait disabled:opacity-60 dark:text-[#e18a6d] dark:hover:bg-[#2a201c]"
-              >
-                <Icon icon={isRestoring ? 'lucide:loader-circle' : 'lucide:rotate-ccw'} className={`h-3.5 w-3.5 ${isRestoring ? 'animate-spin' : ''}`} />
-                {isRestoring ? t('agentCheckpointRestoring') : t('agentCheckpointRestore')}
-              </button>
+              {(['before', 'after'] as const).map(targetBoundary => (
+                <button
+                  key={targetBoundary}
+                  type="button"
+                  disabled={Boolean(restoringBoundary)}
+                  onClick={() => void restoreCheckpoint(targetBoundary)}
+                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-[#9f4d34] transition-colors hover:bg-[#eadfd8] disabled:cursor-wait disabled:opacity-60 dark:text-[#e18a6d] dark:hover:bg-[#2a201c]"
+                >
+                  <Icon
+                    icon={restoringBoundary === targetBoundary ? 'lucide:loader-circle' : targetBoundary === 'before' ? 'lucide:rotate-ccw' : 'lucide:rotate-cw'}
+                    className={`h-3.5 w-3.5 ${restoringBoundary === targetBoundary ? 'animate-spin' : ''}`}
+                  />
+                  {restoringBoundary === targetBoundary
+                    ? t('agentCheckpointRestoring')
+                    : t(targetBoundary === 'before' ? 'agentCheckpointRestore' : 'agentCheckpointRestoreAfter')}
+                </button>
+              ))}
               <span className="text-[11px] text-[#77746d] dark:text-[#96938b]">
                 {t('agentCheckpointFiles', { count: turn.workspaceCheckpoint?.restorableFileCount || 0 })}
               </span>

@@ -99,8 +99,9 @@ surface may read the live sandbox through RoomTalk-controlled socket/API handler
 but durable product semantics belong to RoomTalk:
 
 - The sandbox filesystem is mutable runtime state.
-- RoomTalk needs immutable workspace revisions for turn-final snapshots, publish
-  inputs, review comments, diff sections, explicit checkpoints, and rollback.
+- RoomTalk now owns an Agent revision DAG for turn-final checkpoints and rollback.
+  Publish inputs, review comments, and historical diff sections still need to bind
+  to explicit revision pairs before they can claim the same durable semantics.
 - A stable diff/review section should be addressed by a revision pair, not only by
   the current file path and line numbers.
 - Review annotations must bind to a revision pair or equivalent section id plus
@@ -113,16 +114,20 @@ but durable product semantics belong to RoomTalk:
   implementation details, but they are not a substitute for RoomTalk-owned
   revision metadata and content storage.
 
-Conversation rollback and workspace rollback are separate. The implemented Codex
-app-server path records the exact pre-turn thread/turn boundary and a selective
-workspace checkpoint. Restore forks the Codex thread through that boundary and
-restores only files whose current hash still matches the Agent after-image. Later
-edits become visible conflicts and are never silently overwritten. Checkpoints use
-an isolated temporary Git object database and changed-file blobs; they neither add
-commits to the user's repository nor upload a full workspace on every turn. This is
-safe per-turn undo, not a general revision browser, and external side effects remain
-non-reversible. Coco is intentionally excluded until it can offer an equivalent
-hidden-context boundary.
+Conversation rollback and workspace rollback remain separate operations, but the
+implemented Codex path now coordinates them through one Agent-owned revision DAG.
+Each terminal turn adds a selective before/after edge; the UI exposes both boundaries
+so even an abandoned branch tip remains directly reachable. Restore finds the current
+and target LCA, undoes and redoes complete turn edges, then forks Codex at the selected
+boundary. A later edit is a hash-protected overlay. Any conflict aborts the
+whole path and rolls prior steps back, so context never changes after a partial file
+restore. Restore nodes retain source and target heads instead of rewriting history.
+Checkpoints use an isolated temporary Git object database and changed-file blobs;
+they neither add commits to the user's repository nor upload a full workspace on
+every turn. The remaining product gap is a general revision-pair browser and binding
+review/publish artifacts to it, not cross-turn restore itself. External side effects
+remain non-reversible, and Coco is excluded until it offers an equivalent hidden-
+context boundary.
 
 ## Proposed Types
 

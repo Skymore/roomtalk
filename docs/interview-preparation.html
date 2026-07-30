@@ -318,8 +318,8 @@
 </head>
 <body>
 <div class="architecture-note">
-  <span data-lang="zh">当前代码架构版本：2026-07-29；生产发布状态单独记录，不用文档版本冒充部署证据。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、普通 AI stream 与 Code Agent turn 都有明确 ownership。普通 AI 用 <code>assistant_runs</code> generation；Code Agent 用 <code>{roomId, turnId, ownerId, fence}</code> room lease claim。Codex turn 还保存选择性 workspace checkpoint 与精确的 pre-turn thread boundary，恢复时跳过后来被修改的冲突文件。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
-  <span data-lang="en">Current source architecture: 2026-07-29. Production rollout is recorded separately rather than inferred from a documentation version. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, ordinary AI streams, and Code Agent turns each have explicit ownership. Ordinary AI uses an <code>assistant_runs</code> generation; Code Agent uses a <code>{roomId, turnId, ownerId, fence}</code> room-lease claim. A Codex turn also records a selective workspace checkpoint and exact pre-turn thread boundary; restore skips files changed afterward. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
+  <span data-lang="zh">当前代码架构版本：2026-07-29；生产发布状态单独记录，不用文档版本冒充部署证据。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、普通 AI stream 与 Code Agent turn 都有明确 ownership。普通 AI 用 <code>assistant_runs</code> generation；Code Agent 用 <code>{roomId, turnId, ownerId, fence}</code> room lease claim。完成的 Codex turn 还会进入 Agent-owned workspace revision DAG；跨 checkpoint 恢复按 LCA undo/redo，任一路径有 hash 冲突就整次回滚，不让文件与隐藏 context 落在两条分支。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
+  <span data-lang="en">Current source architecture: 2026-07-29. Production rollout is recorded separately rather than inferred from a documentation version. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, ordinary AI streams, and Code Agent turns each have explicit ownership. Ordinary AI uses an <code>assistant_runs</code> generation; Code Agent uses a <code>{roomId, turnId, ownerId, fence}</code> room-lease claim. Completed Codex turns also form an Agent-owned workspace revision DAG. Cross-checkpoint restore follows an LCA undo/redo path and rolls the whole operation back on any hash conflict, so files and hidden context never land on different branches. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
 </div>
 <div class="lang-toggle">
   <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
@@ -679,23 +679,30 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 <p data-lang="zh"><strong>方案</strong>：每轮开始时，sandbox 在 <code>/tmp</code> 下创建独立 bare Git object database 与 index，记录 pre-turn tree；它不进入用户仓库，不创建 commit，也不修改 branch/index。轮次结束后比较 before/after tree，只把变化的普通文件 blob、SHA-256、存在性和 mode 打包。单文件最多 8 MiB、单轮最多 64 MiB；<code>.env</code>、key、依赖目录、build/cache 和 symlink 不进入可恢复集合。压缩包进入 SeaweedFS/S3-compatible object storage，PostgreSQL 保存 manifest、对象 key、pre/post backend boundary 与审计信息。</p>
 <p data-lang="en"><strong>Solution</strong>: At turn start, the sandbox creates an isolated bare Git object database and index under <code>/tmp</code> and records the pre-turn tree. It never enters the user's repository, creates a commit, or changes the branch/index. At completion it compares before and after trees and packages only changed regular-file blobs with SHA-256, existence, and mode. A file is capped at 8 MiB and a turn at 64 MiB; environment files, keys, dependencies, build/cache output, and symlinks are excluded. The compressed archive goes to S3-compatible storage, while PostgreSQL stores its manifest, object key, pre/post backend boundary, and audit data.</p>
 
-<p data-lang="zh">恢复前先做 compare-and-restore：当前 hash 等于该轮 after-hash，说明它仍是 Agent 留下的版本，可以还原 before-image；hash 不同则说明后来有人或进程改过，标记 conflict 并保持原样。恢复操作取得同一个 PostgreSQL room lease，其他 App 实例的 Agent turn、浏览器编辑和 terminal input 都会被挡住。文件恢复后，runner 调用 Codex app-server <code>thread/fork(threadId, lastTurnId)</code>，在原 thread 上分叉出“只保留到本轮之前”的新 thread。最后一个数据库事务再次验证 lease，切换 room session/cursor、写 restore audit，并释放 lease。</p>
-<p data-lang="en">Restore first performs compare-and-restore. If the live hash equals the turn's after-hash, the path is still the Agent result and may return to its before-image. A different hash means later work exists; the path becomes a conflict and stays untouched. The operation owns the same PostgreSQL room lease, so Agent turns, browser edits, and terminal input on every App instance are blocked. After files restore, the runner calls Codex app-server <code>thread/fork(threadId, lastTurnId)</code> to create a new thread containing history only through the pre-turn boundary. One final transaction revalidates the lease, switches the room session/cursor, records the restore audit, and releases the lease.</p>
+<p data-lang="zh"><strong>Revision 建模</strong>：RoomTalk 不再把 checkpoint 当成一次性的“撤销按钮”。每个房间有一个 <code>root</code>；完成的 Codex turn 产生 <code>turn</code> revision，parent 是该轮开始时的 room head；成功恢复则产生 <code>restore</code> revision。Restore 的 parent 指向目标状态，同时用 <code>restoredFromRevisionId</code> 保留原 head，所以旧历史不会被覆盖，只是形成另一条分支。每个完成 turn 暴露两个清楚的目标：“此轮之前”选择 parent 与 pre-turn context，“此轮之后”选择 turn revision 与 post-turn context。第二个边界不是 UI 装饰：如果某条旧分支的最后一轮没有 successor，仍然必须能直接回到这个叶子节点。</p>
+<p data-lang="en"><strong>Revision model</strong>: RoomTalk no longer treats a checkpoint as a one-shot undo button. Each room has a <code>root</code>. A completed Codex turn creates a <code>turn</code> revision whose parent is the room head captured at turn start. A successful restore creates a <code>restore</code> revision. Its parent names the target state, while <code>restoredFromRevisionId</code> retains the abandoned head, so old history becomes another branch instead of being overwritten. Every completed turn exposes two precise targets: “before” selects its parent and pre-turn context, while “after” selects the turn revision and post-turn context. The latter is not cosmetic; it keeps the final leaf of an abandoned branch directly restorable even when no successor turn exists.</p>
 
-<div class="diagram">turn start
-  ├─ PostgreSQL: backendSessionIdBefore + backendLastTurnIdBefore
-  └─ isolated /tmp Git tree: before
-             │ Agent edits
-             ▼
-turn terminal ── diff trees ──▶ changed-file before/after blobs ──▶ S3
-             │
-restore      ├─ hash matches after ──▶ restore before
-             ├─ hash differs ────────▶ conflict, keep current
-             ├─ Codex thread/fork(lastTurnIdBefore)
-             └─ fenced DB commit: new session + audit + lease release</div>
+<p data-lang="zh"><strong>跨分支执行</strong>：Planner 分别沿 current 与 target 的 parent 向上走，找到最低公共祖先 LCA。先把 source 分支上的 turn 按逆序应用 before-image，再把 target 分支上的 turn 按正序应用 after-image。Undo 前必须确认当前 hash 等于该轮 after-hash；redo 前必须等于 before-hash。这样用户夹在两轮 Agent 之间的手工编辑不会被误认成 Agent revision：它作为 overlay 留在 workspace，一旦旧路径想覆盖它就产生 conflict。</p>
+<p data-lang="en"><strong>Cross-branch execution</strong>: The planner walks parent links from current and target to find their lowest common ancestor. It applies source-branch turn before-images in reverse order, then target-branch after-images in forward order. Undo requires the live hash to match that turn's after-hash; redo requires its before-hash. A manual edit made between Agent turns is therefore not mistaken for an Agent revision. It remains an overlay, and any old path that would overwrite it conflicts.</p>
 
-<p data-lang="zh"><strong>失败语义</strong>：sandbox 内的多文件应用先维护本次操作的回滚日志；任一文件写入失败，会先撤销这一批已经应用的路径，不把半恢复工作区交给下一阶段。如果随后 Codex fork 或数据库提交失败，RoomTalk 再用 checkpoint 的 after-image 把已经恢复的安全文件整体向前还原；未提交的 fork 只是 orphan，房间不会指向它。这个能力是“撤销某一轮自己留下的安全文件变化”，不是任意时间点 checkout，也无法撤销 git push、部署或外部 API 调用。Coco 目前没有等价的隐藏上下文 fork，所以 UI 只对完成的 Codex app-server turn 提供精确恢复。</p>
-<p data-lang="en"><strong>Failure semantics</strong>: The sandbox keeps a rollback journal while applying a multi-file batch. If any file write fails, it first reverses the paths already applied instead of handing a half-restored workspace to the next stage. If the later Codex fork or database commit fails, RoomTalk then uses checkpoint after-images to roll all restored safe files forward. An uncommitted fork is merely orphaned; the room never points to it. This is selective undo for one turn's safe file changes, not arbitrary time travel, and it cannot reverse a Git push, deployment, or external API call. Coco currently lacks an equivalent hidden-context fork, so the UI exposes exact restore only for completed Codex app-server turns.</p>
+<div class="diagram">root R0 ──turn A──▶ R1 ──turn B──▶ R2 ──turn C──▶ R3 (current)
+                         ╲
+restore before B          ╲ source R3 → target R1
+  1. LCA = R1              ╲ undo C.before, then B.before
+  2. validate every hash    ╲ fork Codex at B.pre-turn
+  3. commit restore X ───────▶ RX(parent=R1, restoredFrom=R3)
+
+later restore toward old branch R2:
+  RX → LCA R1 → replay B.after → new restore(parent=R2)
+
+restore after C reaches the old leaf R3 directly:
+  R2 → replay C.after → fork C.post-turn → new restore(parent=R3)</div>
+
+<p data-lang="zh"><strong>原子性与失败语义</strong>：恢复期间同一个 fenced room lease 会持续续租，跨 App 阻止 Agent turn、浏览器写入和 terminal input。每个文件批次在 sandbox 内维护回滚日志；整个 DAG path 也维护已应用 step 列表。任一 conflict、archive 缺失、写入失败或 lease 丢失，都会按相反方向撤销前面已经成功的 step，然后返回失败；此时不会调用 <code>thread/fork</code>，数据库 head 也不移动。全部文件到达 target 后才 fork 精确的 before/after Codex context。最后一个 PostgreSQL 事务锁 room，再次验证 source head 与 lease，一起写 target boundary、restore revision/audit、切换 session/cursor/head 并释放 lease。数据库提交失败时文件回到 source；已经创建但未提交引用的 fork 只是 orphan。</p>
+<p data-lang="en"><strong>Atomicity and failure semantics</strong>: The same fenced room lease is renewed throughout restore, blocking Agent turns, browser writes, and terminal input across App instances. Each sandbox file batch has a rollback journal, and the full DAG operation records every applied step. Any conflict, missing archive, write failure, or lost lease reverses prior steps and returns failure; Codex is not forked and the database head does not move. Only after all files reach the target does RoomTalk fork the exact selected before/after Codex context. One PostgreSQL transaction then locks the room, revalidates the source head and lease, records the target boundary, inserts the restore revision/audit, switches session/cursor/head, and releases the lease. A failed commit restores files to the source; a fork created without a committed reference is merely orphaned.</p>
+
+<p data-lang="zh"><strong>边界</strong>：这是 Agent-owned 变化与 Codex context 的持久 DAG，不是整个文件系统的时间机器。用户编辑目前是受 hash 保护的 overlay，UI 也还不是通用 revision-pair diff browser。Git push、部署和外部 API 调用不能被文件恢复撤销。Coco 没有等价的 hidden-context fork，所以 UI 只对完成的 Codex app-server turn 提供精确 DAG 恢复。</p>
+<p data-lang="en"><strong>Boundary</strong>: This is a persistent DAG for Agent-owned changes and Codex context, not a time machine for the entire filesystem. User edits are hash-protected overlays, and the UI is not yet a general revision-pair diff browser. File restore cannot reverse Git pushes, deployments, or external API calls. Coco lacks an equivalent hidden-context fork, so exact DAG restore is exposed only for completed Codex app-server turns.</p>
 
 <blockquote data-lang="zh">这里按 ownership 划分职责：RoomTalk 不执行不可信命令，E2B 不决定房间权限，Agent 也拿不到数据库或 provider secret。E2B 提供隔离执行环境，权限和业务状态仍由 RoomTalk 管理。</blockquote>
 <blockquote data-lang="en">Ownership defines the boundary. RoomTalk does not execute untrusted commands, E2B does not decide room permissions, and the agent receives neither database nor provider secrets. E2B provides isolated execution, while RoomTalk keeps authority over permissions and application state.</blockquote>
@@ -1974,11 +1981,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>为什么 checkpoint 不直接每轮 git commit，也不保存整个 workspace？</summary>
-  <div class="answer">用户仓库可能有自己的 branch、staged changes、hooks 和尚未提交的工作；自动 commit 会污染历史，并把“产品恢复记录”混进业务仓库。整 workspace 快照则会重复保存依赖、build output 和大文件，成本随每轮快速增长。当前实现只借用 Git 的 tree/blob 算法，但使用 <code>/tmp</code> 下独立的 object database/index；最终只上传变化文件的 before/after blob。恢复时仍按当前 hash 做冲突检测，而不是把旧 tree 强行 checkout 到用户仓库。</div>
+  <div class="answer">用户仓库可能有自己的 branch、staged changes、hooks 和尚未提交的工作；自动 commit 会污染历史，并把“产品恢复记录”混进业务仓库。整 workspace 快照又会重复保存依赖、build output 和大文件。RoomTalk 只借用 Git 的 tree/blob 算法，在 <code>/tmp</code> 使用独立 object database/index，并把每轮变化文件的 before/after blob 存入对象存储；PostgreSQL 的 revision DAG 保存 parent、source/target 和当前 head。恢复走 DAG path 与 hash 校验，不会对用户仓库做强制 checkout。删除房间或清空历史时，checkpoint object 会在数据库提交后清理。</div>
 </details>
 <details data-lang="en">
   <summary>Why not make a Git commit every turn or snapshot the whole workspace?</summary>
-  <div class="answer">The user's repository may have its own branches, staged changes, hooks, and unfinished work. Automatic commits would pollute that history and mix product recovery metadata into the project. Whole-workspace snapshots repeatedly copy dependencies, build output, and large files. The implementation borrows Git tree/blob algorithms but uses a separate object database and index under <code>/tmp</code>, then uploads only changed before/after blobs. Restore still compares live hashes instead of force-checking an old tree into the user's repository.</div>
+  <div class="answer">The user's repository may have its own branches, staged changes, hooks, and unfinished work. Automatic commits would pollute that history and mix product recovery metadata into the project. Whole-workspace snapshots repeatedly copy dependencies, build output, and large files. RoomTalk borrows Git tree/blob algorithms in an isolated object database and index under <code>/tmp</code>, stores only per-turn changed before/after blobs, and keeps parent, source/target, and current head in a PostgreSQL revision DAG. Restore follows that path with hash checks instead of force-checking an old tree into the user's repository. Room deletion or history clear removes checkpoint objects after the database commit.</div>
 </details>
 <details data-lang="en">
   <summary>Why doesn't Code Agent use BullMQ like ordinary chat AI?</summary>
@@ -2221,11 +2228,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <details data-lang="zh">
   <summary>如果让你重新设计，会改什么？</summary>
-  <div class="answer">三件事：1) 增加 RoomTalk-owned immutable workspace revision 层，把 rollback 从当前 sandbox Git 状态提升为可持久恢复的 product contract；目前 archive migration 保证连续性，但不是通用 revision history。2) 如果 E2B 提供稳定 command reconnect handle，就把可重连 daemon metadata 持久化，减少 control-plane restart 后的 cleanup/restart。3) 继续拆分 MessagePage 与 workspace orchestrator，把跨 panel session state 收敛到更明确的 store，而不是增加更多 props。</div>
+  <div class="answer">Revision DAG 已经落地，所以我不会再把它列成未来项。下一步有三件更具体的事：1) 给 DAG 增加 revision-pair browser，让历史 diff、review comment 和 publish manifest 都绑定明确的 base/head；用户文件写入是否也成为 revision 要单独定义，不应悄悄混进 Agent 节点。2) 如果 E2B 提供稳定 command reconnect handle，持久化 daemon metadata，减少 control-plane restart 后的 cleanup/restart。3) 继续拆分 MessagePage 与 workspace orchestrator，把跨 panel session state 收敛到明确 store，而不是增加更多 props。</div>
 </details>
 <details data-lang="en">
   <summary>If you were to redesign, what would you change?</summary>
-  <div class="answer">Three things: 1) Add a RoomTalk-owned immutable workspace revision layer so rollback becomes a durable product contract rather than current-sandbox Git state; archive migration preserves continuity but is not general revision history. 2) Persist reconnectable daemon metadata if E2B exposes stable command handles, reducing cleanup/restart after control-plane restarts. 3) Keep decomposing MessagePage and the workspace orchestrator so cross-panel session state converges on explicit stores instead of deeper prop chains.</div>
+  <div class="answer">The revision DAG is now shipped, so I would no longer list it as future work. The next steps are more specific: 1) add a revision-pair browser so historical diff, review comments, and publish manifests bind to explicit base/head revisions; whether user writes become nodes needs its own product contract rather than being smuggled into Agent revisions. 2) Persist reconnectable daemon metadata if E2B exposes stable command handles, reducing cleanup/restart after control-plane restarts. 3) Keep decomposing MessagePage and the workspace orchestrator so cross-panel session state converges on explicit stores instead of deeper prop chains.</div>
 </details>
 
 <details data-lang="zh">
@@ -2425,11 +2432,11 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 
 <div class="card" data-lang="zh">
   <h4>7. 明确承认边界</h4>
-  <p>当前已经有 RoomTalk-owned 的 Codex turn 级选择性 checkpoint：可以按 hash 保护用户后续编辑，同时恢复安全文件和精确的 pre-turn context。它仍不是任意 revision browser：不能跨任意历史点比较完整 workspace，也不能撤销 push、部署或第三方 API 副作用。面试时要把已经实现的“单轮安全撤销”和未来的“完整 revision history”分开讲。</p>
+  <p>当前已经有 RoomTalk-owned 的 Agent revision DAG：Codex turn 与 restore 都有 parent/source/target，完成 turn 的 before/after boundary 都可选择，跨分支按 LCA undo/redo，并以全路径 hash 校验保护用户 overlay；文件、精确 Codex context、restore audit 与 room head 只能整体切换。它仍不是任意 revision-pair browser，也不能撤销 push、部署或第三方 API 副作用。面试时要把“Agent-owned 可逆历史”与“整个文件系统和外部世界的时间机器”明确分开。</p>
 </div>
 <div class="card" data-lang="en">
   <h4>7. Explicit Boundaries</h4>
-  <p>RoomTalk now owns a selective checkpoint for each completed Codex turn: hash checks protect later user edits while safe files and the exact pre-turn context are restored together. It is still not an arbitrary revision browser and cannot reverse a push, deployment, or third-party API effect. The credible explanation separates shipped single-turn undo from a future full workspace revision history.</p>
+  <p>RoomTalk now owns an Agent revision DAG: Codex turns and restores retain parent/source/target links, both before- and after-turn boundaries are selectable, cross-branch moves use LCA undo/redo, and path-wide hash validation protects user overlays. Files, exact Codex context, restore audit, and the room head switch together. This is still not an arbitrary revision-pair browser and cannot reverse a push, deployment, or third-party API effect. The credible boundary is Agent-owned reversible history, not a time machine for the filesystem and external world.</p>
 </div>
 
 </main>

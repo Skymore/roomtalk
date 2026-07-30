@@ -226,6 +226,7 @@ describe('PostgresStore', () => {
           assert.deepEqual(call.params, ['room-1']);
         },
       },
+      { rows: [], assertCall: call => assert.match(call.sql, /workspace_checkpoint->>'objectKey'/) },
       {
         rowCount: 1,
         assertCall(call) {
@@ -465,7 +466,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },
@@ -1235,6 +1236,9 @@ describe('PostgresStore', () => {
       { rowCount: 0 },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       { rows: [], assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE room_id = \$1 RETURNING object_key/) },
+      { rows: [], assertCall: call => assert.match(call.sql, /workspace_checkpoint->>'objectKey'/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /SET code_agent_workspace_revision_id = NULL/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM code_agent_workspace_revisions/) },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM room_agent_turns/) },
       { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /SET last_activity_at = created_at/) },
@@ -1266,6 +1270,34 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.saveMessageHistory('room-1', [aiMessage]), room({ lastActivityAt: '2026-05-04T00:00:00.000Z' }));
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [aiMessage]);
     assert.equal(await store.clearRoomMessages('room-1'), 2);
+  });
+
+  it('deletes checkpoint archives when clearing a room history', async () => {
+    const checkpointObjectKey = 'code-agent-checkpoints/v1/room-1/turn-1.tar.gz';
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [], assertCall: call => assert.match(call.sql, /DELETE FROM media_assets/) },
+      {
+        rows: [{ object_key: checkpointObjectKey }],
+        assertCall: call => assert.match(call.sql, /workspace_checkpoint->>'objectKey'/),
+      },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /code_agent_workspace_revision_id = NULL/) },
+      { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM code_agent_workspace_revisions/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM room_agent_turns/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const deletedObjects: string[] = [];
+    const store = new PostgresStore(
+      new ScriptedPool([], client),
+      logger as any,
+      {
+        deleteMediaObject: async (objectKey: string) => { deletedObjects.push(objectKey); },
+      } as any,
+    );
+
+    assert.equal(await store.clearRoomMessages('room-1'), 0);
+    assert.deepEqual(deletedObjects, [checkpointObjectKey]);
   });
 
   it('selects ui_payload when reading messages so A2UI surfaces survive a reload', async () => {

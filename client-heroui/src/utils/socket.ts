@@ -65,6 +65,7 @@ let currentUsername = '';
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SOCKET_CONNECT_WAIT_TIMEOUT_MS = 45000;
 const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 10 * 60 * 1000;
+const WORKSPACE_REVISION_RESTORE_ACK_TIMEOUT_MS = 15 * 60 * 1000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
 export type RoomJoinResult = RoomSessionResult;
@@ -149,6 +150,10 @@ export type CodeAgentCheckpointRestoreResponse = SocketAckResponse & {
   conflictPaths?: string[];
   unavailablePaths?: string[];
   sessionId?: string;
+  sourceRevisionId?: string;
+  targetRevisionId?: string;
+  resultRevisionId?: string;
+  alreadyAtTarget?: boolean;
 };
 
 type CodeWorkspaceAssetUrlAckResponse = SocketAckResponse & {
@@ -1594,14 +1599,21 @@ export const interruptCodeAgentTurn = (roomId: string, reason?: string): Promise
   ).then(() => undefined)
 );
 
-export const restoreCodeAgentCheckpoint = (roomId: string, turnId: string): Promise<CodeAgentCheckpointRestoreResponse> => (
+export const restoreCodeAgentCheckpoint = (
+  roomId: string,
+  turnId: string,
+  targetBoundary: 'before' | 'after' = 'before',
+): Promise<CodeAgentCheckpointRestoreResponse> => (
   emitWithAck<CodeAgentCheckpointRestoreResponse>(
     'restore_code_agent_checkpoint',
-    { roomId, turnId },
+    { roomId, turnId, targetBoundary },
     'Timed out while restoring the workspace checkpoint',
     'Failed to restore the workspace checkpoint',
     {
-      timeoutMs: 2 * 60 * 1000,
+      // A cross-branch restore can traverse several archived revisions. Keep
+      // waiting for the single fenced server operation instead of reporting a
+      // false failure while it is still rolling the workspace forward/back.
+      timeoutMs: WORKSPACE_REVISION_RESTORE_ACK_TIMEOUT_MS,
       // An explicit NOT_REGISTERED response proves the restore did not begin,
       // so this one retry is safe. Do not retry an ambiguous timeout/disconnect.
       retryOnNotRegistered: true,

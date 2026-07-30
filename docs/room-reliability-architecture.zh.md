@@ -107,6 +107,8 @@ PostgreSQL 负责跨实例 fan-out；每个 listener 只通知连接到本实例
 
 Realtime 与任务恢复也按实例划分。每个 App 进程生成唯一 runtime instance ID，在 Redis 续租 TTL heartbeat，并记录自己拥有的 sockets。Heartbeat 和实例注册在同一段 Lua 内完成；清理也重新检查 heartbeat 与 owner。滚动启动不会清空其他实例的 presence。Code Agent 使用 PostgreSQL turn claim `{ roomId, turnId, ownerId, fence }`：启动事务一次建立 turn 与 room lease，执行过程产生的每次中间写入都校验 live claim，terminal transaction 在释放精确 lease 前一起收敛 Message、cost、room 与 turn。Recovery 会锁定并重新检查候选项，因此并发 takeover 不会被旧恢复覆盖；遗留 `starting`/`steering` 只有超过 grace period 且没有 live lease 才回到 `queued`。Recovery 与 retention loop 使用 PostgreSQL advisory lock。权威依据是 lease，不是进程内存或 hostname。
 
+Codex workspace 恢复沿用同一 ownership 规则。PostgreSQL 为每个房间保存 Agent-owned revision DAG 与一个 current head。Restore 续租 room lease，计算 current/target LCA，按完整 turn edge 向后 undo、向前 redo，并验证每条 edge 离开状态的 hash。任一冲突都会先回滚前面 step，不 fork Codex context。只有最终 fenced transaction 才一起插入 restore revision/audit，并切换 session、cursor 与 head；旧分支保留，不被改写。
+
 普通 Chat AI 使用独立调度边界。一个事务同时创建 streaming placeholder、`assistant_runs`、对应 room event 与 `task_dispatch_outbox`。App relay 只把 `{ schemaVersion: 1, runId }` 以 `jobId=runId` 送入 BullMQ，再确认精确的 fenced dispatch claim。Redis 不可用时 row 回到 pending，已经接受的用户请求仍留在 PostgreSQL。Dispatch 确认后还有一轮受 PostgreSQL advisory lock 保护的对账：只检查尚未终态的 run，BullMQ job 缺失时补建，failed 或业务仍 active 却提前 completed 时重试。它覆盖空 Redis 恢复和 infrastructure attempts 耗尽，但不会把 PostgreSQL 重新变成 polling scheduler。独立 `ai-worker` claim 精确 run，按配置做有界并发，持续续租 PostgreSQL generation，并通过版本化 Redis channel 发布 transient event；每个 App 在 `io.local` 前重新校验本机 socket 权限。
 
 BullMQ 只拥有 waiting、并发、backoff、stalled recovery 与运维 retention，不拥有业务状态或 result backend。`assistant_runs` 拥有 request snapshot、status、generation、immutable terminal payload、error 与 usage；终态事务只累计一次 Message 和 room cost。系统刻意不建立 `assistant_run_usage` ledger，因为锁定的唯一 run transition 已提供幂等边界，而 immutable terminal payload 已保留审计依据。这里的 exactly-once 只到 RoomTalk 的 PostgreSQL 边界：如果 Provider 已接受请求，但进程在 terminal payload 落库前退出，新 generation 仍可能再次调用外部 Provider。有可靠 idempotency key 的 Provider 可单独接入；基础可迁移契约是 Provider 至少一次、旧 generation 不能落结果、终态 projection 与内部费用只结算一次。
@@ -127,6 +129,8 @@ Migration `0007_ai_stream_fencing` 给每个 AI placeholder 增加单调 generat
 
 Migration `0011_code_agent_turn_fencing` 把 Code Agent room lease 的 owner/fence 保存到 running turn。Schema 虽然是 additive，但写协议已经改变：pre-`0011` App 仍能不校验 claim 就写 transcript 和 terminal state。因此首次部署 `0011` 必须停止旧 App；全部进程跨过这条边界并使用 fenced start/write/finish contract 后，后续兼容版本才可滚动。
 
+Migration `0013_code_agent_workspace_revision_dag` 虽然只增加 table/column，但同样改变 Code Agent terminal/restore protocol。旧 writer 不会追加 turn revision，因此首次发布也必须使用停写维护边界。Backfill 会把 incomplete turn 与含糊的旧 restore 标成不可遍历 barrier。
+
 这是明确的直接切换，不长期维护双 decoder。它也不需要 realtime outbox：outbox 解决 competing worker 的副作用与重试，而 room replay 是已经与 canonical mutation 同事务持久化的 fan-out state transfer。`messageVersion` 同样只会重复 room seq，又不能表达漏掉了哪些提交。
 
 ## 验证证据
@@ -136,7 +140,7 @@ Migration `0011_code_agent_turn_fencing` 把 Code Agent room lease 的 owner/fen
 - store、socket unit/contract tests；
 - broadcaster/reducer/state-machine tests 覆盖精确已提交 payload、无本地订阅短路、local-only fan-out、三态成员授权、有界突发水位合并、listener generation 替换、首事件 byte rejection、fast path 零补拉、实时 replay 与 prepend 竞态、过期分页边界、窗口删空且不缓存无效状态、大 gap snapshot、cache 恢复、数据库回退时重置水位与 gap target、页面生命周期回调、删除、turn、room metadata、提前到达 AI 临时事件、AI 持久/未持久终态、数秒数据库故障后的终态重试，以及临时 AI 更新期间保留 optimistic send；
 - 不依赖数据库的严格 V1 payload 单测覆盖全部 event type、空 AI/media content、缺失/额外字段、room 绑定、重复 ID 与退役 ID-only payload；
-- 真实 PostgreSQL 测试覆盖不可变 after-image、message 房间不可变、严格 payload、migration/checksum、普通 AI 的原子 placeholder/run/dispatch 与 fenced terminal projection、Code Agent 的原子 turn start/rollback、中间与终态写入拒绝 stale fence、遗留 queue recovery、快照、并发、retention、tombstone、owner lease 与 advisory lock。GitHub CI 在 Node 24.18 下同时启动 PostgreSQL 17 与 Redis 7，并提供 `ROOM_EVENT_TEST_DATABASE_URL` 与 `BULLMQ_TEST_REDIS_URL`，因此 trigger transaction 与真实 queue dedupe/retry 都不会静默 skip；
+- 真实 PostgreSQL 测试覆盖不可变 after-image、message 房间不可变、严格 payload、migration/checksum、普通 AI 的原子 placeholder/run/dispatch 与 fenced terminal projection、Code Agent 的原子 turn start/rollback、stale fence 拒绝、workspace revision 创建/restore/no-op 与旧数据 DAG backfill、遗留 queue recovery、快照、并发、retention、tombstone、owner lease 与 advisory lock。GitHub CI 在 Node 24.18 下同时启动 PostgreSQL 17 与 Redis 7，并提供 `ROOM_EVENT_TEST_DATABASE_URL` 与 `BULLMQ_TEST_REDIS_URL`，因此 trigger transaction 与真实 queue dedupe/retry 都不会静默 skip；
 - PostgreSQL Playwright：刷新/新 context、媒体/AI/分享、双客户端、离线追赶；
 - Compose health、重启持久化与 backup/restore。
 

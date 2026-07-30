@@ -1198,6 +1198,18 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [], rowCount: count };
     }
 
+    if (/SELECT DISTINCT workspace_checkpoint->>'objectKey' AS object_key FROM room_agent_turns WHERE room_id = \$1/.test(compactSql)) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (/UPDATE rooms SET code_agent_workspace_revision_id = NULL WHERE id = \$1/.test(compactSql)) {
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (/DELETE FROM code_agent_workspace_revisions WHERE room_id = \$1/.test(compactSql)) {
+      return { rows: [], rowCount: 0 };
+    }
+
     if (/DELETE FROM room_agent_turns WHERE room_id = \$1/.test(compactSql)) {
       return { rows: [], rowCount: 0 };
     }

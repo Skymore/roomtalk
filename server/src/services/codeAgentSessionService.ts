@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { AIStreamOwnership, CodeAgentMessageMutationResult, CodeAgentTurnClaim, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, MessageUpdateResult, RoomStore } from '../repositories/store';
+import { AIStreamOwnership, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentTurnClaim, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, MessageUpdateResult, RoomStore } from '../repositories/store';
 import { AICost, AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAgentTurnPhase, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from './aiHistory';
@@ -138,6 +138,10 @@ export type CodeAgentCheckpointRestoreResult = {
   conflictPaths?: string[];
   unavailablePaths?: string[];
   sessionId?: string;
+  sourceRevisionId?: string;
+  targetRevisionId?: string;
+  resultRevisionId?: string;
+  alreadyAtTarget?: boolean;
 };
 
 export interface CodeAgentThreadListResult {
@@ -1211,6 +1215,7 @@ export class CodeAgentSessionService {
     roomId: string;
     clientId: string;
     turnId: string;
+    targetBoundary?: CodeAgentCheckpointBoundary;
   }): Promise<CodeAgentCheckpointRestoreResult> {
     if (this.activeTurns.has(input.roomId)) {
       return { success: false, error: 'Wait for the current agent turn to finish before restoring a checkpoint' };
@@ -1222,15 +1227,10 @@ export class CodeAgentSessionService {
     if (this.resolveTurnBackend(room) !== 'codex-app-server') {
       return { success: false, error: 'Exact checkpoint restore currently requires Codex app-server' };
     }
-    const stored = await this.store.readCodeAgentWorkspaceCheckpoint?.(input.roomId, input.turnId);
-    if (!stored || stored.checkpoint.status !== 'ready' || !stored.checkpoint.manifest) {
-      return { success: false, error: 'This turn does not have a restorable workspace checkpoint' };
-    }
-    if (stored.backendSessionIdBefore && !stored.backendLastTurnIdBefore) {
-      return { success: false, error: 'This checkpoint predates the recorded Codex turn boundary and cannot restore context safely' };
-    }
     if (
-      !this.store.acquireCodeAgentRoomLease
+      !this.store.readCodeAgentCheckpointRestorePlan
+      || !this.store.acquireCodeAgentRoomLease
+      || !this.store.renewCodeAgentRoomLease
       || !this.store.commitCodeAgentCheckpointRestore
       || !this.sandboxService.previewWorkspaceCheckpoint
       || !this.sandboxService.restoreWorkspaceCheckpoint
@@ -1240,52 +1240,181 @@ export class CodeAgentSessionService {
 
     const restoreId = this.createId();
     const leaseTurnId = `checkpoint_restore_${restoreId}`;
+    const restoreLeaseTtlMs = Math.max(this.roomLeaseTtlMs, 5 * 60 * 1000);
     const lease = await this.store.acquireCodeAgentRoomLease(
       input.roomId,
       leaseTurnId,
       this.leaseOwnerId,
       this.now().toISOString(),
-      Math.max(this.roomLeaseTtlMs, 5 * 60 * 1000),
+      restoreLeaseTtlMs,
     );
     if (!lease) return { success: false, error: 'The workspace is busy' };
 
-    let archive: CodeAgentWorkspaceCheckpointArchive | undefined;
-    let restoredPaths: string[] = [];
+    let restoreLeaseLost = false;
+    let leaseRenewalChain = Promise.resolve();
+    const queueLeaseRenewal = () => {
+      leaseRenewalChain = leaseRenewalChain.then(async () => {
+        if (restoreLeaseLost) return;
+        const renewed = await this.store.renewCodeAgentRoomLease!(
+          input.roomId,
+          lease.turnId,
+          lease.ownerId,
+          this.now().toISOString(),
+          restoreLeaseTtlMs,
+          lease.fence,
+        );
+        if (!renewed || renewed.fence !== lease.fence) {
+          restoreLeaseLost = true;
+        }
+      }).catch(error => {
+        restoreLeaseLost = true;
+        this.logger.error('Failed to renew workspace revision restore lease', {
+          error,
+          roomId: input.roomId,
+          turnId: input.turnId,
+          leaseFence: lease.fence,
+        });
+      });
+      return leaseRenewalChain;
+    };
+    const requireLiveRestoreLease = async () => {
+      await queueLeaseRenewal();
+      if (restoreLeaseLost) throw new Error('The workspace revision restore lease was lost');
+    };
+    const leaseHeartbeat = setInterval(
+      () => { void queueLeaseRenewal(); },
+      Math.max(10_000, Math.min(60_000, Math.floor(restoreLeaseTtlMs / 3))),
+    );
+    leaseHeartbeat.unref?.();
+
+    type LoadedRestoreStep = CodeAgentCheckpointRestoreStep & {
+      archive: CodeAgentWorkspaceCheckpointArchive;
+      paths: string[];
+    };
+    let plan: CodeAgentCheckpointRestorePlan | null = null;
+    let appliedSteps: LoadedRestoreStep[] = [];
+    let turnSandbox: CodeAgentSandboxHandle | null = null;
+    const rollbackAppliedSteps = async () => {
+      if (!turnSandbox || appliedSteps.length === 0) return;
+      const rollbackSteps = [...appliedSteps].reverse();
+      for (const step of rollbackSteps) {
+        const inverse = step.direction === 'before' ? 'after' : 'before';
+        if (step.paths.length === 0) continue;
+        const preview = await this.sandboxService.previewWorkspaceCheckpoint!(
+          turnSandbox,
+          step.archive,
+          inverse,
+        );
+        if (preview.conflictPaths.length > 0 || preview.unavailablePaths.length > 0) {
+          throw new Error(`Workspace revision rollback conflicted at ${[...preview.conflictPaths, ...preview.unavailablePaths].join(', ')}`);
+        }
+        await this.sandboxService.restoreWorkspaceCheckpoint!(
+          turnSandbox,
+          step.archive,
+          step.paths,
+          inverse,
+        );
+      }
+      appliedSteps = [];
+    };
     try {
-      const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
-      if (!sandbox.ok) return { success: false, error: this.describeSandboxFailure(sandbox) };
-      if (stored.checkpoint.manifest.files.length > 0) {
-        const objectKey = stored.checkpoint.objectKey;
-        const getObject = this.options.mediaObjectStorage?.getMediaObject;
-        if (!objectKey || !getObject) return { success: false, error: 'Workspace checkpoint archive is unavailable' };
-        const object = await getObject.call(this.options.mediaObjectStorage, objectKey);
-        archive = {
-          body: object.body,
-          byteSize: object.byteSize,
-          manifest: stored.checkpoint.manifest,
+      plan = await this.store.readCodeAgentCheckpointRestorePlan(
+        input.roomId,
+        input.turnId,
+        input.targetBoundary || 'before',
+      );
+      if (!plan) {
+        return { success: false, error: 'This turn is not connected to the workspace revision graph' };
+      }
+      if (Boolean(plan.targetBackendSessionId) !== Boolean(plan.targetBackendLastTurnId)) {
+        return { success: false, error: 'This checkpoint predates the recorded Codex turn boundary and cannot restore context safely' };
+      }
+      if (plan.alreadyAtTarget) {
+        return {
+          success: true,
+          restoredPaths: [],
+          conflictPaths: [],
+          unavailablePaths: [],
+          sourceRevisionId: plan.currentRevisionId,
+          targetRevisionId: plan.targetRevisionId,
+          resultRevisionId: plan.currentRevisionId,
+          alreadyAtTarget: true,
         };
-      } else {
-        archive = { body: Buffer.from('{}'), byteSize: 2, manifest: stored.checkpoint.manifest };
       }
 
-      const preview = stored.checkpoint.manifest.files.length > 0
-        ? await this.sandboxService.previewWorkspaceCheckpoint(sandbox.handle, archive)
-        : { safePaths: [], conflictPaths: [], unavailablePaths: [] };
-      restoredPaths = preview.safePaths;
-      if (restoredPaths.length > 0) {
-        await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'before');
+      const getObject = this.options.mediaObjectStorage?.getMediaObject;
+      const loadedSteps: LoadedRestoreStep[] = [];
+      for (const step of plan.steps) {
+        const manifest = step.checkpoint.manifest;
+        if (!manifest || manifest.files.some(file => !file.restorable)) {
+          return { success: false, error: `Workspace revision ${step.revisionId} is incomplete` };
+        }
+        const paths = manifest.files.map(file => file.path);
+        let archive: CodeAgentWorkspaceCheckpointArchive;
+        if (paths.length === 0) {
+          archive = { body: Buffer.from('{}'), byteSize: 2, manifest };
+        } else {
+          if (!step.checkpoint.objectKey || !getObject) {
+            return { success: false, error: `Workspace archive for revision ${step.revisionId} is unavailable` };
+          }
+          const object = await getObject.call(this.options.mediaObjectStorage, step.checkpoint.objectKey);
+          archive = { body: object.body, byteSize: object.byteSize, manifest };
+        }
+        loadedSteps.push({ ...step, archive, paths });
+      }
+
+      const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
+      if (!sandbox.ok) return { success: false, error: this.describeSandboxFailure(sandbox) };
+      turnSandbox = sandbox.handle;
+      await requireLiveRestoreLease();
+      const restoredPathSet = new Set<string>();
+      for (const step of loadedSteps) {
+        if (step.paths.length === 0) {
+          appliedSteps.push(step);
+          continue;
+        }
+        const preview = await this.sandboxService.previewWorkspaceCheckpoint(
+          turnSandbox,
+          step.archive,
+          step.direction,
+        );
+        if (
+          preview.conflictPaths.length > 0
+          || preview.unavailablePaths.length > 0
+          || preview.safePaths.length !== step.paths.length
+        ) {
+          await rollbackAppliedSteps();
+          return {
+            success: false,
+            error: 'Workspace changed outside the selected revision path; no files or Codex context were changed',
+            restoredPaths: [],
+            conflictPaths: preview.conflictPaths,
+            unavailablePaths: preview.unavailablePaths,
+            sourceRevisionId: plan.currentRevisionId,
+            targetRevisionId: plan.targetRevisionId,
+          };
+        }
+        await this.sandboxService.restoreWorkspaceCheckpoint(
+          turnSandbox,
+          step.archive,
+          step.paths,
+          step.direction,
+        );
+        step.paths.forEach(path => restoredPathSet.add(path));
+        appliedSteps.push(step);
+        await requireLiveRestoreLease();
       }
 
       let sessionId: string | undefined;
-      if (stored.backendSessionIdBefore) {
+      if (plan.targetBackendSessionId) {
         const request: CodeAgentRunnerThreadForkRequest = {
           schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'thread_fork',
           roomId: input.roomId,
           clientId: input.clientId,
           workspace: sandbox.handle.workspace,
-          threadId: stored.backendSessionIdBefore,
-          lastTurnId: stored.backendLastTurnIdBefore,
+          threadId: plan.targetBackendSessionId,
+          lastTurnId: plan.targetBackendLastTurnId,
         };
         const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadForkResultEvent>({
           codexClientId: room.creatorId,
@@ -1294,47 +1423,54 @@ export class CodeAgentSessionService {
           expectedType: 'thread_fork_result',
         });
         sessionId = event.threadId;
+        await requireLiveRestoreLease();
       }
 
+      const resultRevisionId = `restore:${restoreId}`;
+      const restoredPaths = Array.from(restoredPathSet).sort();
+      await requireLiveRestoreLease();
       const committed = await this.store.commitCodeAgentCheckpointRestore({
         roomId: input.roomId,
         checkpointTurnId: input.turnId,
         restoreId,
         restoredByClientId: input.clientId,
         lease,
+        sourceRevisionId: plan.currentRevisionId,
+        targetRevisionId: plan.targetRevisionId,
+        resultRevisionId,
+        targetBoundary: plan.targetBoundary,
         ...(sessionId ? { sessionId } : {}),
-        ...(stored.backendLastTurnIdBefore ? { lastTurnId: stored.backendLastTurnIdBefore } : {}),
+        ...(plan.targetBackendLastTurnId ? { lastTurnId: plan.targetBackendLastTurnId } : {}),
         restoredPaths,
-        conflictPaths: preview.conflictPaths,
-        unavailablePaths: preview.unavailablePaths,
+        conflictPaths: [],
+        unavailablePaths: [],
         restoredAt: this.now().toISOString(),
       });
       if (!committed) {
-        if (restoredPaths.length > 0) {
-          await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'after');
-        }
+        await rollbackAppliedSteps();
         return { success: false, error: 'The checkpoint restore lost its workspace lease' };
       }
+      appliedSteps = [];
       this.emitter.to(committed.room.creatorId).emit('room_updated', committed.room);
       return {
         success: true,
         restoredPaths,
-        conflictPaths: preview.conflictPaths,
-        unavailablePaths: preview.unavailablePaths,
+        conflictPaths: [],
+        unavailablePaths: [],
         ...(sessionId ? { sessionId } : {}),
+        sourceRevisionId: plan.currentRevisionId,
+        targetRevisionId: plan.targetRevisionId,
+        resultRevisionId: committed.revision.id,
       };
     } catch (error) {
-      if (archive && restoredPaths.length > 0) {
-        const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
-        if (sandbox.ok) {
-          await this.sandboxService.restoreWorkspaceCheckpoint(sandbox.handle, archive, restoredPaths, 'after').catch(rollbackError => {
-            this.logger.error('Failed to roll back workspace after checkpoint restore error', { rollbackError, roomId: input.roomId, turnId: input.turnId });
-          });
-        }
-      }
+      await rollbackAppliedSteps().catch(rollbackError => {
+        this.logger.error('Failed to roll back workspace after checkpoint restore error', { rollbackError, roomId: input.roomId, turnId: input.turnId });
+      });
       this.logger.error('Failed to restore code-agent workspace checkpoint', { error, roomId: input.roomId, turnId: input.turnId });
       return { success: false, error: error instanceof Error ? error.message : 'Failed to restore workspace checkpoint' };
     } finally {
+      clearInterval(leaseHeartbeat);
+      await leaseRenewalChain;
       await this.store.releaseCodeAgentRoomLease?.(input.roomId, lease.turnId, lease.ownerId, lease.fence);
     }
   }

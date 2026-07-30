@@ -112,6 +112,9 @@ describe('FakeCodeAgentSandboxService', () => {
     assert.equal((await service.readWorkspaceFile(handle, 'src/existing.txt')).content, 'user after agent');
     assert.equal((await service.listWorkspaceEntries(handle)).some(entry => entry.path === 'src/new.txt'), false);
 
+    const forwardPreview = await service.previewWorkspaceCheckpoint(handle, checkpoint, 'after');
+    assert.deepEqual(forwardPreview.safePaths, ['src/new.txt']);
+    assert.deepEqual(forwardPreview.conflictPaths, ['src/existing.txt']);
     await service.restoreWorkspaceCheckpoint(handle, checkpoint, preview.safePaths, 'after');
     assert.equal((await service.readWorkspaceFile(handle, 'src/new.txt')).content, 'agent new');
   });

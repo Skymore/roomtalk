@@ -155,6 +155,43 @@ export interface CodeAgentWorkspaceCheckpointRecord {
   error?: string;
 }
 
+export type CodeAgentWorkspaceRevisionKind = 'root' | 'turn' | 'restore';
+export type CodeAgentCheckpointBoundary = 'before' | 'after';
+
+export interface CodeAgentWorkspaceRevisionRecord {
+  id: string;
+  roomId: string;
+  parentRevisionId?: string;
+  kind: CodeAgentWorkspaceRevisionKind;
+  turnId?: string;
+  restoreId?: string;
+  restoredFromRevisionId?: string;
+  restoreTargetRevisionId?: string;
+  backendSessionId?: string;
+  backendLastTurnId?: string;
+  traversable: boolean;
+  createdAt: string;
+}
+
+export interface CodeAgentCheckpointRestoreStep {
+  revisionId: string;
+  turnId: string;
+  direction: 'before' | 'after';
+  checkpoint: CodeAgentWorkspaceCheckpointRecord;
+}
+
+export interface CodeAgentCheckpointRestorePlan {
+  roomId: string;
+  checkpointTurnId: string;
+  targetBoundary: CodeAgentCheckpointBoundary;
+  currentRevisionId: string;
+  targetRevisionId: string;
+  alreadyAtTarget: boolean;
+  targetBackendSessionId?: string;
+  targetBackendLastTurnId?: string;
+  steps: CodeAgentCheckpointRestoreStep[];
+}
+
 export type CodeAgentTurnStartResult =
   | {
       outcome: 'started';
@@ -199,6 +236,10 @@ export interface CodeAgentCheckpointRestoreCommitInput {
   restoreId: string;
   restoredByClientId: string;
   lease: CodeAgentRoomLease;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+  resultRevisionId: string;
+  targetBoundary: CodeAgentCheckpointBoundary;
   sessionId?: string;
   lastTurnId?: string;
   restoredPaths: string[];
@@ -210,6 +251,7 @@ export interface CodeAgentCheckpointRestoreCommitInput {
 export interface CodeAgentCheckpointRestoreCommitResult {
   room: Room;
   turn: RoomAgentTurn;
+  revision: CodeAgentWorkspaceRevisionRecord;
 }
 
 export type CodeAgentTurnTerminalResult =
@@ -605,6 +647,7 @@ export interface DurableRoomStore {
     backendLastTurnIdBefore?: string;
     checkpoint: CodeAgentWorkspaceCheckpointRecord;
   } | null>;
+  readCodeAgentCheckpointRestorePlan?(roomId: string, turnId: string, targetBoundary?: CodeAgentCheckpointBoundary): Promise<CodeAgentCheckpointRestorePlan | null>;
   commitCodeAgentCheckpointRestore?(input: CodeAgentCheckpointRestoreCommitInput): Promise<CodeAgentCheckpointRestoreCommitResult | null>;
   recoverStaleCodeAgentQueuedMessages?(staleBefore: string, updatedAt?: string): Promise<number>;
   recoverInterruptedCodeAgentRoomStates?(now?: string): Promise<number>;
@@ -1076,6 +1119,10 @@ export class CompositeRoomStore implements RoomStore {
 
   readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string) {
     return this.durableStore.readCodeAgentWorkspaceCheckpoint?.(roomId, turnId) || Promise.resolve(null);
+  }
+
+  readCodeAgentCheckpointRestorePlan(roomId: string, turnId: string, targetBoundary?: CodeAgentCheckpointBoundary) {
+    return this.durableStore.readCodeAgentCheckpointRestorePlan?.(roomId, turnId, targetBoundary) || Promise.resolve(null);
   }
 
   commitCodeAgentCheckpointRestore(input: CodeAgentCheckpointRestoreCommitInput) {

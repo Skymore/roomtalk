@@ -95,6 +95,8 @@ Fast path 只改变延迟，不改变正确性边界。PostgreSQL 把 hint fan-o
 
 运行任务遵循同一规则。Code Agent 是绑定房间的交互执行链路，不是 BullMQ job。一个 PostgreSQL 事务在返回成功前同时创建 prompt/placeholder/turn，并取得 `{ roomId, turnId, ownerId, fence }` lease；之后每次由执行过程产生的 turn write 都证明这个 claim，terminal transaction 一次收敛 message、cost、room/session、turn 与精确 lease release。旧进程在 takeover 后不能继续写。Recovery 锁定并重新检查候选项，只有不存在匹配 live lease 时才恢复 turn/sandbox，或把遗留 `starting`/`steering` 输入放回 queue。普通 Chat AI 使用另一条边界：queued run 有 durable dispatch intent，active Worker 持有 generation lease，`finalizing` run 已保存 immutable terminal payload，因此 App 重启不能判死 job。旧 lease 消失后 BullMQ retry 或 replacement Worker 才能取得更高 generation，旧 transient/terminal write 都会被 fence 拒绝。
 
+完成的 Codex app-server turn 还会推进 Agent-owned workspace revision DAG。每个完成 turn 的 before/after boundary 都可作为目标，所以旧分支最后一个 turn 即使没有 successor，也仍然能恢复。Restore 持有并持续续租同一个 room lease，找到 current/target 分支的 LCA，再以 hash 校验把整轮 checkpoint 依次向后 undo、向前 redo，最后在选定 context boundary fork Codex。路径任一处冲突都会反向撤销已经应用的 step，context 与 room head 都不改变。终态事务记录 target boundary 与 source/target/result revision ID 并移动 room head，旧分支仍然保留。Checkpoint 继续只保存 S3-compatible storage 中的变化文件 before/after blob，不做全 workspace 快照，也不向用户仓库写 commit。
+
 Recovery 与 retention loop 在每个副本中都存在，但执行前获取命名 PostgreSQL advisory lock；一轮只有一个实例做维护，其余实例跳过。Event broadcaster 也只为每个房间保存固定大小的 min/max pending state。生产路径未显式传入测试时间时，assistant-run 与 dispatch lease 都以 PostgreSQL `clock_timestamp()` 为时钟权威，避免多节点 wall-clock 偏差。
 
 Lease schema 自己也有 cutover 边界。Pre-`0006` App 不会为 `ai_stream_owner_leases` heartbeat，因此不能与第一个理解 `0006` 的进程重叠：新进程可能恢复旧进程仍在生成的 placeholder。首次引入 `0006` 时必须停止所有旧 App。所有副本都使用 lease protocol 后，后续兼容 image 才可滚动；未来若再次改变 lease protocol，也需要维护窗口或两阶段 migration。
@@ -112,6 +114,8 @@ Migration `0005_message_room_immutability_and_event_clock` 强制 message-room i
 Migration `0006_ai_stream_owner_leases` 增加 stream-owner 接管所需的 PostgreSQL heartbeat/expiry 表。它是 additive migration，不改变 V1 room-event 格式。
 
 Migration `0011_code_agent_turn_fencing` 把 running Code Agent turn 绑定到 room-lease owner 与 generation。旧 App 不会用这个 claim 约束 transcript/terminal write，因此首次部署 `0011` 必须使用维护窗口，不能与旧版本混合滚动。生产已在 2026-07-26 停止全部旧 App 与 Worker 后跨过这条边界。
+
+Migration `0013_code_agent_workspace_revision_dag` 增加 room head、`root`/`turn`/`restore` 节点、turn parent/result link 与 restore source/target/result audit ID。旧历史按保守规则回填：缺失 checkpoint 的 turn、旧的部分恢复或非当前 turn 恢复会成为不可遍历 barrier，不会被伪造成可逆状态。Pre-`0013` App 仍能在不写 revision edge 的情况下完成 turn，因此首次发布必须先停止旧 App writer，执行 migration 后只启动理解 DAG 的新镜像。
 
 Deleted room 无法再取 snapshot。因此 migration 为这些 stream 追加新的 V1 `room.deleted` tombstone，保留 `deleted_reader_ids`，并把 retention floor 指向 tombstone。即使 cursor 早于已清理前缀，服务端仍返回这个终态事件，客户端只对 deletion 允许这一次 seq 跳跃，从而避免 `CURSOR_EXPIRED → 无法取得 snapshot` 死循环。系统不长期维护双格式 decoder。
 
