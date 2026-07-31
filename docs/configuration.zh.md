@@ -3,7 +3,7 @@
 [English](configuration.md)
 
 状态：当前
-更新：2026-07-22
+更新：2026-07-30
 事实源：`server/.env.example`、`.env.compose.example`、`compose.yaml`、runtime config loader 和 `scripts/local-production.mjs`
 
 本文只整理 operator-facing 配置。Test-only 变量和每轮注入 sandbox 的 `ROOMTALK_*` 变量刻意不列入。
@@ -155,6 +155,7 @@ App 与 `ai-worker` 使用同一镜像、不同进程。App 只提交业务事�
 | `ASSISTANT_RUN_RECONCILE_GRACE_MS` | 已确认 dispatch 至少经过多久才检查 missing/failed job，默认 `30000`。 |
 | `ASSISTANT_RUN_RECONCILE_BATCH_SIZE` | 每轮检查的 active dispatch 数，默认 `200`；满批次使用轮转 cursor。 |
 | `ASSISTANT_RUN_WORKER_CONCURRENCY` | 单个 Worker 进程并发 job 数，默认 `2`。 |
+| `ASSISTANT_PROVIDER_LIMITS_JSON` | 可选的 provider 级请求准入限制，通过 queue Redis 在 Worker 间共享。例如 `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`。未知 provider、无效值或非正整数会让 Worker 启动失败。 |
 | `ASSISTANT_RUN_WORKER_LEASE_MS` | Provider 执行期间续租的 PostgreSQL run owner lease，默认 `60000`。 |
 | `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | `assistant_runs` 记录的 domain claim 上限，默认 `10`。 |
 | `ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS` | AI Worker 向 queue Redis 写心跳的间隔，默认 `5000`。 |
@@ -168,6 +169,25 @@ App 侧 reconciler 是有界修复循环，不是第二个 scheduler。它先取
 | `AI_WORKER_HEALTH_PORT` | Worker 专用 health endpoint；Compose 使用 `3013`。 |
 
 Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 pending，relay 恢复后继续投递；App 会报告 `degraded` 与 deferred dispatch，而不是丢请求。BullMQ retry 用于基础设施中断；已经持久化的 Provider error 是业务终态，不会无限重试。`LOG_FILE_ENABLED` 控制可选文件日志，生产日志必须结构化且不包含 secret。
+
+## 账号、会员与额度
+
+密码登录和 Google 登录现在都归属同一个持久化 `accounts` principal。匿名 client ID 仍是访客；设置密码会把该 client 升级成账号，之后绑定 Google 只会给同一账号增加一种登录 identity，不会新建或替换账号。
+
+| 变量 | 用途 |
+| --- | --- |
+| `MEMBERSHIP_ADMIN_TOKEN` | 可选的服务端 Bearer secret，用于 `PUT /api/admin/accounts/:accountId/membership`。未配置时管理接口返回 `404`。只能存放在部署 secret manager 中。 |
+
+会员管理请求可设置 `free`、`pro`、`priority`，以及 `active`、`past_due`、`cancelled` 状态，还可携带账期、外部订阅信息和有界 `priorityOverride`；非 active 的付费会员按 Free 服务等级调度。如同时传入正数 `creditGrantUsd`，必须提供 `Idempotency-Key` header，确保支付 webhook 重试不会重复发放额度。
+
+| 服务等级 | 额度可用 | 额度耗尽 |
+| --- | ---: | ---: |
+| Priority | `1` | `10` |
+| Pro | `20` | `40` |
+| Free | `60` | `80` |
+| Guest | `100` | `100` |
+
+普通 Chat AI 任务在 PostgreSQL 创建时会固化账号、有效会员级别、额度状态和 BullMQ priority；数字越小越先执行。额度用完不会拒绝请求，而是降到该会员级别的 depleted service class。Provider 最终成本、用户可见消息、房间成本、账号 usage event、额度扣减和 run 终态在同一 PostgreSQL 事务内结算。当前 provider admission 控制每秒请求数和并发请求数；真正按 token/s 限流仍应放在能观察 token 流的 provider gateway。
 
 ## PostgreSQL Schema 生命周期
 

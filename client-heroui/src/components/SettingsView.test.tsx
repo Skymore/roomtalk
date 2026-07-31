@@ -116,6 +116,7 @@ describe('SettingsView Codex connection controls', () => {
       hasPassword: false,
       googleConfigured: false,
       account: null,
+      entitlement: null,
     });
     githubApiMock.connectGitHub.mockResolvedValue({
       clientId: 'client-1',
@@ -267,16 +268,50 @@ describe('SettingsView Codex connection controls', () => {
       googleConfigured: true,
       account: {
         id: 'account-1',
+        googleLinked: true,
         email: 'ada@example.com',
         displayName: 'Ada',
         emailVerified: true,
       },
+      entitlement: null,
     });
 
     render(<SettingsView {...baseProps} />);
 
     expect(await screen.findByText('ada@example.com')).toBeTruthy();
     expect(screen.queryByText('googleAccountIntroTitle')).toBeNull();
+  });
+
+  it('shows the effective membership, credits, usage, and queue priority', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: false,
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-1',
+        provider: 'password',
+        googleLinked: false,
+      },
+      entitlement: {
+        accountId: 'account-1',
+        tier: 'pro',
+        status: 'active',
+        effectiveTier: 'pro',
+        creditBalanceUsd: 12.5,
+        lifetimeUsageUsd: 7.25,
+        creditState: 'available',
+        queuePriority: 20,
+        updatedAt: '2026-07-30T00:00:00.000Z',
+      },
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    expect(await screen.findByText('membershipTierPro')).toBeTruthy();
+    expect(screen.getByText('$12.50')).toBeTruthy();
+    expect(screen.getByText('$7.25')).toBeTruthy();
+    expect(screen.getByText('membershipQueuePriority')).toBeTruthy();
   });
 
   it('places high-frequency preferences before account login forms', () => {

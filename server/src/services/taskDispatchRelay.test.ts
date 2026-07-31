@@ -14,6 +14,7 @@ const dispatch = (attempts = 1): TaskDispatchRecord => ({
   updatedAt: '2026-07-22T00:00:00.000Z',
   lockedAt: '2026-07-22T00:00:00.000Z',
   lockedBy: 'relay-1',
+  queuePriority: 20,
 });
 
 describe('TaskDispatchRelay', () => {
@@ -79,6 +80,7 @@ describe('TaskDispatchRelay', () => {
     assert.equal(calls.length, 1);
     assert.equal((calls[0][1] as any).runId, 'run-1');
     assert.equal((calls[0][2] as any).jobId, 'run-1');
+    assert.equal((calls[0][2] as any).priority, 20);
     assert.deepEqual(acknowledgements[0], ['run-1', { workerId: 'relay-1', attempt: 4 }]);
   });
 });

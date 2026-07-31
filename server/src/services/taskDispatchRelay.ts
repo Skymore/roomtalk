@@ -113,6 +113,7 @@ export class TaskDispatchRelay {
           ...assistantRunJobOptions(),
           ...this.options.jobOptions,
           jobId: dispatch.runId,
+          priority: dispatch.queuePriority || 100,
         },
       );
       const marked = await this.options.store.markTaskDispatchDispatched(dispatch.runId, claim);

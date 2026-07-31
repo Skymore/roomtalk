@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
+import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, CreatePasswordAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore, UpdateAccountMembershipInput } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -54,6 +54,18 @@ const durableClientAccountStubs = () => ({
   async getAccountByGoogleSubject() {
     return null;
   },
+  async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
+    return clientAccount({
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      provider: 'password',
+      providerSubject: input.clientId,
+      googleLinked: false,
+      createdAt: input.now || '2026-05-03T00:00:00.000Z',
+      updatedAt: input.now || '2026-05-03T00:00:00.000Z',
+      lastLoginAt: input.now || '2026-05-03T00:00:00.000Z',
+    });
+  },
   async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
     return clientAccount({
       accountId: input.accountId,
@@ -79,6 +91,15 @@ const durableClientAccountStubs = () => ({
       updatedAt: now,
       lastLoginAt: now,
     });
+  },
+  async getAccountEntitlementByClientId() {
+    return null;
+  },
+  async updateAccountMembership(_input: UpdateAccountMembershipInput) {
+    return null;
+  },
+  async grantAccountCredits(_input: AccountCreditGrantInput) {
+    return null;
   },
 });
 
@@ -366,11 +387,24 @@ describe('CompositeRoomStore', () => {
       async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
       async getAccountByClientId(_clientId: string) { calls.push('durable.getAccountByClientId'); return clientAccount(); },
       async getAccountByGoogleSubject(_providerSubject: string) { calls.push('durable.getAccountByGoogleSubject'); return clientAccount(); },
+      async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
+        calls.push('durable.createPasswordAccountForClient');
+        return clientAccount({
+          accountId: input.accountId,
+          primaryClientId: input.clientId,
+          provider: 'password',
+          providerSubject: input.clientId,
+          googleLinked: false,
+        });
+      },
       async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
         calls.push('durable.createGoogleAccountForClient');
         return clientAccount({ accountId: input.accountId, primaryClientId: input.clientId, providerSubject: input.providerSubject });
       },
       async updateGoogleAccountLogin(accountId: string) { calls.push('durable.updateGoogleAccountLogin'); return clientAccount({ accountId }); },
+      async getAccountEntitlementByClientId() { calls.push('durable.getAccountEntitlementByClientId'); return null; },
+      async updateAccountMembership() { calls.push('durable.updateAccountMembership'); return null; },
+      async grantAccountCredits() { calls.push('durable.grantAccountCredits'); return null; },
       async setClientPasswordHash() { calls.push('durable.setClientPasswordHash'); },
       async getClientPasswordHash() { calls.push('durable.getClientPasswordHash'); return 'password-hash'; },
       async saveClientAuthToken() { calls.push('durable.saveClientAuthToken'); },
@@ -499,6 +533,19 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.getAccountByClientId('client-1'), clientAccount());
     assert.deepEqual(await store.getAccountByGoogleSubject('google-subject-1'), clientAccount());
     assert.deepEqual(
+      await store.createPasswordAccountForClient({
+        accountId: 'account-2',
+        clientId: 'client-2',
+      }),
+      clientAccount({
+        accountId: 'account-2',
+        primaryClientId: 'client-2',
+        provider: 'password',
+        providerSubject: 'client-2',
+        googleLinked: false,
+      }),
+    );
+    assert.deepEqual(
       await store.createGoogleAccountForClient({
         accountId: 'account-2',
         clientId: 'client-2',
@@ -507,6 +554,18 @@ describe('CompositeRoomStore', () => {
       clientAccount({ accountId: 'account-2', primaryClientId: 'client-2', providerSubject: 'google-subject-2' }),
     );
     assert.deepEqual(await store.updateGoogleAccountLogin('account-1', { providerSubject: 'google-subject-1' }), clientAccount());
+    assert.equal(await store.getAccountEntitlementByClientId('client-1'), null);
+    assert.equal(await store.updateAccountMembership({
+      accountId: 'account-1',
+      tier: 'pro',
+      status: 'active',
+    }), null);
+    assert.equal(await store.grantAccountCredits({
+      id: 'grant-1',
+      accountId: 'account-1',
+      amountUsd: 1,
+      idempotencyKey: 'grant-1',
+    }), null);
     await store.setClientPasswordHash('client-2', 'password-hash');
     assert.equal(await store.getClientPasswordHash('client-2'), 'password-hash');
     await store.saveClientAuthToken({ clientId: 'client-2', tokenHash: 'token-hash', createdAt: '2026-05-03T00:00:00.000Z' });
@@ -597,8 +656,12 @@ describe('CompositeRoomStore', () => {
       'durable.readPushSubscriptionsByRoom',
       'durable.getAccountByClientId',
       'durable.getAccountByGoogleSubject',
+      'durable.createPasswordAccountForClient',
       'durable.createGoogleAccountForClient',
       'durable.updateGoogleAccountLogin',
+      'durable.getAccountEntitlementByClientId',
+      'durable.updateAccountMembership',
+      'durable.grantAccountCredits',
       'durable.setClientPasswordHash',
       'durable.getClientPasswordHash',
       'durable.saveClientAuthToken',

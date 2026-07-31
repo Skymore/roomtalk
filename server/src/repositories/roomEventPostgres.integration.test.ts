@@ -1549,6 +1549,171 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.000015);
   });
 
+  it('snapshots membership priority and debits account credits exactly once', async () => {
+    const roomId = 'assistant-run-membership-room';
+    const accountId = 'assistant-run-membership-account';
+    const clientId = 'event-test-owner';
+    const runId = 'assistant-run-membership-first';
+    const messageId = 'assistant-run-membership-message-first';
+    assert.ok(await store.saveRoom(room(roomId)));
+    assert.ok(await store.createPasswordAccountForClient({
+      accountId,
+      clientId,
+      now: createdAt,
+    }));
+    assert.ok(await store.updateAccountMembership({
+      accountId,
+      tier: 'pro',
+      status: 'active',
+      now: createdAt,
+    }));
+    // Concurrent billing webhook retries must both succeed without granting
+    // the same credit twice.
+    const grants = await Promise.all([
+      store.grantAccountCredits({
+        id: 'assistant-run-membership-grant',
+        accountId,
+        amountUsd: 0.000015,
+        idempotencyKey: 'assistant-run-membership-grant',
+        now: createdAt,
+      }),
+      store.grantAccountCredits({
+        id: 'assistant-run-membership-grant-retry',
+        accountId,
+        amountUsd: 0.000015,
+        idempotencyKey: 'assistant-run-membership-grant',
+        now: createdAt,
+      }),
+    ]);
+    assert.ok(grants.every(Boolean));
+    await assert.rejects(store.grantAccountCredits({
+      id: 'assistant-run-membership-grant-conflict',
+      accountId,
+      amountUsd: 1,
+      idempotencyKey: 'assistant-run-membership-grant',
+      now: createdAt,
+    }), /another amount/);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.creditBalanceUsd, 0.000015);
+
+    const placeholder = message(roomId, messageId, {
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+      aiModel: assistantMessageModel,
+    });
+    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+      id: runId,
+      roomId,
+      requestedByClientId: clientId,
+      aiMessageId: messageId,
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt,
+      queuedAt: createdAt,
+      updatedAt: createdAt,
+      requestPayload: assistantRequest(roomId),
+      generation: 0,
+      attempt: 0,
+      availableAt: createdAt,
+    }));
+
+    const queued = await store.getAssistantRun(runId);
+    assert.equal(queued?.billingAccountId, accountId);
+    assert.equal(queued?.membershipTier, 'pro');
+    assert.equal(queued?.creditState, 'available');
+    assert.equal(queued?.queuePriority, 20);
+    assert.equal((await pool.query<{ queue_priority: number }>(
+      'SELECT queue_priority FROM task_dispatch_outbox WHERE run_id = $1',
+      [runId],
+    )).rows[0]?.queue_priority, 20);
+
+    const execution = await store.claimAssistantRunById(runId, {
+      workerId: 'membership-worker',
+      now: createdAt,
+      leaseMs: 30_000,
+    });
+    assert.ok(execution);
+    assert.ok(await store.stageAssistantRunTerminal(runId, execution.token, {
+      schemaVersion: 1,
+      outcome: 'complete',
+      message: {
+        ...placeholder,
+        content: 'membership answer',
+        status: 'complete',
+        timestamp: createdAt,
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          source: 'reported',
+        },
+        cost: {
+          currency: 'USD',
+          inputUsd: 0.00001,
+          outputUsd: 0.000005,
+          totalUsd: 0.000015,
+          inputPerMillion: 1,
+          outputPerMillion: 1,
+          estimated: false,
+        },
+      },
+    }));
+    const projected = await store.projectAssistantRunTerminal(runId, execution.token);
+    assert.equal(projected.outcome, 'applied');
+    if (projected.outcome !== 'applied') throw new Error('Expected applied projection');
+    assert.equal(projected.run.chargedCostUsd, 0.000015);
+    assert.equal(projected.run.creditAppliedUsd, 0.000015);
+    assert.deepEqual(await store.projectAssistantRunTerminal(runId, execution.token), { outcome: 'stale' });
+
+    const entitlement = await store.getAccountEntitlementByClientId(clientId);
+    assert.equal(entitlement?.creditBalanceUsd, 0);
+    assert.equal(entitlement?.lifetimeUsageUsd, 0.000015);
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
+      [runId],
+    )).rows[0]?.count, '1');
+
+    const exhaustedRunId = 'assistant-run-membership-exhausted';
+    assert.ok(await store.createAssistantRunWithMessage(message(roomId, 'assistant-run-membership-message-exhausted', {
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+      aiModel: assistantMessageModel,
+    }), {
+      id: exhaustedRunId,
+      roomId,
+      requestedByClientId: clientId,
+      aiMessageId: 'assistant-run-membership-message-exhausted',
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt,
+      queuedAt: createdAt,
+      updatedAt: createdAt,
+      requestPayload: assistantRequest(roomId, 'context-message-exhausted'),
+      generation: 0,
+      attempt: 0,
+      availableAt: createdAt,
+    }));
+    const exhaustedRun = await store.getAssistantRun(exhaustedRunId);
+    assert.equal(exhaustedRun?.membershipTier, 'pro');
+    assert.equal(exhaustedRun?.creditState, 'exhausted');
+    assert.equal(exhaustedRun?.queuePriority, 40);
+
+    assert.equal(await store.deleteRoom(roomId, clientId), true);
+    assert.equal(await store.getAssistantRun(runId), null);
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
+      [runId],
+    )).rows[0]?.count, '1');
+    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.lifetimeUsageUsd, 0.000015);
+  });
+
   it('commits queue dispatch with the placeholder and safely retries a failed Redis enqueue', async () => {
     const roomId = 'assistant-run-dispatch-room';
     const messageId = 'assistant-run-dispatch-message';
@@ -2176,12 +2341,17 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         [roomId, JSON.stringify({ contextMessages: [message(roomId, 'legacy-context')] }), createdAt],
       );
 
-      await migrationPool.query(POSTGRES_MIGRATIONS[aggregateMigrationIndex].sql);
+      for (const migration of POSTGRES_MIGRATIONS.slice(aggregateMigrationIndex)) {
+        await migrationPool.query(migration.sql);
+      }
 
       const activeRun = await migrationStore.getAssistantRun('legacy-active-run');
       assert.equal(activeRun?.status, 'queued');
       assert.deepEqual(activeRun?.requestPayload?.contextMessages.map(item => item.id), ['legacy-context']);
       assert.equal(activeRun?.leaseOwner, undefined);
+      assert.equal(activeRun?.membershipTier, 'guest');
+      assert.equal(activeRun?.creditState, 'none');
+      assert.equal(activeRun?.queuePriority, 100);
       assert.equal((await migrationPool.query(
         "SELECT status FROM outbox_events WHERE id = 'legacy-active-outbox'",
       )).rows[0]?.status, 'processed');

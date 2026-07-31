@@ -10,8 +10,9 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, GoogleAccountProfile, PendingMediaUpload } from '../repositories/store';
+import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, PendingMediaUpload, UpdateAccountMembershipInput } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
+import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 
@@ -45,6 +46,7 @@ type TestServer = {
     audioTranscriptions: Map<string, AudioTranscriptionRecord>;
     pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     accounts: Map<string, ClientAccount>;
+    entitlements: Map<string, AccountEntitlement>;
     googleSubjectAccountIds: Map<string, string>;
     clientAccountLinks: Map<string, string>;
     clientPasswords: Map<string, string>;
@@ -60,8 +62,12 @@ type TestServer = {
     readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
     getAccountByClientId: (clientId: string) => Promise<ClientAccount | null>;
     getAccountByGoogleSubject: (providerSubject: string) => Promise<ClientAccount | null>;
+    createPasswordAccountForClient: (input: CreatePasswordAccountInput) => Promise<ClientAccount | null>;
     createGoogleAccountForClient: (input: CreateGoogleAccountInput) => Promise<ClientAccount | null>;
     updateGoogleAccountLogin: (accountId: string, profile: GoogleAccountProfile, now?: string) => Promise<ClientAccount | null>;
+    getAccountEntitlementByClientId: (clientId: string) => Promise<AccountEntitlement | null>;
+    updateAccountMembership: (input: UpdateAccountMembershipInput) => Promise<AccountEntitlement | null>;
+    grantAccountCredits: (input: AccountCreditGrantInput) => Promise<AccountEntitlement | null>;
     setClientPasswordHash: (clientId: string, passwordHash: string) => Promise<void>;
     getClientPasswordHash: (clientId: string) => Promise<string | null>;
     saveClientAuthToken: (token: ClientAuthTokenRecord) => Promise<void>;
@@ -123,6 +129,7 @@ const sampleClientAccount = (overrides: Partial<ClientAccount> = {}): ClientAcco
   primaryClientId: 'client-1',
   provider: 'google',
   providerSubject: 'google-subject-1',
+  googleLinked: true,
   email: 'ada@example.com',
   emailVerified: true,
   displayName: 'Ada Lovelace',
@@ -197,6 +204,7 @@ async function createTestServer(overrides: {
   codeAgentAccess?: Parameters<typeof registerApiRoutes>[1]['codeAgentAccess'];
   socketAdapterReady?: Parameters<typeof registerApiRoutes>[1]['socketAdapterReady'];
   assistantQueueHealth?: Parameters<typeof registerApiRoutes>[1]['assistantQueueHealth'];
+  membershipAdminToken?: Parameters<typeof registerApiRoutes>[1]['membershipAdminToken'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -215,6 +223,7 @@ async function createTestServer(overrides: {
     audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
     pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     accounts: new Map<string, ClientAccount>(),
+    entitlements: new Map<string, AccountEntitlement>(),
     googleSubjectAccountIds: new Map<string, string>(),
     clientAccountLinks: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
@@ -270,16 +279,53 @@ async function createTestServer(overrides: {
       const accountId = this.googleSubjectAccountIds.get(providerSubject);
       return accountId ? this.accounts.get(accountId) || null : null;
     },
-    async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
-      if (this.clientAccountLinks.has(input.clientId) || this.googleSubjectAccountIds.has(input.providerSubject)) {
-        return null;
-      }
+    async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
+      const existingAccountId = this.clientAccountLinks.get(input.clientId);
+      if (existingAccountId) return this.accounts.get(existingAccountId) || null;
       const now = input.now || '2026-05-03T00:00:00.000Z';
       const account: ClientAccount = {
         accountId: input.accountId,
         primaryClientId: input.clientId,
+        provider: 'password',
+        providerSubject: input.clientId,
+        googleLinked: false,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: now,
+      };
+      this.accounts.set(account.accountId, account);
+      this.clientAccountLinks.set(account.primaryClientId, account.accountId);
+      const scheduling = resolveAssistantRunScheduling({
+        accountId: account.accountId,
+        tier: 'free',
+        status: 'active',
+        creditBalanceUsd: 0,
+      });
+      this.entitlements.set(account.accountId, {
+        accountId: account.accountId,
+        tier: 'free',
+        status: 'active',
+        effectiveTier: 'free',
+        creditBalanceUsd: 0,
+        lifetimeUsageUsd: 0,
+        creditState: 'exhausted',
+        queuePriority: scheduling.queuePriority,
+        updatedAt: now,
+      });
+      return account;
+    },
+    async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
+      if (this.googleSubjectAccountIds.has(input.providerSubject)) {
+        return null;
+      }
+      const now = input.now || '2026-05-03T00:00:00.000Z';
+      const existingAccountId = this.clientAccountLinks.get(input.clientId);
+      const account: ClientAccount = {
+        accountId: existingAccountId || input.accountId,
+        primaryClientId: input.clientId,
         provider: 'google',
         providerSubject: input.providerSubject,
+        googleLinked: true,
         email: input.email,
         emailVerified: input.emailVerified,
         displayName: input.displayName,
@@ -291,6 +337,25 @@ async function createTestServer(overrides: {
       this.accounts.set(account.accountId, account);
       this.googleSubjectAccountIds.set(account.providerSubject, account.accountId);
       this.clientAccountLinks.set(account.primaryClientId, account.accountId);
+      if (!this.entitlements.has(account.accountId)) {
+        const scheduling = resolveAssistantRunScheduling({
+          accountId: account.accountId,
+          tier: 'free',
+          status: 'active',
+          creditBalanceUsd: 0,
+        });
+        this.entitlements.set(account.accountId, {
+          accountId: account.accountId,
+          tier: 'free',
+          status: 'active',
+          effectiveTier: 'free',
+          creditBalanceUsd: 0,
+          lifetimeUsageUsd: 0,
+          creditState: 'exhausted',
+          queuePriority: scheduling.queuePriority,
+          updatedAt: now,
+        });
+      }
       return account;
     },
     async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = '2026-05-03T00:00:00.000Z') {
@@ -304,6 +369,8 @@ async function createTestServer(overrides: {
       }
       const updated: ClientAccount = {
         ...existing,
+        provider: 'google',
+        googleLinked: true,
         providerSubject: profile.providerSubject,
         email: profile.email ?? existing.email,
         emailVerified: profile.emailVerified ?? existing.emailVerified,
@@ -314,6 +381,62 @@ async function createTestServer(overrides: {
       };
       this.accounts.set(accountId, updated);
       return updated;
+    },
+    async getAccountEntitlementByClientId(clientId: string) {
+      const accountId = this.clientAccountLinks.get(clientId);
+      return accountId ? this.entitlements.get(accountId) || null : null;
+    },
+    async updateAccountMembership(input: UpdateAccountMembershipInput) {
+      if (!this.accounts.has(input.accountId)) return null;
+      const existing = this.entitlements.get(input.accountId);
+      const creditBalanceUsd = existing?.creditBalanceUsd || 0;
+      const scheduling = resolveAssistantRunScheduling({
+        accountId: input.accountId,
+        tier: input.tier,
+        status: input.status,
+        creditBalanceUsd,
+        ...(input.priorityOverride !== undefined && input.priorityOverride !== null
+          ? { priorityOverride: input.priorityOverride }
+          : {}),
+      });
+      const entitlement: AccountEntitlement = {
+        accountId: input.accountId,
+        tier: input.tier,
+        status: input.status,
+        effectiveTier: resolveEffectiveMembershipTier(input.tier, input.status),
+        creditBalanceUsd,
+        lifetimeUsageUsd: existing?.lifetimeUsageUsd || 0,
+        creditState: creditBalanceUsd > 0 ? 'available' : 'exhausted',
+        queuePriority: scheduling.queuePriority,
+        ...(input.priorityOverride !== undefined && input.priorityOverride !== null
+          ? { priorityOverride: input.priorityOverride }
+          : {}),
+        updatedAt: input.now || '2026-05-03T00:00:00.000Z',
+      };
+      this.entitlements.set(input.accountId, entitlement);
+      return entitlement;
+    },
+    async grantAccountCredits(input: AccountCreditGrantInput) {
+      const existing = this.entitlements.get(input.accountId);
+      if (!existing) return null;
+      const creditBalanceUsd = existing.creditBalanceUsd + input.amountUsd;
+      const scheduling = resolveAssistantRunScheduling({
+        accountId: input.accountId,
+        tier: existing.tier,
+        status: existing.status,
+        creditBalanceUsd,
+        ...(existing.priorityOverride !== undefined
+          ? { priorityOverride: existing.priorityOverride }
+          : {}),
+      });
+      const entitlement: AccountEntitlement = {
+        ...existing,
+        creditBalanceUsd,
+        creditState: 'available',
+        queuePriority: scheduling.queuePriority,
+      };
+      this.entitlements.set(input.accountId, entitlement);
+      return entitlement;
     },
     async setClientPasswordHash(clientId: string, passwordHash: string) {
       this.clientPasswords.set(clientId, passwordHash);
@@ -579,6 +702,7 @@ async function createTestServer(overrides: {
     codeAgentAvailableModes: ['plan', 'acceptEdits'],
     codeAgentDefaultMode: 'plan',
     mediaUploadCleanup: overrides.mediaUploadCleanup,
+    membershipAdminToken: overrides.membershipAdminToken,
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -812,6 +936,7 @@ describe('API routes', () => {
       hasPassword: false,
       googleConfigured: false,
       account: null,
+      entitlement: null,
     });
   });
 
@@ -940,7 +1065,7 @@ describe('API routes', () => {
 
     const updatedStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
     assert.equal(updatedStatusResponse.status, 200);
-    assert.deepEqual(await updatedStatusResponse.json(), { clientId: 'client-1', hasPassword: true, hasAccount: false });
+    assert.deepEqual(await updatedStatusResponse.json(), { clientId: 'client-1', hasPassword: true, hasAccount: true });
 
     const badLoginResponse = await fetch(`${server.baseUrl}/api/client-auth/login`, {
       method: 'POST',
@@ -970,6 +1095,67 @@ describe('API routes', () => {
     assert.equal(loginWithNicknameResponse.status, 200);
     const loginWithNicknamePayload = await loginWithNicknameResponse.json() as { nickname: string | null };
     assert.equal(loginWithNicknamePayload.nickname, 'Ada');
+  });
+
+  it('updates membership and grants credits through the protected admin boundary', async () => {
+    await server.close();
+    server = await createTestServer({ membershipAdminToken: 'membership-secret' });
+    const passwordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(passwordResponse.status, 200);
+    const passwordPayload = await passwordResponse.json() as { account: ClientAccount };
+
+    const unauthorized = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: 'pro', status: 'active' }),
+      },
+    );
+    assert.equal(unauthorized.status, 401);
+
+    const invalidPeriod = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer membership-secret',
+        },
+        body: JSON.stringify({
+          tier: 'pro',
+          status: 'active',
+          currentPeriodStart: 'not-a-timestamp',
+        }),
+      },
+    );
+    assert.equal(invalidPeriod.status, 400);
+
+    const response = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer membership-secret',
+          'Idempotency-Key': 'invoice-1',
+        },
+        body: JSON.stringify({
+          tier: 'pro',
+          status: 'active',
+          creditGrantUsd: 20,
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { entitlement: AccountEntitlement };
+    assert.equal(payload.entitlement.tier, 'pro');
+    assert.equal(payload.entitlement.creditBalanceUsd, 20);
+    assert.equal(payload.entitlement.queuePriority, 20);
   });
 
   it('requires valid client auth tokens after a User ID password is set', async () => {

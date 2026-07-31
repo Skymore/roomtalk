@@ -3,13 +3,20 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord } from './store';
+import { AccountCreditGrantInput, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
 import { orderMessageBatches } from '../services/messageDomain';
 import { validateStoredRoomEventPayload } from './roomEventPayload';
 import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
+import {
+  AccountEntitlement,
+  MembershipStatus,
+  MembershipTier,
+  resolveAssistantRunScheduling,
+  resolveEffectiveMembershipTier,
+} from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -221,6 +228,12 @@ type AssistantRunRow = {
   available_at: string | Date;
   lease_owner: string | null;
   lease_expires_at: string | Date | null;
+  billing_account_id: string | null;
+  membership_tier: AssistantRunRecord['membershipTier'];
+  credit_state: AssistantRunRecord['creditState'];
+  queue_priority: number | string;
+  charged_cost_usd: number | string;
+  credit_applied_usd: number | string;
 };
 
 type RoomAgentTurnRow = {
@@ -291,6 +304,7 @@ type TaskDispatchRow = {
   last_error: string | null;
   created_at: string | Date;
   updated_at: string | Date;
+  queue_priority: number | string;
 };
 
 type PushSubscriptionRow = {
@@ -312,10 +326,24 @@ type ClientAccountRow = {
   account_created_at: string | Date;
   account_updated_at: string | Date;
   last_login_at: string | Date | null;
-  provider: 'google';
+  provider: 'google' | 'password';
   provider_subject: string;
+  google_linked: boolean;
   email: string | null;
   email_verified: boolean | null;
+};
+
+type AccountEntitlementRow = {
+  account_id: string;
+  tier: MembershipTier;
+  status: MembershipStatus;
+  priority_override: number | string | null;
+  current_period_start: string | Date | null;
+  current_period_end: string | Date | null;
+  external_provider: string | null;
+  available_usd: number | string;
+  lifetime_usage_usd: number | string;
+  updated_at: string | Date;
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
@@ -324,7 +352,7 @@ const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
-const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at, request_payload, terminal_payload, generation, attempt, available_at, lease_owner, lease_expires_at';
+const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at, request_payload, terminal_payload, generation, attempt, available_at, lease_owner, lease_expires_at, billing_account_id, membership_tier, credit_state, queue_priority, charged_cost_usd, credit_applied_usd';
 const CLAIMED_ASSISTANT_RUN_COLUMNS = ASSISTANT_RUN_COLUMNS
   .split(', ')
   .map(column => `run.${column}`)
@@ -342,10 +370,11 @@ const ACCOUNT_SELECT_COLUMNS = `
   a.created_at AS account_created_at,
   a.updated_at AS account_updated_at,
   a.last_login_at,
-  ai.provider,
-  ai.provider_subject,
-  ai.email,
-  ai.email_verified`;
+  CASE WHEN google_identity.provider_subject IS NULL THEN 'password' ELSE 'google' END AS provider,
+  COALESCE(google_identity.provider_subject, a.primary_client_id) AS provider_subject,
+  (google_identity.provider_subject IS NOT NULL) AS google_linked,
+  google_identity.email,
+  google_identity.email_verified`;
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -590,6 +619,11 @@ const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
     generation: Number(row.generation) || 0,
     attempt: Number(row.attempt) || 0,
     availableAt: toIsoString(row.available_at),
+    membershipTier: row.membership_tier || 'guest',
+    creditState: row.credit_state || 'none',
+    queuePriority: Number(row.queue_priority) || 100,
+    chargedCostUsd: Number(row.charged_cost_usd) || 0,
+    creditAppliedUsd: Number(row.credit_applied_usd) || 0,
   };
 
   if (row.user_message_id) run.userMessageId = row.user_message_id;
@@ -610,6 +644,7 @@ const mapAssistantRun = (row: AssistantRunRow): AssistantRunRecord => {
   if (terminalPayload) run.terminalPayload = terminalPayload;
   if (row.lease_owner) run.leaseOwner = row.lease_owner;
   if (row.lease_expires_at) run.leaseExpiresAt = toIsoString(row.lease_expires_at);
+  if (row.billing_account_id) run.billingAccountId = row.billing_account_id;
   return run;
 };
 
@@ -671,6 +706,7 @@ const mapTaskDispatch = (row: TaskDispatchRow): TaskDispatchRecord => ({
   ...(row.locked_by ? { lockedBy: row.locked_by } : {}),
   ...(row.dispatched_at ? { dispatchedAt: toIsoString(row.dispatched_at) } : {}),
   ...(row.last_error ? { lastError: row.last_error } : {}),
+  queuePriority: Number(row.queue_priority) || 100,
 });
 
 const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord => ({
@@ -690,6 +726,7 @@ const mapClientAccount = (row: ClientAccountRow): ClientAccount => {
     primaryClientId: row.primary_client_id,
     provider: row.provider,
     providerSubject: row.provider_subject,
+    googleLinked: row.google_linked,
     emailVerified: Boolean(row.email_verified),
     createdAt: toIsoString(row.account_created_at),
     updatedAt: toIsoString(row.account_updated_at),
@@ -699,6 +736,34 @@ const mapClientAccount = (row: ClientAccountRow): ClientAccount => {
   if (row.avatar_url) account.avatarUrl = row.avatar_url;
   if (row.last_login_at) account.lastLoginAt = toIsoString(row.last_login_at);
   return account;
+};
+
+const mapAccountEntitlement = (row: AccountEntitlementRow): AccountEntitlement => {
+  const creditBalanceUsd = Number(row.available_usd) || 0;
+  const priorityOverride = toOptionalNumber(row.priority_override);
+  const effectiveTier = resolveEffectiveMembershipTier(row.tier, row.status);
+  const scheduling = resolveAssistantRunScheduling({
+    accountId: row.account_id,
+    tier: row.tier,
+    status: row.status,
+    creditBalanceUsd,
+    ...(priorityOverride !== undefined ? { priorityOverride } : {}),
+  });
+  return {
+    accountId: row.account_id,
+    tier: row.tier,
+    status: row.status,
+    effectiveTier,
+    creditBalanceUsd,
+    lifetimeUsageUsd: Number(row.lifetime_usage_usd) || 0,
+    creditState: creditBalanceUsd > 0 ? 'available' : 'exhausted',
+    queuePriority: scheduling.queuePriority,
+    ...(priorityOverride !== undefined ? { priorityOverride } : {}),
+    ...(row.current_period_start ? { currentPeriodStart: toIsoString(row.current_period_start) } : {}),
+    ...(row.current_period_end ? { currentPeriodEnd: toIsoString(row.current_period_end) } : {}),
+    ...(row.external_provider ? { externalProvider: row.external_provider } : {}),
+    updatedAt: toIsoString(row.updated_at),
+  };
 };
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
@@ -833,6 +898,12 @@ const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
   run.availableAt || run.queuedAt,
   run.leaseOwner || null,
   run.leaseExpiresAt || null,
+  run.billingAccountId || null,
+  run.membershipTier || 'guest',
+  run.creditState || 'none',
+  run.queuePriority || 100,
+  run.chargedCostUsd || 0,
+  run.creditAppliedUsd || 0,
 ];
 
 const outboxEventParams = (event: OutboxEventRecord): unknown[] => [
@@ -955,10 +1026,16 @@ const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
   attempt,
   available_at,
   lease_owner,
-  lease_expires_at
+  lease_expires_at,
+  billing_account_id,
+  membership_tier,
+  credit_state,
+  queue_priority,
+  charged_cost_usd,
+  credit_applied_usd
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21,
-  $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28
+  $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34
 ) ON CONFLICT (id) DO NOTHING
 RETURNING ${ASSISTANT_RUN_COLUMNS}`;
 
@@ -3668,19 +3745,65 @@ export class PostgresStore implements DurableRoomStore {
           'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
           [message.roomId],
         );
+        const entitlementResult = await client.query<AccountEntitlementRow>(
+          `SELECT membership.account_id,
+            membership.tier,
+            membership.status,
+            membership.priority_override,
+            membership.current_period_start,
+            membership.current_period_end,
+            membership.external_provider,
+            balance.available_usd,
+            balance.lifetime_usage_usd,
+            GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+          FROM client_account_links AS link
+          JOIN account_memberships AS membership
+            ON membership.account_id = link.account_id
+          JOIN account_credit_balances AS balance
+            ON balance.account_id = link.account_id
+          WHERE link.client_id = $1
+          LIMIT 1
+          FOR SHARE OF membership, balance`,
+          [run.requestedByClientId],
+        );
+        const entitlement = entitlementResult.rows[0]
+          ? mapAccountEntitlement(entitlementResult.rows[0])
+          : null;
+        const scheduling = resolveAssistantRunScheduling(entitlement ? {
+          accountId: entitlement.accountId,
+          tier: entitlement.tier,
+          status: entitlement.status,
+          creditBalanceUsd: entitlement.creditBalanceUsd,
+          ...(entitlement.priorityOverride !== undefined
+            ? { priorityOverride: entitlement.priorityOverride }
+            : {}),
+        } : null);
+        const scheduledRun: AssistantRunRecord = {
+          ...run,
+          billingAccountId: scheduling.accountId,
+          membershipTier: scheduling.membershipTier,
+          creditState: scheduling.creditState,
+          queuePriority: scheduling.queuePriority,
+          chargedCostUsd: 0,
+          creditAppliedUsd: 0,
+        };
         const position = Number(nextPosition.rows[0]?.position || 0);
         const insertedMessage = await client.query<MessageRow>(
           `${INSERT_MESSAGE_ROW_SQL} RETURNING ${MESSAGE_COLUMNS}`,
           messageParams(message, position),
         );
-        const runResult = await client.query<AssistantRunRow>(INSERT_ASSISTANT_RUN_SQL, assistantRunParams(run));
+        const runResult = await client.query<AssistantRunRow>(
+          INSERT_ASSISTANT_RUN_SQL,
+          assistantRunParams(scheduledRun),
+        );
         if (!insertedMessage.rows[0] || !runResult.rows[0]) {
           throw new Error('Failed to create assistant run and placeholder');
         }
         await client.query(
-          `INSERT INTO task_dispatch_outbox (run_id, status, available_at)
-          VALUES ($1, 'pending', $2::timestamptz)`,
-          [run.id, run.availableAt],
+          `INSERT INTO task_dispatch_outbox (
+            run_id, status, available_at, queue_priority
+          ) VALUES ($1, 'pending', $2::timestamptz, $3)`,
+          [run.id, run.availableAt, scheduling.queuePriority],
         );
 
         const updatedRoom = await client.query<RoomRow>(
@@ -3956,6 +4079,7 @@ export class PostgresStore implements DurableRoomStore {
       const totalUsd = Number.isFinite(message.cost?.totalUsd) && Number(message.cost?.totalUsd) > 0
         ? Number(message.cost!.totalUsd)
         : 0;
+      let creditAppliedUsd = 0;
       if (totalUsd > 0) {
         await client.query(
           `INSERT INTO room_ai_cost_totals (room_id, total_usd, updated_at)
@@ -3965,6 +4089,77 @@ export class PostgresStore implements DurableRoomStore {
             updated_at = clock_timestamp()`,
           [message.roomId, totalUsd],
         );
+      }
+
+      if (
+        totalUsd > 0
+        && runRow.billing_account_id
+        && runRow.membership_tier
+        && runRow.membership_tier !== 'guest'
+      ) {
+        const existingUsage = await client.query<{ assistant_run_id: string }>(
+          `SELECT assistant_run_id
+          FROM account_ai_usage_events
+          WHERE assistant_run_id = $1
+          LIMIT 1`,
+          [runId],
+        );
+        if (!existingUsage.rows[0]) {
+          const balance = await client.query<{ available_usd: number | string }>(
+            `SELECT available_usd
+            FROM account_credit_balances
+            WHERE account_id = $1
+            FOR UPDATE`,
+            [runRow.billing_account_id],
+          );
+          if (!balance.rows[0]) {
+            throw new Error(`Assistant run ${runId} billing account has no credit balance`);
+          }
+          const availableUsd = Number(balance.rows[0].available_usd) || 0;
+          creditAppliedUsd = Math.min(availableUsd, totalUsd);
+          const usage = await client.query(
+            `INSERT INTO account_ai_usage_events (
+              assistant_run_id,
+              account_id,
+              cost_usd,
+              credit_applied_usd,
+              membership_tier,
+              provider,
+              model_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (assistant_run_id) DO NOTHING`,
+            [
+              runId,
+              runRow.billing_account_id,
+              totalUsd,
+              creditAppliedUsd,
+              runRow.membership_tier,
+              runRow.provider,
+              runRow.model_id,
+            ],
+          );
+          if ((usage.rowCount || 0) === 1) {
+            const updatedBalance = await client.query(
+              `UPDATE account_credit_balances
+              SET available_usd = GREATEST(0, available_usd - $2),
+                lifetime_usage_usd = lifetime_usage_usd + $3,
+                updated_at = clock_timestamp()
+              WHERE account_id = $1`,
+              [runRow.billing_account_id, creditAppliedUsd, totalUsd],
+            );
+            if ((updatedBalance.rowCount || 0) !== 1) {
+              throw new Error(`Assistant run ${runId} lost its billing account balance`);
+            }
+          }
+        } else {
+          const previousUsage = await client.query<{ credit_applied_usd: number | string }>(
+            `SELECT credit_applied_usd
+            FROM account_ai_usage_events
+            WHERE assistant_run_id = $1`,
+            [runId],
+          );
+          creditAppliedUsd = Number(previousUsage.rows[0]?.credit_applied_usd) || 0;
+        }
       }
 
       const costTotal = await client.query<{ total_usd: number | string }>(
@@ -3987,6 +4182,8 @@ export class PostgresStore implements DurableRoomStore {
         `UPDATE assistant_runs
         SET status = $4,
           error = $5,
+          charged_cost_usd = $6,
+          credit_applied_usd = $7,
           completed_at = clock_timestamp(),
           lease_owner = NULL,
           lease_expires_at = NULL,
@@ -3996,7 +4193,15 @@ export class PostgresStore implements DurableRoomStore {
           AND lease_owner = $2
           AND generation = $3
         RETURNING ${ASSISTANT_RUN_COLUMNS}`,
-        [runId, claim.workerId, claim.generation, terminal.outcome, terminal.error || null],
+        [
+          runId,
+          claim.workerId,
+          claim.generation,
+          terminal.outcome,
+          terminal.error || null,
+          totalUsd,
+          creditAppliedUsd,
+        ],
       );
       if (!completed.rows[0]) throw new Error(`Assistant run ${runId} lost its terminal projection fence`);
 
@@ -4058,7 +4263,7 @@ export class PostgresStore implements DurableRoomStore {
               AND dispatch.locked_at <= runtime_clock.now - ($4::bigint * interval '1 millisecond')
             )
           )
-        ORDER BY dispatch.created_at ASC
+        ORDER BY dispatch.queue_priority ASC, dispatch.created_at ASC
         LIMIT $3
         FOR UPDATE OF dispatch SKIP LOCKED
       )
@@ -4524,7 +4729,9 @@ export class PostgresStore implements DurableRoomStore {
         `SELECT ${ACCOUNT_SELECT_COLUMNS}
         FROM client_account_links cal
         INNER JOIN accounts a ON a.id = cal.account_id
-        INNER JOIN account_identities ai ON ai.account_id = a.id AND ai.provider = 'google'
+        LEFT JOIN account_identities google_identity
+          ON google_identity.account_id = a.id
+          AND google_identity.provider = 'google'
         WHERE cal.client_id = $1
         LIMIT 1`,
         [clientId]
@@ -4540,9 +4747,13 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<ClientAccountRow>(
         `SELECT ${ACCOUNT_SELECT_COLUMNS}
-        FROM account_identities ai
-        INNER JOIN accounts a ON a.id = ai.account_id
-        WHERE ai.provider = 'google' AND ai.provider_subject = $1
+        FROM account_identities matched_identity
+        INNER JOIN accounts a ON a.id = matched_identity.account_id
+        LEFT JOIN account_identities google_identity
+          ON google_identity.account_id = a.id
+          AND google_identity.provider = 'google'
+        WHERE matched_identity.provider = 'google'
+          AND matched_identity.provider_subject = $1
         LIMIT 1`,
         [providerSubject]
       );
@@ -4553,27 +4764,110 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async createPasswordAccountForClient(input: CreatePasswordAccountInput): Promise<ClientAccount | null> {
+    const now = input.now || new Date().toISOString();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query<{ account_id: string }>(
+        `SELECT account_id
+        FROM client_account_links
+        WHERE client_id = $1
+        FOR UPDATE`,
+        [input.clientId],
+      );
+      const accountId = existing.rows[0]?.account_id || input.accountId;
+      if (!existing.rows[0]) {
+        await client.query(
+          `INSERT INTO accounts (
+            id, primary_client_id, created_at, updated_at, last_login_at
+          ) VALUES ($1, $2, $3, $3, $3)`,
+          [accountId, input.clientId, now],
+        );
+        await client.query(
+          `INSERT INTO client_account_links (client_id, account_id, linked_at)
+          VALUES ($1, $2, $3)`,
+          [input.clientId, accountId, now],
+        );
+      }
+      await client.query(
+        `INSERT INTO account_identities (
+          account_id, provider, provider_subject, created_at, updated_at
+        ) VALUES ($1, 'password', $2, $3, $3)
+        ON CONFLICT (provider, provider_subject) DO UPDATE SET
+          account_id = EXCLUDED.account_id,
+          updated_at = EXCLUDED.updated_at`,
+        [accountId, input.clientId, now],
+      );
+      await client.query(
+        `INSERT INTO account_memberships (account_id, created_at, updated_at)
+        VALUES ($1, $2, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
+      );
+      await client.query(
+        `INSERT INTO account_credit_balances (account_id, updated_at)
+        VALUES ($1, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
+      );
+      await client.query('COMMIT');
+      return this.getAccountByClientId(input.clientId);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      this.logger.error('Error creating PostgreSQL password account', { error, clientId: input.clientId });
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
   async createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null> {
     const now = input.now || new Date().toISOString();
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO accounts (id, primary_client_id, display_name, avatar_url, created_at, updated_at, last_login_at)
-        VALUES ($1, $2, $3, $4, $5, $5, $5)`,
-        [
-          input.accountId,
-          input.clientId,
-          input.displayName || null,
-          input.avatarUrl || null,
-          now,
-        ]
+      const existing = await client.query<{ account_id: string }>(
+        `SELECT account_id
+        FROM client_account_links
+        WHERE client_id = $1
+        FOR UPDATE`,
+        [input.clientId],
       );
+      const accountId = existing.rows[0]?.account_id || input.accountId;
+      if (!existing.rows[0]) {
+        await client.query(
+          `INSERT INTO accounts (id, primary_client_id, display_name, avatar_url, created_at, updated_at, last_login_at)
+          VALUES ($1, $2, $3, $4, $5, $5, $5)`,
+          [
+            accountId,
+            input.clientId,
+            input.displayName || null,
+            input.avatarUrl || null,
+            now,
+          ],
+        );
+        await client.query(
+          `INSERT INTO client_account_links (client_id, account_id, linked_at)
+          VALUES ($1, $2, $3)`,
+          [input.clientId, accountId, now],
+        );
+      } else {
+        await client.query(
+          `UPDATE accounts
+          SET display_name = COALESCE($2, display_name),
+            avatar_url = COALESCE($3, avatar_url),
+            updated_at = $4,
+            last_login_at = $4
+          WHERE id = $1`,
+          [accountId, input.displayName || null, input.avatarUrl || null, now],
+        );
+      }
       await client.query(
         `INSERT INTO account_identities (account_id, provider, provider_subject, email, email_verified, created_at, updated_at)
         VALUES ($1, 'google', $2, $3, $4, $5, $5)`,
         [
-          input.accountId,
+          accountId,
           input.providerSubject,
           input.email || null,
           Boolean(input.emailVerified),
@@ -4581,9 +4875,16 @@ export class PostgresStore implements DurableRoomStore {
         ]
       );
       await client.query(
-        `INSERT INTO client_account_links (client_id, account_id, linked_at)
-        VALUES ($1, $2, $3)`,
-        [input.clientId, input.accountId, now]
+        `INSERT INTO account_memberships (account_id, created_at, updated_at)
+        VALUES ($1, $2, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
+      );
+      await client.query(
+        `INSERT INTO account_credit_balances (account_id, updated_at)
+        VALUES ($1, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
       );
       await client.query('COMMIT');
       return this.getAccountByClientId(input.clientId);
@@ -4624,7 +4925,9 @@ export class PostgresStore implements DurableRoomStore {
       const result = await this.pool.query<ClientAccountRow>(
         `SELECT ${ACCOUNT_SELECT_COLUMNS}
         FROM accounts a
-        INNER JOIN account_identities ai ON ai.account_id = a.id AND ai.provider = 'google'
+        LEFT JOIN account_identities google_identity
+          ON google_identity.account_id = a.id
+          AND google_identity.provider = 'google'
         WHERE a.id = $1
         LIMIT 1`,
         [accountId]
@@ -4634,6 +4937,195 @@ export class PostgresStore implements DurableRoomStore {
       this.logger.error('Error updating PostgreSQL Google account login', { error, accountId });
       return null;
     }
+  }
+
+  private async getAccountEntitlementByAccountId(accountId: string): Promise<AccountEntitlement | null> {
+    const result = await this.pool.query<AccountEntitlementRow>(
+      `SELECT membership.account_id,
+        membership.tier,
+        membership.status,
+        membership.priority_override,
+        membership.current_period_start,
+        membership.current_period_end,
+        membership.external_provider,
+        balance.available_usd,
+        balance.lifetime_usage_usd,
+        GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+      FROM account_memberships AS membership
+      JOIN account_credit_balances AS balance
+        ON balance.account_id = membership.account_id
+      WHERE membership.account_id = $1
+      LIMIT 1`,
+      [accountId],
+    );
+    return result.rows[0] ? mapAccountEntitlement(result.rows[0]) : null;
+  }
+
+  async getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null> {
+    try {
+      const result = await this.pool.query<AccountEntitlementRow>(
+        `SELECT membership.account_id,
+          membership.tier,
+          membership.status,
+          membership.priority_override,
+          membership.current_period_start,
+          membership.current_period_end,
+          membership.external_provider,
+          balance.available_usd,
+          balance.lifetime_usage_usd,
+          GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+        FROM client_account_links AS link
+        JOIN account_memberships AS membership
+          ON membership.account_id = link.account_id
+        JOIN account_credit_balances AS balance
+          ON balance.account_id = link.account_id
+        WHERE link.client_id = $1
+        LIMIT 1`,
+        [clientId],
+      );
+      return result.rows[0] ? mapAccountEntitlement(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL account entitlement', { error, clientId });
+      throw error;
+    }
+  }
+
+  async updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null> {
+    const now = input.now || new Date().toISOString();
+    try {
+      const updated = await this.transaction(async client => {
+        const result = await client.query(
+          `INSERT INTO account_memberships (
+            account_id,
+            tier,
+            status,
+            priority_override,
+            current_period_start,
+            current_period_end,
+            external_provider,
+            external_customer_id,
+            external_subscription_id,
+            created_at,
+            updated_at
+          )
+          SELECT
+            account.id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10
+          FROM accounts AS account
+          WHERE account.id = $1
+          ON CONFLICT (account_id) DO UPDATE SET
+            tier = EXCLUDED.tier,
+            status = EXCLUDED.status,
+            priority_override = EXCLUDED.priority_override,
+            current_period_start = EXCLUDED.current_period_start,
+            current_period_end = EXCLUDED.current_period_end,
+            external_provider = EXCLUDED.external_provider,
+            external_customer_id = EXCLUDED.external_customer_id,
+            external_subscription_id = EXCLUDED.external_subscription_id,
+            updated_at = EXCLUDED.updated_at`,
+          [
+            input.accountId,
+            input.tier,
+            input.status,
+            input.priorityOverride ?? null,
+            input.currentPeriodStart ?? null,
+            input.currentPeriodEnd ?? null,
+            input.externalProvider ?? null,
+            input.externalCustomerId ?? null,
+            input.externalSubscriptionId ?? null,
+            now,
+          ],
+        );
+        if ((result.rowCount || 0) === 0) return false;
+        await client.query(
+          `INSERT INTO account_credit_balances (account_id, updated_at)
+          VALUES ($1, $2)
+          ON CONFLICT (account_id) DO NOTHING`,
+          [input.accountId, now],
+        );
+        return true;
+      });
+      if (!updated) return null;
+      return this.getAccountEntitlementByAccountId(input.accountId);
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL account membership', { error, accountId: input.accountId });
+      throw error;
+    }
+  }
+
+  async grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null> {
+    if (!Number.isFinite(input.amountUsd) || input.amountUsd <= 0) {
+      throw new Error('Credit grant amount must be a positive USD value');
+    }
+    const now = input.now || new Date().toISOString();
+    await this.transaction(async client => {
+      // Serialize concurrent webhook retries for the same idempotency key so
+      // every caller observes the first committed grant instead of racing the
+      // unique index and receiving a spurious failure.
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [input.idempotencyKey],
+      );
+      const existing = await client.query<{ account_id: string; amount_usd: number | string }>(
+        `SELECT account_id, amount_usd
+        FROM account_credit_ledger
+        WHERE idempotency_key = $1
+        LIMIT 1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        if (existing.rows[0].account_id !== input.accountId) {
+          throw new Error('Credit idempotency key is already bound to another account');
+        }
+        if (Math.abs(Number(existing.rows[0].amount_usd) - input.amountUsd) >= 0.0000000005) {
+          throw new Error('Credit idempotency key is already bound to another amount');
+        }
+        return;
+      }
+
+      const balance = await client.query<{ available_usd: number | string }>(
+        `SELECT available_usd
+        FROM account_credit_balances
+        WHERE account_id = $1
+        FOR UPDATE`,
+        [input.accountId],
+      );
+      if (!balance.rows[0]) {
+        throw new Error(`Account ${input.accountId} has no credit balance`);
+      }
+      const currentBalance = Number(balance.rows[0].available_usd) || 0;
+      const nextBalance = currentBalance + input.amountUsd;
+      await client.query(
+        `INSERT INTO account_credit_ledger (
+          id,
+          account_id,
+          kind,
+          amount_usd,
+          balance_after_usd,
+          idempotency_key,
+          note,
+          metadata,
+          created_at
+        ) VALUES ($1, $2, 'grant', $3, $4, $5, $6, $7::jsonb, $8)`,
+        [
+          input.id,
+          input.accountId,
+          input.amountUsd,
+          nextBalance,
+          input.idempotencyKey,
+          input.note || null,
+          toJsonb(input.metadata || {}),
+          now,
+        ],
+      );
+      await client.query(
+        `UPDATE account_credit_balances
+        SET available_usd = $2,
+          updated_at = $3
+        WHERE account_id = $1`,
+        [input.accountId, nextBalance, now],
+      );
+    });
+    return this.getAccountEntitlementByAccountId(input.accountId);
   }
 
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
@@ -5207,7 +5699,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

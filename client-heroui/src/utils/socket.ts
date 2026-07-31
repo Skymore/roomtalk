@@ -214,7 +214,8 @@ type ClientAuthResponse = ClientAuthStatus & {
 export type ClientAccountInfo = {
   accountId: string;
   primaryClientId: string;
-  provider: 'google';
+  provider: 'google' | 'password';
+  googleLinked: boolean;
   email?: string;
   emailVerified?: boolean;
   displayName?: string;
@@ -222,11 +223,28 @@ export type ClientAccountInfo = {
   lastLoginAt?: string;
 };
 
+export type AccountEntitlementInfo = {
+  accountId: string;
+  tier: 'free' | 'pro' | 'priority';
+  status: 'active' | 'past_due' | 'cancelled';
+  effectiveTier: 'free' | 'pro' | 'priority';
+  creditBalanceUsd: number;
+  lifetimeUsageUsd: number;
+  creditState: 'available' | 'exhausted';
+  queuePriority: number;
+  priorityOverride?: number;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  externalProvider?: string;
+  updatedAt: string;
+};
+
 export type ClientAccountStatus = {
   clientId: string;
   hasPassword: boolean;
   googleConfigured: boolean;
   account: ClientAccountInfo | null;
+  entitlement: AccountEntitlementInfo | null;
 };
 
 type GoogleAuthResponse = ClientAuthResponse & {

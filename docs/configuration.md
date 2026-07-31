@@ -3,7 +3,7 @@
 [中文](configuration.zh.md)
 
 Status: Current
-Updated: 2026-07-22
+Updated: 2026-07-30
 Source of truth: `server/.env.example`, `.env.compose.example`, `compose.yaml`, runtime config loaders, and `scripts/local-production.mjs`
 
 This document groups operator-facing configuration. Test-only variables and turn-scoped `ROOMTALK_*` variables injected into sandboxes are intentionally omitted.
@@ -161,6 +161,7 @@ The App and `ai-worker` run from the same image but are separate processes. The 
 | `ASSISTANT_RUN_RECONCILE_GRACE_MS` | Minimum age before a dispatched active run is checked for a missing/failed job; default `30000`. |
 | `ASSISTANT_RUN_RECONCILE_BATCH_SIZE` | Active dispatches checked per reconciliation pass; default `200`, with a rotating cursor across full batches. |
 | `ASSISTANT_RUN_WORKER_CONCURRENCY` | BullMQ jobs executed concurrently by one worker process; default `2`. |
+| `ASSISTANT_PROVIDER_LIMITS_JSON` | Optional provider-specific request admission limits shared through queue Redis. Example: `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`. Unknown providers or invalid/non-positive integer limits fail Worker startup. |
 | `ASSISTANT_RUN_WORKER_LEASE_MS` | PostgreSQL run-owner lease renewed during provider execution; default `60000`. |
 | `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | Domain-level claim limit recorded in `assistant_runs`; default `10`. |
 | `ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS` | Queue-Redis Worker heartbeat interval; default `5000`. |
@@ -174,6 +175,25 @@ The App-side reconciler is a bounded repair loop, not a second scheduler. Under 
 | `AI_WORKER_HEALTH_PORT` | Worker-only health endpoint; Compose uses `3013`. |
 
 If queue Redis is unavailable after PostgreSQL accepts a request, its dispatch row remains pending and the relay retries; the App reports `degraded` with deferred dispatch rather than losing the request. BullMQ retry handles infrastructure interruption, while a durable terminal provider error is a completed business outcome, not an endlessly retried job. `LOG_FILE_ENABLED` controls optional file logging; production logs must remain structured and secret-safe.
+
+## Accounts, Memberships, and Credits
+
+Password setup and Google login both resolve to one durable `accounts` principal. Anonymous client IDs remain guests; creating a password upgrades the client to an account, and later Google linking adds an identity to that same account.
+
+| Variable | Purpose |
+| --- | --- |
+| `MEMBERSHIP_ADMIN_TOKEN` | Optional server-side bearer secret for `PUT /api/admin/accounts/:accountId/membership`. If unset, the administration route returns `404`. Store it only in the deployment secret manager. |
+
+The membership administration request sets `free`, `pro`, or `priority`, its `active`, `past_due`, or `cancelled` status, optional billing-period/external-subscription metadata, and an optional bounded `priorityOverride`. Paid tiers that are not active use the Free service class. A positive `creditGrantUsd` also requires an `Idempotency-Key` header, so payment webhook retries cannot grant credits twice.
+
+| Service class | Credit available | Credit exhausted |
+| --- | ---: | ---: |
+| Priority | `1` | `10` |
+| Pro | `20` | `40` |
+| Free | `60` | `80` |
+| Guest | `100` | `100` |
+
+Each ordinary chat run snapshots the current account, effective membership, credit state, and BullMQ priority when PostgreSQL creates the run. Lower priority numbers execute first. Exhausting credits does not reject AI requests; it moves the account to the tier's depleted service class. Final provider cost, the user-visible message, room cost, account usage event, credit deduction, and terminal run state settle in one PostgreSQL transaction. Provider admission currently controls requests per second and concurrent requests; provider token-per-second enforcement still belongs at a token-aware provider gateway.
 
 ## PostgreSQL Schema Lifecycle
 

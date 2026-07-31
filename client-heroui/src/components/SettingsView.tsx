@@ -353,6 +353,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const status = await setClientPassword(newClientPassword, currentClientPassword || undefined);
       setClientAuthStatus(status);
+      await refreshAccountStatus();
       setCurrentClientPassword('');
       setNewClientPassword('');
       setClientAuthMessage(t('userIdPasswordSaved'));
@@ -505,12 +506,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsUpdatingGoogleAuth(true);
     try {
       const result = await loginWithGoogleCredential(credential);
-      setAccountStatus({
-        clientId: result.clientId,
-        hasPassword: result.hasPassword,
-        googleConfigured: true,
-        account: result.account,
-      });
+      setAccountStatus(await getClientAccountStatus(result.clientId));
       setClientAuthStatus({
         clientId: result.clientId,
         hasPassword: result.hasPassword,
@@ -531,7 +527,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [pushStatus, t]);
 
   const isGoogleLoginAvailable = Boolean(GOOGLE_CLIENT_ID) && Boolean(accountStatus?.googleConfigured);
-  const shouldRenderGoogleButton = isGoogleLoginAvailable && !accountStatus?.account;
+  const isGoogleLinked = accountStatus?.account?.googleLinked === true;
+  const shouldRenderGoogleButton = isGoogleLoginAvailable && !isGoogleLinked;
 
   React.useEffect(() => {
     const buttonContainer = googleButtonRef.current;
@@ -819,10 +816,81 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row">
             <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("membership")}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  variant="flat"
+                  color={accountStatus?.entitlement?.effectiveTier === 'priority'
+                    ? 'secondary'
+                    : accountStatus?.entitlement?.effectiveTier === 'pro'
+                      ? 'primary'
+                      : 'default'}
+                >
+                  {t({
+                    guest: 'membershipTierGuest',
+                    free: 'membershipTierFree',
+                    pro: 'membershipTierPro',
+                    priority: 'membershipTierPriority',
+                  }[accountStatus?.entitlement?.effectiveTier || 'guest'])}
+                </Chip>
+                {accountStatus?.entitlement && accountStatus.entitlement.status !== 'active' && (
+                  <Chip size="sm" variant="flat" color="warning">
+                    {t(accountStatus.entitlement.status === 'past_due'
+                      ? 'membershipStatusPastDue'
+                      : 'membershipStatusCancelled')}
+                  </Chip>
+                )}
+              </div>
+              {accountStatus?.entitlement ? (
+                <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#e8e6dc] p-3 text-xs dark:bg-[#242423]">
+                  <div>
+                    <p className="text-[#77746b] dark:text-[#96938a]">{t("membershipCredits")}</p>
+                    <p className="mt-1 font-semibold text-[#141413] dark:text-[#faf9f5]">
+                      {new Intl.NumberFormat(undefined, {
+                        style: 'currency',
+                        currency: 'USD',
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 4,
+                      }).format(accountStatus.entitlement.creditBalanceUsd)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[#77746b] dark:text-[#96938a]">{t("membershipUsage")}</p>
+                    <p className="mt-1 font-semibold text-[#141413] dark:text-[#faf9f5]">
+                      {new Intl.NumberFormat(undefined, {
+                        style: 'currency',
+                        currency: 'USD',
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 4,
+                      }).format(accountStatus.entitlement.lifetimeUsageUsd)}
+                    </p>
+                  </div>
+                  <p className="col-span-2 text-[#77746b] dark:text-[#96938a]">
+                    {t("membershipQueuePriority", { priority: accountStatus.entitlement.queuePriority })}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                  {t("membershipGuestHelp")}
+                </p>
+              )}
+              {accountStatus?.entitlement?.creditState === 'exhausted' && (
+                <p className="text-xs leading-5 text-[#9a651f] dark:text-[#e9b96e]">
+                  {t("membershipCreditsExhausted")}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row">
+            <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
               {t("googleAccount")}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
-              {!accountStatus?.account && (
+              {!isGoogleLinked && (
                 <FeatureIntro
                   featureKey="google-account-login"
                   title={t("googleAccountIntroTitle")}
@@ -834,11 +902,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <Chip
                   size="sm"
                   variant="flat"
-                  color={accountStatus?.account ? 'success' : 'default'}
+                  color={isGoogleLinked ? 'success' : 'default'}
                 >
-                  {accountStatus?.account ? t("googleAccountLinked") : t("googleAccountNotLinked")}
+                  {isGoogleLinked ? t("googleAccountLinked") : t("googleAccountNotLinked")}
                 </Chip>
-                {accountStatus?.account && (
+                {isGoogleLinked && accountStatus?.account && (
                   <Chip
                     size="sm"
                     variant="flat"
@@ -848,7 +916,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </Chip>
                 )}
               </div>
-              {accountStatus?.account && (
+              {isGoogleLinked && accountStatus?.account && (
                 <div className="flex min-w-0 items-center gap-3 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
                   <Avatar
                     size="sm"
@@ -876,7 +944,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ].join(' ')}
                 />
               )}
-              {accountStatus && !isGoogleLoginAvailable && !accountStatus.account && (
+              {accountStatus && !isGoogleLoginAvailable && !isGoogleLinked && (
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">{t("googleAccountUnavailable")}</p>
               )}
               {isUpdatingGoogleAuth && (

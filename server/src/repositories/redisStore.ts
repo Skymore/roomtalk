@@ -4,7 +4,8 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, UpdateAccountMembershipInput } from './store';
+import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -43,6 +44,7 @@ const getClientAuthTokensKey = (clientId: string) => `client:${clientId}:auth_to
 const CLIENT_ACCOUNTS_KEY = 'client:accounts';
 const CLIENT_ACCOUNT_LINKS_KEY = 'client:account_links';
 const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
+const ACCOUNT_ENTITLEMENTS_KEY = 'account:entitlements';
 const REALTIME_INSTANCES_KEY = 'realtime:instances';
 const SOCKET_INSTANCES_KEY = 'socket:instances';
 const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
@@ -2758,6 +2760,32 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async createPasswordAccountForClient(input: CreatePasswordAccountInput): Promise<ClientAccount | null> {
+    const existing = await this.getAccountByClientId(input.clientId);
+    if (existing) return existing;
+    const now = input.now || new Date().toISOString();
+    const account: ClientAccount = {
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      provider: 'password',
+      providerSubject: input.clientId,
+      googleLinked: false,
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+    try {
+      await Promise.all([
+        this.redisClient.hSet(CLIENT_ACCOUNTS_KEY, input.accountId, JSON.stringify(account)),
+        this.redisClient.hSet(CLIENT_ACCOUNT_LINKS_KEY, input.clientId, input.accountId),
+      ]);
+      return account;
+    } catch (error) {
+      this.logger.error('Error creating Redis password account', { error, clientId: input.clientId });
+      return null;
+    }
+  }
+
   async createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null> {
     const now = input.now || new Date().toISOString();
     const account: ClientAccount = {
@@ -2765,6 +2793,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       primaryClientId: input.clientId,
       provider: 'google',
       providerSubject: input.providerSubject,
+      googleLinked: true,
       emailVerified: Boolean(input.emailVerified),
       createdAt: now,
       updatedAt: now,
@@ -2779,10 +2808,23 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.hGet(CLIENT_ACCOUNT_LINKS_KEY, input.clientId),
         this.redisClient.hGet(GOOGLE_ACCOUNT_SUBJECTS_KEY, input.providerSubject),
       ]);
-      if (existingClientAccountId || existingGoogleAccountId) {
-        return existingClientAccountId
-          ? this.getAccountByClientId(input.clientId)
-          : this.getAccountByGoogleSubject(input.providerSubject);
+      if (existingGoogleAccountId) {
+        return this.getAccountByGoogleSubject(input.providerSubject);
+      }
+      if (existingClientAccountId) {
+        const existing = await this.getAccountByClientId(input.clientId);
+        if (!existing || existing.googleLinked) return existing;
+        const linked = {
+          ...existing,
+          ...account,
+          accountId: existing.accountId,
+          createdAt: existing.createdAt,
+        };
+        await Promise.all([
+          this.redisClient.hSet(CLIENT_ACCOUNTS_KEY, existing.accountId, JSON.stringify(linked)),
+          this.redisClient.hSet(GOOGLE_ACCOUNT_SUBJECTS_KEY, input.providerSubject, existing.accountId),
+        ]);
+        return linked;
       }
 
       await Promise.all([
@@ -2806,6 +2848,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const account = JSON.parse(rawAccount) as ClientAccount;
       const nextAccount: ClientAccount = {
         ...account,
+        provider: 'google',
+        googleLinked: true,
         providerSubject: profile.providerSubject || account.providerSubject,
         email: profile.email || account.email,
         emailVerified: profile.emailVerified === undefined ? account.emailVerified : Boolean(profile.emailVerified),
@@ -2823,6 +2867,95 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       this.logger.error('Error updating Redis Google account login', { error, accountId });
       return null;
     }
+  }
+
+  async getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null> {
+    const account = await this.getAccountByClientId(clientId);
+    if (!account) return null;
+    const raw = await this.redisClient.hGet(ACCOUNT_ENTITLEMENTS_KEY, account.accountId);
+    if (raw) return JSON.parse(raw) as AccountEntitlement;
+    const now = new Date().toISOString();
+    const scheduling = resolveAssistantRunScheduling({
+      accountId: account.accountId,
+      tier: 'free',
+      status: 'active',
+      creditBalanceUsd: 0,
+    });
+    return {
+      accountId: account.accountId,
+      tier: 'free',
+      status: 'active',
+      effectiveTier: 'free',
+      creditBalanceUsd: 0,
+      lifetimeUsageUsd: 0,
+      creditState: 'exhausted',
+      queuePriority: scheduling.queuePriority,
+      updatedAt: now,
+    };
+  }
+
+  async updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null> {
+    const rawAccount = await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, input.accountId);
+    if (!rawAccount) return null;
+    const existingRaw = await this.redisClient.hGet(ACCOUNT_ENTITLEMENTS_KEY, input.accountId);
+    const existing = existingRaw ? JSON.parse(existingRaw) as AccountEntitlement : null;
+    const creditBalanceUsd = existing?.creditBalanceUsd || 0;
+    const scheduling = resolveAssistantRunScheduling({
+      accountId: input.accountId,
+      tier: input.tier,
+      status: input.status,
+      creditBalanceUsd,
+      ...(input.priorityOverride !== undefined && input.priorityOverride !== null
+        ? { priorityOverride: input.priorityOverride }
+        : {}),
+    });
+    const entitlement: AccountEntitlement = {
+      accountId: input.accountId,
+      tier: input.tier,
+      status: input.status,
+      effectiveTier: resolveEffectiveMembershipTier(input.tier, input.status),
+      creditBalanceUsd,
+      lifetimeUsageUsd: existing?.lifetimeUsageUsd || 0,
+      creditState: creditBalanceUsd > 0 ? 'available' : 'exhausted',
+      queuePriority: scheduling.queuePriority,
+      ...(input.priorityOverride !== undefined && input.priorityOverride !== null
+        ? { priorityOverride: input.priorityOverride }
+        : {}),
+      ...(input.currentPeriodStart ? { currentPeriodStart: input.currentPeriodStart } : {}),
+      ...(input.currentPeriodEnd ? { currentPeriodEnd: input.currentPeriodEnd } : {}),
+      ...(input.externalProvider ? { externalProvider: input.externalProvider } : {}),
+      updatedAt: input.now || new Date().toISOString(),
+    };
+    await this.redisClient.hSet(ACCOUNT_ENTITLEMENTS_KEY, input.accountId, JSON.stringify(entitlement));
+    return entitlement;
+  }
+
+  async grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null> {
+    const account = JSON.parse(
+      await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, input.accountId) || 'null',
+    ) as ClientAccount | null;
+    if (!account) return null;
+    const existing = await this.getAccountEntitlementByClientId(account.primaryClientId);
+    if (!existing) return null;
+    const creditBalanceUsd = existing.creditBalanceUsd + input.amountUsd;
+    const scheduling = resolveAssistantRunScheduling({
+      accountId: existing.accountId,
+      tier: existing.tier,
+      status: existing.status,
+      creditBalanceUsd,
+      ...(existing.priorityOverride !== undefined
+        ? { priorityOverride: existing.priorityOverride }
+        : {}),
+    });
+    const entitlement: AccountEntitlement = {
+      ...existing,
+      creditBalanceUsd,
+      creditState: 'available',
+      queuePriority: scheduling.queuePriority,
+      updatedAt: input.now || new Date().toISOString(),
+    };
+    await this.redisClient.hSet(ACCOUNT_ENTITLEMENTS_KEY, input.accountId, JSON.stringify(entitlement));
+    return entitlement;
   }
 
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {

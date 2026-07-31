@@ -4,6 +4,7 @@ import path from 'path';
 import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
+import { timingSafeEqual } from 'node:crypto';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, ClientAccount, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
@@ -38,6 +39,7 @@ import {
   MediaThumbnailService,
 } from '../services/mediaThumbnail';
 import type { AssistantRunQueueHealthSnapshot } from '../services/assistantRunQueue';
+import { MembershipStatus, MembershipTier } from '../services/accountEntitlements';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -67,6 +69,7 @@ interface ApiRouteOptions {
     enabled: boolean;
     service?: GitHubConnectionService;
   };
+  membershipAdminToken?: string;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -81,6 +84,13 @@ const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
   audio: 25 * 1024 * 1024,
   video: 100 * 1024 * 1024,
   file: 50 * 1024 * 1024,
+};
+
+const securelyMatches = (actual: string, expected: string): boolean => {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length
+    && timingSafeEqual(actualBytes, expectedBytes);
 };
 
 const MEDIA_HISTORY_DEFAULT_LIMIT = 40;
@@ -281,6 +291,7 @@ const serializeClientAccount = (account: ClientAccount | null) => account
       accountId: account.accountId,
       primaryClientId: account.primaryClientId,
       provider: account.provider,
+      googleLinked: account.googleLinked === true,
       email: account.email,
       emailVerified: account.emailVerified,
       displayName: account.displayName,
@@ -325,6 +336,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
   const codexConnections = options.codexConnections || { enabled: false };
   const githubConnections = options.githubConnections || { enabled: false };
+  const membershipAdminToken = options.membershipAdminToken ?? process.env.MEMBERSHIP_ADMIN_TOKEN ?? '';
   const mediaThumbnailService = options.mediaThumbnailService
     || new MediaThumbnailService(mediaObjectStorage, routeLogger);
 
@@ -636,15 +648,17 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return;
     }
 
-    const [account, passwordHash] = await Promise.all([
+    const [account, passwordHash, entitlement] = await Promise.all([
       store.getAccountByClientId(clientId),
       store.getClientPasswordHash(clientId),
+      store.getAccountEntitlementByClientId(clientId),
     ]);
     return res.json({
       clientId,
       hasPassword: Boolean(passwordHash),
       googleConfigured: googleClientIds.length > 0,
       account: serializeClientAccount(account),
+      entitlement,
     });
   });
 
@@ -666,7 +680,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       }
 
       const existingClientAccount = await store.getAccountByClientId(requestedClientId);
-      if (existingClientAccount) {
+      if (existingClientAccount?.googleLinked) {
         return res.status(409).json({ error: 'This User ID is already linked to another Google account' });
       }
 
@@ -738,10 +752,25 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       }
     }
 
+    const account = await store.createPasswordAccountForClient({
+      accountId: uuidv4(),
+      clientId,
+    });
+    if (!account) {
+      return res.status(500).json({ error: 'Unable to create the account for this User ID' });
+    }
     await store.setClientPasswordHash(clientId, await hashClientPassword(password));
     await store.deleteClientAuthTokens(clientId);
-    const clientAuthToken = await issueClientAuthToken(store, clientId);
-    return res.json({ clientId, clientAuthToken, hasPassword: true });
+    const clientAuthToken = await issueClientAuthToken(store, clientId, {
+      accountId: account.accountId,
+      authMethod: 'password',
+    });
+    return res.json({
+      clientId,
+      clientAuthToken,
+      hasPassword: true,
+      account: serializeClientAccount(account),
+    });
   });
 
   app.post('/api/client-auth/login', async (req: Request, res: Response) => {
@@ -756,9 +785,132 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(401).json({ error: 'Invalid user ID or password' });
     }
 
-    const clientAuthToken = await issueClientAuthToken(store, clientId);
-    const nicknames = await store.getClientNicknames([clientId]);
-    return res.json({ clientId, clientAuthToken, hasPassword: true, nickname: nicknames[clientId] ?? null });
+    const [account, nicknames] = await Promise.all([
+      store.getAccountByClientId(clientId),
+      store.getClientNicknames([clientId]),
+    ]);
+    if (!account) {
+      return res.status(500).json({ error: 'The password is not linked to an account' });
+    }
+    const clientAuthToken = await issueClientAuthToken(store, clientId, {
+      accountId: account.accountId,
+      authMethod: 'password',
+    });
+    return res.json({
+      clientId,
+      clientAuthToken,
+      hasPassword: true,
+      nickname: nicknames[clientId] ?? null,
+      account: serializeClientAccount(account),
+    });
+  });
+
+  app.put('/api/admin/accounts/:accountId/membership', async (req: Request, res: Response) => {
+    if (!membershipAdminToken) {
+      return res.status(404).json({ error: 'Membership administration is not configured' });
+    }
+    const authorization = req.header('authorization') || '';
+    if (!securelyMatches(authorization, `Bearer ${membershipAdminToken}`)) {
+      return res.status(401).json({ error: 'Invalid membership administrator credential' });
+    }
+
+    const accountId = req.params.accountId?.trim();
+    const tier = req.body?.tier as MembershipTier;
+    const status = req.body?.status as MembershipStatus;
+    const priorityOverride = req.body?.priorityOverride;
+    const creditGrantUsd = req.body?.creditGrantUsd;
+    if (!accountId || !['free', 'pro', 'priority'].includes(tier)) {
+      return res.status(400).json({ error: 'accountId and a valid membership tier are required' });
+    }
+    if (!['active', 'past_due', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'A valid membership status is required' });
+    }
+    if (
+      priorityOverride !== undefined
+      && priorityOverride !== null
+      && (
+        !Number.isInteger(priorityOverride)
+        || priorityOverride < 1
+        || priorityOverride > 2_097_152
+      )
+    ) {
+      return res.status(400).json({ error: 'priorityOverride must be an integer between 1 and 2097152' });
+    }
+    if (
+      creditGrantUsd !== undefined
+      && (!Number.isFinite(creditGrantUsd) || creditGrantUsd <= 0)
+    ) {
+      return res.status(400).json({ error: 'creditGrantUsd must be a positive number' });
+    }
+    const creditIdempotencyKey = creditGrantUsd === undefined
+      ? undefined
+      : req.header('idempotency-key')?.trim();
+    if (creditGrantUsd !== undefined && !creditIdempotencyKey) {
+      return res.status(400).json({ error: 'Idempotency-Key is required for credit grants' });
+    }
+    const currentPeriodStart = typeof req.body?.currentPeriodStart === 'string'
+      ? req.body.currentPeriodStart
+      : null;
+    const currentPeriodEnd = typeof req.body?.currentPeriodEnd === 'string'
+      ? req.body.currentPeriodEnd
+      : null;
+    if (
+      (currentPeriodStart && !Number.isFinite(Date.parse(currentPeriodStart)))
+      || (currentPeriodEnd && !Number.isFinite(Date.parse(currentPeriodEnd)))
+      || (
+        currentPeriodStart
+        && currentPeriodEnd
+        && Date.parse(currentPeriodEnd) <= Date.parse(currentPeriodStart)
+      )
+    ) {
+      return res.status(400).json({ error: 'Membership billing period timestamps are invalid' });
+    }
+
+    try {
+      let entitlement = await store.updateAccountMembership({
+        accountId,
+        tier,
+        status,
+        priorityOverride: priorityOverride ?? null,
+        currentPeriodStart,
+        currentPeriodEnd,
+        externalProvider: typeof req.body?.externalProvider === 'string'
+          ? req.body.externalProvider
+          : null,
+        externalCustomerId: typeof req.body?.externalCustomerId === 'string'
+          ? req.body.externalCustomerId
+          : null,
+        externalSubscriptionId: typeof req.body?.externalSubscriptionId === 'string'
+          ? req.body.externalSubscriptionId
+          : null,
+      });
+      if (!entitlement) {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+
+      if (creditGrantUsd !== undefined) {
+        entitlement = await store.grantAccountCredits({
+          id: uuidv4(),
+          accountId,
+          amountUsd: creditGrantUsd,
+          idempotencyKey: creditIdempotencyKey!,
+          note: typeof req.body?.creditNote === 'string' ? req.body.creditNote : undefined,
+          metadata: {
+            source: 'membership_admin_api',
+            tier,
+            status,
+          },
+        });
+        if (!entitlement) {
+          throw new Error('Credit grant did not return an account entitlement');
+        }
+      }
+
+      return res.json({ entitlement });
+    } catch (error) {
+      routeLogger.error('Membership administration failed', { error, accountId });
+      return res.status(500).json({ error: 'Unable to update account membership' });
+    }
   });
 
   app.post('/api/client-auth/logout', async (req: Request, res: Response) => {

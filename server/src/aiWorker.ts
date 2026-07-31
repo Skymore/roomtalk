@@ -20,6 +20,10 @@ import {
 import { processAssistantRunJob } from './services/assistantRunBullProcessor';
 import { RedisAssistantRunEventPublisher } from './services/assistantRunEvents';
 import { resolveRuntimeInstanceId } from './services/runtimeInstance';
+import {
+  RedisProviderAdmissionController,
+  resolveProviderAdmissionLimits,
+} from './services/providerAdmission';
 
 dotenv.config();
 
@@ -46,6 +50,12 @@ const store = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage
 const transientRedis = createClient({ url: realtimeRedisUrl });
 const eventPublisher = new RedisAssistantRunEventPublisher(transientRedis);
 const queueConnection = createQueueRedisConnection(queueRedisUrl, 'worker');
+const providerAdmissionLimits = resolveProviderAdmissionLimits();
+const providerAdmission = new RedisProviderAdmissionController(
+  queueConnection,
+  providerAdmissionLimits,
+  logger,
+);
 const { getAIClientForModel } = createAIClients(process.env);
 
 transientRedis.on('error', error => redisLogger.error('AI worker transient Redis error', { error }));
@@ -92,20 +102,45 @@ const start = async () => {
     async job => {
       const data = decodeAssistantRunJobData(job.data);
       if (!data) throw new Error(`Invalid assistant run BullMQ payload for job ${job.id || 'unknown'}`);
-      return processAssistantRunJob(data, {
-        store,
-        logger,
-        workerId: `${workerId}:${job.id || data.runId}`,
-        leaseMs: parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_LEASE_MS, 60_000),
-        maxAttempts: parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_MAX_ATTEMPTS, 10),
-        execute: (claim, execution) => executeAssistantRun(claim, {
+      const run = await store.getAssistantRun(data.runId);
+      if (
+        !run
+        || run.status === 'complete'
+        || run.status === 'error'
+        || run.status === 'cancelled'
+      ) {
+        return processAssistantRunJob(data, {
           store,
-          socketLogger: logger,
-          openaiLogger,
-          getAIClientForModel,
-          eventPublisher,
-        }, execution),
-      });
+          logger,
+          workerId: `${workerId}:${job.id || data.runId}`,
+          execute: async () => undefined,
+        });
+      }
+      const admission = await providerAdmission.acquire(run.provider);
+      try {
+        return await processAssistantRunJob(data, {
+          store,
+          logger,
+          workerId: `${workerId}:${job.id || data.runId}`,
+          leaseMs: parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_LEASE_MS, 60_000),
+          maxAttempts: parsePositiveInt(process.env.ASSISTANT_RUN_WORKER_MAX_ATTEMPTS, 10),
+          execute: (claim, execution) => executeAssistantRun(claim, {
+            store,
+            socketLogger: logger,
+            openaiLogger,
+            getAIClientForModel,
+            eventPublisher,
+          }, execution),
+        });
+      } finally {
+        await admission.release().catch(error => {
+          logger.error('Failed to release provider admission lease', {
+            error,
+            runId: data.runId,
+            provider: run.provider,
+          });
+        });
+      }
     },
     {
       connection: queueConnection,
@@ -157,6 +192,7 @@ const start = async () => {
     healthPort,
     heartbeatIntervalMs,
     heartbeatTtlMs,
+    providerAdmissionLimits,
   });
 };
 

@@ -1922,4 +1922,224 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $$;
     `,
   },
+  {
+    // Accounts are the durable billing/scheduling principal. Password users
+    // are upgraded from client-only credentials, while anonymous clients stay
+    // in the guest service class until they create an account.
+    id: '0014_account_memberships_and_ai_scheduling',
+    sql: `
+      ALTER TABLE account_identities
+        DROP CONSTRAINT IF EXISTS account_identities_provider_check;
+      ALTER TABLE account_identities
+        ADD CONSTRAINT account_identities_provider_check
+        CHECK (provider IN ('google', 'password'));
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_account_identities_one_per_provider
+        ON account_identities (account_id, provider);
+
+      INSERT INTO accounts (
+        id,
+        primary_client_id,
+        created_at,
+        updated_at,
+        last_login_at
+      )
+      SELECT
+        'password:' || password.client_id,
+        password.client_id,
+        password.created_at,
+        password.updated_at,
+        password.updated_at
+      FROM client_passwords AS password
+      LEFT JOIN client_account_links AS link
+        ON link.client_id = password.client_id
+      WHERE link.client_id IS NULL
+      ON CONFLICT (primary_client_id) DO NOTHING;
+
+      INSERT INTO client_account_links (client_id, account_id, linked_at)
+      SELECT account.primary_client_id, account.id, account.created_at
+      FROM accounts AS account
+      LEFT JOIN client_account_links AS link
+        ON link.client_id = account.primary_client_id
+      WHERE link.client_id IS NULL
+      ON CONFLICT (client_id) DO NOTHING;
+
+      INSERT INTO account_identities (
+        account_id,
+        provider,
+        provider_subject,
+        created_at,
+        updated_at
+      )
+      SELECT
+        link.account_id,
+        'password',
+        password.client_id,
+        password.created_at,
+        password.updated_at
+      FROM client_passwords AS password
+      JOIN client_account_links AS link
+        ON link.client_id = password.client_id
+      ON CONFLICT (provider, provider_subject) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS account_memberships (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        tier TEXT NOT NULL DEFAULT 'free'
+          CHECK (tier IN ('free', 'pro', 'priority')),
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active', 'past_due', 'cancelled')),
+        priority_override INTEGER
+          CHECK (priority_override IS NULL OR priority_override BETWEEN 1 AND 2097152),
+        current_period_start TIMESTAMPTZ,
+        current_period_end TIMESTAMPTZ,
+        external_provider TEXT,
+        external_customer_id TEXT,
+        external_subscription_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CHECK (
+          current_period_start IS NULL
+          OR current_period_end IS NULL
+          OR current_period_end > current_period_start
+        )
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_account_memberships_external_subscription
+        ON account_memberships (external_provider, external_subscription_id)
+        WHERE external_provider IS NOT NULL AND external_subscription_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS account_credit_balances (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        available_usd NUMERIC(18, 9) NOT NULL DEFAULT 0
+          CHECK (available_usd >= 0),
+        lifetime_usage_usd NUMERIC(18, 9) NOT NULL DEFAULT 0
+          CHECK (lifetime_usage_usd >= 0),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE TABLE IF NOT EXISTS account_credit_ledger (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL
+          CHECK (kind IN ('grant', 'adjustment', 'refund', 'expiration')),
+        amount_usd NUMERIC(18, 9) NOT NULL CHECK (amount_usd <> 0),
+        balance_after_usd NUMERIC(18, 9) NOT NULL CHECK (balance_after_usd >= 0),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        note TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_credit_ledger_account_created
+        ON account_credit_ledger (account_id, created_at DESC);
+
+      INSERT INTO account_memberships (account_id)
+      SELECT id FROM accounts
+      ON CONFLICT (account_id) DO NOTHING;
+
+      INSERT INTO account_credit_balances (account_id)
+      SELECT id FROM accounts
+      ON CONFLICT (account_id) DO NOTHING;
+
+      ALTER TABLE assistant_runs
+        ADD COLUMN IF NOT EXISTS billing_account_id TEXT
+          REFERENCES accounts(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS membership_tier TEXT NOT NULL DEFAULT 'guest',
+        ADD COLUMN IF NOT EXISTS credit_state TEXT NOT NULL DEFAULT 'none',
+        ADD COLUMN IF NOT EXISTS queue_priority INTEGER NOT NULL DEFAULT 100,
+        ADD COLUMN IF NOT EXISTS charged_cost_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS credit_applied_usd NUMERIC(18, 9) NOT NULL DEFAULT 0;
+
+      ALTER TABLE assistant_runs
+        DROP CONSTRAINT IF EXISTS assistant_runs_membership_tier_check;
+      ALTER TABLE assistant_runs
+        ADD CONSTRAINT assistant_runs_membership_tier_check
+        CHECK (membership_tier IN ('guest', 'free', 'pro', 'priority'));
+      ALTER TABLE assistant_runs
+        DROP CONSTRAINT IF EXISTS assistant_runs_credit_state_check;
+      ALTER TABLE assistant_runs
+        ADD CONSTRAINT assistant_runs_credit_state_check
+        CHECK (credit_state IN ('none', 'available', 'exhausted'));
+      ALTER TABLE assistant_runs
+        DROP CONSTRAINT IF EXISTS assistant_runs_queue_priority_check;
+      ALTER TABLE assistant_runs
+        ADD CONSTRAINT assistant_runs_queue_priority_check
+        CHECK (queue_priority BETWEEN 1 AND 2097152);
+      ALTER TABLE assistant_runs
+        DROP CONSTRAINT IF EXISTS assistant_runs_accounting_check;
+      ALTER TABLE assistant_runs
+        ADD CONSTRAINT assistant_runs_accounting_check
+        CHECK (
+          charged_cost_usd >= 0
+          AND credit_applied_usd >= 0
+          AND credit_applied_usd <= charged_cost_usd
+        );
+
+      CREATE INDEX IF NOT EXISTS idx_assistant_runs_billing_account_created
+        ON assistant_runs (billing_account_id, created_at DESC)
+        WHERE billing_account_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS account_ai_usage_events (
+        -- Keep billing audit rows after a room and its assistant runs are
+        -- deleted. Globally unique run IDs remain the idempotency key.
+        assistant_run_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        cost_usd NUMERIC(18, 9) NOT NULL CHECK (cost_usd >= 0),
+        credit_applied_usd NUMERIC(18, 9) NOT NULL
+          CHECK (credit_applied_usd >= 0 AND credit_applied_usd <= cost_usd),
+        membership_tier TEXT NOT NULL
+          CHECK (membership_tier IN ('free', 'pro', 'priority')),
+        provider TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_ai_usage_events_account_created
+        ON account_ai_usage_events (account_id, created_at DESC);
+
+      ALTER TABLE task_dispatch_outbox
+        ADD COLUMN IF NOT EXISTS queue_priority INTEGER NOT NULL DEFAULT 100;
+      ALTER TABLE task_dispatch_outbox
+        DROP CONSTRAINT IF EXISTS task_dispatch_outbox_queue_priority_check;
+      ALTER TABLE task_dispatch_outbox
+        ADD CONSTRAINT task_dispatch_outbox_queue_priority_check
+        CHECK (queue_priority BETWEEN 1 AND 2097152);
+
+      UPDATE assistant_runs AS run
+      SET billing_account_id = link.account_id,
+        membership_tier = CASE
+          WHEN membership.status = 'active' THEN membership.tier
+          ELSE 'free'
+        END,
+        credit_state = CASE
+          WHEN balance.available_usd > 0 THEN 'available'
+          ELSE 'exhausted'
+        END,
+        queue_priority = CASE
+          WHEN membership.priority_override IS NOT NULL THEN membership.priority_override
+          WHEN membership.status <> 'active' OR membership.tier = 'free'
+            THEN CASE WHEN balance.available_usd > 0 THEN 60 ELSE 80 END
+          WHEN membership.tier = 'pro'
+            THEN CASE WHEN balance.available_usd > 0 THEN 20 ELSE 40 END
+          ELSE CASE WHEN balance.available_usd > 0 THEN 1 ELSE 10 END
+        END
+      FROM client_account_links AS link
+      JOIN account_memberships AS membership
+        ON membership.account_id = link.account_id
+      JOIN account_credit_balances AS balance
+        ON balance.account_id = link.account_id
+      WHERE link.client_id = run.requested_by_client_id
+        AND run.status IN ('queued', 'running', 'finalizing');
+
+      UPDATE task_dispatch_outbox AS dispatch
+      SET queue_priority = run.queue_priority
+      FROM assistant_runs AS run
+      WHERE run.id = dispatch.run_id;
+
+      DROP INDEX IF EXISTS idx_task_dispatch_claim;
+      CREATE INDEX idx_task_dispatch_claim
+        ON task_dispatch_outbox (queue_priority, available_at, created_at)
+        WHERE status IN ('pending', 'processing');
+    `,
+  },
 ];

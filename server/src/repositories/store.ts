@@ -1,6 +1,13 @@
 import { AICost, AIModelOption, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
+import {
+  AccountCreditState,
+  AccountEntitlement,
+  MembershipStatus,
+  MembershipTier,
+  SchedulingTier,
+} from '../services/accountEntitlements';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -430,6 +437,12 @@ export interface AssistantRunRecord {
   availableAt: string;
   leaseOwner?: string;
   leaseExpiresAt?: string;
+  billingAccountId?: string;
+  membershipTier?: SchedulingTier;
+  creditState?: AccountCreditState;
+  queuePriority?: number;
+  chargedCostUsd?: number;
+  creditAppliedUsd?: number;
 }
 
 export interface AssistantRunClaimToken {
@@ -468,6 +481,7 @@ export interface TaskDispatchRecord {
   lockedBy?: string;
   dispatchedAt?: string;
   lastError?: string;
+  queuePriority?: number;
 }
 
 export interface TaskDispatchClaimOptions {
@@ -572,8 +586,9 @@ export interface GoogleAccountProfile {
 export interface ClientAccount {
   accountId: string;
   primaryClientId: string;
-  provider: 'google';
+  provider: 'google' | 'password';
   providerSubject: string;
+  googleLinked?: boolean;
   email?: string;
   emailVerified?: boolean;
   displayName?: string;
@@ -586,6 +601,35 @@ export interface ClientAccount {
 export interface CreateGoogleAccountInput extends GoogleAccountProfile {
   accountId: string;
   clientId: string;
+  now?: string;
+}
+
+export interface CreatePasswordAccountInput {
+  accountId: string;
+  clientId: string;
+  now?: string;
+}
+
+export interface UpdateAccountMembershipInput {
+  accountId: string;
+  tier: MembershipTier;
+  status: MembershipStatus;
+  priorityOverride?: number | null;
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  externalProvider?: string | null;
+  externalCustomerId?: string | null;
+  externalSubscriptionId?: string | null;
+  now?: string;
+}
+
+export interface AccountCreditGrantInput {
+  id: string;
+  accountId: string;
+  amountUsd: number;
+  idempotencyKey: string;
+  note?: string;
+  metadata?: Record<string, unknown>;
   now?: string;
 }
 
@@ -701,8 +745,12 @@ export interface DurableRoomStore {
   readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
   getAccountByClientId(clientId: string): Promise<ClientAccount | null>;
   getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null>;
+  createPasswordAccountForClient(input: CreatePasswordAccountInput): Promise<ClientAccount | null>;
   createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string): Promise<ClientAccount | null>;
+  getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null>;
+  updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null>;
+  grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null>;
   setClientPasswordHash(clientId: string, passwordHash: string): Promise<void>;
   getClientPasswordHash(clientId: string): Promise<string | null>;
   saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void>;
@@ -1355,12 +1403,28 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.getAccountByGoogleSubject(providerSubject);
   }
 
+  createPasswordAccountForClient(input: CreatePasswordAccountInput) {
+    return this.durableStore.createPasswordAccountForClient(input);
+  }
+
   createGoogleAccountForClient(input: CreateGoogleAccountInput) {
     return this.durableStore.createGoogleAccountForClient(input);
   }
 
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string) {
     return this.durableStore.updateGoogleAccountLogin(accountId, profile, now);
+  }
+
+  getAccountEntitlementByClientId(clientId: string) {
+    return this.durableStore.getAccountEntitlementByClientId(clientId);
+  }
+
+  updateAccountMembership(input: UpdateAccountMembershipInput) {
+    return this.durableStore.updateAccountMembership(input);
+  }
+
+  grantAccountCredits(input: AccountCreditGrantInput) {
+    return this.durableStore.grantAccountCredits(input);
   }
 
   setClientPasswordHash(clientId: string, passwordHash: string) {
