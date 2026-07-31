@@ -366,7 +366,7 @@ describe('SettingsView Codex connection controls', () => {
     expect(screen.getByText('platformAdministrator')).toBeTruthy();
   });
 
-  it('shows the effective membership, credits, usage, and queue priority', async () => {
+  it('shows the effective membership, credits, usage, and a readable queue level', async () => {
     accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
       clientId: 'client-1',
       hasPassword: true,
@@ -395,7 +395,9 @@ describe('SettingsView Codex connection controls', () => {
     expect(await screen.findByText('membershipTierPro')).toBeTruthy();
     expect(screen.getByText('$12.50')).toBeTruthy();
     expect(screen.getByText('$7.25')).toBeTruthy();
-    expect(screen.getByText('membershipQueuePriority')).toBeTruthy();
+    expect(screen.getByText('membershipQueueLevel')).toBeTruthy();
+    expect(screen.getByText('membershipQueueLevelHigh')).toBeTruthy();
+    expect(screen.queryByText('membershipQueuePriority')).toBeNull();
   });
 
   it('shows administrators as Priority with unlimited credits', async () => {
@@ -429,6 +431,7 @@ describe('SettingsView Codex connection controls', () => {
     expect(await screen.findByText('membershipTierPriority')).toBeTruthy();
     expect(screen.getByText('membershipUnlimited')).toBeTruthy();
     expect(screen.getByText('platformAdministrator')).toBeTruthy();
+    expect(screen.getByText('membershipQueueLevelHighest')).toBeTruthy();
     expect(screen.queryByText('membershipCreditsExhausted')).toBeNull();
   });
 
@@ -465,6 +468,7 @@ describe('SettingsView Codex connection controls', () => {
 
     expect(await screen.findByText('$5.00')).toBeTruthy();
     expect(screen.getByText('membershipFreeMonthlyAllowance')).toBeTruthy();
+    expect(screen.getByText('membershipQueueLevelStandard')).toBeTruthy();
   });
 
   it('places high-frequency preferences before account login forms', () => {

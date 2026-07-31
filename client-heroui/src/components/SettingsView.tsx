@@ -18,6 +18,10 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
+import {
+  getMembershipQueueLevel,
+  MEMBERSHIP_QUEUE_LEVEL_LABEL_KEYS,
+} from "../utils/membershipQueueLevel";
 import { FeatureIntro } from "./FeatureIntro";
 import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from "../utils/accessibility";
 import {
@@ -684,6 +688,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [codexDeviceAuthSecondsRemaining, t]);
   const isNewClientPasswordValid = newClientPassword.length >= 8 && newClientPassword.length <= 128;
   const canSubmitExistingClientLogin = Boolean(loginClientId.trim() && loginPassword);
+  const membershipQueueLevel = accountStatus?.entitlement
+    ? getMembershipQueueLevel(accountStatus.entitlement.queuePriority)
+    : null;
 
   return (
     <>
@@ -892,9 +899,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       }).format(accountStatus.entitlement.lifetimeUsageUsd)}
                     </p>
                   </div>
-                  <p className="col-span-2 text-[#77746b] dark:text-[#96938a]">
-                    {t("membershipQueuePriority", { priority: accountStatus.entitlement.queuePriority })}
-                  </p>
+                  {membershipQueueLevel && (
+                    <div className="col-span-2">
+                      <p className="text-[#77746b] dark:text-[#96938a]">{t("membershipQueueLevel")}</p>
+                      <p className="mt-1 font-semibold text-[#141413] dark:text-[#faf9f5]">
+                        {t(MEMBERSHIP_QUEUE_LEVEL_LABEL_KEYS[membershipQueueLevel])}
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
