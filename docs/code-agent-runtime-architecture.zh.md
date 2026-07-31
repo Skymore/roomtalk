@@ -3,7 +3,7 @@
 [English](code-agent-runtime-architecture.md)
 
 状态：当前
-已按 `master` 核对：2026-07-24
+已按 `master` 核对：2026-07-30
 
 本文描述当前实现。`docs/` 中的早期 phase、spike 和 migration plan 保留了演进证据；当前简明入口以本文为准，最终事实源仍是源码和测试。
 
@@ -20,6 +20,7 @@ Code Agent room 不是给 remote shell 包一层 chat prompt，而是一个 room
 - Sandbox 是 file、Git、process、terminal 和 dev server 的可变 runtime state。
 - Coco 是 RoomTalk 自研 CLI coding agent/engine，其 reasoning/tool loop 位于 runner contract 之后。
 - Codex 由房主提供：房主连接自己的 Codex subscription，RoomTalk 加密存储，并为获准使用工作区的成员 turn 物化房主连接。
+- OpenCode 与 Hermes Agent 作为隔离的 ACP harness 运行。模型访问只使用 RoomTalk 的 turn-scoped gateway；room access、turn ownership、approval、持久化和 artifact 发布仍由 RoomTalk 负责。
 - GitHub 也是用户自有 connection：加密 PAT 只以 turn-scoped secret file 形式供 `gh`/Git 使用，轮次后删除。
 - Browser 永远不获得 E2B、provider、database 或 RoomTalk service secret。
 
@@ -36,6 +37,8 @@ flowchart TB
   E2B --> Daemon["Reusable JSONL daemon"]
   Daemon --> Coco["Coco"]
   Daemon --> Codex["Codex app-server"]
+  Daemon --> OpenCode["OpenCode ACP"]
+  Daemon --> Hermes["Hermes ACP"]
   E2B --> Workspace["Files / Git / PTY / previews"]
   Daemon --> Broker["Turn-scoped RoomTalk capabilities"]
   Broker --> Node
@@ -70,6 +73,8 @@ Turn control 不会绕过 durable scheduler：Queue 保存下一个 prompt；Ste
 每个 Code Agent room 绑定一个可持续 `/workspace`。Idle TTL 与 active TTL 分离；正在执行的 turn 会续租 active TTL，完成后回到 idle TTL。Sandbox 暂停/超时后可恢复；artifact 不匹配时可用 archive 迁移到 replacement sandbox。
 
 Daemon 是 sandbox-local JSONL process，不是 RoomTalk 权威状态存储。它复用 backend process/session，串行 turn/control/query，并发出版本化 event。RoomTalk 为 thread query 和 turn release 设置有界等待；丢失 release、query timeout 或 control connection 失败会使 daemon handle 中毒并重建，而不是永久卡住 room。
+
+当前产品 backend 是 Coco（`code-agent`）、Codex app-server（`codex-app-server`）、OpenCode（`opencode`）与 Hermes Agent（`hermes-agent`）。OpenCode 与 Hermes 共享 capability-negotiated ACP adapter，统一映射 text/tool/usage/permission/cancel/session，而不是各自复制一套私有协议。Live steer、Codex thread 浏览和 checkpoint 仍按 backend capability 明确区分，ACP backend 不会宣称未实现的能力。Plan 模式除了 native permission 配置，还用 bubblewrap 把 workspace 强制挂成只读。
 
 PTY terminal、browser preview、dev server 和 file API 是独立 sandbox service，不属于 daemon protocol state。
 

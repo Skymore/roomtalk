@@ -7,7 +7,7 @@ Verified against `master` and the production non-secret runtime pins: 2026-07-12
 
 ## Purpose
 
-RoomTalk runs Coco and Codex app-server inside a room-scoped file/process sandbox. Production must use a pinned artifact rather than a developer workstation path. The legacy Codex CLI adapter remains packaged only for compatibility and migration.
+RoomTalk runs Coco, Codex app-server, OpenCode, and Hermes Agent inside a room-scoped file/process sandbox. Production must use a pinned artifact rather than a developer workstation path. The legacy Codex CLI adapter remains packaged only for compatibility and migration.
 
 This artifact contains:
 
@@ -15,6 +15,7 @@ This artifact contains:
 - the `roomtalk_code_agent_runner` JSONL adapters and reusable daemon
 - hash-verified Python runtime dependencies installed into the image
 - pinned Codex CLI/app-server and Python SDK dependencies
+- pinned OpenCode npm package plus pinned Hermes Agent source/lock, connected through ACP 0.9.0
 - Chromium/Playwright, common build toolchains, `gh`, Git LFS, the `roomtalk` CLI, and the PTY shell environment
 
 ## Locked Version
@@ -28,13 +29,17 @@ ops/code-agent-sandbox/artifact.lock.json
 Pinned values:
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-07-12-coco-permissions-v3
+artifactVersion: roomtalk-code-agent-2026-07-30-multi-harness-v1
 codeAgentEngineSourceRepo: https://github.com/Venti0325/Coco.git
 codeAgentEngineSourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
 codeAgentEnginePackageVersion: 0.1.3a0
-runnerPackageVersion: 0.1.31
-codexCliVersion: 0.144.1
+runnerPackageVersion: 0.1.38
+codexCliVersion: 0.145.0-alpha.4
 codexPythonSdkVersion: 0.1.0b3
+openCodeVersion: 1.18.10
+hermesAgentVersion: 0.19.1
+hermesAgentSourceRef: f3cda0ceb18d8ba7465a6d223098ef0e56c8fee1
+acpSdkVersion: 0.9.0
 playwrightVersion: 1.61.1
 pythonVersion: 3.12
 baseImage: python:3.12-slim-bookworm@sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef
@@ -66,13 +71,14 @@ artifact.lock.json
 BUILD-METADATA.json
 requirements.lock
 code-agent-engine/
+hermes-agent/
 roomtalk_code_agent_runner/
 ```
 
 Build the container image from that context:
 
 ```bash
-docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-07-12-coco-permissions-v3 /tmp/roomtalk-code-agent-sandbox-context
+docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-07-30-multi-harness-v1 /tmp/roomtalk-code-agent-sandbox-context
 ```
 
 Publish that image as the E2B template named by `CODE_AGENT_E2B_TEMPLATE_ID`.
@@ -82,7 +88,7 @@ Use the helper so the build context, E2B create command, readiness checks, and o
 ```bash
 node scripts/code-agent/build-e2b-template.mjs \
   --clean \
-  --template roomtalk-code-agent-2026-07-12-coco-permissions-v3 \
+  --template roomtalk-code-agent-2026-07-30-multi-harness-v1 \
   --publish
 ```
 

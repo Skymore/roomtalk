@@ -50,11 +50,13 @@ export interface CodeAgentRuntimeConfig {
 export const DEFAULT_CODE_AGENT_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner';
 export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_cli';
 export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_app_server';
+export const DEFAULT_OPENCODE_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.acp_harness --backend opencode';
+export const DEFAULT_HERMES_AGENT_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.acp_harness --backend hermes-agent';
 export const DEFAULT_CODE_AGENT_DAEMON_COMMAND = [
   "bash -lc '",
-  'pkill -TERM -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host" 2>/dev/null || true;',
+  'pkill -TERM -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host|[o]pencode acp|[h]ermes acp" 2>/dev/null || true;',
   'sleep 0.2;',
-  'pkill -KILL -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host" 2>/dev/null || true;',
+  'pkill -KILL -f "^python -m roomtalk_code_agent_runner[.]daemon$|[c]odex app-server --listen stdio://|[c]odex-code-mode-host|[o]pencode acp|[h]ermes acp" 2>/dev/null || true;',
   'exec python -m roomtalk_code_agent_runner.daemon',
   "'",
 ].join(' ');
@@ -99,7 +101,7 @@ const readSandboxProvider = (env: NodeJS.ProcessEnv): CodeAgentSandboxProvider =
 const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
   const defaultBackend = env.CODEX_CLI_BACKEND_ENABLED === 'true' ? 'codex-app-server' : 'code-agent';
   const value = (env.CODE_AGENT_BACKEND || defaultBackend).toLowerCase();
-  if (value === 'code-agent') {
+  if (value === 'code-agent' || value === 'opencode' || value === 'hermes-agent') {
     return value;
   }
   if (value === 'codex' || value === 'codex-app-server') {
@@ -125,6 +127,12 @@ const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => {
   }
   if (backend === 'codex-app-server') {
     return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
+  }
+  if (backend === 'opencode') {
+    return DEFAULT_OPENCODE_RUNNER_COMMAND;
+  }
+  if (backend === 'hermes-agent') {
+    return DEFAULT_HERMES_AGENT_RUNNER_COMMAND;
   }
   return DEFAULT_CODE_AGENT_RUNNER_COMMAND;
 };
@@ -444,6 +452,8 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
     'code-agent': backend === 'code-agent' ? runnerCommand : DEFAULT_CODE_AGENT_RUNNER_COMMAND,
     codex: env.CODEX_CLI_RUNNER_COMMAND || (backend === 'codex' ? runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND),
     'codex-app-server': env.CODEX_APP_SERVER_RUNNER_COMMAND || (backend === 'codex-app-server' ? runnerCommand : DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND),
+    opencode: env.OPENCODE_RUNNER_COMMAND || (backend === 'opencode' ? runnerCommand : DEFAULT_OPENCODE_RUNNER_COMMAND),
+    'hermes-agent': env.HERMES_AGENT_RUNNER_COMMAND || (backend === 'hermes-agent' ? runnerCommand : DEFAULT_HERMES_AGENT_RUNNER_COMMAND),
   } satisfies Partial<Record<CodeAgentBackend, string>>;
   const daemonCommand = env.CODE_AGENT_DAEMON_COMMAND || DEFAULT_CODE_AGENT_DAEMON_COMMAND;
   const config: CodeAgentRuntimeConfig = {

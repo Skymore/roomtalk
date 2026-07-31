@@ -15,8 +15,19 @@ export {
   normalizeCodeAgentModeList,
 } from './codeAgentModes';
 
-export const CODE_AGENT_BACKEND_OPTIONS = ['code-agent', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
-const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(['code-agent', 'codex', 'codex-app-server']);
+export const CODE_AGENT_BACKEND_OPTIONS = [
+  'code-agent',
+  'codex-app-server',
+  'opencode',
+  'hermes-agent',
+] as const satisfies readonly CodeAgentBackend[];
+const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>([
+  'code-agent',
+  'codex',
+  'codex-app-server',
+  'opencode',
+  'hermes-agent',
+]);
 
 export const getCodeAgentAssistantDisplayName = (username: string | null | undefined): string | undefined => {
   const trimmed = username?.trim();
@@ -72,10 +83,18 @@ export const isCodexCodeAgentBackend = (backend: CodeAgentBackend | null | undef
 );
 
 export const getCodeAgentBackendLabelKey = (backend: CodeAgentBackend): string => {
-  if (backend === 'codex-app-server') {
-    return 'codeAgentEngineCodexAppServer';
+  switch (backend) {
+    case 'codex-app-server':
+      return 'codeAgentEngineCodexAppServer';
+    case 'codex':
+      return 'codeAgentEngineCodex';
+    case 'opencode':
+      return 'codeAgentEngineOpenCode';
+    case 'hermes-agent':
+      return 'codeAgentEngineHermesAgent';
+    case 'code-agent':
+      return 'codeAgentEngineCodeAgent';
   }
-  return backend === 'codex' ? 'codeAgentEngineCodex' : 'codeAgentEngineCodeAgent';
 };
 
 export const getCodeAgentStatus = (room: Room | null | undefined): RoomCodeAgentStatus | undefined => (

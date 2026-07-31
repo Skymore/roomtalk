@@ -21,6 +21,9 @@ const options = {
   readyCmd: process.env.CODE_AGENT_E2B_TEMPLATE_READY_CMD || [
     'codex --version >/dev/null',
     'codex-linux-sandbox --help >/dev/null',
+    'opencode --version >/dev/null',
+    'opencode acp --help >/dev/null',
+    'hermes acp --check >/dev/null',
     'playwright --version >/dev/null',
     'node -e "const { chromium } = require(\\"playwright\\"); const fs = require(\\"fs\\"); const executable = chromium.executablePath(); if (!fs.existsSync(executable)) { console.error(`missing Chromium executable: ${executable}`); process.exit(1); }"',
     'curl --version >/dev/null',
@@ -60,7 +63,7 @@ const options = {
     'test -f "$HOME/.oh-my-zsh/oh-my-zsh.sh"',
     'test -f "$HOME/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme"',
     'roomtalk --help >/dev/null',
-    'python -c "import importlib; importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.daemon\\"); importlib.import_module(\\"openai_codex\\")"',
+    'python -c "import importlib; importlib.import_module(\\"acp\\"); importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.acp_harness\\"); importlib.import_module(\\"roomtalk_code_agent_runner.daemon\\"); importlib.import_module(\\"openai_codex\\")"',
   ].join(' && '),
 };
 

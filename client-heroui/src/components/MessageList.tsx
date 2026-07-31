@@ -83,7 +83,13 @@ export const buildMessageTimeline = (
         startedAt: firstTimestamp,
         ...(!isRunning ? { completedAt: lastTimestamp } : {}),
         ...(lastAIMessage ? { finalMessageId: lastAIMessage.id } : {}),
-        backend: assistantName === 'Codex' ? 'codex-app-server' : 'code-agent',
+        backend: assistantName === 'Codex'
+          ? 'codex-app-server'
+          : assistantName === 'OpenCode'
+            ? 'opencode'
+            : assistantName === 'Hermes'
+              ? 'hermes-agent'
+              : 'code-agent',
         assistantName,
         updatedAt: lastTimestamp,
       },

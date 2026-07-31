@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Room, RoomPermissions } from '../utils/types';
+import { Room, RoomPermissions, type CodeAgentBackend } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import {
@@ -42,7 +42,7 @@ vi.mock('./MessageList', async () => {
       bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
       onOpenWorkspaceArtifact?: (url: string) => boolean;
-      onCodeAgentBackendChange?: (backend: 'code-agent' | 'codex' | 'codex-app-server') => void;
+      onCodeAgentBackendChange?: (backend: CodeAgentBackend) => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
     return (
@@ -215,7 +215,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
 }));
 
 vi.mock('../utils/socket', () => ({
-  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'; codeAgentBackend?: 'code-agent' | 'codex' | 'codex-app-server' }) => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'; codeAgentBackend?: CodeAgentBackend }) => ({
     id: roomId,
     name: 'Code Agent Room',
     creatorId: 'client-1',

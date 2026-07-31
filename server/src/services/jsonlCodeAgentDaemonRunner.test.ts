@@ -105,7 +105,7 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
       },
     }, createContext(process));
 
-    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', pid: 123, backends: ['code-agent', 'codex', 'codex-app-server'] });
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', pid: 123, backends: ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'] });
     await waitFor(() => process.written.length === 1);
     process.emit({ schemaVersion: 1, type: 'text_delta', messageId: 'ai-1', delta: 'done' });
     process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: 'done', sessionId: 'session-1' });

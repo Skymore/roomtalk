@@ -90,6 +90,11 @@ describe('codeAgent room adapters', () => {
     expect(getCodeAgentBackend(codeAgentCodexRoom)).toBe('codex');
     expect(getCodeAgentBackend(codeAgentCodexAppRoom)).toBe('codex-app-server');
     expect(getCodeAgentStatus(codeAgentCodexRoom)).toBe('running');
-    expect(CODE_AGENT_BACKEND_OPTIONS).toEqual(['code-agent', 'codex-app-server']);
+    expect(CODE_AGENT_BACKEND_OPTIONS).toEqual([
+      'code-agent',
+      'codex-app-server',
+      'opencode',
+      'hermes-agent',
+    ]);
   });
 });

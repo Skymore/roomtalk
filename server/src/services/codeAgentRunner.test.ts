@@ -109,6 +109,8 @@ describe('CodeAgentRunner', () => {
     assert.equal(createCodeAgentRunner('code-agent', sharedClient).backend, 'code-agent');
     assert.equal(createCodeAgentRunner('codex', sharedClient).backend, 'codex');
     assert.equal(createCodeAgentRunner('codex-app-server', sharedClient).backend, 'codex-app-server');
+    assert.equal(createCodeAgentRunner('opencode', sharedClient).backend, 'opencode');
+    assert.equal(createCodeAgentRunner('hermes-agent', sharedClient).backend, 'hermes-agent');
     assert.equal(createCodeAgentRunner('codex', sharedClient, { codexRunner }).backend, 'codex');
     assert.throws(
       () => createCodeAgentRunner('codex', sharedClient, { codexRunner: createCodeAgentRunner('code-agent', sharedClient) }),

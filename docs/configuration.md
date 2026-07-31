@@ -101,8 +101,11 @@ Core selection:
 | `CODE_AGENT_ALLOWED_RUN_MODES` / `CODE_AGENT_DEFAULT_MODE` | Available and default Plan/Ask/Auto/Full modes. |
 | `CODE_AGENT_SANDBOX_PROVIDER` | Production uses `e2b`. |
 | `CODE_AGENT_RUNNER_CLIENT` | Production uses the reusable `daemon`. |
-| `CODE_AGENT_BACKEND` | Default backend; production uses `codex-app-server`. |
+| `CODE_AGENT_BACKEND` | Default backend. Supported values: `code-agent`, `codex-app-server`, `opencode`, and `hermes-agent`; the deprecated `codex` CLI remains gated separately. |
 | `CODE_AGENT_DAEMON_COMMAND` | Optional daemon command override. |
+| `CODE_AGENT_RUNNER_COMMAND` | Optional runner override for the selected default backend. |
+| `CODE_AGENT_ENGINE_RUNNER_COMMAND` / `CODEX_APP_SERVER_RUNNER_COMMAND` | Optional Coco and Codex app-server runner overrides. |
+| `OPENCODE_RUNNER_COMMAND` / `HERMES_AGENT_RUNNER_COMMAND` | Optional ACP runner overrides for OpenCode and Hermes Agent. |
 
 Pinned artifact and E2B:
 
@@ -138,7 +141,10 @@ Scoped capabilities:
 | `GITHUB_CONNECTIONS_ENABLED` | Enables GitHub PAT connection routes. |
 | `GITHUB_AUTH_ENCRYPTION_KEY` | Encrypts stored GitHub tokens; may be independently rotated. |
 
-Do not add new product behavior to the deprecated Codex CLI path. `codex-app-server` is the supported backend.
+Do not add new product behavior to the deprecated Codex CLI path. Codex product behavior uses
+`codex-app-server`; OpenCode and Hermes Agent use the shared ACP adapter. A room may select any
+enabled backend without moving room authorization, turn fencing, approvals, persistence, or model
+gateway ownership out of RoomTalk.
 
 ## Assistant Queue, Workers, and Observability
 

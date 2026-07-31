@@ -190,6 +190,8 @@ const backendShortLabels: Record<CodeAgentBackend, string> = {
   'code-agent': 'Coco',
   codex: 'Codex',
   'codex-app-server': 'Codex',
+  opencode: 'Open',
+  'hermes-agent': 'Hermes',
 };
 
 const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> = {

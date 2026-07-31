@@ -490,7 +490,12 @@ const emitRunnerError = async (
 };
 
 const daemonBackend = (backend?: CodeAgentBackend): CodeAgentDaemonBackend => {
-  if (backend === 'codex' || backend === 'codex-app-server') {
+  if (
+    backend === 'codex'
+    || backend === 'codex-app-server'
+    || backend === 'opencode'
+    || backend === 'hermes-agent'
+  ) {
     return backend;
   }
   return 'code-agent';

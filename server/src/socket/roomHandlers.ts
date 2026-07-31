@@ -1154,7 +1154,7 @@ export function registerRoomHandlers({
         updates.codeAgentMode = null;
       }
 
-      const VALID_CODE_AGENT_BACKENDS = ['code-agent', 'codex', 'codex-app-server'] as const;
+      const VALID_CODE_AGENT_BACKENDS = ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'] as const;
       if (typeof data.codeAgentBackend === 'string' && VALID_CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as any)) {
         updates.codeAgentBackend = data.codeAgentBackend as typeof VALID_CODE_AGENT_BACKENDS[number];
       } else if (data.codeAgentBackend === null) {

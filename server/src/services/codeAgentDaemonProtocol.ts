@@ -9,8 +9,10 @@ import {
   CodeAgentRunnerThreadReadRequest,
   parseCodeAgentRunnerEventLine,
 } from './codeAgentRunnerProtocol';
+import { isCodeAgentBackend } from './codeAgentBackends';
+import type { CodeAgentBackend } from '../types';
 
-export type CodeAgentDaemonBackend = 'code-agent' | 'codex' | 'codex-app-server';
+export type CodeAgentDaemonBackend = CodeAgentBackend;
 
 export interface CodeAgentDaemonHealthRequest {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
@@ -245,7 +247,7 @@ const readBackends = (value: Record<string, unknown>): CodeAgentDaemonBackend[] 
 };
 
 const isCodeAgentDaemonBackend = (value: unknown): value is CodeAgentDaemonBackend => (
-  value === 'code-agent' || value === 'codex' || value === 'codex-app-server'
+  isCodeAgentBackend(value)
 );
 
 export const isCodeAgentDaemonControlEvent = (

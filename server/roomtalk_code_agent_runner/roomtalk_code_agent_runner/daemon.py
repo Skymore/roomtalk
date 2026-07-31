@@ -11,7 +11,7 @@ from typing import Any, Callable, TextIO
 from .runner import EventEmitter, RunnerError, RunnerRequest, parse_request
 
 SCHEMA_VERSION = 1
-SUPPORTED_BACKENDS = ("code-agent", "codex", "codex-app-server")
+SUPPORTED_BACKENDS = ("code-agent", "codex", "codex-app-server", "opencode", "hermes-agent")
 
 DaemonRunHandler = Callable[[RunnerRequest, EventEmitter, dict[str, str], "queue.Queue[dict[str, Any] | None]"], None]
 
@@ -263,6 +263,8 @@ def _default_handlers() -> dict[str, DaemonRunHandler]:
         "code-agent": _run_code_agent,
         "codex": _run_codex_cli,
         "codex-app-server": _run_codex_app_server,
+        "opencode": _run_opencode,
+        "hermes-agent": _run_hermes_agent,
     }
 
 
@@ -299,6 +301,28 @@ def _run_codex_app_server(
     from .codex_app_server import run_request
 
     run_request(request, emitter=emitter, env=env, control_queue=control_queue)
+
+
+def _run_opencode(
+    request: RunnerRequest,
+    emitter: EventEmitter,
+    env: dict[str, str],
+    control_queue: "queue.Queue[dict[str, Any] | None]",
+) -> None:
+    from .acp_harness import run_request
+
+    run_request("opencode", request, emitter=emitter, env=env, control_queue=control_queue)
+
+
+def _run_hermes_agent(
+    request: RunnerRequest,
+    emitter: EventEmitter,
+    env: dict[str, str],
+    control_queue: "queue.Queue[dict[str, Any] | None]",
+) -> None:
+    from .acp_harness import run_request
+
+    run_request("hermes-agent", request, emitter=emitter, env=env, control_queue=control_queue)
 
 
 class _temporary_environ:

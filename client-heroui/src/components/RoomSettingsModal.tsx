@@ -54,6 +54,8 @@ const backendIcons: Record<CodeAgentBackend, string> = {
   'code-agent': 'lucide:sparkles',
   codex: 'lucide:terminal',
   'codex-app-server': 'lucide:server',
+  opencode: 'lucide:braces',
+  'hermes-agent': 'lucide:bot',
 };
 
 const localTimezone = () => {

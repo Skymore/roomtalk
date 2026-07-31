@@ -3,7 +3,7 @@
 [中文](code-agent-runtime-architecture.zh.md)
 
 Status: Current
-Verified against `master`: 2026-07-24
+Verified against `master`: 2026-07-30
 
 This document describes the current implementation. Earlier files under `docs/` may describe individual phases, spikes, or migration plans; use this file as the concise architecture entry point and use source/tests as the final authority.
 
@@ -22,6 +22,7 @@ A code-agent room is not a chat prompt wrapped around remote shell commands. It 
 - The sandbox is mutable runtime state for files, Git, processes, terminals, and dev servers.
 - Coco is RoomTalk's in-house CLI coding agent and engine; its reasoning/tool loop remains behind the runner contract.
 - Codex is room-owner-provided: the room owner connects a Codex subscription through device authorization, and RoomTalk brokers that encrypted connection into E2B for turns started by members who are allowed to use the workspace.
+- OpenCode and Hermes Agent run as isolated ACP harnesses. RoomTalk supplies the selected model only through its turn-scoped gateway and remains authoritative for room access, turn ownership, approvals, persistence, and artifact publication.
 - GitHub access is also room-owner-provided: the owner's optional encrypted personal access token is materialized as turn-scoped secret files for `gh` and Git, then removed after the run.
 - The browser never receives E2B credentials, provider keys, database credentials, or raw RoomTalk service tokens.
 
@@ -52,7 +53,7 @@ flowchart TB
 
   subgraph Sandbox["Per-room E2B execution plane"]
     Daemon["RoomTalk JSONL daemon"]
-    Backends["Coco | Codex app-server"]
+    Backends["Coco | Codex app-server | OpenCode ACP | Hermes ACP"]
     Broker["Unix-socket room broker + roomtalk CLI"]
     Workdir["/workspace\nGit, files, PTY, processes, previews"]
   end
@@ -151,13 +152,17 @@ The current default idle TTL is two minutes and the default active TTL is one ho
 
 ### Reusable JSONL daemon
 
-RoomTalk starts one `roomtalk_code_agent_runner.daemon` per sandbox and reuses it for sequential turns. The supported product paths are Coco (`code-agent`) and Codex app-server (`codex-app-server`). The daemon still accepts the deprecated `codex` adapter only for migration and compatibility; new behavior must target app-server. The protocol supports:
+RoomTalk starts one `roomtalk_code_agent_runner.daemon` per sandbox and reuses it for sequential turns. The supported product paths are Coco (`code-agent`), Codex app-server (`codex-app-server`), OpenCode (`opencode`), and Hermes Agent (`hermes-agent`). OpenCode and Hermes share a capability-negotiated ACP client adapter instead of duplicating their native event protocols. The daemon still accepts the deprecated `codex` adapter only for migration and compatibility; new Codex behavior must target app-server. The protocol supports:
 
 - `code-agent` (Coco, RoomTalk's self-built CLI agent and engine);
 - `codex-app-server` (Codex app-server thread/session protocol using the room owner's connection);
+- `opencode` (OpenCode ACP over stdio with room-scoped XDG state);
+- `hermes-agent` (Hermes ACP over stdio with room-scoped `HERMES_HOME`);
 - legacy `codex` CLI JSON events while compatibility data still requires them;
 - health, run, interrupt, steer, approval, thread list/read, and shutdown requests;
 - `daemon_ready`, structured runner events, `turn_released`, and shutdown events.
+
+ACP establishes the portable baseline: streaming text, tool lifecycle, image prompts when advertised, session load, model/mode selection, permission requests, and cancellation. Backend-only features remain explicit capabilities: live steer and Codex thread browsing/checkpoints are not claimed for the generic ACP backends. Plan mode launches ACP harnesses with a bubblewrap read-only workspace in addition to native permission settings.
 
 Each application process keeps an in-memory registry of daemon handles, but the daemon itself lives in E2B. Startup serializes daemon creation and removes stale daemon/Codex child processes before launching a replacement. SIGTERM/SIGINT shutdown reclaims all daemons owned by the process. A bounded turn-release wait prevents a lost `turn_released` signal from leaving a room permanently `running`; timed-out thread queries terminate and recycle the daemon instead of leaving its request channel wedged.
 

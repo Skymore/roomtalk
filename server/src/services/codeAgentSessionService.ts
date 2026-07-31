@@ -31,6 +31,8 @@ import {
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
   DEFAULT_CODE_AGENT_DAEMON_COMMAND,
   DEFAULT_CODE_AGENT_RUNNER_COMMAND,
+  DEFAULT_HERMES_AGENT_RUNNER_COMMAND,
+  DEFAULT_OPENCODE_RUNNER_COMMAND,
 } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { getAIStreamFence, stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
@@ -59,9 +61,16 @@ import {
   CocoModelStepCostRecord,
   summarizeCocoModelStepCosts,
 } from './codeAgentModelStepCosts';
+import {
+  codeAgentBackendSupportsApprovals,
+  codeAgentBackendSupportsInterrupt,
+  codeAgentBackendSupportsSteer,
+  displayNameForCodeAgentBackend,
+  isCodexCodeAgentBackend,
+} from './codeAgentBackends';
 
 const isCodexBackend = (backend: CodeAgentBackend) => (
-  backend === 'codex' || backend === 'codex-app-server'
+  isCodexCodeAgentBackend(backend)
 );
 
 const githubGitConfig = () => [
@@ -1069,7 +1078,7 @@ export class CodeAgentSessionService {
     if (active.clientId !== clientId) {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
-    if (active.backend === 'code-agent' || active.backend === 'codex-app-server') {
+    if (codeAgentBackendSupportsInterrupt(active.backend)) {
       const response = await this.writeActiveControl(roomId, {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'interrupt',
@@ -1100,7 +1109,7 @@ export class CodeAgentSessionService {
     if (!active) {
       return { success: false, error: 'No agent turn is running in this workspace' };
     }
-    if (active.backend !== 'code-agent' && active.backend !== 'codex-app-server') {
+    if (!codeAgentBackendSupportsSteer(active.backend)) {
       return { success: false, error: 'The current engine does not support turn steering' };
     }
     const trimmedPrompt = prompt.trim();
@@ -1136,8 +1145,8 @@ export class CodeAgentSessionService {
     if (!active) {
       return { success: false, error: 'No agent turn is running in this workspace' };
     }
-    if (active.backend !== 'codex-app-server') {
-      return { success: false, error: 'Interactive approval requires the Codex engine' };
+    if (!codeAgentBackendSupportsApprovals(active.backend)) {
+      return { success: false, error: 'The current engine does not support interactive approval' };
     }
     if (active.clientId !== clientId) {
       const member = await this.store.getRoomMember(roomId, clientId);
@@ -1934,7 +1943,7 @@ export class CodeAgentSessionService {
   }
 
   private displayBackendName(backend: CodeAgentBackend): string {
-    return isCodexBackend(backend) ? 'Codex' : 'Coco';
+    return displayNameForCodeAgentBackend(backend);
   }
 
   private describeCodexConnectionError(error: CodexConnectionError, requesterIsOwner: boolean): string {
@@ -1987,6 +1996,12 @@ export class CodeAgentSessionService {
     }
     if (backend === 'codex-app-server') {
       return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
+    }
+    if (backend === 'opencode') {
+      return DEFAULT_OPENCODE_RUNNER_COMMAND;
+    }
+    if (backend === 'hermes-agent') {
+      return DEFAULT_HERMES_AGENT_RUNNER_COMMAND;
     }
     return DEFAULT_CODE_AGENT_RUNNER_COMMAND;
   }

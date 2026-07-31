@@ -95,8 +95,11 @@ Provider key 保留在服务端，不会发给浏览器，也不会整体复制�
 | `CODE_AGENT_ALLOWED_RUN_MODES` / `CODE_AGENT_DEFAULT_MODE` | 可用和默认 Plan/Ask/Auto/Full 模式。 |
 | `CODE_AGENT_SANDBOX_PROVIDER` | 生产使用 `e2b`。 |
 | `CODE_AGENT_RUNNER_CLIENT` | 生产使用可复用 `daemon`。 |
-| `CODE_AGENT_BACKEND` | 默认 backend；生产使用 `codex-app-server`。 |
+| `CODE_AGENT_BACKEND` | 默认 backend。支持 `code-agent`、`codex-app-server`、`opencode`、`hermes-agent`；已废弃的 `codex` CLI 仍单独受 gate 约束。 |
 | `CODE_AGENT_DAEMON_COMMAND` | 可选 daemon command override。 |
+| `CODE_AGENT_RUNNER_COMMAND` | 当前默认 backend 的可选 runner override。 |
+| `CODE_AGENT_ENGINE_RUNNER_COMMAND` / `CODEX_APP_SERVER_RUNNER_COMMAND` | Coco 与 Codex app-server 的可选 runner override。 |
+| `OPENCODE_RUNNER_COMMAND` / `HERMES_AGENT_RUNNER_COMMAND` | OpenCode 与 Hermes Agent ACP runner 的可选 override。 |
 
 固定 artifact 与 E2B：
 
@@ -132,7 +135,10 @@ Scoped capability：
 | `GITHUB_CONNECTIONS_ENABLED` | 启用 GitHub PAT connection route。 |
 | `GITHUB_AUTH_ENCRYPTION_KEY` | 加密 GitHub token，可独立轮换。 |
 
-不要继续为已废弃 Codex CLI 路径增加产品能力。`codex-app-server` 是受支持 backend。
+不要继续为已废弃 Codex CLI 路径增加产品能力。Codex 产品能力使用
+`codex-app-server`；OpenCode 与 Hermes Agent 使用共用 ACP adapter。Room 可以选择任一已启用
+backend，而 room authorization、turn fencing、approval、persistence 与 model gateway 的所有权
+仍然留在 RoomTalk。
 
 ## Assistant Queue、Worker 与 Observability
 

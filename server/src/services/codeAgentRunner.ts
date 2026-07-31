@@ -63,6 +63,10 @@ export const createCodeAgentRunner = (
       return new CodeAgentRunnerAdapter(sharedClient, 'codex');
     case 'codex-app-server':
       return new CodeAgentRunnerAdapter(sharedClient, 'codex-app-server');
+    case 'opencode':
+      return new CodeAgentRunnerAdapter(sharedClient, 'opencode');
+    case 'hermes-agent':
+      return new CodeAgentRunnerAdapter(sharedClient, 'hermes-agent');
     default: {
       const exhaustive: never = backend;
       throw new Error(`Unsupported code-agent backend: ${exhaustive}`);

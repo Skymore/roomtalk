@@ -3,11 +3,11 @@
 [English](code-agent-sandbox-artifact.md)
 
 状态：当前 release 合约
-已按 `master` 和生产非 secret runtime pin 核对：2026-07-12
+已按 `master` 和生产非 secret runtime pin 核对：2026-07-30
 
 ## 用途
 
-RoomTalk 在 room-scoped file/process sandbox 里运行 Coco 和 Codex app-server。生产必须使用固定 artifact，不能使用开发机 path。遗留 Codex CLI adapter 只为兼容/迁移保留。
+RoomTalk 在 room-scoped file/process sandbox 里运行 Coco、Codex app-server、OpenCode 和 Hermes Agent。OpenCode 与 Hermes 通过同一套 ACP adapter 接入；RoomTalk 继续拥有鉴权、turn fence、queue、approval、持久化和 sandbox 生命周期。生产必须使用固定 artifact，不能使用开发机 path。遗留 Codex CLI adapter 只为兼容/迁移保留。
 
 Artifact 包含：
 
@@ -15,6 +15,7 @@ Artifact 包含：
 - `roomtalk_code_agent_runner` JSONL adapter 和可复用 daemon；
 - hash-verified Python dependency；
 - 固定 Codex CLI/app-server 和 Python SDK；
+- 固定 OpenCode npm package、Hermes Agent commit 和 ACP Python SDK；
 - Chromium/Playwright、常见 toolchain、`gh`、Git LFS、`roomtalk` CLI 和 PTY shell environment。
 
 ## 当前 Lock
@@ -22,11 +23,14 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-07-12-coco-permissions-v3
+artifactVersion: roomtalk-code-agent-2026-07-30-multi-harness-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.31
-openai-codex: 0.144.1
+roomtalk-code-agent-runner: 0.1.38
+openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
+opencode-ai: 1.18.10
+hermes-agent: 0.19.1 @ f3cda0ceb18d8ba7465a6d223098ef0e56c8fee1
+agent-client-protocol: 0.9.0
 playwright: 1.61.1
 ```
 
@@ -44,19 +48,19 @@ node scripts/code-agent/prepare-sandbox-context.mjs
 
 构建前需验证：
 
-- engine source ref 已提交并可从配置 remote 获取；
-- archive/hash 与 lock 匹配；
+- Coco/Hermes source ref 已提交并可从配置 remote 获取；
+- 两个 source archive/hash 与 lock 匹配；
 - runner package version、Dockerfile metadata 和 artifact version 一致；
 - context 不包含 `.env`、auth JSON、provider key、GitHub PAT 或开发机绝对 path。
 
 ## 生产配置
 
-生产 control plane 使用 E2B、daemon 和 Codex app-server，关键 pin 包括：
+生产 control plane 使用 E2B 和 daemon；每个 room 可选择 Coco、Codex app-server、OpenCode 或 Hermes Agent。关键 pin 包括：
 
 ```text
 CODE_AGENT_SANDBOX_PROVIDER=e2b
 CODE_AGENT_RUNNER_CLIENT=daemon
-CODE_AGENT_BACKEND=codex-app-server
+CODE_AGENT_BACKEND=<default backend>
 CODE_AGENT_E2B_TEMPLATE_ID=<template>
 CODE_AGENT_ARTIFACT_VERSION=<artifactVersion>
 CODE_AGENT_SOURCE_REF=<engine sourceRef>
@@ -75,6 +79,8 @@ CODE_AGENT_SOURCE_REF=<engine sourceRef>
 - Python runner 和 daemon 可 import/启动；
 - Coco 在允许 mode 下执行 text/tool turn；
 - Codex app-server 可用用户 subscription auth 执行 turn；
+- OpenCode 和 Hermes Agent 的 ACP server 可启动，并通过 RoomTalk model gateway 完成 text/tool/usage/session/approval/cancel 映射；
+- plan 模式的 workspace 在 OS mount 层只读；
 - image input、room context、model gateway、static publish 和 approval/interrupt/steer 的受影响边界；
 - workspace Git/file/PTY/preview 基础能力；
 - artifact metadata 与 production pin 完全匹配。

@@ -146,7 +146,7 @@ const validateTurnRow = (value: unknown, path: string, roomId: string): void => 
   string(row.started_at, `${path}.started_at`);
   nullableString(row.completed_at, `${path}.completed_at`);
   nullableString(row.final_message_id, `${path}.final_message_id`);
-  oneOf(row.backend, `${path}.backend`, ['code-agent', 'codex', 'codex-app-server']);
+  oneOf(row.backend, `${path}.backend`, ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent']);
   string(row.assistant_name, `${path}.assistant_name`);
   ['phase', 'phase_message', 'last_heartbeat_at'].forEach(key => nullableString(row[key], `${path}.${key}`));
   string(row.updated_at, `${path}.updated_at`);

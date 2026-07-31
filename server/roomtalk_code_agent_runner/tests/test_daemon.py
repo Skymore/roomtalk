@@ -93,6 +93,8 @@ def test_daemon_handles_health_and_multiple_sequential_runs():
             "code-agent": handler,
             "codex": handler,
             "codex-app-server": handler,
+            "opencode": handler,
+            "hermes-agent": handler,
         },
     )
 
@@ -283,4 +285,6 @@ def test_default_handlers_keep_coco_cli_and_app_server_routes_separate():
         "code-agent": daemon_module._run_code_agent,
         "codex": daemon_module._run_codex_cli,
         "codex-app-server": daemon_module._run_codex_app_server,
+        "opencode": daemon_module._run_opencode,
+        "hermes-agent": daemon_module._run_hermes_agent,
     }

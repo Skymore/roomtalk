@@ -502,6 +502,8 @@ const codeAgentSessionService = new CodeAgentSessionService(
     runnerEnvByBackend: {
       codex: codexRunnerEnv,
       'codex-app-server': codexRunnerEnv,
+      opencode: codeAgentRuntimeConfig.runnerEnv,
+      'hermes-agent': codeAgentRuntimeConfig.runnerEnv,
     },
     runnerProviderEnvByProvider: codeAgentRuntimeConfig.runnerProviderEnvByProvider,
     codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),

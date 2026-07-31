@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-29-selective-checkpoint-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-30-multi-harness-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.37",
+    "packageVersion": "0.1.38",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -32,9 +32,33 @@
         "codexCliVersion": "0.145.0-alpha.4",
         "pythonSdkVersion": "0.1.0b3"
       },
+      "opencode_acp": {
+        "command": "python -m roomtalk_code_agent_runner.acp_harness --backend opencode",
+        "opencodeVersion": "1.18.10",
+        "acpSdkVersion": "0.9.0"
+      },
+      "hermes_agent_acp": {
+        "command": "python -m roomtalk_code_agent_runner.acp_harness --backend hermes-agent",
+        "hermesAgentVersion": "0.19.1",
+        "acpSdkVersion": "0.9.0"
+      },
       "daemon": {
         "command": "python -m roomtalk_code_agent_runner.daemon"
       }
+    }
+  },
+  "harnesses": {
+    "openCode": {
+      "packageName": "opencode-ai",
+      "packageVersion": "1.18.10",
+      "integrity": "sha512-/PoGrZnTrSrmHvvXUg12O4yAEjytuqEQNG8usCydrYg4EtosvbtKtGIHI40DFaIhPws91Wa20niSvFG32xL8ZQ=="
+    },
+    "hermesAgent": {
+      "packageName": "hermes-agent",
+      "packageVersion": "0.19.1",
+      "sourceRepo": "https://github.com/NousResearch/hermes-agent.git",
+      "sourceRef": "f3cda0ceb18d8ba7465a6d223098ef0e56c8fee1",
+      "acpSdkVersion": "0.9.0"
     }
   },
   "browserRuntime": {

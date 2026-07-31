@@ -8,8 +8,10 @@ import {
   DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
   DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+  DEFAULT_HERMES_AGENT_RUNNER_COMMAND,
   DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   DEFAULT_NODE_PATH,
+  DEFAULT_OPENCODE_RUNNER_COMMAND,
   DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
   resolveCodeAgentRuntimeConfig,
 } from './codeAgentRuntimeConfig';
@@ -60,6 +62,20 @@ describe('resolveCodeAgentRuntimeConfig', () => {
 
   it('accepts only implemented code-agent backends', () => {
     assert.equal(resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'code-agent' }).backend, 'code-agent');
+    assert.deepEqual(
+      {
+        backend: resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'opencode' }).backend,
+        command: resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'opencode' }).runnerCommand,
+      },
+      { backend: 'opencode', command: DEFAULT_OPENCODE_RUNNER_COMMAND },
+    );
+    assert.deepEqual(
+      {
+        backend: resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'hermes-agent' }).backend,
+        command: resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'hermes-agent' }).runnerCommand,
+      },
+      { backend: 'hermes-agent', command: DEFAULT_HERMES_AGENT_RUNNER_COMMAND },
+    );
     assert.equal(resolveCodeAgentRuntimeConfig({ CODEX_CLI_BACKEND_ENABLED: 'true' }).backend, 'codex-app-server');
     assert.throws(
       () => resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }),

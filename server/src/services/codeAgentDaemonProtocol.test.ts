@@ -104,7 +104,7 @@ describe('code agent daemon protocol', () => {
       type: 'daemon_ready',
       daemonId: 'daemon-1',
       pid: 123,
-      backends: ['code-agent', 'codex', 'codex-app-server'],
+      backends: ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'],
     }));
     const health = parseCodeAgentDaemonEventLine(JSON.stringify({
       schemaVersion: 1,
@@ -135,7 +135,7 @@ describe('code agent daemon protocol', () => {
       type: 'daemon_ready',
       daemonId: 'daemon-1',
       pid: 123,
-      backends: ['code-agent', 'codex', 'codex-app-server'],
+      backends: ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'],
     });
     assert.deepEqual(health, {
       schemaVersion: 1,

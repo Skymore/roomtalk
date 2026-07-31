@@ -15,7 +15,7 @@ export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'err
 export type RoomCodeAgentStatus = 'idle' | 'running' | 'error';
 export type CodeAgentAccessLevel = 'owner' | 'admin' | 'member';
 export type CodeAgentMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
-export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server';
+export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server' | 'opencode' | 'hermes-agent';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 

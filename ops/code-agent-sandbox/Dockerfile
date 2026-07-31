@@ -1,6 +1,8 @@
 FROM python:3.12-slim-bookworm@sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef
 
 ARG CODEX_CLI_NPM_VERSION=0.145.0-alpha.4
+ARG OPENCODE_NPM_VERSION=1.18.10
+ARG UV_VERSION=0.10.4
 ARG PLAYWRIGHT_NPM_VERSION=1.61.1
 ARG PNPM_NPM_VERSION=11.10.0
 ARG YARN_NPM_VERSION=1.22.22
@@ -14,9 +16,11 @@ ARG POWERLEVEL10K_REF=9253fb1c5034410c43a0c681ff8294181c54016c
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-29-selective-checkpoint-v1
+ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-30-multi-harness-v1
 ENV ROOMTALK_CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
+ENV ROOMTALK_OPENCODE_VERSION=${OPENCODE_NPM_VERSION}
+ENV ROOMTALK_HERMES_AGENT_VERSION=0.19.1
 ENV ROOMTALK_PLAYWRIGHT_VERSION=${PLAYWRIGHT_NPM_VERSION}
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV NODE_PATH=/usr/lib/node_modules
@@ -25,6 +29,7 @@ ENV PYTHONPATH=/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner
 WORKDIR /workspace
 
 COPY code-agent-engine /opt/code-agent-engine
+COPY hermes-agent /opt/hermes-agent
 COPY roomtalk_code_agent_runner /opt/roomtalk_code_agent_runner
 COPY artifact.lock.json /opt/roomtalk-code-agent-artifact.lock.json
 COPY requirements.lock /opt/roomtalk-code-agent-requirements.lock
@@ -102,6 +107,7 @@ RUN apt-get update \
   && chmod 755 /usr/local/bin/gh \
   && npm install -g \
     @openai/codex@${CODEX_CLI_NPM_VERSION} \
+    opencode-ai@${OPENCODE_NPM_VERSION} \
     playwright@${PLAYWRIGHT_NPM_VERSION} \
     pnpm@${PNPM_NPM_VERSION} \
     yarn@${YARN_NPM_VERSION} \
@@ -118,6 +124,8 @@ RUN apt-get update \
   && test -n "${CODEX_NATIVE_BIN}" \
   && ln -sf "${CODEX_NATIVE_BIN}" /usr/local/bin/codex-linux-sandbox \
   && codex --version \
+  && opencode --version \
+  && opencode acp --help >/dev/null \
   && codex-linux-sandbox --help >/dev/null \
   && playwright --version >/dev/null \
   && node -e 'const { chromium } = require("playwright"); const fs = require("fs"); const executable = chromium.executablePath(); if (!fs.existsSync(executable)) { console.error(`missing Chromium executable: ${executable}`); process.exit(1); }' \
@@ -156,9 +164,14 @@ RUN apt-get update \
   && shellcheck --version >/dev/null \
   && zsh --version >/dev/null \
   && roomtalk --help >/dev/null \
+  && python -m pip install --no-cache-dir "uv==${UV_VERSION}" \
+  && uv sync --frozen --no-dev --extra acp --project /opt/hermes-agent \
+  && ln -sf /opt/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes \
+  && ln -sf /opt/hermes-agent/.venv/bin/hermes-acp /usr/local/bin/hermes-acp \
+  && hermes acp --check >/dev/null \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-code-agent-requirements.lock \
   && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
-  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_code_agent_runner.runner"); importlib.import_module("roomtalk_code_agent_runner.codex_cli"); importlib.import_module("roomtalk_code_agent_runner.codex_app_server"); importlib.import_module("openai_codex")' \
+  && python -c 'import importlib; importlib.import_module("acp"); importlib.import_module("core.engine"); importlib.import_module("roomtalk_code_agent_runner.runner"); importlib.import_module("roomtalk_code_agent_runner.codex_cli"); importlib.import_module("roomtalk_code_agent_runner.codex_app_server"); importlib.import_module("roomtalk_code_agent_runner.acp_harness"); importlib.import_module("openai_codex")' \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
