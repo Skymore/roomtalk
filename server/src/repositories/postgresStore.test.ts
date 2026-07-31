@@ -202,6 +202,70 @@ describe('PostgresStore', () => {
     assert.equal(client.calls.filter(call => /INSERT INTO room_members/.test(call.sql)).length, 1);
   });
 
+  it('reads platform administrator roles from durable account state', async () => {
+    const pool = new ScriptedPool([{
+      rows: [{ role: 'admin' }],
+      assertCall(call) {
+        assert.match(call.sql, /FROM account_roles/);
+        assert.deepEqual(call.params, ['account-1']);
+      },
+    }]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.getAccountRoles('account-1'), ['admin']);
+  });
+
+  it('grants a platform administrator role and records the grant atomically', async () => {
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ '?column?': 1 }],
+        assertCall(call) {
+          assert.match(call.sql, /FROM accounts WHERE id = \$1 FOR UPDATE/);
+          assert.deepEqual(call.params, ['account-1']);
+        },
+      },
+      {
+        rows: [{ account_id: 'account-1' }],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO account_roles/);
+          assert.deepEqual(call.params, [
+            'account-1',
+            'admin',
+            null,
+            '2026-05-03T00:00:00.000Z',
+          ]);
+        },
+      },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO account_role_events/);
+          assert.deepEqual(call.params, [
+            'role-event-1',
+            'account-1',
+            'admin',
+            null,
+            JSON.stringify({ source: 'configured_verified_google_email' }),
+            '2026-05-03T00:00:00.000Z',
+          ]);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.equal(await store.grantAccountRole({
+      id: 'role-event-1',
+      accountId: 'account-1',
+      role: 'admin',
+      metadata: { source: 'configured_verified_google_email' },
+      now: '2026-05-03T00:00:00.000Z',
+    }), true);
+    assert.equal(client.released, true);
+  });
+
   it('saves, reads, counts, and deletes rooms', async () => {
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },

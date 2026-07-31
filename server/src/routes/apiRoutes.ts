@@ -4,7 +4,6 @@ import path from 'path';
 import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
-import { timingSafeEqual } from 'node:crypto';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, ClientAccount, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
@@ -42,6 +41,7 @@ import {
 import type { AssistantRunQueueHealthSnapshot } from '../services/assistantRunQueue';
 import { MembershipStatus, MembershipTier } from '../services/accountEntitlements';
 import { ClientLoginRateLimiter, RedisClientLoginRateLimiter } from '../services/clientLoginRateLimiter';
+import { accountMatchesPlatformAdminEmail, resolvePlatformAdminEmails } from '../services/platformAdmin';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -57,6 +57,7 @@ interface ApiRouteOptions {
   mediaThumbnailService?: MediaThumbnailResolver;
   audioTranscriptionRunner?: AudioTranscriptionRunner;
   googleClientIds?: string[];
+  platformAdminEmails?: string[];
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
   codeAgentAccess?: CodeAgentAccessControl;
   codeAgentMode?: CodeAgentRunnerMode;
@@ -71,7 +72,6 @@ interface ApiRouteOptions {
     enabled: boolean;
     service?: GitHubConnectionService;
   };
-  membershipAdminToken?: string;
   clientLoginRateLimiter?: ClientLoginRateLimiter;
   mediaUploadCleanup?: {
     disabled?: boolean;
@@ -87,13 +87,6 @@ const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
   audio: 25 * 1024 * 1024,
   video: 100 * 1024 * 1024,
   file: 50 * 1024 * 1024,
-};
-
-const securelyMatches = (actual: string, expected: string): boolean => {
-  const actualBytes = Buffer.from(actual);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length
-    && timingSafeEqual(actualBytes, expectedBytes);
 };
 
 const MEDIA_HISTORY_DEFAULT_LIMIT = 40;
@@ -336,10 +329,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const sweepIntervalMs = mediaUploadCleanup.sweepIntervalMs ?? MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS;
   const sweepBatchSize = mediaUploadCleanup.sweepBatchSize ?? MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE;
   const googleClientIds = options.googleClientIds ?? resolveGoogleClientIds();
+  const platformAdminEmails = new Set(resolvePlatformAdminEmails(
+    options.platformAdminEmails === undefined
+      ? process.env.PLATFORM_ADMIN_EMAILS || ''
+      : options.platformAdminEmails.join(','),
+  ));
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
   const codexConnections = options.codexConnections || { enabled: false };
   const githubConnections = options.githubConnections || { enabled: false };
-  const membershipAdminToken = options.membershipAdminToken ?? process.env.MEMBERSHIP_ADMIN_TOKEN ?? '';
   const clientLoginRateLimiter = options.clientLoginRateLimiter
     || new RedisClientLoginRateLimiter(redisClient);
   const resetClientLoginRateLimitBestEffort = async (clientId: string, ipAddress: string) => {
@@ -543,6 +540,59 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return false;
   };
 
+  const resolveAccountRoles = async (account: ClientAccount) => {
+    const existingRoles = await store.getAccountRoles(account.accountId);
+    if (existingRoles.includes('admin') || !accountMatchesPlatformAdminEmail(account, platformAdminEmails)) {
+      return existingRoles;
+    }
+
+    const granted = await store.grantAccountRole({
+      id: uuidv4(),
+      accountId: account.accountId,
+      role: 'admin',
+      metadata: { source: 'configured_verified_google_email' },
+    });
+    if (!granted) {
+      throw new Error('Configured platform administrator account no longer exists');
+    }
+    return [...new Set([...existingRoles, 'admin' as const])];
+  };
+
+  const authorizePlatformAdmin = async (req: Request, res: Response) => {
+    const clientId = req.header('x-client-id')?.trim() || '';
+    const token = req.header('x-client-auth-token')?.trim() || '';
+    if (!clientId || !token) {
+      res.status(401).json({ error: 'An authenticated administrator account is required' });
+      return null;
+    }
+
+    try {
+      const [account, tokenValid] = await Promise.all([
+        store.getAccountByClientId(clientId),
+        store.isClientAuthTokenValid(clientId, hashClientAuthToken(token)),
+      ]);
+      if (!account || !tokenValid) {
+        res.status(401).json({ error: 'An authenticated administrator account is required' });
+        return null;
+      }
+      const roles = await resolveAccountRoles(account);
+      if (!roles.includes('admin')) {
+        res.status(403).json({ error: 'Platform administrator role is required' });
+        return null;
+      }
+      return { clientId, account };
+    } catch (error) {
+      routeLogger.error('Platform administrator authorization failed', {
+        error,
+        endpoint: req.path,
+        clientId,
+        ip: req.ip,
+      });
+      res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+      return null;
+    }
+  };
+
   const runningAudioTranscriptionJobs = new Set<string>();
   const scheduleAudioTranscriptionJob = (record: AudioTranscriptionRecord, asset: MediaAsset) => {
     if (record.status === 'completed' || runningAudioTranscriptionJobs.has(record.assetId)) {
@@ -681,11 +731,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         store.getClientPasswordHash(clientId),
         store.getAccountEntitlementByClientId(clientId),
       ]);
+      const roles = account ? await resolveAccountRoles(account) : [];
       return res.json({
         clientId,
         hasPassword: Boolean(passwordHash),
         googleConfigured: googleClientIds.length > 0,
         account: serializeClientAccount(account),
+        roles,
         entitlement,
       });
     } catch (error) {
@@ -739,6 +791,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         store.getClientPasswordHash(account.primaryClientId),
         store.getClientNicknames([account.primaryClientId]),
       ]);
+      const roles = await resolveAccountRoles(account);
       const nickname = nicknames[account.primaryClientId] || profile.displayName || null;
       if (!nicknames[account.primaryClientId] && profile.displayName) {
         await store.setClientNickname(account.primaryClientId, profile.displayName);
@@ -750,6 +803,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         hasPassword: Boolean(passwordHash),
         nickname,
         account: serializeClientAccount(account),
+        roles,
       });
     } catch (error) {
       routeLogger.error('Google account authentication failed', {
@@ -828,11 +882,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         throw new Error('Atomic password credential update did not return an account');
       }
       await resetClientLoginRateLimitBestEffort(clientId, req.ip || 'unknown');
+      const roles = await resolveAccountRoles(account);
       return res.json({
         clientId,
         clientAuthToken: session.token,
         hasPassword: true,
         account: serializeClientAccount(account),
+        roles,
       });
     } catch (error) {
       routeLogger.error('Failed to set client password credentials', { error, clientId, ip: req.ip });
@@ -869,6 +925,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         accountId: account.accountId,
         authMethod: 'password',
       });
+      const roles = await resolveAccountRoles(account);
       await resetClientLoginRateLimitBestEffort(clientId, req.ip || 'unknown');
       return res.json({
         clientId,
@@ -876,6 +933,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         hasPassword: true,
         nickname: nicknames[clientId] ?? null,
         account: serializeClientAccount(account),
+        roles,
       });
     } catch (error) {
       routeLogger.error('Client password login failed because authentication storage is unavailable', {
@@ -888,13 +946,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   });
 
   app.put('/api/admin/accounts/:accountId/membership', async (req: Request, res: Response) => {
-    if (!membershipAdminToken) {
-      return res.status(404).json({ error: 'Membership administration is not configured' });
-    }
-    const authorization = req.header('authorization') || '';
-    if (!securelyMatches(authorization, `Bearer ${membershipAdminToken}`)) {
-      return res.status(401).json({ error: 'Invalid membership administrator credential' });
-    }
+    const administrator = await authorizePlatformAdmin(req, res);
+    if (!administrator) return;
 
     const accountId = req.params.accountId?.trim();
     const tier = req.body?.tier as MembershipTier;
@@ -973,6 +1026,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         creditNote: typeof req.body?.creditNote === 'string' ? req.body.creditNote : undefined,
         metadata: {
           source: 'membership_admin_api',
+          actorAccountId: administrator.account.accountId,
+          actorClientId: administrator.clientId,
           tier,
           status,
         },

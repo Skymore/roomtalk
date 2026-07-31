@@ -1674,6 +1674,39 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(rolledBack?.creditBalanceUsd, 0);
   });
 
+  it('reads platform administrator authorization from PostgreSQL account roles', async () => {
+    const accountId = 'platform-admin-account';
+    assert.ok(await store.createPasswordAccountForClient({
+      accountId,
+      clientId: 'platform-admin-client',
+      now: createdAt,
+    }));
+    assert.deepEqual(await store.getAccountRoles(accountId), []);
+
+    assert.equal(await store.grantAccountRole({
+      id: 'platform-admin-grant-event',
+      accountId,
+      role: 'admin',
+      metadata: { source: 'integration_test' },
+      now: createdAt,
+    }), true);
+    assert.equal(await store.grantAccountRole({
+      id: 'platform-admin-grant-event-retry',
+      accountId,
+      role: 'admin',
+      metadata: { source: 'integration_test' },
+      now: createdAt,
+    }), true);
+
+    assert.deepEqual(await store.getAccountRoles(accountId), ['admin']);
+    assert.equal((await pool.query(
+      `SELECT COUNT(*) AS count
+      FROM account_role_events
+      WHERE account_id = $1 AND role = 'admin' AND action = 'grant'`,
+      [accountId],
+    )).rows[0]?.count, '1');
+  });
+
   it('snapshots membership priority and debits account credits exactly once', async () => {
     const roomId = 'assistant-run-membership-room';
     const accountId = 'assistant-run-membership-account';

@@ -20,6 +20,7 @@
     "backfill:misrouted-coco-model-steps": "ts-node src/scripts/backfillMisroutedCocoModelSteps.ts",
     "migrate:codex-sandboxes": "ts-node src/scripts/migrateCodexSandboxes.ts",
     "provision:postgres-app-user": "ts-node src/scripts/provisionPostgresAppUser.ts",
+    "admin:set-role": "ts-node src/scripts/setPlatformAdmin.ts",
     "smoke:codex:e2b": "ts-node src/scripts/codexE2BSmoke.ts",
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
     "smoke:code-agent:e2b": "ts-node src/scripts/codeAgentE2BSmoke.ts",

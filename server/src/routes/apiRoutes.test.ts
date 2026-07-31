@@ -10,11 +10,12 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, PendingMediaUpload, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from '../repositories/store';
+import { AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, GrantAccountRoleInput, PendingMediaUpload, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
+import { hashClientAuthToken } from '../services/clientAuth';
 
 type EmittedEvent = {
   target: string;
@@ -52,6 +53,7 @@ type TestServer = {
     clientAccountLinks: Map<string, string>;
     clientPasswords: Map<string, string>;
     clientAuthTokens: Map<string, ClientAuthTokenRecord>;
+    accountRoles: Map<string, Set<'admin'>>;
     nicknames: Map<string, string>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -63,6 +65,8 @@ type TestServer = {
     readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
     getAccountByClientId: (clientId: string) => Promise<ClientAccount | null>;
     getAccountByGoogleSubject: (providerSubject: string) => Promise<ClientAccount | null>;
+    getAccountRoles: (accountId: string) => Promise<Array<'admin'>>;
+    grantAccountRole: (input: GrantAccountRoleInput) => Promise<boolean | null>;
     createPasswordAccountForClient: (input: CreatePasswordAccountInput) => Promise<ClientAccount | null>;
     setPasswordAccountCredentials: (input: SetPasswordAccountCredentialsInput) => Promise<ClientAccount | null>;
     createGoogleAccountForClient: (input: CreateGoogleAccountInput) => Promise<ClientAccount | null>;
@@ -203,11 +207,11 @@ async function createTestServer(overrides: {
   mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'];
   audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
+  platformAdminEmails?: Parameters<typeof registerApiRoutes>[1]['platformAdminEmails'];
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
   codeAgentAccess?: Parameters<typeof registerApiRoutes>[1]['codeAgentAccess'];
   socketAdapterReady?: Parameters<typeof registerApiRoutes>[1]['socketAdapterReady'];
   assistantQueueHealth?: Parameters<typeof registerApiRoutes>[1]['assistantQueueHealth'];
-  membershipAdminToken?: Parameters<typeof registerApiRoutes>[1]['membershipAdminToken'];
   clientLoginRateLimiter?: Parameters<typeof registerApiRoutes>[1]['clientLoginRateLimiter'];
 } = {}): Promise<TestServer> {
   const app = express();
@@ -233,6 +237,7 @@ async function createTestServer(overrides: {
     clientAccountLinks: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
     clientAuthTokens: new Map<string, ClientAuthTokenRecord>(),
+    accountRoles: new Map<string, Set<'admin'>>(),
     nicknames: new Map<string, string>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
@@ -283,6 +288,16 @@ async function createTestServer(overrides: {
     async getAccountByGoogleSubject(providerSubject: string) {
       const accountId = this.googleSubjectAccountIds.get(providerSubject);
       return accountId ? this.accounts.get(accountId) || null : null;
+    },
+    async getAccountRoles(accountId: string) {
+      return [...(this.accountRoles.get(accountId) || new Set<'admin'>())];
+    },
+    async grantAccountRole(input: GrantAccountRoleInput) {
+      if (!this.accounts.has(input.accountId)) return null;
+      const roles = this.accountRoles.get(input.accountId) || new Set<'admin'>();
+      roles.add(input.role);
+      this.accountRoles.set(input.accountId, roles);
+      return true;
     },
     async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
       const existingAccountId = this.clientAccountLinks.get(input.clientId);
@@ -732,13 +747,13 @@ async function createTestServer(overrides: {
     mediaThumbnailService: overrides.mediaThumbnailService,
     audioTranscriptionRunner,
     googleClientIds: overrides.googleClientIds,
+    platformAdminEmails: overrides.platformAdminEmails,
     verifyGoogleCredential: overrides.verifyGoogleCredential,
     codeAgentAccess: overrides.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
     codeAgentMode: 'acceptEdits',
     codeAgentAvailableModes: ['plan', 'acceptEdits'],
     codeAgentDefaultMode: 'plan',
     mediaUploadCleanup: overrides.mediaUploadCleanup,
-    membershipAdminToken: overrides.membershipAdminToken,
     clientLoginRateLimiter: overrides.clientLoginRateLimiter || {
       async consume() {
         return { allowed: true, retryAfterSeconds: 1 };
@@ -978,6 +993,7 @@ describe('API routes', () => {
       hasPassword: false,
       googleConfigured: false,
       account: null,
+      roles: [],
       entitlement: null,
     });
   });
@@ -1198,17 +1214,52 @@ describe('API routes', () => {
 
   it('updates membership and grants credits through the protected admin boundary', async () => {
     await server.close();
-    server = await createTestServer({ membershipAdminToken: 'membership-secret' });
-    const passwordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    server = await createTestServer({ platformAdminEmails: ['realruitao@gmail.com'] });
+    const adminAccount = sampleClientAccount({
+      accountId: 'admin-account',
+      primaryClientId: 'admin-client',
+      provider: 'google',
+      providerSubject: 'realruitao-google-subject',
+      googleLinked: true,
+      email: 'realruitao@gmail.com',
+      emailVerified: true,
     });
-    assert.equal(passwordResponse.status, 200);
-    const passwordPayload = await passwordResponse.json() as { account: ClientAccount };
+    const memberAccount = sampleClientAccount({
+      accountId: 'member-account',
+      primaryClientId: 'client-1',
+      provider: 'password',
+      providerSubject: 'client-1',
+      googleLinked: false,
+    });
+    const adminSession = 'admin-session';
+    const memberSession = 'member-session';
+    server.store.accounts.set(adminAccount.accountId, adminAccount);
+    server.store.accounts.set(memberAccount.accountId, memberAccount);
+    server.store.clientAccountLinks.set(adminAccount.primaryClientId, adminAccount.accountId);
+    server.store.clientAccountLinks.set(memberAccount.primaryClientId, memberAccount.accountId);
+    server.store.clientAuthTokens.set(hashClientAuthToken(adminSession), {
+      clientId: adminAccount.primaryClientId,
+      accountId: adminAccount.accountId,
+      authMethod: 'password',
+      tokenHash: hashClientAuthToken(adminSession),
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+    server.store.clientAuthTokens.set(hashClientAuthToken(memberSession), {
+      clientId: memberAccount.primaryClientId,
+      accountId: memberAccount.accountId,
+      authMethod: 'password',
+      tokenHash: hashClientAuthToken(memberSession),
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+    assert.deepEqual(await server.store.getAccountRoles(adminAccount.accountId), []);
+    await server.store.updateAccountMembership({
+      accountId: memberAccount.accountId,
+      tier: 'free',
+      status: 'active',
+    });
 
     const unauthorized = await fetch(
-      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1216,14 +1267,44 @@ describe('API routes', () => {
       },
     );
     assert.equal(unauthorized.status, 401);
+    await unauthorized.json();
 
-    const invalidPeriod = await fetch(
-      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+    const forbidden = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
       {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer membership-secret',
+          'X-Client-Id': memberAccount.primaryClientId,
+          'X-Client-Auth-Token': memberSession,
+        },
+        body: JSON.stringify({ tier: 'pro', status: 'active' }),
+      },
+    );
+    assert.equal(forbidden.status, 403);
+    await forbidden.json();
+
+    const accountResponse = await fetch(
+      `${server.baseUrl}/api/auth/account?clientId=${adminAccount.primaryClientId}`,
+      {
+        headers: {
+          'X-Client-Id': adminAccount.primaryClientId,
+          'X-Client-Auth-Token': adminSession,
+        },
+      },
+    );
+    assert.equal(accountResponse.status, 200);
+    assert.deepEqual((await accountResponse.json() as { roles: string[] }).roles, ['admin']);
+    assert.deepEqual(await server.store.getAccountRoles(adminAccount.accountId), ['admin']);
+
+    const invalidPeriod = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Client-Id': adminAccount.primaryClientId,
+          'X-Client-Auth-Token': adminSession,
         },
         body: JSON.stringify({
           tier: 'pro',
@@ -1233,14 +1314,16 @@ describe('API routes', () => {
       },
     );
     assert.equal(invalidPeriod.status, 400);
+    await invalidPeriod.json();
 
     const response = await fetch(
-      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
       {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer membership-secret',
+          'X-Client-Id': adminAccount.primaryClientId,
+          'X-Client-Auth-Token': adminSession,
           'Idempotency-Key': 'invoice-1',
         },
         body: JSON.stringify({
@@ -1257,12 +1340,13 @@ describe('API routes', () => {
     assert.equal(payload.entitlement.queuePriority, 20);
 
     const retry = await fetch(
-      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
       {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer membership-secret',
+          'X-Client-Id': adminAccount.primaryClientId,
+          'X-Client-Auth-Token': adminSession,
           'Idempotency-Key': 'invoice-1',
         },
         body: JSON.stringify({
@@ -1280,12 +1364,13 @@ describe('API routes', () => {
       throw new Error('Membership idempotency key is already bound to a different change');
     };
     const conflict = await fetch(
-      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      `${server.baseUrl}/api/admin/accounts/${memberAccount.accountId}/membership`,
       {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer membership-secret',
+          'X-Client-Id': adminAccount.primaryClientId,
+          'X-Client-Auth-Token': adminSession,
           'Idempotency-Key': 'invoice-1',
         },
         body: JSON.stringify({
@@ -1296,6 +1381,7 @@ describe('API routes', () => {
       },
     );
     assert.equal(conflict.status, 409);
+    await conflict.json();
   });
 
   it('requires valid client auth tokens after a User ID password is set', async () => {

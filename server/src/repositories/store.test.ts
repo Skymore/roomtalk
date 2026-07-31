@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { AccountAIUsageInput, AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, CreatePasswordAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, CreatePasswordAccountInput, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -52,6 +52,12 @@ const durableClientAccountStubs = () => ({
     return null;
   },
   async getAccountByGoogleSubject() {
+    return null;
+  },
+  async getAccountRoles() {
+    return [];
+  },
+  async grantAccountRole() {
     return null;
   },
   async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
@@ -405,6 +411,8 @@ describe('CompositeRoomStore', () => {
       async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
       async getAccountByClientId(_clientId: string) { calls.push('durable.getAccountByClientId'); return clientAccount(); },
       async getAccountByGoogleSubject(_providerSubject: string) { calls.push('durable.getAccountByGoogleSubject'); return clientAccount(); },
+      async getAccountRoles(_accountId: string) { calls.push('durable.getAccountRoles'); return ['admin' as const]; },
+      async grantAccountRole(_input: GrantAccountRoleInput) { calls.push('durable.grantAccountRole'); return true; },
       async createPasswordAccountForClient(input: CreatePasswordAccountInput) {
         calls.push('durable.createPasswordAccountForClient');
         return clientAccount({
@@ -562,6 +570,12 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.readPushSubscriptionsByRoom('room-1'), []);
     assert.deepEqual(await store.getAccountByClientId('client-1'), clientAccount());
     assert.deepEqual(await store.getAccountByGoogleSubject('google-subject-1'), clientAccount());
+    assert.deepEqual(await store.getAccountRoles('account-1'), ['admin']);
+    assert.equal(await store.grantAccountRole({
+      id: 'role-event-1',
+      accountId: 'account-1',
+      role: 'admin',
+    }), true);
     assert.deepEqual(
       await store.createPasswordAccountForClient({
         accountId: 'account-2',
@@ -722,6 +736,8 @@ describe('CompositeRoomStore', () => {
       'durable.readPushSubscriptionsByRoom',
       'durable.getAccountByClientId',
       'durable.getAccountByGoogleSubject',
+      'durable.getAccountRoles',
+      'durable.grantAccountRole',
       'durable.createPasswordAccountForClient',
       'durable.setPasswordAccountCredentials',
       'durable.createGoogleAccountForClient',

@@ -5,7 +5,7 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -65,6 +65,8 @@ const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
 const ACCOUNT_ENTITLEMENTS_KEY = 'account:entitlements';
 const ACCOUNT_AI_USAGE_KEY = 'account:ai_usage';
 const ACCOUNT_MEMBERSHIP_EVENTS_KEY = 'account:membership_events';
+const ACCOUNT_ADMIN_ROLES_KEY = 'account:roles:admin';
+const ACCOUNT_ROLE_EVENTS_KEY = 'account:role_events';
 const REALTIME_INSTANCES_KEY = 'realtime:instances';
 const SOCKET_INSTANCES_KEY = 'socket:instances';
 const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
@@ -2922,6 +2924,45 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return rawAccount ? JSON.parse(rawAccount) as ClientAccount : null;
     } catch (error) {
       this.logger.error('Error reading Redis account by Google subject', { error });
+      throw error;
+    }
+  }
+
+  async getAccountRoles(accountId: string): Promise<AccountRole[]> {
+    try {
+      return await this.redisClient.sIsMember(ACCOUNT_ADMIN_ROLES_KEY, accountId)
+        ? ['admin']
+        : [];
+    } catch (error) {
+      this.logger.error('Error reading Redis account roles', { error, accountId });
+      throw error;
+    }
+  }
+
+  async grantAccountRole(input: GrantAccountRoleInput): Promise<boolean | null> {
+    try {
+      if (!(await this.redisClient.hExists(CLIENT_ACCOUNTS_KEY, input.accountId))) {
+        return null;
+      }
+      const inserted = await this.redisClient.sAdd(ACCOUNT_ADMIN_ROLES_KEY, input.accountId);
+      if (inserted > 0) {
+        await this.redisClient.hSet(ACCOUNT_ROLE_EVENTS_KEY, input.id, JSON.stringify({
+          id: input.id,
+          accountId: input.accountId,
+          role: input.role,
+          action: 'grant',
+          grantedByAccountId: input.grantedByAccountId,
+          metadata: input.metadata || {},
+          createdAt: input.now || new Date().toISOString(),
+        }));
+      }
+      return true;
+    } catch (error) {
+      this.logger.error('Error granting Redis account role', {
+        error,
+        accountId: input.accountId,
+        role: input.role,
+      });
       throw error;
     }
   }

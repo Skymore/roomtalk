@@ -182,7 +182,6 @@ Password setup and Google login both resolve to one durable `accounts` principal
 
 | Variable | Purpose |
 | --- | --- |
-| `MEMBERSHIP_ADMIN_TOKEN` | Optional server-side bearer secret for `PUT /api/admin/accounts/:accountId/membership`. If unset, the administration route returns `404`. Store it only in the deployment secret manager. |
 | `CLIENT_AUTH_TOKEN_TTL_DAYS` | Lifetime for newly issued password and Google account sessions; default `30`, allowed range `1`–`365`. Existing unbounded account sessions receive a 30-day expiry during migration. |
 | `CLIENT_AUTH_LOGIN_WINDOW_SECONDS` | Shared Redis login-attempt window; default `900`. |
 | `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT_IP` | Attempts for one User ID/IP pair per window; default `10`. |
@@ -190,10 +189,22 @@ Password setup and Google login both resolve to one durable `accounts` principal
 | `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_IP` | Password attempts from one IP across User IDs per window; default `100`. |
 | `ACCOUNT_AI_USAGE_SETTLEMENT_INTERVAL_MS` | Retry interval for Code Agent usage records durably queued in Redis when PostgreSQL settlement is temporarily unavailable; default `5000`. |
 | `ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE` | Maximum deferred usage settlements retried per pass; default `100`. |
+| `PLATFORM_ADMIN_EMAILS` | Optional comma-separated bootstrap allowlist. A matching account must have a database-backed Google identity with `email_verified=true`; the resulting `admin` role and grant audit event are persisted in PostgreSQL. Inject this through the deployment secret, never source control. |
 
 Password account creation, password rotation, prior-session revocation, and new-session issuance commit in one transaction. Account-backed sessions expire and retain a database foreign key to their account. Authentication storage failures return `503` and never fall back to anonymous authorization. The Redis limiter returns `429` plus `Retry-After` before expensive password verification when an attempt budget is exhausted.
 
-The membership administration request sets `free`, `pro`, or `priority`, its `active`, `past_due`, or `cancelled` status, optional billing-period/external-subscription metadata, and an optional bounded `priorityOverride`. Paid tiers that are not active use the Free service class. Every change requires an `Idempotency-Key`; the membership transition, optional positive `creditGrantUsd`, credit-ledger row, and immutable membership audit event commit in one transaction, so payment webhook retries cannot partially apply or grant credits twice.
+Platform administrator authorization is durable database state in `account_roles`; there is no deployment-wide membership bearer secret. `PLATFORM_ADMIN_EMAILS` only declares which verified Google identities may bootstrap that durable role. On the first authenticated account request, a matching `email_verified=true` identity receives the role and an immutable audit event transactionally. Merely knowing or claiming an email address is insufficient. `PUT /api/admin/accounts/:accountId/membership` requires an unexpired account session in `X-Client-Id` and `X-Client-Auth-Token`, then checks the caller's persisted `admin` role from PostgreSQL.
+
+When one address is configured, an operator can also materialize the role before the next login without placing the address on the command line:
+
+```bash
+node scripts/local-production.mjs --profile edge exec -T app \
+  node dist/src/scripts/setPlatformAdmin.js --grant
+```
+
+Use `--revoke` to remove it; `--email` and `--client-id` are available for explicit operator selection. Removing an address from `PLATFORM_ADMIN_EMAILS` does not silently revoke an already persisted role. The command refuses to revoke the last administrator. Role changes and membership mutations both leave immutable database audit events. Anonymous use remains available for ordinary guest functionality, but can never satisfy the administrator boundary.
+
+The membership administration request sets `free`, `pro`, or `priority`, its `active`, `past_due`, or `cancelled` status, optional billing-period/external-subscription metadata, and an optional bounded `priorityOverride`. Paid tiers that are not active use the Free service class. Every change requires an `Idempotency-Key`; the membership transition, optional positive `creditGrantUsd`, credit-ledger row, immutable membership audit event, and administrator account identity commit in one transaction, so payment webhook retries cannot partially apply or grant credits twice.
 
 | Service class | Credit available | Credit exhausted |
 | --- | ---: | ---: |

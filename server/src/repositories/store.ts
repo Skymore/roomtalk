@@ -598,6 +598,17 @@ export interface ClientAccount {
   lastLoginAt?: string;
 }
 
+export type AccountRole = 'admin';
+
+export interface GrantAccountRoleInput {
+  id: string;
+  accountId: string;
+  role: AccountRole;
+  grantedByAccountId?: string;
+  metadata?: Record<string, unknown>;
+  now?: string;
+}
+
 export interface CreateGoogleAccountInput extends GoogleAccountProfile {
   accountId: string;
   clientId: string;
@@ -782,6 +793,8 @@ export interface DurableRoomStore {
   readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
   getAccountByClientId(clientId: string): Promise<ClientAccount | null>;
   getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null>;
+  getAccountRoles(accountId: string): Promise<AccountRole[]>;
+  grantAccountRole(input: GrantAccountRoleInput): Promise<boolean | null>;
   createPasswordAccountForClient(input: CreatePasswordAccountInput): Promise<ClientAccount | null>;
   setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput): Promise<ClientAccount | null>;
   createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
@@ -1441,6 +1454,14 @@ export class CompositeRoomStore implements RoomStore {
 
   getAccountByGoogleSubject(providerSubject: string) {
     return this.durableStore.getAccountByGoogleSubject(providerSubject);
+  }
+
+  getAccountRoles(accountId: string) {
+    return this.durableStore.getAccountRoles(accountId);
+  }
+
+  grantAccountRole(input: GrantAccountRoleInput) {
+    return this.durableStore.grantAccountRole(input);
   }
 
   createPasswordAccountForClient(input: CreatePasswordAccountInput) {

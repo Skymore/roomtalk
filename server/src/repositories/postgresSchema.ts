@@ -2265,4 +2265,32 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ));
     `,
   },
+  {
+    // Platform authorization belongs to durable account state. A role row can
+    // be granted or revoked without rotating deployment secrets or restarting
+    // the App, and every change leaves an immutable audit event.
+    id: '0019_account_roles',
+    sql: `
+      CREATE TABLE IF NOT EXISTS account_roles (
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('admin')),
+        granted_by_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        granted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (account_id, role)
+      );
+
+      CREATE TABLE IF NOT EXISTS account_role_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('admin')),
+        action TEXT NOT NULL CHECK (action IN ('grant', 'revoke')),
+        actor_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_role_events_account_created
+        ON account_role_events (account_id, created_at DESC);
+    `,
+  },
 ];

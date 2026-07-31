@@ -176,7 +176,6 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 
 | 变量 | 用途 |
 | --- | --- |
-| `MEMBERSHIP_ADMIN_TOKEN` | 可选的服务端 Bearer secret，用于 `PUT /api/admin/accounts/:accountId/membership`。未配置时管理接口返回 `404`。只能存放在部署 secret manager 中。 |
 | `CLIENT_AUTH_TOKEN_TTL_DAYS` | 新签发密码/Google 账号会话的有效天数；默认 `30`，范围 `1`–`365`。迁移时会给旧的无限期账号会话补上 30 天过期时间。 |
 | `CLIENT_AUTH_LOGIN_WINDOW_SECONDS` | Redis 共享登录尝试窗口；默认 `900`。 |
 | `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT_IP` | 同一 User ID/IP 每窗口允许的尝试数；默认 `10`。 |
@@ -184,10 +183,22 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 | `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_IP` | 同一 IP 跨 User ID 每窗口允许的密码尝试数；默认 `100`。 |
 | `ACCOUNT_AI_USAGE_SETTLEMENT_INTERVAL_MS` | Code Agent usage 因 PostgreSQL 暂时不可用而进入 Redis 持久恢复队列后的重试间隔；默认 `5000`。 |
 | `ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE` | 每轮最多重试的延迟 usage 结算数；默认 `100`。 |
+| `PLATFORM_ADMIN_EMAILS` | 可选的逗号分隔管理员自举白名单。匹配账号必须在数据库中拥有 `email_verified=true` 的 Google identity；最终 `admin` 角色和授权审计事件持久化到 PostgreSQL。生产值只能通过部署 secret 注入。 |
 
 密码账号创建、密码轮换、旧会话撤销和新会话签发在同一事务内提交。账号会话有过期时间，并通过数据库外键绑定账号。认证存储异常统一返回 `503`，不会退化为匿名授权；Redis 尝试额度耗尽时，会在执行昂贵的密码校验前返回 `429` 和 `Retry-After`。
 
-会员管理请求可设置 `free`、`pro`、`priority`，以及 `active`、`past_due`、`cancelled` 状态，还可携带账期、外部订阅信息和有界 `priorityOverride`；非 active 的付费会员按 Free 服务等级调度。每次变更都必须提供 `Idempotency-Key`；会员状态、可选正数 `creditGrantUsd`、credit ledger 和不可变会员审计事件在同一事务提交，确保支付 webhook 重试不会部分生效或重复发放额度。
+平台管理员权限是 `account_roles` 中的持久数据库状态，不再存在部署级会员 Bearer secret。`PLATFORM_ADMIN_EMAILS` 只声明哪些已验证 Google identity 可以自举该数据库角色：匹配账号首次发起已认证账号请求时，会在同一事务中写入 `admin` 角色与不可变授权审计事件。只知道或声称拥有某个邮箱不能获得权限。`PUT /api/admin/accounts/:accountId/membership` 必须通过 `X-Client-Id` 和 `X-Client-Auth-Token` 提供未过期账号会话，服务端再从 PostgreSQL 检查已持久化的 `admin` 角色。
+
+只配置一个邮箱时，也可以在用户下次登录前从生产 App 容器预先落库，不需要把邮箱写进命令行：
+
+```bash
+node scripts/local-production.mjs --profile edge exec -T app \
+  node dist/src/scripts/setPlatformAdmin.js --grant
+```
+
+撤销时使用 `--revoke`；也可用 `--email` 或 `--client-id` 明确选择操作对象。把邮箱从 `PLATFORM_ADMIN_EMAILS` 删除不会暗中撤销已经落库的角色。命令会拒绝撤销最后一个管理员。角色变更与会员变更都会保留不可变数据库审计事件。普通访客功能仍允许不登录使用，但匿名身份永远无法通过管理员边界。
+
+会员管理请求可设置 `free`、`pro`、`priority`，以及 `active`、`past_due`、`cancelled` 状态，还可携带账期、外部订阅信息和有界 `priorityOverride`；非 active 的付费会员按 Free 服务等级调度。每次变更都必须提供 `Idempotency-Key`；会员状态、可选正数 `creditGrantUsd`、credit ledger、不可变会员审计事件和操作管理员账号身份在同一事务提交，确保支付 webhook 重试不会部分生效或重复发放额度。
 
 | 服务等级 | 额度可用 | 额度耗尽 |
 | --- | ---: | ---: |
