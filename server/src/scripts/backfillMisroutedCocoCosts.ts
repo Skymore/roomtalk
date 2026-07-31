@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { Logger } from '../logger';
 import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresClient, PostgresPool } from '../repositories/postgresStore';
-import { calculateAICost, createAIModelRegistry, getMessageAIModel } from '../services/aiModels';
+import { calculateAICost, getHistoricalAIModelOptions, getMessageAIModel } from '../services/aiModels';
 import { AICost, AIModelOption, AIUsage, Message } from '../types';
 
 dotenv.config();
@@ -54,7 +54,7 @@ const numberFrom = (value: unknown, field: string) => {
 
 export const buildMisroutedCocoCostPlan = (
   rows: MisroutedCocoTurnRow[],
-  modelOptions: AIModelOption[] = createAIModelRegistry().modelOptions
+  modelOptions: AIModelOption[] = getHistoricalAIModelOptions()
 ): MisroutedCocoCostPlan => {
   const items = rows.map(row => {
     if (row.existing_cost !== null && row.existing_cost !== undefined) {

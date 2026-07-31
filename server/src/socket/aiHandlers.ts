@@ -204,7 +204,6 @@ const streamOpenAICompatibleWithA2UI = async (params: {
         model: params.model,
         messages: providerMessages,
         stream: true,
-        temperature: 1,
         tools: [openAIA2UITool],
         tool_choice: 'auto',
         stream_options: { include_usage: true },

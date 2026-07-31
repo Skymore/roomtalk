@@ -1053,6 +1053,7 @@ describe('AI socket handlers', () => {
     await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
 
     assert.equal(createCalls.length, 2);
+    assert.equal('temperature' in createCalls[0], false);
     assert.equal(createCalls[0].tools?.[0]?.function?.name, 'a2ui_update');
     assert.equal(createCalls[1].messages.some((message: any) => message.role === 'tool'), true);
     const a2uiUpdateIndex = io.roomEmits.findIndex(event => event.event === 'a2ui_update');

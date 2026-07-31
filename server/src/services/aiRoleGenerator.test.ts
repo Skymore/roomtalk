@@ -4,15 +4,15 @@ import { createAIRoleDraftGenerator, parseAIRoleDraft } from './aiRoleGenerator'
 import { AIModelOption } from '../types';
 
 const model: AIModelOption = {
-  id: 'google/gemini-3.5-flash',
-  apiModel: 'google/gemini-3.5-flash',
+  id: 'google/gemini-3.6-flash',
+  apiModel: 'google/gemini-3.6-flash',
   provider: 'openrouter',
   label: 'Gemini 3.5 Flash',
   description: 'Google Gemini 3.5 Flash via OpenRouter',
 };
 
 describe('AI role generator', () => {
-  it('generates a structured draft with Gemini 3.5 Flash through OpenRouter', async () => {
+  it('generates a structured draft with Gemini 3.6 Flash through OpenRouter', async () => {
     const requests: any[] = [];
     const generateDraft = createAIRoleDraftGenerator({
       model,
@@ -35,7 +35,7 @@ describe('AI role generator', () => {
       name: 'Reviewer',
       systemPrompt: 'Review code rigorously.',
     });
-    assert.equal(requests[0].model, 'google/gemini-3.5-flash');
+    assert.equal(requests[0].model, 'google/gemini-3.6-flash');
     assert.equal(requests[0].messages[1].content, 'Create a code reviewer');
     assert.deepEqual(requests[0].response_format, { type: 'json_object' });
   });

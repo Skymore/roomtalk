@@ -35,11 +35,14 @@ describe("aiModels", () => {
 
   it("uses DeepSeek as the fallback default and flags high or unknown output prices as premium", () => {
     expect(FALLBACK_AI_MODEL).toBe("deepseek-v4-pro");
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.5")!)).toBe(true);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-sol")!)).toBe(true);
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "claude-sonnet-5")!)).toBe(false);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "~google/gemini-pro-latest")!)).toBe(true);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash")!)).toBe(false);
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3-preview")?.pricing?.outputPerMillion).toBe(0.26);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "claude-opus-5")!)).toBe(true);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.6-flash")!)).toBe(false);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash-lite")!)).toBe(false);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3")?.pricing?.outputPerMillion).toBe(0.528);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna")?.pricing?.outputPerMillion).toBe(0.6);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "qwen/qwen3.7-plus")?.pricing?.outputPerMillion).toBe(1.28);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "deepseek-v4-flash")).toMatchObject({
       id: "deepseek-v4-flash",
       apiModel: "deepseek-v4-flash",
@@ -59,9 +62,9 @@ describe("aiModels", () => {
       label: "DeepSeek V4 Flash (OpenRouter)",
       pricing: {
         currency: "USD",
-        inputPerMillion: 0.098,
-        cachedInputPerMillion: 0.02,
-        outputPerMillion: 0.196,
+        inputPerMillion: 0.14,
+        cachedInputPerMillion: 0.028,
+        outputPerMillion: 0.28,
       },
     });
     expect(FALLBACK_AI_MODELS.find(model => model.id === "mimo-v2.5")).toMatchObject({
@@ -70,15 +73,16 @@ describe("aiModels", () => {
       label: "MiMo V2.5",
       pricing: {
         currency: "USD",
-        inputPerMillion: 0.105,
+        inputPerMillion: 0.14,
+        cachedInputPerMillion: 0.0028,
         outputPerMillion: 0.28,
       },
     });
     expect(FALLBACK_AI_MODELS.find(model => model.id === "glm-5.2")?.pricing).toEqual({
       currency: "USD",
-      inputPerMillion: 0.93,
-      cachedInputPerMillion: 0.18,
-      outputPerMillion: 3,
+      inputPerMillion: 1.232,
+      cachedInputPerMillion: 0.2288,
+      outputPerMillion: 3.872,
     });
     expect(isPremiumAIModel({})).toBe(true);
     expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10 } })).toBe(false);

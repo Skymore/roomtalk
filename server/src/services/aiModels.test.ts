@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { calculateAICost, createAIModelRegistry, DEFAULT_AI_MODEL_ID, isPremiumAIModel, normalizeUsage, parseAIModelOptions } from './aiModels';
+import { calculateAICost, createAIModelRegistry, DEFAULT_AI_MODEL_ID, getHistoricalAIModelOptions, isPremiumAIModel, normalizeUsage, parseAIModelOptions } from './aiModels';
 import { AIModelOption, AIUsage } from '../types';
 
 describe('AI model registry', () => {
@@ -10,17 +10,17 @@ describe('AI model registry', () => {
     assert.equal(models[0].id, 'custom/model');
     assert.equal(models[0].isDefault, true);
     assert.equal(models.filter(model => model.id === 'custom/model').length, 1);
-    assert.equal(models.filter(model => model.id === 'gpt-5.5').length, 1);
+    assert.equal(models.filter(model => model.id === 'gpt-5.6-sol').length, 1);
   });
 
   it('normalizes by id or api model and falls back to the default', () => {
-    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.5' });
+    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.6-sol' });
 
-    assert.equal(registry.normalizeAIModel('openai/gpt-5.5').id, 'gpt-5.5');
+    assert.equal(registry.normalizeAIModel('openai/gpt-5.6-sol').id, 'gpt-5.6-sol');
     assert.equal(registry.normalizeAIModel('deepseek-v4-flash').provider, 'deepseek');
     assert.equal(registry.normalizeAIModel('deepseek/deepseek-v4-flash').id, 'deepseek-v4-flash-openrouter');
     assert.equal(registry.normalizeAIModel('xiaomi/mimo-v2.5').id, 'mimo-v2.5');
-    assert.equal(registry.normalizeAIModel('not-allowed').id, 'gpt-5.5');
+    assert.equal(registry.normalizeAIModel('not-allowed').id, 'gpt-5.6-sol');
   });
 
   it('uses DeepSeek V4 Pro as the built-in default and flags high or unknown output prices as premium', () => {
@@ -31,12 +31,14 @@ describe('AI model registry', () => {
     assert.equal(registry.defaultModel.id, 'deepseek-v4-pro');
     assert.equal(registry.getAIModelResponse().defaultModel, 'deepseek-v4-pro');
     assert.equal(customModels.find(model => model.id === 'custom/model')?.isPremium, true);
-    assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.5')?.isPremium, true);
-    assert.equal(registry.modelOptions.find(model => model.id === 'claude-opus-4.8')?.isPremium, true);
+    assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.6-sol')?.isPremium, true);
+    assert.equal(registry.modelOptions.find(model => model.id === 'claude-opus-5')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'claude-sonnet-5')?.isPremium, false);
-    assert.equal(registry.modelOptions.find(model => model.id === '~google/gemini-pro-latest')?.isPremium, true);
-    assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash')?.isPremium, false);
-    assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3-preview')?.pricing?.outputPerMillion, 0.26);
+    assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.6-flash')?.isPremium, false);
+    assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash-lite')?.isPremium, false);
+    assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3')?.pricing?.outputPerMillion, 0.528);
+    assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.6-luna')?.pricing?.outputPerMillion, 0.6);
+    assert.equal(registry.modelOptions.find(model => model.id === 'qwen/qwen3.7-plus')?.pricing?.outputPerMillion, 1.28);
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'deepseek-v4-flash'), {
       id: 'deepseek-v4-flash',
       apiModel: 'deepseek-v4-flash',
@@ -60,19 +62,26 @@ describe('AI model registry', () => {
       description: 'DeepSeek V4 Flash via OpenRouter',
       pricing: {
         currency: 'USD',
-        inputPerMillion: 0.098,
-        cachedInputPerMillion: 0.02,
-        outputPerMillion: 0.196,
+        inputPerMillion: 0.14,
+        cachedInputPerMillion: 0.028,
+        outputPerMillion: 0.28,
       },
       isPremium: false,
       isDefault: false,
     });
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'mimo-v2.5')?.pricing, {
       currency: 'USD',
-      inputPerMillion: 0.105,
+      inputPerMillion: 0.14,
+      cachedInputPerMillion: 0.0028,
       outputPerMillion: 0.28,
     });
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'glm-5.2')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 1.232,
+      cachedInputPerMillion: 0.2288,
+      outputPerMillion: 3.872,
+    });
+    assert.deepEqual(getHistoricalAIModelOptions().find(model => model.id === 'glm-5.2')?.pricing, {
       currency: 'USD',
       inputPerMillion: 0.93,
       cachedInputPerMillion: 0.18,
@@ -87,7 +96,7 @@ describe('AI model registry', () => {
 
 describe('calculateAICost', () => {
   it('uses cached input pricing when reported', () => {
-    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.5' });
+    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.6-sol' });
     const usage: AIUsage = {
       promptTokens: 1_000_000,
       cachedPromptTokens: 250_000,
@@ -123,7 +132,7 @@ describe('calculateAICost', () => {
   });
 
   it('caps cached prompt tokens at total prompt tokens', () => {
-    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.5' });
+    const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.6-sol' });
     const usage: AIUsage = {
       promptTokens: 100,
       cachedPromptTokens: 1_000,

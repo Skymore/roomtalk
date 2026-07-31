@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { Logger } from '../logger';
 import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresClient, PostgresPool } from '../repositories/postgresStore';
-import { calculateAICost, createAIModelRegistry, getMessageAIModel } from '../services/aiModels';
+import { calculateAICost, getHistoricalAIModelOptions, getMessageAIModel } from '../services/aiModels';
 import { AIModelOption, AIUsage, Message } from '../types';
 
 dotenv.config();
@@ -149,7 +149,7 @@ export const buildMisroutedCocoModelStepPlan = (
   messageRows: MisroutedCocoMessageRow[],
   settlementRows: MisroutedCocoSettlementRow[],
   toolEventRows: MisroutedCocoToolEventRow[],
-  modelOptions: AIModelOption[] = createAIModelRegistry().modelOptions
+  modelOptions: AIModelOption[] = getHistoricalAIModelOptions()
 ): MisroutedCocoModelStepPlan => {
   const turnById = new Map<string, MisroutedCocoTurnIdentityRow>();
   for (const turn of turns) {

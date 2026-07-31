@@ -2,7 +2,7 @@ import { AICost, AIModelOption, AIUsage, Message } from '../types';
 
 export const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
 export const DEFAULT_AI_MODEL_ID = 'deepseek-v4-pro';
-export const AI_ROLE_GENERATOR_MODEL_ID = 'google/gemini-3.5-flash';
+export const AI_ROLE_GENERATOR_MODEL_ID = 'google/gemini-3.6-flash';
 export const PREMIUM_OUTPUT_PRICE_THRESHOLD = 10;
 
 interface AIModelLogger {
@@ -32,7 +32,7 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     provider: 'openrouter',
     label: 'DeepSeek V4 Flash (OpenRouter)',
     description: 'DeepSeek V4 Flash via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.098, cachedInputPerMillion: 0.02, outputPerMillion: 0.196 },
+    pricing: { currency: 'USD', inputPerMillion: 0.14, cachedInputPerMillion: 0.028, outputPerMillion: 0.28 },
   },
   {
     id: 'mimo-v2.5',
@@ -40,15 +40,31 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     provider: 'openrouter',
     label: 'MiMo V2.5',
     description: 'Xiaomi MiMo V2.5 via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.105, outputPerMillion: 0.28 },
+    pricing: { currency: 'USD', inputPerMillion: 0.14, cachedInputPerMillion: 0.0028, outputPerMillion: 0.28 },
   },
   {
-    id: 'gpt-5.5',
-    apiModel: 'openai/gpt-5.5',
+    id: 'gpt-5.6-sol',
+    apiModel: 'openai/gpt-5.6-sol',
     provider: 'openrouter',
-    label: 'GPT-5.5',
-    description: 'OpenAI GPT-5.5 routed through OpenRouter',
+    label: 'GPT-5.6 Sol',
+    description: 'OpenAI flagship model via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+  },
+  {
+    id: 'gpt-5.6-terra',
+    apiModel: 'openai/gpt-5.6-terra',
+    provider: 'openrouter',
+    label: 'GPT-5.6 Terra',
+    description: 'OpenAI balanced model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1, cachedInputPerMillion: 0.1, outputPerMillion: 6 },
+  },
+  {
+    id: 'gpt-5.6-luna',
+    apiModel: 'openai/gpt-5.6-luna',
+    provider: 'openrouter',
+    label: 'GPT-5.6 Luna',
+    description: 'OpenAI high-throughput model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.1, cachedInputPerMillion: 0.01, outputPerMillion: 0.6 },
   },
   {
     id: 'claude-sonnet-5',
@@ -59,20 +75,20 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.20, outputPerMillion: 10 },
   },
   {
-    id: 'claude-opus-4.8',
-    apiModel: 'claude-opus-4-8',
+    id: 'claude-opus-5',
+    apiModel: 'claude-opus-5',
     provider: 'anthropic',
-    label: 'Claude Opus 4.8',
-    description: 'Anthropic Claude Opus 4.8 via official API (with prompt caching)',
+    label: 'Claude Opus 5',
+    description: 'Anthropic Claude Opus 5 via official API (with prompt caching)',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
   },
   {
-    id: 'kimi-k2.7-code',
-    apiModel: 'moonshotai/kimi-k2.7-code',
+    id: 'kimi-k3',
+    apiModel: 'moonshotai/kimi-k3',
     provider: 'openrouter',
-    label: 'Kimi K2.7 Code',
-    description: 'Moonshot Kimi model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.74, cachedInputPerMillion: 0.15, outputPerMillion: 3.5 },
+    label: 'Kimi K3',
+    description: 'Moonshot Kimi K3 via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.3, outputPerMillion: 15 },
   },
   {
     id: 'glm-5.2',
@@ -80,7 +96,7 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     provider: 'openrouter',
     label: 'GLM 5.2',
     description: 'Latest GLM model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.93, cachedInputPerMillion: 0.18, outputPerMillion: 3 },
+    pricing: { currency: 'USD', inputPerMillion: 1.232, cachedInputPerMillion: 0.2288, outputPerMillion: 3.872 },
   },
   {
     id: 'minimax-m3',
@@ -91,36 +107,44 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 0.3, cachedInputPerMillion: 0.06, outputPerMillion: 1.2 },
   },
   {
-    id: 'x-ai/grok-4.3',
-    apiModel: 'x-ai/grok-4.3',
+    id: 'x-ai/grok-4.5',
+    apiModel: 'x-ai/grok-4.5',
     provider: 'openrouter',
-    label: 'Grok 4.3',
-    description: 'xAI Grok 4.3 via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.2, outputPerMillion: 2.5 },
+    label: 'Grok 4.5',
+    description: 'xAI Grok 4.5 via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.3, outputPerMillion: 6 },
   },
   {
-    id: 'tencent/hy3-preview',
-    apiModel: 'tencent/hy3-preview',
+    id: 'tencent/hy3',
+    apiModel: 'tencent/hy3',
     provider: 'openrouter',
-    label: 'Tencent Hy3 Preview',
-    description: 'Tencent Hy3 preview via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.066, cachedInputPerMillion: 0.029, outputPerMillion: 0.26 },
+    label: 'Tencent Hy3',
+    description: 'Tencent Hy3 via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.132, cachedInputPerMillion: 0.033, outputPerMillion: 0.528 },
   },
   {
-    id: 'google/gemini-3.5-flash',
-    apiModel: 'google/gemini-3.5-flash',
+    id: 'google/gemini-3.6-flash',
+    apiModel: 'google/gemini-3.6-flash',
     provider: 'openrouter',
-    label: 'Gemini 3.5 Flash',
-    description: 'Google Gemini 3.5 Flash via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 9 },
+    label: 'Gemini 3.6 Flash',
+    description: 'Google Gemini 3.6 Flash via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 7.5 },
   },
   {
-    id: '~google/gemini-pro-latest',
-    apiModel: '~google/gemini-pro-latest',
+    id: 'google/gemini-3.5-flash-lite',
+    apiModel: 'google/gemini-3.5-flash-lite',
     provider: 'openrouter',
-    label: 'Gemini Pro Latest',
-    description: 'Google Gemini Pro Latest via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
+    label: 'Gemini 3.5 Flash-Lite',
+    description: 'Google Gemini 3.5 Flash-Lite via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.3, cachedInputPerMillion: 0.03, outputPerMillion: 2.5 },
+  },
+  {
+    id: 'qwen/qwen3.7-plus',
+    apiModel: 'qwen/qwen3.7-plus',
+    provider: 'openrouter',
+    label: 'Qwen 3.7 Plus',
+    description: 'Alibaba Qwen 3.7 Plus via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.32, cachedInputPerMillion: 0.064, outputPerMillion: 1.28 },
   },
 ];
 
@@ -149,9 +173,88 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     description: 'OpenAI GPT-5 nano routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.05, cachedInputPerMillion: 0.005, outputPerMillion: 0.4 },
   },
+  {
+    id: 'deepseek-v4-flash-openrouter',
+    apiModel: 'deepseek/deepseek-v4-flash',
+    provider: 'openrouter',
+    label: 'DeepSeek V4 Flash (OpenRouter, historical)',
+    description: 'Historical OpenRouter pricing',
+    pricing: { currency: 'USD', inputPerMillion: 0.098, cachedInputPerMillion: 0.02, outputPerMillion: 0.196 },
+  },
+  {
+    id: 'mimo-v2.5',
+    apiModel: 'xiaomi/mimo-v2.5',
+    provider: 'openrouter',
+    label: 'MiMo V2.5 (historical)',
+    description: 'Historical OpenRouter pricing',
+    pricing: { currency: 'USD', inputPerMillion: 0.105, outputPerMillion: 0.28 },
+  },
+  {
+    id: 'claude-opus-4.8',
+    apiModel: 'claude-opus-4-8',
+    provider: 'anthropic',
+    label: 'Claude Opus 4.8',
+    description: 'Historical Anthropic model',
+    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
+  },
+  {
+    id: 'kimi-k2.7-code',
+    apiModel: 'moonshotai/kimi-k2.7-code',
+    provider: 'openrouter',
+    label: 'Kimi K2.7 Code',
+    description: 'Historical OpenRouter model',
+    pricing: { currency: 'USD', inputPerMillion: 0.74, cachedInputPerMillion: 0.15, outputPerMillion: 3.5 },
+  },
+  {
+    id: 'glm-5.2',
+    apiModel: 'z-ai/glm-5.2',
+    provider: 'openrouter',
+    label: 'GLM 5.2 (historical)',
+    description: 'Historical OpenRouter pricing',
+    pricing: { currency: 'USD', inputPerMillion: 0.93, cachedInputPerMillion: 0.18, outputPerMillion: 3 },
+  },
+  {
+    id: 'x-ai/grok-4.3',
+    apiModel: 'x-ai/grok-4.3',
+    provider: 'openrouter',
+    label: 'Grok 4.3',
+    description: 'Historical OpenRouter model',
+    pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.2, outputPerMillion: 2.5 },
+  },
+  {
+    id: 'tencent/hy3-preview',
+    apiModel: 'tencent/hy3-preview',
+    provider: 'openrouter',
+    label: 'Tencent Hy3 Preview',
+    description: 'Historical OpenRouter model',
+    pricing: { currency: 'USD', inputPerMillion: 0.066, cachedInputPerMillion: 0.029, outputPerMillion: 0.26 },
+  },
+  {
+    id: 'google/gemini-3.5-flash',
+    apiModel: 'google/gemini-3.5-flash',
+    provider: 'openrouter',
+    label: 'Gemini 3.5 Flash',
+    description: 'Historical OpenRouter model',
+    pricing: { currency: 'USD', inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 9 },
+  },
+  {
+    id: '~google/gemini-pro-latest',
+    apiModel: '~google/gemini-pro-latest',
+    provider: 'openrouter',
+    label: 'Gemini Pro Latest',
+    description: 'Historical OpenRouter alias',
+    pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
+  },
 ];
 
 const AI_MODEL_CATALOG = [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATALOG];
+
+export const getHistoricalAIModelOptions = (): AIModelOption[] => [
+  ...LEGACY_AI_MODEL_CATALOG,
+  ...REQUESTED_AI_MODEL_CATALOG.filter(model => !LEGACY_AI_MODEL_CATALOG.some(legacy =>
+    legacy.id === model.id && legacy.provider === model.provider
+  )),
+];
 
 const normalizeModelLookupKey = (value: string) => value.trim().toLowerCase();
 
