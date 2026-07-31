@@ -11,7 +11,14 @@ import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunner
 import { CodeAgentRunnerClient, CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCodeAgentSandboxService } from './fakeCodeAgentSandboxService';
-import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_DAEMON_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import {
+  DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+  DEFAULT_CODE_AGENT_DAEMON_COMMAND,
+  DEFAULT_CODE_AGENT_RUNNER_COMMAND,
+  DEFAULT_HERMES_AGENT_RUNNER_COMMAND,
+  DEFAULT_OPENCODE_RUNNER_COMMAND,
+} from './codeAgentRuntimeConfig';
 import { CodeAgentModelGateway, InMemoryCodeAgentModelGatewayTokenStateStore } from './codeAgentModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
@@ -1988,6 +1995,150 @@ describe('CodeAgentSessionService', () => {
       label: 'GPT-5.5 Extra High',
     });
   });
+
+  for (const harness of [
+    {
+      backend: 'opencode' as const,
+      command: DEFAULT_OPENCODE_RUNNER_COMMAND,
+      displayName: 'OpenCode',
+    },
+    {
+      backend: 'hermes-agent' as const,
+      command: DEFAULT_HERMES_AGENT_RUNNER_COMMAND,
+      displayName: 'Hermes',
+    },
+  ]) {
+    it(`orchestrates a complete ${harness.displayName} turn through the scoped model gateway`, async () => {
+      const previousSessionId = `acp:${harness.backend}:previous-session`;
+      const nextSessionId = `acp:${harness.backend}:next-session`;
+      const store = new MemoryCodeAgentStore(room({
+        codeAgentBackend: harness.backend,
+        codeAgentSessionId: previousSessionId,
+      }), [userMessage()]);
+      const contexts: Array<{ backend?: CodeAgentBackend }> = [];
+      const runner: CodeAgentRunnerClient = {
+        async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
+          contexts.push({ backend: context?.backend });
+          assert.equal(request.sessionId, previousSessionId);
+          assert.equal(request.provider, selectedModel.provider);
+          assert.equal(request.modelId, selectedModel.id);
+          assert.equal(request.apiModel, selectedModel.apiModel);
+          assert.equal(request.codexModel, undefined);
+          assert.equal(request.codexPermissionMode, undefined);
+
+          const toolCall = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'tool_call' as const,
+            id: `${harness.backend}-tool-1`,
+            name: 'Read',
+            args: { file_path: 'README.md' },
+          };
+          const toolResult = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'tool_result' as const,
+            id: toolCall.id,
+            name: toolCall.name,
+            success: true,
+            output: '# RoomTalk',
+          };
+          const firstText = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'text_delta' as const,
+            messageId: `${harness.backend}-message-1`,
+            delta: 'I checked the project.',
+          };
+          const secondText = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'text_delta' as const,
+            messageId: `${harness.backend}-message-2`,
+            delta: ' It is ready.',
+          };
+          const finalEvent = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'final' as const,
+            messageId: secondText.messageId,
+            answer: 'I checked the project. It is ready.',
+            sessionId: nextSessionId,
+            usage: {
+              promptTokens: 100,
+              completionTokens: 20,
+              totalTokens: 120,
+              source: 'reported' as const,
+            },
+          };
+          for (const event of [firstText, toolCall, toolResult, secondText, finalEvent]) {
+            await handlers.onEvent(event);
+          }
+          return {
+            events: [firstText, toolCall, toolResult, secondText, finalEvent],
+            finalEvent,
+          };
+        },
+      };
+      const gateway = new CodeAgentModelGateway({
+        publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+        tokenSecret: 'gateway-secret',
+        providerApiKeys: { deepseek: 'deepseek-provider-key' },
+        nowMs: () => 1_800_000_000_000,
+        stateStore: new InMemoryCodeAgentModelGatewayTokenStateStore(() => 1_800_000_000_000),
+      });
+      const { emitter, sandboxService, service } = createService({
+        store,
+        runner,
+        backend: 'code-agent',
+        runnerCommandByBackend: {
+          [harness.backend]: harness.command,
+        },
+        runnerProviderEnvByProvider: {
+          deepseek: { DEEPSEEK_API_KEY: 'must-not-leak' },
+        },
+        modelGateway: gateway,
+        ids: ['ai-1', 'turn-1', 'tool-message-1', 'tool-result-1', 'ai-2'],
+      });
+
+      const result = await service.startTurn({
+        roomId: 'room-1',
+        clientId: 'client-1',
+        selectedModel,
+      });
+
+      assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+      assert.deepEqual(contexts, [{ backend: harness.backend }]);
+      assert.equal(sandboxService.startedRunnerCommands[0], harness.command);
+      const runnerEnv = sandboxService.startedRunnerEnvs[0];
+      assert.equal(
+        runnerEnv.CODE_AGENT_MODEL_PROXY_URL,
+        'https://room.example/api/code-agent/model-gateway/v1',
+      );
+      assert.equal(typeof runnerEnv.CODE_AGENT_MODEL_PROXY_TOKEN, 'string');
+      assert.equal('DEEPSEEK_API_KEY' in runnerEnv, false);
+
+      const messages = store.messages.get('room-1') || [];
+      assert.deepEqual(
+        messages.map(message => message.messageType),
+        ['text', 'ai', 'tool_call', 'tool_result', 'ai'],
+      );
+      assert.equal(messages[1].content, 'I checked the project.');
+      assert.equal(messages[2].username, harness.displayName);
+      assert.equal(messages[3].username, harness.displayName);
+      assert.equal(messages[4].content, ' It is ready.');
+      assert.equal(messages[4].status, 'complete');
+      assert.deepEqual(messages[4].aiModel, {
+        id: selectedModel.id,
+        apiModel: selectedModel.apiModel,
+        provider: selectedModel.provider,
+        label: selectedModel.label,
+        isPremium: selectedModel.isPremium,
+      });
+      assert.ok((messages[4].cost?.totalUsd || 0) > 0);
+      assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, nextSessionId);
+      assert.equal([...store.agentTurns.values()][0]?.backend, harness.backend);
+      assert.equal(
+        emitter.roomEmits.some(event => event.event === 'ai_stream_end'),
+        true,
+      );
+    });
+  }
 
   it("uses the room owner's Codex and GitHub connections for an authorized member turn", async () => {
     const prompt = { ...userMessage('member prompt'), clientId: 'member-1' };
