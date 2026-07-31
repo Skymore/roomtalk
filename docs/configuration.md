@@ -210,10 +210,15 @@ The membership administration request sets `free`, `pro`, or `priority`, its `ac
 
 | Service class | Credit available | Credit exhausted |
 | --- | ---: | ---: |
+| Administrator (unlimited) | `1` | `1` |
 | Priority | `1` | `10` |
 | Pro | `20` | `40` |
 | Free | `60` | `80` |
 | Guest | `100` | `100` |
+
+Anonymous guests have no account credit balance and remain in the Guest service class. A signed-in account whose effective membership is Free receives a non-rollover `$5` allowance per UTC calendar month. PostgreSQL tracks the monthly granted and remaining portions separately from manual or paid credits: the first entitlement read or AI request in a new month expires only the unused monthly portion, writes immutable expiration/grant ledger rows, and grants the new `$5` exactly once under a row lock. Manual and paid credit balances are never removed by this rollover.
+
+An account with the persisted `admin` role always resolves to the Priority service class at queue priority `1` and reports unlimited credits. Administrator AI usage still increments lifetime usage and room/provider cost accounting, but applies `$0` against the account credit balance. Removing the bootstrap email from configuration does not change this policy because the role remains database state until explicitly revoked.
 
 Each ordinary Chat run snapshots the current account, effective membership, credit state, and BullMQ priority when PostgreSQL creates the run. Code Agent model-gateway requests resolve the same scheduling class at admission time. Lower priority numbers execute first at both the durable queue and the shared provider admission queue. While an ordinary Chat job is waiting for provider capacity, it yields back to BullMQ's delayed state without occupying a worker processor; its stable admission waiter keeps its priority and FIFO position across retries. Exhausting credits does not reject AI requests; it moves the account to the tier's depleted service class. Ordinary Chat terminal projection settles provider cost, the user-visible message, room cost, account usage event, credit deduction, and terminal run state in one PostgreSQL transaction. Code Agent gateway usage uses an idempotent account usage event and the same balance/lifetime-usage ledger; it is first recorded in a Redis recovery queue, so a transient PostgreSQL failure is retried after the provider response instead of silently losing the charge. Provider admission controls requests per second and concurrent requests; precise token-per-second enforcement still requires token-aware reservation/stream accounting.
 

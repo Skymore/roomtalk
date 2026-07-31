@@ -12,6 +12,11 @@ export interface AccountEntitlement {
   lifetimeUsageUsd: number;
   creditState: Exclude<AccountCreditState, 'none'>;
   queuePriority: number;
+  creditUnlimited?: boolean;
+  monthlyCreditAllowanceUsd?: number;
+  monthlyCreditRemainingUsd?: number;
+  monthlyCreditPeriodStart?: string;
+  monthlyCreditPeriodEnd?: string;
   priorityOverride?: number;
   currentPeriodStart?: string;
   currentPeriodEnd?: string;
@@ -27,6 +32,7 @@ export interface AssistantRunSchedulingSnapshot {
 }
 
 export const BULLMQ_MAX_PRIORITY = 2_097_152;
+export const FREE_MONTHLY_CREDIT_USD = 5;
 
 const PRIORITY_POLICY: Record<SchedulingTier, {
   available: number;
@@ -53,12 +59,22 @@ export const resolveAssistantRunScheduling = (input?: {
   status: MembershipStatus;
   creditBalanceUsd: number;
   priorityOverride?: number;
+  creditUnlimited?: boolean;
 } | null): AssistantRunSchedulingSnapshot => {
   if (!input) {
     return {
       membershipTier: 'guest',
       creditState: 'none',
       queuePriority: PRIORITY_POLICY.guest.exhausted,
+    };
+  }
+
+  if (input.creditUnlimited) {
+    return {
+      accountId: input.accountId,
+      membershipTier: 'priority',
+      creditState: 'available',
+      queuePriority: PRIORITY_POLICY.priority.available,
     };
   }
 

@@ -1750,7 +1750,59 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     );
     const rolledBack = await store.getAccountEntitlementByClientId(rollbackClientId);
     assert.equal(rolledBack?.tier, 'free');
-    assert.equal(rolledBack?.creditBalanceUsd, 0);
+    assert.equal(rolledBack?.creditBalanceUsd, 5);
+  });
+
+  it('grants signed-in Free accounts five non-rollover dollars per UTC calendar month', async () => {
+    const accountId = 'monthly-free-account';
+    const clientId = 'monthly-free-client';
+    assert.ok(await store.createPasswordAccountForClient({
+      accountId,
+      clientId,
+      now: '2026-07-15T12:00:00.000Z',
+    }));
+    assert.equal(await store.getAccountEntitlementByClientId('monthly-free-guest', createdAt), null);
+
+    const july = await store.getAccountEntitlementByClientId(clientId, '2026-07-15T12:00:00.000Z');
+    assert.equal(july?.creditBalanceUsd, 5);
+    assert.equal(july?.monthlyCreditAllowanceUsd, 5);
+    assert.equal(july?.monthlyCreditRemainingUsd, 5);
+    assert.equal(july?.monthlyCreditPeriodStart, '2026-07-01');
+    assert.equal(july?.monthlyCreditPeriodEnd, '2026-08-01');
+    assert.equal(july?.queuePriority, 60);
+
+    const usage = await store.settleAccountAIUsage({
+      id: 'monthly-free-july-usage',
+      clientId,
+      source: 'code_agent_gateway',
+      costUsd: 2,
+      provider: 'openai',
+      modelId: 'test-model',
+      now: '2026-07-20T12:00:00.000Z',
+    });
+    assert.equal(usage?.creditAppliedUsd, 2);
+    const afterUsage = await store.getAccountEntitlementByClientId(clientId, '2026-07-31T23:59:00.000Z');
+    assert.equal(afterUsage?.creditBalanceUsd, 3);
+    assert.equal(afterUsage?.monthlyCreditRemainingUsd, 3);
+
+    assert.ok(await store.grantAccountCredits({
+      id: 'monthly-free-manual-credit',
+      accountId,
+      amountUsd: 7,
+      idempotencyKey: 'monthly-free-manual-credit',
+      now: '2026-07-31T23:59:30.000Z',
+    }));
+    const august = await store.getAccountEntitlementByClientId(clientId, '2026-08-01T00:00:00.000Z');
+    assert.equal(august?.creditBalanceUsd, 12);
+    assert.equal(august?.monthlyCreditRemainingUsd, 5);
+    assert.equal(august?.monthlyCreditPeriodStart, '2026-08-01');
+    assert.equal((await pool.query(
+      `SELECT COUNT(*) AS count
+      FROM account_credit_ledger
+      WHERE account_id = $1
+        AND metadata->>'source' = 'free_monthly_allowance'`,
+      [accountId],
+    )).rows[0]?.count, '3');
   });
 
   it('reads platform administrator authorization from PostgreSQL account roles', async () => {
@@ -1778,6 +1830,101 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     }), true);
 
     assert.deepEqual(await store.getAccountRoles(accountId), ['admin']);
+    const adminEntitlement = await store.getAccountEntitlementByClientId(
+      'platform-admin-client',
+      createdAt,
+    );
+    assert.equal(adminEntitlement?.effectiveTier, 'priority');
+    assert.equal(adminEntitlement?.creditUnlimited, true);
+    assert.equal(adminEntitlement?.creditState, 'available');
+    assert.equal(adminEntitlement?.queuePriority, 1);
+    assert.equal(adminEntitlement?.creditBalanceUsd, 0);
+
+    const adminRoomId = 'platform-admin-priority-room';
+    const adminRunId = 'platform-admin-priority-run';
+    const adminMessageId = 'platform-admin-priority-message';
+    assert.ok(await store.saveRoom(room(adminRoomId)));
+    const adminPlaceholder = message(adminRoomId, adminMessageId, {
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+      aiModel: assistantMessageModel,
+    });
+    assert.ok(await store.createAssistantRunWithMessage(adminPlaceholder, {
+      id: adminRunId,
+      roomId: adminRoomId,
+      requestedByClientId: 'platform-admin-client',
+      aiMessageId: adminMessageId,
+      status: 'queued',
+      modelId: 'test-model',
+      apiModel: 'test-model',
+      provider: 'openai',
+      createdAt,
+      queuedAt: createdAt,
+      updatedAt: createdAt,
+      requestPayload: assistantRequest(adminRoomId),
+      generation: 0,
+      attempt: 0,
+      availableAt: createdAt,
+    }));
+    const adminRun = await store.getAssistantRun(adminRunId);
+    assert.equal(adminRun?.membershipTier, 'priority');
+    assert.equal(adminRun?.creditState, 'available');
+    assert.equal(adminRun?.queuePriority, 1);
+
+    const adminClaim = await store.claimAssistantRunById(adminRunId, {
+      workerId: 'platform-admin-worker',
+      now: createdAt,
+      leaseMs: 30_000,
+    });
+    assert.ok(adminClaim);
+    assert.ok(await store.stageAssistantRunTerminal(adminRunId, adminClaim.token, {
+      schemaVersion: 1,
+      outcome: 'complete',
+      message: {
+        ...adminPlaceholder,
+        content: 'unlimited admin answer',
+        status: 'complete',
+        timestamp: createdAt,
+        usage: {
+          promptTokens: 500_000,
+          completionTokens: 500_000,
+          totalTokens: 1_000_000,
+          source: 'reported',
+        },
+        cost: {
+          currency: 'USD',
+          inputUsd: 0.5,
+          outputUsd: 0.5,
+          totalUsd: 1,
+          inputPerMillion: 1,
+          outputPerMillion: 1,
+          estimated: false,
+        },
+      },
+    }));
+    const adminProjection = await store.projectAssistantRunTerminal(adminRunId, adminClaim.token);
+    assert.equal(adminProjection.outcome, 'applied');
+    if (adminProjection.outcome !== 'applied') throw new Error('Expected admin projection');
+    assert.equal(adminProjection.run.creditAppliedUsd, 0);
+
+    const adminUsage = await store.settleAccountAIUsage({
+      id: 'platform-admin-unlimited-usage',
+      clientId: 'platform-admin-client',
+      source: 'code_agent_gateway',
+      costUsd: 25,
+      provider: 'openai',
+      modelId: 'test-model',
+      now: createdAt,
+    });
+    assert.equal(adminUsage?.membershipTier, 'priority');
+    assert.equal(adminUsage?.creditAppliedUsd, 0);
+    assert.equal(adminUsage?.creditBalanceUsd, 0);
+    assert.equal((await store.getAccountEntitlementByClientId(
+      'platform-admin-client',
+      createdAt,
+    ))?.lifetimeUsageUsd, 26);
     assert.equal((await pool.query(
       `SELECT COUNT(*) AS count
       FROM account_role_events

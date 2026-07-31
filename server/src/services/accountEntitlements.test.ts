@@ -57,4 +57,20 @@ describe('account entitlement scheduling', () => {
     assert.equal(normalizeQueuePriority(0), 1);
     assert.equal(normalizeQueuePriority(Number.MAX_SAFE_INTEGER), BULLMQ_MAX_PRIORITY);
   });
+
+  it('gives administrators the highest service class without a credit limit', () => {
+    assert.deepEqual(resolveAssistantRunScheduling({
+      accountId: 'admin-account',
+      tier: 'free',
+      status: 'active',
+      creditBalanceUsd: 0,
+      creditUnlimited: true,
+      priorityOverride: 80,
+    }), {
+      accountId: 'admin-account',
+      membershipTier: 'priority',
+      creditState: 'available',
+      queuePriority: 1,
+    });
+  });
 });

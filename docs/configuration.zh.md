@@ -204,10 +204,15 @@ node scripts/local-production.mjs --profile edge exec -T app \
 
 | 服务等级 | 额度可用 | 额度耗尽 |
 | --- | ---: | ---: |
+| 管理员（无限额度） | `1` | `1` |
 | Priority | `1` | `10` |
 | Pro | `20` | `40` |
 | Free | `60` | `80` |
 | Guest | `100` | `100` |
+
+匿名访客没有账号额度，始终使用 Guest 服务等级。已登录且有效会员等级为 Free 的账号，每个 UTC 自然月获得不可结转的 `$5` 额度。PostgreSQL 会把“本月已赠送/本月剩余”与人工或付费额度分开记录：新月份第一次读取 entitlement 或发起 AI 请求时，只过期未用完的月度部分，写入不可变的 expiration/grant ledger，并在行锁保护下只发放一次新 `$5`；人工充值和付费额度不会被月度 rollover 清除。
+
+持久化 `admin` 角色的账号始终映射到 Priority 服务等级和队列优先级 `1`，并显示无限额度。管理员的 AI 消耗仍会累计 lifetime usage、房间成本和 provider 成本，但账号额度扣减始终为 `$0`。从配置中删除管理员自举邮箱不会改变这项权益，因为角色会一直保存在数据库中，直到被明确撤销。
 
 普通 Chat AI 任务在 PostgreSQL 创建时会固化账号、有效会员级别、额度状态和 BullMQ priority；Code Agent model gateway 在准入时解析同一服务等级。数字越小，越先通过持久队列和共享 provider admission 队列。普通 Chat 任务等待 Provider 容量时会退回 BullMQ delayed 状态，不占用 Worker processor；稳定的 admission waiter 会在重试之间保留原有优先级与同级 FIFO 位置。额度用完不会拒绝请求，而是降到该会员级别的 depleted service class。普通 Chat 的 Provider 成本、用户可见消息、房间成本、账号 usage event、额度扣减和 run 终态在同一 PostgreSQL 事务内结算；Code Agent gateway 使用幂等账号 usage event，并扣同一余额、累计同一 lifetime usage。其 usage 会先写入 Redis 恢复队列，因此 Provider 返回后即使 PostgreSQL 短暂故障，也会继续重试结算而不是静默漏扣。当前 provider admission 控制每秒请求数和并发请求数；精确 token/s 仍需要 token reservation 与流式计量。
 

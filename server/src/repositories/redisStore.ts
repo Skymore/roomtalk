@@ -6,7 +6,7 @@ import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Ro
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
-import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
+import { AccountEntitlement, FREE_MONTHLY_CREDIT_USD, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const fingerprintAccountMembershipChange = (input: AccountMembershipChangeInput) => (
@@ -3211,27 +3211,55 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null> {
+  async getAccountEntitlementByClientId(clientId: string, _now?: string): Promise<AccountEntitlement | null> {
     const account = await this.getAccountByClientId(clientId);
     if (!account) return null;
+    const isAdmin = (await this.getAccountRoles(account.accountId)).includes('admin');
     const raw = await this.redisClient.hGet(ACCOUNT_ENTITLEMENTS_KEY, account.accountId);
-    if (raw) return JSON.parse(raw) as AccountEntitlement;
-    const now = new Date().toISOString();
+    if (raw) {
+      const entitlement = JSON.parse(raw) as AccountEntitlement;
+      if (!isAdmin) return entitlement;
+      return {
+        ...entitlement,
+        effectiveTier: 'priority',
+        creditState: 'available',
+        queuePriority: 1,
+        creditUnlimited: true,
+      };
+    }
+    const now = _now || new Date().toISOString();
+    const monthStart = new Date(Date.UTC(
+      new Date(now).getUTCFullYear(),
+      new Date(now).getUTCMonth(),
+      1,
+    ));
+    const monthEnd = new Date(Date.UTC(
+      monthStart.getUTCFullYear(),
+      monthStart.getUTCMonth() + 1,
+      1,
+    ));
+    const creditBalanceUsd = isAdmin ? 0 : FREE_MONTHLY_CREDIT_USD;
     const scheduling = resolveAssistantRunScheduling({
       accountId: account.accountId,
       tier: 'free',
       status: 'active',
-      creditBalanceUsd: 0,
+      creditBalanceUsd,
+      creditUnlimited: isAdmin,
     });
     return {
       accountId: account.accountId,
       tier: 'free',
       status: 'active',
-      effectiveTier: 'free',
-      creditBalanceUsd: 0,
+      effectiveTier: isAdmin ? 'priority' : 'free',
+      creditBalanceUsd,
       lifetimeUsageUsd: 0,
-      creditState: 'exhausted',
+      creditState: 'available',
       queuePriority: scheduling.queuePriority,
+      creditUnlimited: isAdmin,
+      monthlyCreditAllowanceUsd: isAdmin ? 0 : FREE_MONTHLY_CREDIT_USD,
+      monthlyCreditRemainingUsd: isAdmin ? 0 : FREE_MONTHLY_CREDIT_USD,
+      monthlyCreditPeriodStart: monthStart.toISOString().slice(0, 10),
+      monthlyCreditPeriodEnd: monthEnd.toISOString().slice(0, 10),
       updatedAt: now,
     };
   }

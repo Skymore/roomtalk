@@ -306,6 +306,7 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
         tier: entitlement.tier,
         status: entitlement.status,
         creditBalanceUsd: entitlement.creditBalanceUsd,
+        creditUnlimited: entitlement.creditUnlimited,
         ...(entitlement.priorityOverride !== undefined
           ? { priorityOverride: entitlement.priorityOverride }
           : {}),

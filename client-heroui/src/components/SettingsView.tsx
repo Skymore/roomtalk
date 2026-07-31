@@ -871,12 +871,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div>
                     <p className="text-[#77746b] dark:text-[#96938a]">{t("membershipCredits")}</p>
                     <p className="mt-1 font-semibold text-[#141413] dark:text-[#faf9f5]">
-                      {new Intl.NumberFormat(undefined, {
-                        style: 'currency',
-                        currency: 'USD',
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 4,
-                      }).format(accountStatus.entitlement.creditBalanceUsd)}
+                      {accountStatus.entitlement.creditUnlimited
+                        ? t('membershipUnlimited')
+                        : new Intl.NumberFormat(undefined, {
+                          style: 'currency',
+                          currency: 'USD',
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 4,
+                        }).format(accountStatus.entitlement.creditBalanceUsd)}
                     </p>
                   </div>
                   <div>
@@ -899,7 +901,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {t("membershipGuestHelp")}
                 </p>
               )}
-              {accountStatus?.entitlement?.creditState === 'exhausted' && (
+              {accountStatus?.entitlement?.effectiveTier === 'free'
+                && !accountStatus.entitlement.creditUnlimited
+                && Number(accountStatus.entitlement.monthlyCreditAllowanceUsd) > 0 && (
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                  {t('membershipFreeMonthlyAllowance')}
+                </p>
+              )}
+              {accountStatus?.entitlement?.creditState === 'exhausted'
+                && !accountStatus.entitlement.creditUnlimited && (
                 <p className="text-xs leading-5 text-[#9a651f] dark:text-[#e9b96e]">
                   {t("membershipCreditsExhausted")}
                 </p>

@@ -2312,4 +2312,22 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON account_identity_events (account_id, created_at DESC);
     `,
   },
+  {
+    // Free account allowances are a non-rollover monthly bucket. Keep that
+    // bucket separate from purchased/manual credits so month rollover never
+    // expires unrelated balance, and use the existing ledger for its audit.
+    id: '0021_monthly_free_credits',
+    sql: `
+      ALTER TABLE account_credit_balances
+        ADD COLUMN IF NOT EXISTS monthly_credit_period_start DATE,
+        ADD COLUMN IF NOT EXISTS monthly_credit_granted_usd NUMERIC(18, 9) NOT NULL DEFAULT 0
+          CHECK (monthly_credit_granted_usd >= 0),
+        ADD COLUMN IF NOT EXISTS monthly_credit_remaining_usd NUMERIC(18, 9) NOT NULL DEFAULT 0
+          CHECK (monthly_credit_remaining_usd >= 0);
+
+      ALTER TABLE account_credit_balances
+        ADD CONSTRAINT account_credit_monthly_remaining_check
+        CHECK (monthly_credit_remaining_usd <= monthly_credit_granted_usd);
+    `,
+  },
 ];

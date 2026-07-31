@@ -12,6 +12,7 @@ import { validateStoredRoomEventPayload } from './roomEventPayload';
 import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
 import {
   AccountEntitlement,
+  FREE_MONTHLY_CREDIT_USD,
   MembershipStatus,
   MembershipTier,
   resolveAssistantRunScheduling,
@@ -361,6 +362,10 @@ type AccountEntitlementRow = {
   external_provider: string | null;
   available_usd: number | string;
   lifetime_usage_usd: number | string;
+  monthly_credit_period_start: string | Date | null;
+  monthly_credit_granted_usd: number | string;
+  monthly_credit_remaining_usd: number | string;
+  is_admin: boolean;
   updated_at: string | Date;
 };
 
@@ -416,6 +421,24 @@ const toIsoString = (value: string | Date): string => {
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+};
+
+const toDateOnly = (value: string | Date): string => {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+};
+
+const getUtcMonthPeriod = (now: string): { start: string; end: string } => {
+  const parsed = new Date(now);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error('Monthly credit reconciliation requires a valid timestamp');
+  }
+  const start = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, 1));
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+  };
 };
 
 const normalizeMessagePageLimit = (limit?: number): number => {
@@ -759,12 +782,16 @@ const mapClientAccount = (row: ClientAccountRow): ClientAccount => {
 const mapAccountEntitlement = (row: AccountEntitlementRow): AccountEntitlement => {
   const creditBalanceUsd = Number(row.available_usd) || 0;
   const priorityOverride = toOptionalNumber(row.priority_override);
-  const effectiveTier = resolveEffectiveMembershipTier(row.tier, row.status);
+  const creditUnlimited = Boolean(row.is_admin);
+  const effectiveTier = creditUnlimited
+    ? 'priority'
+    : resolveEffectiveMembershipTier(row.tier, row.status);
   const scheduling = resolveAssistantRunScheduling({
     accountId: row.account_id,
     tier: row.tier,
     status: row.status,
     creditBalanceUsd,
+    creditUnlimited,
     ...(priorityOverride !== undefined ? { priorityOverride } : {}),
   });
   return {
@@ -774,12 +801,21 @@ const mapAccountEntitlement = (row: AccountEntitlementRow): AccountEntitlement =
     effectiveTier,
     creditBalanceUsd,
     lifetimeUsageUsd: Number(row.lifetime_usage_usd) || 0,
-    creditState: creditBalanceUsd > 0 ? 'available' : 'exhausted',
+    creditState: creditUnlimited || creditBalanceUsd > 0 ? 'available' : 'exhausted',
     queuePriority: scheduling.queuePriority,
+    creditUnlimited,
+    monthlyCreditAllowanceUsd: Number(row.monthly_credit_granted_usd) || 0,
+    monthlyCreditRemainingUsd: Number(row.monthly_credit_remaining_usd) || 0,
     ...(priorityOverride !== undefined ? { priorityOverride } : {}),
     ...(row.current_period_start ? { currentPeriodStart: toIsoString(row.current_period_start) } : {}),
     ...(row.current_period_end ? { currentPeriodEnd: toIsoString(row.current_period_end) } : {}),
     ...(row.external_provider ? { externalProvider: row.external_provider } : {}),
+    ...(row.monthly_credit_period_start ? {
+      monthlyCreditPeriodStart: toDateOnly(row.monthly_credit_period_start),
+      monthlyCreditPeriodEnd: getUtcMonthPeriod(
+        `${toDateOnly(row.monthly_credit_period_start)}T00:00:00.000Z`,
+      ).end,
+    } : {}),
     updatedAt: toIsoString(row.updated_at),
   };
 };
@@ -3763,6 +3799,17 @@ export class PostgresStore implements DurableRoomStore {
           'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
           [message.roomId],
         );
+        const billingLink = await client.query<{ account_id: string }>(
+          `SELECT account_id FROM client_account_links WHERE client_id = $1 LIMIT 1`,
+          [run.requestedByClientId],
+        );
+        if (billingLink.rows[0]?.account_id) {
+          await this.reconcileMonthlyFreeCredits(
+            client,
+            billingLink.rows[0].account_id,
+            run.createdAt,
+          );
+        }
         const entitlementResult = await client.query<AccountEntitlementRow>(
           `SELECT membership.account_id,
             membership.tier,
@@ -3773,6 +3820,14 @@ export class PostgresStore implements DurableRoomStore {
             membership.external_provider,
             balance.available_usd,
             balance.lifetime_usage_usd,
+            balance.monthly_credit_period_start,
+            balance.monthly_credit_granted_usd,
+            balance.monthly_credit_remaining_usd,
+            EXISTS (
+              SELECT 1 FROM account_roles role
+              WHERE role.account_id = membership.account_id
+                AND role.role = 'admin'
+            ) AS is_admin,
             GREATEST(membership.updated_at, balance.updated_at) AS updated_at
           FROM client_account_links AS link
           JOIN account_memberships AS membership
@@ -3792,6 +3847,7 @@ export class PostgresStore implements DurableRoomStore {
           tier: entitlement.tier,
           status: entitlement.status,
           creditBalanceUsd: entitlement.creditBalanceUsd,
+          creditUnlimited: entitlement.creditUnlimited,
           ...(entitlement.priorityOverride !== undefined
             ? { priorityOverride: entitlement.priorityOverride }
             : {}),
@@ -4123,18 +4179,34 @@ export class PostgresStore implements DurableRoomStore {
           [runId],
         );
         if (!existingUsage.rows[0]) {
-          const balance = await client.query<{ available_usd: number | string }>(
-            `SELECT available_usd
-            FROM account_credit_balances
-            WHERE account_id = $1
-            FOR UPDATE`,
+          const balance = await client.query<{
+            available_usd: number | string;
+            monthly_credit_remaining_usd: number | string;
+            is_admin: boolean;
+          }>(
+            `SELECT balance.available_usd,
+              balance.monthly_credit_remaining_usd,
+              EXISTS (
+                SELECT 1 FROM account_roles role
+                WHERE role.account_id = balance.account_id
+                  AND role.role = 'admin'
+              ) AS is_admin
+            FROM account_credit_balances AS balance
+            WHERE balance.account_id = $1
+            FOR UPDATE OF balance`,
             [runRow.billing_account_id],
           );
           if (!balance.rows[0]) {
             throw new Error(`Assistant run ${runId} billing account has no credit balance`);
           }
           const availableUsd = Number(balance.rows[0].available_usd) || 0;
-          creditAppliedUsd = Math.min(availableUsd, totalUsd);
+          creditAppliedUsd = balance.rows[0].is_admin
+            ? 0
+            : Math.min(availableUsd, totalUsd);
+          const monthlyCreditAppliedUsd = Math.min(
+            Number(balance.rows[0].monthly_credit_remaining_usd) || 0,
+            creditAppliedUsd,
+          );
           const usage = await client.query(
             `INSERT INTO account_ai_usage_events (
               assistant_run_id,
@@ -4154,7 +4226,7 @@ export class PostgresStore implements DurableRoomStore {
               runRow.billing_account_id,
               totalUsd,
               creditAppliedUsd,
-              runRow.membership_tier,
+              balance.rows[0].is_admin ? 'priority' : runRow.membership_tier,
               runRow.provider,
               runRow.model_id,
               runRow.room_id,
@@ -4165,10 +4237,11 @@ export class PostgresStore implements DurableRoomStore {
             const updatedBalance = await client.query(
               `UPDATE account_credit_balances
               SET available_usd = GREATEST(0, available_usd - $2),
+                monthly_credit_remaining_usd = GREATEST(0, monthly_credit_remaining_usd - $4),
                 lifetime_usage_usd = lifetime_usage_usd + $3,
                 updated_at = clock_timestamp()
               WHERE account_id = $1`,
-              [runRow.billing_account_id, creditAppliedUsd, totalUsd],
+              [runRow.billing_account_id, creditAppliedUsd, totalUsd, monthlyCreditAppliedUsd],
             );
             if ((updatedBalance.rowCount || 0) !== 1) {
               throw new Error(`Assistant run ${runId} lost its billing account balance`);
@@ -5250,31 +5323,129 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  private async getAccountEntitlementByAccountId(accountId: string): Promise<AccountEntitlement | null> {
-    const result = await this.pool.query<AccountEntitlementRow>(
-      `SELECT membership.account_id,
-        membership.tier,
+  private async reconcileMonthlyFreeCredits(
+    client: PostgresClient,
+    accountId: string,
+    now: string,
+  ): Promise<void> {
+    const period = getUtcMonthPeriod(now);
+    const state = await client.query<{
+      tier: MembershipTier;
+      status: MembershipStatus;
+      available_usd: number | string;
+      monthly_credit_period_start: string | Date | null;
+      monthly_credit_granted_usd: number | string;
+      monthly_credit_remaining_usd: number | string;
+      is_admin: boolean;
+    }>(
+      `SELECT membership.tier,
         membership.status,
-        membership.priority_override,
-        membership.current_period_start,
-        membership.current_period_end,
-        membership.external_provider,
         balance.available_usd,
-        balance.lifetime_usage_usd,
-        GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+        balance.monthly_credit_period_start,
+        balance.monthly_credit_granted_usd,
+        balance.monthly_credit_remaining_usd,
+        EXISTS (
+          SELECT 1 FROM account_roles role
+          WHERE role.account_id = membership.account_id
+            AND role.role = 'admin'
+        ) AS is_admin
       FROM account_memberships AS membership
       JOIN account_credit_balances AS balance
         ON balance.account_id = membership.account_id
       WHERE membership.account_id = $1
-      LIMIT 1`,
+      FOR UPDATE OF membership, balance`,
       [accountId],
     );
-    return result.rows[0] ? mapAccountEntitlement(result.rows[0]) : null;
+    const row = state.rows[0];
+    if (!row) return;
+
+    let availableUsd = Number(row.available_usd) || 0;
+    let grantedUsd = Number(row.monthly_credit_granted_usd) || 0;
+    let remainingUsd = Number(row.monthly_credit_remaining_usd) || 0;
+    const previousPeriodStart = row.monthly_credit_period_start
+      ? toDateOnly(row.monthly_credit_period_start)
+      : null;
+    let changed = false;
+
+    if (previousPeriodStart !== period.start) {
+      if (remainingUsd > 0 && previousPeriodStart) {
+        availableUsd = Math.max(0, availableUsd - remainingUsd);
+        const expirationKey = `free-monthly-expiration:${accountId}:${previousPeriodStart}`;
+        await client.query(
+          `INSERT INTO account_credit_ledger (
+            id, account_id, kind, amount_usd, balance_after_usd,
+            idempotency_key, note, metadata, created_at
+          ) VALUES ($1, $2, 'expiration', $3, $4, $1, $5, $6::jsonb, $7)`,
+          [
+            expirationKey,
+            accountId,
+            -remainingUsd,
+            availableUsd,
+            'Unused monthly Free credits expired',
+            toJsonb({
+              source: 'free_monthly_allowance',
+              periodStart: previousPeriodStart,
+            }),
+            now,
+          ],
+        );
+      }
+      grantedUsd = 0;
+      remainingUsd = 0;
+      changed = true;
+    }
+
+    const isFreeAccount = !row.is_admin
+      && resolveEffectiveMembershipTier(row.tier, row.status) === 'free';
+    if (isFreeAccount && grantedUsd < FREE_MONTHLY_CREDIT_USD) {
+      const grantUsd = FREE_MONTHLY_CREDIT_USD - grantedUsd;
+      availableUsd += grantUsd;
+      grantedUsd += grantUsd;
+      remainingUsd += grantUsd;
+      const grantKey = `free-monthly-grant:${accountId}:${period.start}`;
+      await client.query(
+        `INSERT INTO account_credit_ledger (
+          id, account_id, kind, amount_usd, balance_after_usd,
+          idempotency_key, note, metadata, created_at
+        ) VALUES ($1, $2, 'grant', $3, $4, $1, $5, $6::jsonb, $7)`,
+        [
+          grantKey,
+          accountId,
+          grantUsd,
+          availableUsd,
+          'Monthly Free account credits',
+          toJsonb({
+            source: 'free_monthly_allowance',
+            periodStart: period.start,
+            periodEnd: period.end,
+          }),
+          now,
+        ],
+      );
+      changed = true;
+    }
+
+    if (changed) {
+      await client.query(
+        `UPDATE account_credit_balances
+        SET available_usd = $2,
+          monthly_credit_period_start = $3::date,
+          monthly_credit_granted_usd = $4,
+          monthly_credit_remaining_usd = $5,
+          updated_at = $6::timestamptz
+        WHERE account_id = $1`,
+        [accountId, availableUsd, period.start, grantedUsd, remainingUsd, now],
+      );
+    }
   }
 
-  async getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null> {
-    try {
-      const result = await this.pool.query<AccountEntitlementRow>(
+  private async getAccountEntitlementByAccountId(
+    accountId: string,
+    now = new Date().toISOString(),
+  ): Promise<AccountEntitlement | null> {
+    return this.transaction(async client => {
+      await this.reconcileMonthlyFreeCredits(client, accountId, now);
+      const result = await client.query<AccountEntitlementRow>(
         `SELECT membership.account_id,
           membership.tier,
           membership.status,
@@ -5284,17 +5455,67 @@ export class PostgresStore implements DurableRoomStore {
           membership.external_provider,
           balance.available_usd,
           balance.lifetime_usage_usd,
+          balance.monthly_credit_period_start,
+          balance.monthly_credit_granted_usd,
+          balance.monthly_credit_remaining_usd,
+          EXISTS (
+            SELECT 1 FROM account_roles role
+            WHERE role.account_id = membership.account_id
+              AND role.role = 'admin'
+          ) AS is_admin,
           GREATEST(membership.updated_at, balance.updated_at) AS updated_at
-        FROM client_account_links AS link
-        JOIN account_memberships AS membership
-          ON membership.account_id = link.account_id
+        FROM account_memberships AS membership
         JOIN account_credit_balances AS balance
-          ON balance.account_id = link.account_id
-        WHERE link.client_id = $1
+          ON balance.account_id = membership.account_id
+        WHERE membership.account_id = $1
         LIMIT 1`,
-        [clientId],
+        [accountId],
       );
       return result.rows[0] ? mapAccountEntitlement(result.rows[0]) : null;
+    });
+  }
+
+  async getAccountEntitlementByClientId(
+    clientId: string,
+    now = new Date().toISOString(),
+  ): Promise<AccountEntitlement | null> {
+    try {
+      return await this.transaction(async client => {
+        const link = await client.query<{ account_id: string }>(
+          `SELECT account_id FROM client_account_links WHERE client_id = $1 LIMIT 1`,
+          [clientId],
+        );
+        const accountId = link.rows[0]?.account_id;
+        if (!accountId) return null;
+        await this.reconcileMonthlyFreeCredits(client, accountId, now);
+        const result = await client.query<AccountEntitlementRow>(
+          `SELECT membership.account_id,
+            membership.tier,
+            membership.status,
+            membership.priority_override,
+            membership.current_period_start,
+            membership.current_period_end,
+            membership.external_provider,
+            balance.available_usd,
+            balance.lifetime_usage_usd,
+            balance.monthly_credit_period_start,
+            balance.monthly_credit_granted_usd,
+            balance.monthly_credit_remaining_usd,
+            EXISTS (
+              SELECT 1 FROM account_roles role
+              WHERE role.account_id = membership.account_id
+                AND role.role = 'admin'
+            ) AS is_admin,
+            GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+          FROM account_memberships AS membership
+          JOIN account_credit_balances AS balance
+            ON balance.account_id = membership.account_id
+          WHERE membership.account_id = $1
+          LIMIT 1`,
+          [accountId],
+        );
+        return result.rows[0] ? mapAccountEntitlement(result.rows[0]) : null;
+      });
     } catch (error) {
       this.logger.error('Error reading PostgreSQL account entitlement', { error, clientId });
       throw error;
@@ -5356,7 +5577,7 @@ export class PostgresStore implements DurableRoomStore {
         return true;
       });
       if (!updated) return null;
-      return this.getAccountEntitlementByAccountId(input.accountId);
+      return this.getAccountEntitlementByAccountId(input.accountId, now);
     } catch (error) {
       this.logger.error('Error updating PostgreSQL account membership', { error, accountId: input.accountId });
       throw error;
@@ -5518,6 +5739,7 @@ export class PostgresStore implements DurableRoomStore {
           }
         }
 
+        await this.reconcileMonthlyFreeCredits(client, input.accountId, now);
         const entitlementResult = await client.query<AccountEntitlementRow>(
           `SELECT membership.account_id,
             membership.tier,
@@ -5528,6 +5750,14 @@ export class PostgresStore implements DurableRoomStore {
             membership.external_provider,
             balance.available_usd,
             balance.lifetime_usage_usd,
+            balance.monthly_credit_period_start,
+            balance.monthly_credit_granted_usd,
+            balance.monthly_credit_remaining_usd,
+            EXISTS (
+              SELECT 1 FROM account_roles role
+              WHERE role.account_id = membership.account_id
+                AND role.role = 'admin'
+            ) AS is_admin,
             GREATEST(membership.updated_at, balance.updated_at) AS updated_at
           FROM account_memberships AS membership
           JOIN account_credit_balances AS balance
@@ -5651,7 +5881,7 @@ export class PostgresStore implements DurableRoomStore {
         [input.accountId, nextBalance, now],
       );
     });
-    return this.getAccountEntitlementByAccountId(input.accountId);
+    return this.getAccountEntitlementByAccountId(input.accountId, now);
   }
 
   async settleAccountAIUsage(input: AccountAIUsageInput): Promise<AccountAIUsageSettlement | null> {
@@ -5676,6 +5906,7 @@ export class PostgresStore implements DurableRoomStore {
       );
       const accountId = accountLink.rows[0]?.account_id;
       if (!accountId) return null;
+      await this.reconcileMonthlyFreeCredits(client, accountId, now);
 
       const existing = await client.query<{
         account_id: string;
@@ -5727,8 +5958,18 @@ export class PostgresStore implements DurableRoomStore {
         tier: MembershipTier;
         status: MembershipStatus;
         available_usd: number | string;
+        monthly_credit_remaining_usd: number | string;
+        is_admin: boolean;
       }>(
-        `SELECT membership.tier, membership.status, balance.available_usd
+        `SELECT membership.tier,
+          membership.status,
+          balance.available_usd,
+          balance.monthly_credit_remaining_usd,
+          EXISTS (
+            SELECT 1 FROM account_roles role
+            WHERE role.account_id = membership.account_id
+              AND role.role = 'admin'
+          ) AS is_admin
         FROM account_memberships AS membership
         JOIN account_credit_balances AS balance
           ON balance.account_id = membership.account_id
@@ -5740,11 +5981,17 @@ export class PostgresStore implements DurableRoomStore {
         throw new Error(`Account ${accountId} has no membership or credit balance`);
       }
       const membershipTier = resolveEffectiveMembershipTier(
-        entitlement.rows[0].tier,
-        entitlement.rows[0].status,
+        entitlement.rows[0].is_admin ? 'priority' : entitlement.rows[0].tier,
+        entitlement.rows[0].is_admin ? 'active' : entitlement.rows[0].status,
       );
       const availableUsd = Number(entitlement.rows[0].available_usd) || 0;
-      const creditAppliedUsd = Math.min(availableUsd, input.costUsd);
+      const creditAppliedUsd = entitlement.rows[0].is_admin
+        ? 0
+        : Math.min(availableUsd, input.costUsd);
+      const monthlyCreditAppliedUsd = Math.min(
+        Number(entitlement.rows[0].monthly_credit_remaining_usd) || 0,
+        creditAppliedUsd,
+      );
       await client.query(
         `INSERT INTO account_ai_usage_events (
           assistant_run_id,
@@ -5778,11 +6025,12 @@ export class PostgresStore implements DurableRoomStore {
       const updatedBalance = await client.query<{ available_usd: number | string }>(
         `UPDATE account_credit_balances
         SET available_usd = GREATEST(0, available_usd - $2),
+          monthly_credit_remaining_usd = GREATEST(0, monthly_credit_remaining_usd - $5),
           lifetime_usage_usd = lifetime_usage_usd + $3,
           updated_at = $4::timestamptz
         WHERE account_id = $1
         RETURNING available_usd`,
-        [accountId, creditAppliedUsd, input.costUsd, now],
+        [accountId, creditAppliedUsd, input.costUsd, now, monthlyCreditAppliedUsd],
       );
       if (!updatedBalance.rows[0]) {
         throw new Error(`Account ${accountId} lost its credit balance during usage settlement`);

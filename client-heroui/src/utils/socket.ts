@@ -232,6 +232,11 @@ export type AccountEntitlementInfo = {
   lifetimeUsageUsd: number;
   creditState: 'available' | 'exhausted';
   queuePriority: number;
+  creditUnlimited?: boolean;
+  monthlyCreditAllowanceUsd?: number;
+  monthlyCreditRemainingUsd?: number;
+  monthlyCreditPeriodStart?: string;
+  monthlyCreditPeriodEnd?: string;
   priorityOverride?: number;
   currentPeriodStart?: string;
   currentPeriodEnd?: string;

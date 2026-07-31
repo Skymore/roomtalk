@@ -398,6 +398,75 @@ describe('SettingsView Codex connection controls', () => {
     expect(screen.getByText('membershipQueuePriority')).toBeTruthy();
   });
 
+  it('shows administrators as Priority with unlimited credits', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: false,
+      account: {
+        accountId: 'admin-account',
+        primaryClientId: 'client-1',
+        provider: 'password',
+        googleLinked: false,
+      },
+      roles: ['admin'],
+      entitlement: {
+        accountId: 'admin-account',
+        tier: 'free',
+        status: 'active',
+        effectiveTier: 'priority',
+        creditBalanceUsd: 0,
+        lifetimeUsageUsd: 18.5,
+        creditState: 'available',
+        queuePriority: 1,
+        creditUnlimited: true,
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      },
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    expect(await screen.findByText('membershipTierPriority')).toBeTruthy();
+    expect(screen.getByText('membershipUnlimited')).toBeTruthy();
+    expect(screen.getByText('platformAdministrator')).toBeTruthy();
+    expect(screen.queryByText('membershipCreditsExhausted')).toBeNull();
+  });
+
+  it('explains the non-rollover monthly allowance for signed-in Free accounts', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: false,
+      account: {
+        accountId: 'free-account',
+        primaryClientId: 'client-1',
+        provider: 'password',
+        googleLinked: false,
+      },
+      roles: [],
+      entitlement: {
+        accountId: 'free-account',
+        tier: 'free',
+        status: 'active',
+        effectiveTier: 'free',
+        creditBalanceUsd: 5,
+        lifetimeUsageUsd: 0,
+        creditState: 'available',
+        queuePriority: 60,
+        monthlyCreditAllowanceUsd: 5,
+        monthlyCreditRemainingUsd: 5,
+        monthlyCreditPeriodStart: '2026-07-01',
+        monthlyCreditPeriodEnd: '2026-08-01',
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      },
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    expect(await screen.findByText('$5.00')).toBeTruthy();
+    expect(screen.getByText('membershipFreeMonthlyAllowance')).toBeTruthy();
+  });
+
   it('places high-frequency preferences before account login forms', () => {
     render(<SettingsView {...baseProps} />);
 

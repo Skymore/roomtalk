@@ -812,7 +812,7 @@ export interface DurableRoomStore {
   createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string): Promise<ClientAccount | null>;
   disconnectGoogleAccount(input: DisconnectGoogleAccountInput): Promise<DisconnectGoogleAccountResult>;
-  getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null>;
+  getAccountEntitlementByClientId(clientId: string, now?: string): Promise<AccountEntitlement | null>;
   updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null>;
   applyAccountMembershipChange(input: AccountMembershipChangeInput): Promise<AccountEntitlement | null>;
   grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null>;
@@ -1497,8 +1497,8 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.disconnectGoogleAccount(input);
   }
 
-  getAccountEntitlementByClientId(clientId: string) {
-    return this.durableStore.getAccountEntitlementByClientId(clientId);
+  getAccountEntitlementByClientId(clientId: string, now?: string) {
+    return this.durableStore.getAccountEntitlementByClientId(clientId, now);
   }
 
   updateAccountMembership(input: UpdateAccountMembershipInput) {
