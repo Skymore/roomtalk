@@ -22,6 +22,7 @@ GitHub Actions
   ├─ Check for changes
   ├─ Checkout
   ├─ Verify Fly runtime secrets
+  ├─ Stage pinned Code Agent artifact
   └─ flyctl deploy --remote-only
        └─ Docker / Fly remote builder
             ├─ client-build
@@ -42,6 +43,10 @@ GitHub Actions
 ```
 
 Docker 构建失败时，`fly deploy` 会在更新生产 Machine 之前失败，因此 TypeScript、i18n 和 Vite 构建仍然是发布门禁。
+
+Deploy job 会读取已提交的 Code Agent artifact lock，在 `fly deploy` 前把 template ID、
+artifact version 与 engine source ref 作为 staged Fly secrets 写入。应用代码与对应 sandbox
+artifact pin 因此会在同一个 release 中生效，不再依赖额外的人工 secret 更新。
 
 ## 关键实现
 

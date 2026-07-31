@@ -135,6 +135,19 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      - name: Stage pinned Code Agent artifact
+        run: |
+          artifact_lock="ops/code-agent-sandbox/artifact.lock.json"
+          artifact_version="$(jq -er '.artifactVersion | select(type == "string" and length > 0)' "$artifact_lock")"
+          source_ref="$(jq -er '.codeAgentEngine.sourceRef | select(type == "string" and test("^[0-9a-f]{40}$"))' "$artifact_lock")"
+
+          flyctl secrets set --stage -a message-system \
+            "CODE_AGENT_E2B_TEMPLATE_ID=$artifact_version" \
+            "CODE_AGENT_ARTIFACT_VERSION=$artifact_version" \
+            "CODE_AGENT_SOURCE_REF=$source_ref"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Deploy to Fly
         run: flyctl deploy --remote-only -a message-system
         env:

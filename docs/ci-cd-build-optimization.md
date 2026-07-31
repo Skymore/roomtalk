@@ -49,6 +49,11 @@ The workflow classifies changed paths before paying for Docker/Fly work. It deli
 
 Required Fly/provider/storage/runtime secrets are checked before deployment. After rollout, the public status endpoint verifies online state, PostgreSQL, Redis, and socket-adapter readiness.
 
+The deploy job also reads the committed Code Agent artifact lock and stages its template ID,
+artifact version, and engine source ref as Fly secrets before `fly deploy`. The deployment therefore
+applies application code and the matching sandbox artifact pins in one release instead of depending
+on a separate manual secret update.
+
 ## Cache Invalidation Matrix
 
 | Change | Expected invalidation |
