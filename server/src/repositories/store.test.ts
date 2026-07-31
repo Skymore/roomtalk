@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, CreatePasswordAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, CreatePasswordAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -66,6 +66,18 @@ const durableClientAccountStubs = () => ({
       lastLoginAt: input.now || '2026-05-03T00:00:00.000Z',
     });
   },
+  async setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput) {
+    return clientAccount({
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      provider: 'password',
+      providerSubject: input.clientId,
+      googleLinked: false,
+      createdAt: input.now || input.authToken.createdAt,
+      updatedAt: input.now || input.authToken.createdAt,
+      lastLoginAt: input.now || input.authToken.createdAt,
+    });
+  },
   async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
     return clientAccount({
       accountId: input.accountId,
@@ -98,7 +110,13 @@ const durableClientAccountStubs = () => ({
   async updateAccountMembership(_input: UpdateAccountMembershipInput) {
     return null;
   },
+  async applyAccountMembershipChange(_input: AccountMembershipChangeInput) {
+    return null;
+  },
   async grantAccountCredits(_input: AccountCreditGrantInput) {
+    return null;
+  },
+  async settleAccountAIUsage(_input: AccountAIUsageInput) {
     return null;
   },
 });
@@ -397,6 +415,16 @@ describe('CompositeRoomStore', () => {
           googleLinked: false,
         });
       },
+      async setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput) {
+        calls.push('durable.setPasswordAccountCredentials');
+        return clientAccount({
+          accountId: input.accountId,
+          primaryClientId: input.clientId,
+          provider: 'password',
+          providerSubject: input.clientId,
+          googleLinked: false,
+        });
+      },
       async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
         calls.push('durable.createGoogleAccountForClient');
         return clientAccount({ accountId: input.accountId, primaryClientId: input.clientId, providerSubject: input.providerSubject });
@@ -404,7 +432,9 @@ describe('CompositeRoomStore', () => {
       async updateGoogleAccountLogin(accountId: string) { calls.push('durable.updateGoogleAccountLogin'); return clientAccount({ accountId }); },
       async getAccountEntitlementByClientId() { calls.push('durable.getAccountEntitlementByClientId'); return null; },
       async updateAccountMembership() { calls.push('durable.updateAccountMembership'); return null; },
+      async applyAccountMembershipChange() { calls.push('durable.applyAccountMembershipChange'); return null; },
       async grantAccountCredits() { calls.push('durable.grantAccountCredits'); return null; },
+      async settleAccountAIUsage() { calls.push('durable.settleAccountAIUsage'); return null; },
       async setClientPasswordHash() { calls.push('durable.setClientPasswordHash'); },
       async getClientPasswordHash() { calls.push('durable.getClientPasswordHash'); return 'password-hash'; },
       async saveClientAuthToken() { calls.push('durable.saveClientAuthToken'); },
@@ -546,6 +576,27 @@ describe('CompositeRoomStore', () => {
       }),
     );
     assert.deepEqual(
+      await store.setPasswordAccountCredentials({
+        accountId: 'account-2',
+        clientId: 'client-2',
+        passwordHash: 'password-hash',
+        authToken: {
+          clientId: 'client-2',
+          accountId: 'account-2',
+          authMethod: 'password',
+          tokenHash: 'token-hash',
+          createdAt: '2026-05-03T00:00:00.000Z',
+        },
+      }),
+      clientAccount({
+        accountId: 'account-2',
+        primaryClientId: 'client-2',
+        provider: 'password',
+        providerSubject: 'client-2',
+        googleLinked: false,
+      }),
+    );
+    assert.deepEqual(
       await store.createGoogleAccountForClient({
         accountId: 'account-2',
         clientId: 'client-2',
@@ -560,11 +611,26 @@ describe('CompositeRoomStore', () => {
       tier: 'pro',
       status: 'active',
     }), null);
+    assert.equal(await store.applyAccountMembershipChange({
+      id: 'membership-change-1',
+      idempotencyKey: 'membership-change-1',
+      accountId: 'account-1',
+      tier: 'pro',
+      status: 'active',
+    }), null);
     assert.equal(await store.grantAccountCredits({
       id: 'grant-1',
       accountId: 'account-1',
       amountUsd: 1,
       idempotencyKey: 'grant-1',
+    }), null);
+    assert.equal(await store.settleAccountAIUsage({
+      id: 'usage-1',
+      clientId: 'client-1',
+      source: 'code_agent_gateway',
+      costUsd: 0.1,
+      provider: 'openai',
+      modelId: 'gpt-5',
     }), null);
     await store.setClientPasswordHash('client-2', 'password-hash');
     assert.equal(await store.getClientPasswordHash('client-2'), 'password-hash');
@@ -657,11 +723,14 @@ describe('CompositeRoomStore', () => {
       'durable.getAccountByClientId',
       'durable.getAccountByGoogleSubject',
       'durable.createPasswordAccountForClient',
+      'durable.setPasswordAccountCredentials',
       'durable.createGoogleAccountForClient',
       'durable.updateGoogleAccountLogin',
       'durable.getAccountEntitlementByClientId',
       'durable.updateAccountMembership',
+      'durable.applyAccountMembershipChange',
       'durable.grantAccountCredits',
+      'durable.settleAccountAIUsage',
       'durable.setClientPasswordHash',
       'durable.getClientPasswordHash',
       'durable.saveClientAuthToken',

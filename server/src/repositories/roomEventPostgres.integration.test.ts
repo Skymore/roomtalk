@@ -1549,6 +1549,131 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.000015);
   });
 
+  it('atomically creates password accounts, credentials, and expiring sessions', async () => {
+    const failedClientId = 'atomic-password-failed-client';
+    const failedAccountId = 'atomic-password-failed-account';
+    await assert.rejects(
+      store.setPasswordAccountCredentials({
+        accountId: failedAccountId,
+        clientId: failedClientId,
+        passwordHash: 'password-hash',
+        authToken: {
+          clientId: failedClientId,
+          accountId: failedAccountId,
+          authMethod: 'password',
+          tokenHash: 'failed-token-hash',
+          createdAt,
+        },
+        now: createdAt,
+      }),
+      /client_auth_tokens_account_expiry_check/,
+    );
+    assert.equal(await store.getAccountByClientId(failedClientId), null);
+    assert.equal(await store.getClientPasswordHash(failedClientId), null);
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM client_auth_tokens WHERE client_id = $1',
+      [failedClientId],
+    )).rows[0]?.count, '0');
+
+    const clientId = 'atomic-password-client';
+    const accountId = 'atomic-password-account';
+    const expiresAt = '2026-08-19T12:00:00.000Z';
+    const account = await store.setPasswordAccountCredentials({
+      accountId,
+      clientId,
+      passwordHash: 'password-hash',
+      authToken: {
+        clientId,
+        accountId,
+        authMethod: 'password',
+        tokenHash: 'atomic-token-hash',
+        createdAt,
+        expiresAt,
+      },
+      now: createdAt,
+    });
+    assert.equal(account?.accountId, accountId);
+    assert.equal(await store.getClientPasswordHash(clientId), 'password-hash');
+    assert.deepEqual((await pool.query<{
+      account_id: string;
+      auth_method: string;
+      expires_at: Date;
+    }>(
+      `SELECT account_id, auth_method, expires_at
+      FROM client_auth_tokens
+      WHERE token_hash = $1`,
+      ['atomic-token-hash'],
+    )).rows[0], {
+      account_id: accountId,
+      auth_method: 'password',
+      expires_at: new Date(expiresAt),
+    });
+  });
+
+  it('applies membership transitions and credit grants as one idempotent transaction', async () => {
+    const accountId = 'atomic-membership-account';
+    const clientId = 'atomic-membership-client';
+    assert.ok(await store.createPasswordAccountForClient({
+      accountId,
+      clientId,
+      now: createdAt,
+    }));
+    const change = {
+      id: 'atomic-membership-event',
+      idempotencyKey: 'atomic-membership-invoice',
+      accountId,
+      tier: 'priority' as const,
+      status: 'active' as const,
+      creditGrantUsd: 20,
+      now: createdAt,
+    };
+    const retries = await Promise.all([
+      store.applyAccountMembershipChange(change),
+      store.applyAccountMembershipChange({ ...change, id: 'atomic-membership-event-retry' }),
+    ]);
+    assert.ok(retries.every(Boolean));
+    assert.equal(retries[0]?.tier, 'priority');
+    assert.equal(retries[0]?.creditBalanceUsd, 20);
+    assert.equal(retries[0]?.queuePriority, 1);
+    assert.equal(retries[1]?.creditBalanceUsd, 20);
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM account_membership_events WHERE idempotency_key = $1',
+      [change.idempotencyKey],
+    )).rows[0]?.count, '1');
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM account_credit_ledger WHERE idempotency_key = $1',
+      [change.idempotencyKey],
+    )).rows[0]?.count, '1');
+    await assert.rejects(
+      store.applyAccountMembershipChange({
+        ...change,
+        id: 'atomic-membership-conflict',
+        creditGrantUsd: 21,
+      }),
+      /different change/,
+    );
+
+    const rollbackAccountId = 'atomic-membership-rollback-account';
+    const rollbackClientId = 'atomic-membership-rollback-client';
+    assert.ok(await store.createPasswordAccountForClient({
+      accountId: rollbackAccountId,
+      clientId: rollbackClientId,
+      now: createdAt,
+    }));
+    await assert.rejects(
+      store.applyAccountMembershipChange({
+        ...change,
+        idempotencyKey: 'atomic-membership-rollback',
+        accountId: rollbackAccountId,
+        creditGrantUsd: 5,
+      }),
+      /account_(credit_ledger|membership_events)_pkey/,
+    );
+    const rolledBack = await store.getAccountEntitlementByClientId(rollbackClientId);
+    assert.equal(rolledBack?.tier, 'free');
+    assert.equal(rolledBack?.creditBalanceUsd, 0);
+  });
+
   it('snapshots membership priority and debits account credits exactly once', async () => {
     const roomId = 'assistant-run-membership-room';
     const accountId = 'assistant-run-membership-account';
@@ -1705,13 +1830,61 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(exhaustedRun?.creditState, 'exhausted');
     assert.equal(exhaustedRun?.queuePriority, 40);
 
+    assert.ok(await store.grantAccountCredits({
+      id: 'code-agent-gateway-grant',
+      accountId,
+      amountUsd: 0.00002,
+      idempotencyKey: 'code-agent-gateway-grant',
+      now: createdAt,
+    }));
+    const gatewayUsage = {
+      id: 'code-agent-gateway:token-1:1',
+      clientId,
+      source: 'code_agent_gateway' as const,
+      costUsd: 0.00001,
+      provider: 'openai' as const,
+      modelId: 'test-model',
+      roomId,
+      turnId: 'code-agent-turn-1',
+      now: createdAt,
+    };
+    const gatewaySettlements = await Promise.all([
+      store.settleAccountAIUsage(gatewayUsage),
+      store.settleAccountAIUsage(gatewayUsage),
+    ]);
+    assert.equal(gatewaySettlements.filter(settlement => settlement?.duplicate === false).length, 1);
+    assert.equal(gatewaySettlements.filter(settlement => settlement?.duplicate === true).length, 1);
+    const afterGatewayUsage = await store.getAccountEntitlementByClientId(clientId);
+    assert.equal(afterGatewayUsage?.creditBalanceUsd, 0.00001);
+    assert.equal(afterGatewayUsage?.lifetimeUsageUsd, 0.000025);
+    assert.deepEqual((await pool.query<{
+      source: string;
+      room_id: string | null;
+      turn_id: string | null;
+      credit_applied_usd: string;
+    }>(
+      `SELECT source, room_id, turn_id, credit_applied_usd
+      FROM account_ai_usage_events
+      WHERE assistant_run_id = $1`,
+      [gatewayUsage.id],
+    )).rows[0], {
+      source: 'code_agent_gateway',
+      room_id: roomId,
+      turn_id: 'code-agent-turn-1',
+      credit_applied_usd: '0.000010000',
+    });
+
     assert.equal(await store.deleteRoom(roomId, clientId), true);
     assert.equal(await store.getAssistantRun(runId), null);
     assert.equal((await pool.query(
       'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
       [runId],
     )).rows[0]?.count, '1');
-    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.lifetimeUsageUsd, 0.000015);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.lifetimeUsageUsd, 0.000025);
+    assert.equal((await pool.query(
+      'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
+      [gatewayUsage.id],
+    )).rows[0]?.count, '1');
   });
 
   it('commits queue dispatch with the placeholder and safely retries a failed Redis enqueue', async () => {

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AccountCreditGrantInput, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -23,6 +23,24 @@ const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
 const checksumStatements = (statements: string[]) => createHash('sha256')
   .update(statements.join('\u0000'))
   .digest('hex');
+
+const fingerprintAccountMembershipChange = (input: AccountMembershipChangeInput) => (
+  createHash('sha256')
+    .update(JSON.stringify({
+      accountId: input.accountId,
+      tier: input.tier,
+      status: input.status,
+      priorityOverride: input.priorityOverride ?? null,
+      currentPeriodStart: input.currentPeriodStart ?? null,
+      currentPeriodEnd: input.currentPeriodEnd ?? null,
+      externalProvider: input.externalProvider ?? null,
+      externalCustomerId: input.externalCustomerId ?? null,
+      externalSubscriptionId: input.externalSubscriptionId ?? null,
+      creditGrantUsd: input.creditGrantUsd ?? 0,
+      creditNote: input.creditNote ?? null,
+    }))
+    .digest('hex')
+);
 
 const REQUIRED_POSTGRES_MIGRATIONS = [
   {
@@ -4125,8 +4143,11 @@ export class PostgresStore implements DurableRoomStore {
               credit_applied_usd,
               membership_tier,
               provider,
-              model_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+              model_id,
+              source,
+              room_id,
+              message_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'assistant_run', $8, $9)
             ON CONFLICT (assistant_run_id) DO NOTHING`,
             [
               runId,
@@ -4136,6 +4157,8 @@ export class PostgresStore implements DurableRoomStore {
               runRow.membership_tier,
               runRow.provider,
               runRow.model_id,
+              runRow.room_id,
+              runRow.ai_message_id,
             ],
           );
           if ((usage.rowCount || 0) === 1) {
@@ -4739,7 +4762,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error reading PostgreSQL account by client ID', { error, clientId });
-      return null;
+      throw error;
     }
   }
 
@@ -4760,7 +4783,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error reading PostgreSQL account by Google subject', { error });
-      return null;
+      throw error;
     }
   }
 
@@ -4817,6 +4840,114 @@ export class PostgresStore implements DurableRoomStore {
       await client.query('ROLLBACK').catch(() => undefined);
       this.logger.error('Error creating PostgreSQL password account', { error, clientId: input.clientId });
       return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async setPasswordAccountCredentials(
+    input: SetPasswordAccountCredentialsInput,
+  ): Promise<ClientAccount | null> {
+    if (
+      !input.passwordHash
+      || input.authToken.clientId !== input.clientId
+      || input.authToken.accountId !== input.accountId
+      || input.authToken.authMethod !== 'password'
+    ) {
+      throw new Error('Password account credentials do not match their account and client');
+    }
+    const now = input.now || input.authToken.createdAt;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query<{ account_id: string }>(
+        `SELECT account_id
+        FROM client_account_links
+        WHERE client_id = $1
+        FOR UPDATE`,
+        [input.clientId],
+      );
+      const accountId = existing.rows[0]?.account_id || input.accountId;
+      if (existing.rows[0] && accountId !== input.accountId) {
+        throw new Error('Password credential update targeted a different account');
+      }
+      if (!existing.rows[0]) {
+        await client.query(
+          `INSERT INTO accounts (
+            id, primary_client_id, created_at, updated_at, last_login_at
+          ) VALUES ($1, $2, $3, $3, $3)`,
+          [accountId, input.clientId, now],
+        );
+        await client.query(
+          `INSERT INTO client_account_links (client_id, account_id, linked_at)
+          VALUES ($1, $2, $3)`,
+          [input.clientId, accountId, now],
+        );
+      } else {
+        await client.query(
+          `UPDATE accounts
+          SET updated_at = $2::timestamptz,
+            last_login_at = $2::timestamptz
+          WHERE id = $1`,
+          [accountId, now],
+        );
+      }
+      await client.query(
+        `INSERT INTO account_identities (
+          account_id, provider, provider_subject, created_at, updated_at
+        ) VALUES ($1, 'password', $2, $3, $3)
+        ON CONFLICT (provider, provider_subject) DO UPDATE SET
+          account_id = EXCLUDED.account_id,
+          updated_at = EXCLUDED.updated_at`,
+        [accountId, input.clientId, now],
+      );
+      await client.query(
+        `INSERT INTO account_memberships (account_id, created_at, updated_at)
+        VALUES ($1, $2, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
+      );
+      await client.query(
+        `INSERT INTO account_credit_balances (account_id, updated_at)
+        VALUES ($1, $2)
+        ON CONFLICT (account_id) DO NOTHING`,
+        [accountId, now],
+      );
+      await client.query(
+        `INSERT INTO client_passwords (client_id, password_hash, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
+        ON CONFLICT (client_id) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          updated_at = EXCLUDED.updated_at`,
+        [input.clientId, input.passwordHash, now],
+      );
+      await client.query(
+        'DELETE FROM client_auth_tokens WHERE client_id = $1',
+        [input.clientId],
+      );
+      await client.query(
+        `INSERT INTO client_auth_tokens (
+          token_hash, client_id, account_id, auth_method,
+          created_at, last_used_at, expires_at
+        ) VALUES ($1, $2, $3, 'password', $4, $4, $5)`,
+        [
+          input.authToken.tokenHash,
+          input.clientId,
+          accountId,
+          input.authToken.createdAt,
+          input.authToken.expiresAt || null,
+        ],
+      );
+      await client.query('COMMIT');
+      return this.getAccountByClientId(input.clientId);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      this.logger.error('Error setting atomic PostgreSQL password account credentials', {
+        error,
+        clientId: input.clientId,
+        accountId: input.accountId,
+      });
+      throw error;
     } finally {
       client.release();
     }
@@ -4891,7 +5022,12 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       this.logger.error('Error creating PostgreSQL Google account', { error, clientId: input.clientId });
-      return null;
+      if ((error as { code?: string })?.code === '23505') {
+        const racedAccount = await this.getAccountByGoogleSubject(input.providerSubject);
+        if (racedAccount) return racedAccount;
+        return null;
+      }
+      throw error;
     } finally {
       client.release();
     }
@@ -4935,7 +5071,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error updating PostgreSQL Google account login', { error, accountId });
-      return null;
+      throw error;
     }
   }
 
@@ -5052,6 +5188,221 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async applyAccountMembershipChange(
+    input: AccountMembershipChangeInput,
+  ): Promise<AccountEntitlement | null> {
+    if (!input.id || !input.idempotencyKey) {
+      throw new Error('Membership change requires an id and idempotency key');
+    }
+    if (
+      input.creditGrantUsd !== undefined
+      && (
+        !Number.isFinite(input.creditGrantUsd)
+        || input.creditGrantUsd <= 0
+        || input.creditGrantUsd > 999_999_999
+      )
+    ) {
+      throw new Error('Membership credit grant must be a positive bounded USD value');
+    }
+    const now = input.now || new Date().toISOString();
+    const requestFingerprint = fingerprintAccountMembershipChange(input);
+    try {
+      return await this.transaction(async client => {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`membership:${input.idempotencyKey}`],
+        );
+        const existingEvent = await client.query<{
+          request_fingerprint: string;
+          entitlement_snapshot: AccountEntitlement;
+        }>(
+          `SELECT request_fingerprint, entitlement_snapshot
+          FROM account_membership_events
+          WHERE idempotency_key = $1
+          LIMIT 1`,
+          [input.idempotencyKey],
+        );
+        if (existingEvent.rows[0]) {
+          if (existingEvent.rows[0].request_fingerprint !== requestFingerprint) {
+            throw new Error('Membership idempotency key is already bound to a different change');
+          }
+          return existingEvent.rows[0].entitlement_snapshot;
+        }
+
+        const membershipResult = await client.query(
+          `INSERT INTO account_memberships (
+            account_id,
+            tier,
+            status,
+            priority_override,
+            current_period_start,
+            current_period_end,
+            external_provider,
+            external_customer_id,
+            external_subscription_id,
+            created_at,
+            updated_at
+          )
+          SELECT
+            account.id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10
+          FROM accounts AS account
+          WHERE account.id = $1
+          ON CONFLICT (account_id) DO UPDATE SET
+            tier = EXCLUDED.tier,
+            status = EXCLUDED.status,
+            priority_override = EXCLUDED.priority_override,
+            current_period_start = EXCLUDED.current_period_start,
+            current_period_end = EXCLUDED.current_period_end,
+            external_provider = EXCLUDED.external_provider,
+            external_customer_id = EXCLUDED.external_customer_id,
+            external_subscription_id = EXCLUDED.external_subscription_id,
+            updated_at = EXCLUDED.updated_at`,
+          [
+            input.accountId,
+            input.tier,
+            input.status,
+            input.priorityOverride ?? null,
+            input.currentPeriodStart ?? null,
+            input.currentPeriodEnd ?? null,
+            input.externalProvider ?? null,
+            input.externalCustomerId ?? null,
+            input.externalSubscriptionId ?? null,
+            now,
+          ],
+        );
+        if ((membershipResult.rowCount || 0) === 0) return null;
+
+        await client.query(
+          `INSERT INTO account_credit_balances (account_id, updated_at)
+          VALUES ($1, $2)
+          ON CONFLICT (account_id) DO NOTHING`,
+          [input.accountId, now],
+        );
+        const balanceResult = await client.query<{ available_usd: string | number }>(
+          `SELECT available_usd
+          FROM account_credit_balances
+          WHERE account_id = $1
+          FOR UPDATE`,
+          [input.accountId],
+        );
+        if (!balanceResult.rows[0]) {
+          throw new Error(`Account ${input.accountId} has no credit balance`);
+        }
+
+        if (input.creditGrantUsd !== undefined) {
+          const existingCredit = await client.query<{
+            account_id: string;
+            amount_usd: string | number;
+          }>(
+            `SELECT account_id, amount_usd
+            FROM account_credit_ledger
+            WHERE idempotency_key = $1
+            LIMIT 1`,
+            [input.idempotencyKey],
+          );
+          if (existingCredit.rows[0]) {
+            if (
+              existingCredit.rows[0].account_id !== input.accountId
+              || Math.abs(Number(existingCredit.rows[0].amount_usd) - input.creditGrantUsd) >= 0.0000000005
+            ) {
+              throw new Error('Membership credit idempotency key is already bound to a different grant');
+            }
+          } else {
+            const currentBalance = Number(balanceResult.rows[0].available_usd) || 0;
+            const nextBalance = currentBalance + input.creditGrantUsd;
+            await client.query(
+              `INSERT INTO account_credit_ledger (
+                id,
+                account_id,
+                kind,
+                amount_usd,
+                balance_after_usd,
+                idempotency_key,
+                note,
+                metadata,
+                created_at
+              ) VALUES ($1, $2, 'grant', $3, $4, $5, $6, $7::jsonb, $8)`,
+              [
+                `membership-credit:${input.id}`,
+                input.accountId,
+                input.creditGrantUsd,
+                nextBalance,
+                input.idempotencyKey,
+                input.creditNote || null,
+                toJsonb(input.metadata || {}),
+                now,
+              ],
+            );
+            await client.query(
+              `UPDATE account_credit_balances
+              SET available_usd = $2,
+                updated_at = $3
+              WHERE account_id = $1`,
+              [input.accountId, nextBalance, now],
+            );
+          }
+        }
+
+        const entitlementResult = await client.query<AccountEntitlementRow>(
+          `SELECT membership.account_id,
+            membership.tier,
+            membership.status,
+            membership.priority_override,
+            membership.current_period_start,
+            membership.current_period_end,
+            membership.external_provider,
+            balance.available_usd,
+            balance.lifetime_usage_usd,
+            GREATEST(membership.updated_at, balance.updated_at) AS updated_at
+          FROM account_memberships AS membership
+          JOIN account_credit_balances AS balance
+            ON balance.account_id = membership.account_id
+          WHERE membership.account_id = $1
+          LIMIT 1`,
+          [input.accountId],
+        );
+        if (!entitlementResult.rows[0]) {
+          throw new Error('Membership change did not produce an entitlement');
+        }
+        const entitlement = mapAccountEntitlement(entitlementResult.rows[0]);
+        await client.query(
+          `INSERT INTO account_membership_events (
+            id,
+            account_id,
+            idempotency_key,
+            request_fingerprint,
+            tier,
+            status,
+            credit_grant_usd,
+            entitlement_snapshot,
+            metadata,
+            created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)`,
+          [
+            input.id,
+            input.accountId,
+            input.idempotencyKey,
+            requestFingerprint,
+            input.tier,
+            input.status,
+            input.creditGrantUsd || 0,
+            toJsonb(entitlement),
+            toJsonb(input.metadata || {}),
+            now,
+          ],
+        );
+        return entitlement;
+      });
+    } catch (error) {
+      this.logger.error('Error applying atomic PostgreSQL account membership change', {
+        error,
+        accountId: input.accountId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      throw error;
+    }
+  }
+
   async grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null> {
     if (!Number.isFinite(input.amountUsd) || input.amountUsd <= 0) {
       throw new Error('Credit grant amount must be a positive USD value');
@@ -5128,6 +5479,150 @@ export class PostgresStore implements DurableRoomStore {
     return this.getAccountEntitlementByAccountId(input.accountId);
   }
 
+  async settleAccountAIUsage(input: AccountAIUsageInput): Promise<AccountAIUsageSettlement | null> {
+    if (!Number.isFinite(input.costUsd) || input.costUsd <= 0 || input.costUsd > 999_999_999) {
+      throw new Error('Account AI usage cost must be a positive bounded USD value');
+    }
+    if (!input.id || !input.clientId || !input.provider || !input.modelId) {
+      throw new Error('Account AI usage requires an id, client, provider, and model');
+    }
+    const now = input.now || new Date().toISOString();
+    return this.transaction(async client => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [input.id],
+      );
+      const accountLink = await client.query<{ account_id: string }>(
+        `SELECT account_id
+        FROM client_account_links
+        WHERE client_id = $1
+        LIMIT 1`,
+        [input.clientId],
+      );
+      const accountId = accountLink.rows[0]?.account_id;
+      if (!accountId) return null;
+
+      const existing = await client.query<{
+        account_id: string;
+        source: AccountAIUsageInput['source'];
+        cost_usd: number | string;
+        credit_applied_usd: number | string;
+        membership_tier: MembershipTier;
+        provider: string;
+        model_id: string;
+      }>(
+        `SELECT account_id, source, cost_usd, credit_applied_usd,
+          membership_tier, provider, model_id
+        FROM account_ai_usage_events
+        WHERE assistant_run_id = $1
+        LIMIT 1`,
+        [input.id],
+      );
+      if (existing.rows[0]) {
+        const row = existing.rows[0];
+        if (
+          row.account_id !== accountId
+          || row.source !== input.source
+          || row.provider !== input.provider
+          || row.model_id !== input.modelId
+          || Math.abs(Number(row.cost_usd) - input.costUsd) >= 0.0000000005
+        ) {
+          throw new Error('Account AI usage id is already bound to different usage');
+        }
+        const balance = await client.query<{ available_usd: number | string }>(
+          `SELECT available_usd
+          FROM account_credit_balances
+          WHERE account_id = $1`,
+          [accountId],
+        );
+        if (!balance.rows[0]) {
+          throw new Error(`Account ${accountId} has no credit balance`);
+        }
+        return {
+          accountId,
+          membershipTier: row.membership_tier,
+          costUsd: Number(row.cost_usd),
+          creditAppliedUsd: Number(row.credit_applied_usd),
+          creditBalanceUsd: Number(balance.rows[0].available_usd),
+          duplicate: true,
+        };
+      }
+
+      const entitlement = await client.query<{
+        tier: MembershipTier;
+        status: MembershipStatus;
+        available_usd: number | string;
+      }>(
+        `SELECT membership.tier, membership.status, balance.available_usd
+        FROM account_memberships AS membership
+        JOIN account_credit_balances AS balance
+          ON balance.account_id = membership.account_id
+        WHERE membership.account_id = $1
+        FOR UPDATE OF membership, balance`,
+        [accountId],
+      );
+      if (!entitlement.rows[0]) {
+        throw new Error(`Account ${accountId} has no membership or credit balance`);
+      }
+      const membershipTier = resolveEffectiveMembershipTier(
+        entitlement.rows[0].tier,
+        entitlement.rows[0].status,
+      );
+      const availableUsd = Number(entitlement.rows[0].available_usd) || 0;
+      const creditAppliedUsd = Math.min(availableUsd, input.costUsd);
+      await client.query(
+        `INSERT INTO account_ai_usage_events (
+          assistant_run_id,
+          account_id,
+          cost_usd,
+          credit_applied_usd,
+          membership_tier,
+          provider,
+          model_id,
+          source,
+          room_id,
+          turn_id,
+          message_id,
+          created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz)`,
+        [
+          input.id,
+          accountId,
+          input.costUsd,
+          creditAppliedUsd,
+          membershipTier,
+          input.provider,
+          input.modelId,
+          input.source,
+          input.roomId || null,
+          input.turnId || null,
+          input.messageId || null,
+          now,
+        ],
+      );
+      const updatedBalance = await client.query<{ available_usd: number | string }>(
+        `UPDATE account_credit_balances
+        SET available_usd = GREATEST(0, available_usd - $2),
+          lifetime_usage_usd = lifetime_usage_usd + $3,
+          updated_at = $4::timestamptz
+        WHERE account_id = $1
+        RETURNING available_usd`,
+        [accountId, creditAppliedUsd, input.costUsd, now],
+      );
+      if (!updatedBalance.rows[0]) {
+        throw new Error(`Account ${accountId} lost its credit balance during usage settlement`);
+      }
+      return {
+        accountId,
+        membershipTier,
+        costUsd: input.costUsd,
+        creditAppliedUsd,
+        creditBalanceUsd: Number(updatedBalance.rows[0].available_usd),
+        duplicate: false,
+      };
+    });
+  }
+
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
     try {
       await this.pool.query(
@@ -5140,6 +5635,7 @@ export class PostgresStore implements DurableRoomStore {
       );
     } catch (error) {
       this.logger.error('Error setting PostgreSQL client password hash', { error, clientId });
+      throw error;
     }
   }
 
@@ -5152,7 +5648,7 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0]?.password_hash || null;
     } catch (error) {
       this.logger.error('Error reading PostgreSQL client password hash', { error, clientId });
-      return null;
+      throw error;
     }
   }
 
@@ -5178,6 +5674,7 @@ export class PostgresStore implements DurableRoomStore {
       );
     } catch (error) {
       this.logger.error('Error saving PostgreSQL client auth token', { error, clientId: token.clientId });
+      throw error;
     }
   }
 
@@ -5194,7 +5691,7 @@ export class PostgresStore implements DurableRoomStore {
       return (result.rowCount || 0) > 0;
     } catch (error) {
       this.logger.error('Error checking PostgreSQL client auth token', { error, clientId });
-      return false;
+      throw error;
     }
   }
 
@@ -5207,7 +5704,7 @@ export class PostgresStore implements DurableRoomStore {
       return (result.rowCount || 0) > 0;
     } catch (error) {
       this.logger.error('Error deleting PostgreSQL client auth token', { error, clientId });
-      return false;
+      throw error;
     }
   }
 
@@ -5216,6 +5713,7 @@ export class PostgresStore implements DurableRoomStore {
       await this.pool.query('DELETE FROM client_auth_tokens WHERE client_id = $1', [clientId]);
     } catch (error) {
       this.logger.error('Error deleting PostgreSQL client auth tokens', { error, clientId });
+      throw error;
     }
   }
 
@@ -5699,7 +6197,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

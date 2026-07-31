@@ -610,6 +610,11 @@ export interface CreatePasswordAccountInput {
   now?: string;
 }
 
+export interface SetPasswordAccountCredentialsInput extends CreatePasswordAccountInput {
+  passwordHash: string;
+  authToken: ClientAuthTokenRecord;
+}
+
 export interface UpdateAccountMembershipInput {
   accountId: string;
   tier: MembershipTier;
@@ -623,6 +628,14 @@ export interface UpdateAccountMembershipInput {
   now?: string;
 }
 
+export interface AccountMembershipChangeInput extends UpdateAccountMembershipInput {
+  id: string;
+  idempotencyKey: string;
+  creditGrantUsd?: number;
+  creditNote?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface AccountCreditGrantInput {
   id: string;
   accountId: string;
@@ -631,6 +644,30 @@ export interface AccountCreditGrantInput {
   note?: string;
   metadata?: Record<string, unknown>;
   now?: string;
+}
+
+export type AccountAIUsageSource = 'assistant_run' | 'code_agent_gateway';
+
+export interface AccountAIUsageInput {
+  id: string;
+  clientId: string;
+  source: AccountAIUsageSource;
+  costUsd: number;
+  provider: AIModelProvider;
+  modelId: string;
+  roomId?: string;
+  turnId?: string;
+  messageId?: string;
+  now?: string;
+}
+
+export interface AccountAIUsageSettlement {
+  accountId: string;
+  membershipTier: MembershipTier;
+  costUsd: number;
+  creditAppliedUsd: number;
+  creditBalanceUsd: number;
+  duplicate: boolean;
 }
 
 export interface RoomSettingsUpdate {
@@ -746,11 +783,14 @@ export interface DurableRoomStore {
   getAccountByClientId(clientId: string): Promise<ClientAccount | null>;
   getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null>;
   createPasswordAccountForClient(input: CreatePasswordAccountInput): Promise<ClientAccount | null>;
+  setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput): Promise<ClientAccount | null>;
   createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string): Promise<ClientAccount | null>;
   getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null>;
   updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null>;
+  applyAccountMembershipChange(input: AccountMembershipChangeInput): Promise<AccountEntitlement | null>;
   grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null>;
+  settleAccountAIUsage(input: AccountAIUsageInput): Promise<AccountAIUsageSettlement | null>;
   setClientPasswordHash(clientId: string, passwordHash: string): Promise<void>;
   getClientPasswordHash(clientId: string): Promise<string | null>;
   saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void>;
@@ -1407,6 +1447,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.createPasswordAccountForClient(input);
   }
 
+  setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput) {
+    return this.durableStore.setPasswordAccountCredentials(input);
+  }
+
   createGoogleAccountForClient(input: CreateGoogleAccountInput) {
     return this.durableStore.createGoogleAccountForClient(input);
   }
@@ -1423,8 +1467,16 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.updateAccountMembership(input);
   }
 
+  applyAccountMembershipChange(input: AccountMembershipChangeInput) {
+    return this.durableStore.applyAccountMembershipChange(input);
+  }
+
   grantAccountCredits(input: AccountCreditGrantInput) {
     return this.durableStore.grantAccountCredits(input);
+  }
+
+  settleAccountAIUsage(input: AccountAIUsageInput) {
+    return this.durableStore.settleAccountAIUsage(input);
   }
 
   setClientPasswordHash(clientId: string, passwordHash: string) {

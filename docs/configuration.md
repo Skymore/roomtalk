@@ -161,7 +161,7 @@ The App and `ai-worker` run from the same image but are separate processes. The 
 | `ASSISTANT_RUN_RECONCILE_GRACE_MS` | Minimum age before a dispatched active run is checked for a missing/failed job; default `30000`. |
 | `ASSISTANT_RUN_RECONCILE_BATCH_SIZE` | Active dispatches checked per reconciliation pass; default `200`, with a rotating cursor across full batches. |
 | `ASSISTANT_RUN_WORKER_CONCURRENCY` | BullMQ jobs executed concurrently by one worker process; default `2`. |
-| `ASSISTANT_PROVIDER_LIMITS_JSON` | Optional provider-specific request admission limits shared through queue Redis. Example: `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`. Unknown providers or invalid/non-positive integer limits fail Worker startup. |
+| `ASSISTANT_PROVIDER_LIMITS_JSON` | Optional provider-specific request admission limits shared through queue Redis by ordinary Chat workers and the Code Agent model gateway. Example: `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`. Unknown providers or invalid/non-positive integer limits fail startup. Waiting requests are admitted by account service priority, FIFO within the same priority. |
 | `ASSISTANT_RUN_WORKER_LEASE_MS` | PostgreSQL run-owner lease renewed during provider execution; default `60000`. |
 | `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | Domain-level claim limit recorded in `assistant_runs`; default `10`. |
 | `ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS` | Queue-Redis Worker heartbeat interval; default `5000`. |
@@ -183,8 +183,17 @@ Password setup and Google login both resolve to one durable `accounts` principal
 | Variable | Purpose |
 | --- | --- |
 | `MEMBERSHIP_ADMIN_TOKEN` | Optional server-side bearer secret for `PUT /api/admin/accounts/:accountId/membership`. If unset, the administration route returns `404`. Store it only in the deployment secret manager. |
+| `CLIENT_AUTH_TOKEN_TTL_DAYS` | Lifetime for newly issued password and Google account sessions; default `30`, allowed range `1`–`365`. Existing unbounded account sessions receive a 30-day expiry during migration. |
+| `CLIENT_AUTH_LOGIN_WINDOW_SECONDS` | Shared Redis login-attempt window; default `900`. |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT_IP` | Attempts for one User ID/IP pair per window; default `10`. |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT` | Attempts for one User ID across IPs per window; default `30`. |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_IP` | Password attempts from one IP across User IDs per window; default `100`. |
+| `ACCOUNT_AI_USAGE_SETTLEMENT_INTERVAL_MS` | Retry interval for Code Agent usage records durably queued in Redis when PostgreSQL settlement is temporarily unavailable; default `5000`. |
+| `ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE` | Maximum deferred usage settlements retried per pass; default `100`. |
 
-The membership administration request sets `free`, `pro`, or `priority`, its `active`, `past_due`, or `cancelled` status, optional billing-period/external-subscription metadata, and an optional bounded `priorityOverride`. Paid tiers that are not active use the Free service class. A positive `creditGrantUsd` also requires an `Idempotency-Key` header, so payment webhook retries cannot grant credits twice.
+Password account creation, password rotation, prior-session revocation, and new-session issuance commit in one transaction. Account-backed sessions expire and retain a database foreign key to their account. Authentication storage failures return `503` and never fall back to anonymous authorization. The Redis limiter returns `429` plus `Retry-After` before expensive password verification when an attempt budget is exhausted.
+
+The membership administration request sets `free`, `pro`, or `priority`, its `active`, `past_due`, or `cancelled` status, optional billing-period/external-subscription metadata, and an optional bounded `priorityOverride`. Paid tiers that are not active use the Free service class. Every change requires an `Idempotency-Key`; the membership transition, optional positive `creditGrantUsd`, credit-ledger row, and immutable membership audit event commit in one transaction, so payment webhook retries cannot partially apply or grant credits twice.
 
 | Service class | Credit available | Credit exhausted |
 | --- | ---: | ---: |
@@ -193,7 +202,7 @@ The membership administration request sets `free`, `pro`, or `priority`, its `ac
 | Free | `60` | `80` |
 | Guest | `100` | `100` |
 
-Each ordinary chat run snapshots the current account, effective membership, credit state, and BullMQ priority when PostgreSQL creates the run. Lower priority numbers execute first. Exhausting credits does not reject AI requests; it moves the account to the tier's depleted service class. Final provider cost, the user-visible message, room cost, account usage event, credit deduction, and terminal run state settle in one PostgreSQL transaction. Provider admission currently controls requests per second and concurrent requests; provider token-per-second enforcement still belongs at a token-aware provider gateway.
+Each ordinary Chat run snapshots the current account, effective membership, credit state, and BullMQ priority when PostgreSQL creates the run. Code Agent model-gateway requests resolve the same scheduling class at admission time. Lower priority numbers execute first at both the durable queue and the shared provider admission queue. While an ordinary Chat job is waiting for provider capacity, it yields back to BullMQ's delayed state without occupying a worker processor; its stable admission waiter keeps its priority and FIFO position across retries. Exhausting credits does not reject AI requests; it moves the account to the tier's depleted service class. Ordinary Chat terminal projection settles provider cost, the user-visible message, room cost, account usage event, credit deduction, and terminal run state in one PostgreSQL transaction. Code Agent gateway usage uses an idempotent account usage event and the same balance/lifetime-usage ledger; it is first recorded in a Redis recovery queue, so a transient PostgreSQL failure is retried after the provider response instead of silently losing the charge. Provider admission controls requests per second and concurrent requests; precise token-per-second enforcement still requires token-aware reservation/stream accounting.
 
 ## PostgreSQL Schema Lifecycle
 

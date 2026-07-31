@@ -28,7 +28,12 @@ import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
-import { createAssistantRunQueue, readAssistantRunQueueHealth } from './services/assistantRunQueue';
+import {
+  createAssistantRunQueue,
+  createQueueRedisConnection,
+  readAssistantRunQueueHealth,
+  resolveQueueRedisUrl,
+} from './services/assistantRunQueue';
 import { AssistantRunQueueReconciler } from './services/assistantRunQueueReconciler';
 import { TaskDispatchRelay } from './services/taskDispatchRelay';
 import { subscribeToAssistantRunEvents } from './services/assistantRunEvents';
@@ -78,10 +83,16 @@ import { GitHubConnectionService, GitHubTokenCipher } from './services/githubCon
 import { resolveGitHubConnectionConfig } from './services/githubConnectionConfig';
 import { PostgresGitHubConnectionStore, RedisGitHubConnectionStore } from './services/githubConnectionStore';
 import { emitRoomEventLocally, emitRoomSyncRequiredLocally, RoomEventBroadcaster } from './services/roomEventBroadcaster';
+import { resolveAssistantRunScheduling } from './services/accountEntitlements';
+import {
+  RedisProviderAdmissionController,
+  resolveProviderAdmissionLimits,
+} from './services/providerAdmission';
 import { RoomEventNotifier } from './services/roomEventNotifier';
 import { resolveRuntimeInstanceId } from './services/runtimeInstance';
 import { AITerminalPersistReconciler } from './services/aiTerminalPersistReconciler';
 import { enforceRoomEventAuthorizationBarrier } from './services/roomEventAuthorizationBarrier';
+import { AccountAIUsageSettlementQueue } from './services/accountAIUsageSettlementQueue';
 
 dotenv.config();
 
@@ -180,6 +191,11 @@ const activePersistenceStore = 'postgres';
 const postgresPool: PostgresPool = createPostgresPool(databaseUrl, postgresLogger);
 const postgresStore = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage);
 const store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
+const accountAIUsageSettlementQueue = new AccountAIUsageSettlementQueue(
+  redisClient,
+  input => store.settleAccountAIUsage(input),
+  codeAgentLogger,
+);
 
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
@@ -247,6 +263,19 @@ const codeAgentAccess = createCodeAgentAccessControl({
   enabled: codeAgentRuntimeConfig.enabled,
   allowedClientIds: codeAgentRuntimeConfig.allowedClientIds,
 });
+const codeAgentProviderAdmissionConnection = codeAgentRuntimeConfig.modelGateway
+  ? createQueueRedisConnection(resolveQueueRedisUrl(), 'producer')
+  : undefined;
+codeAgentProviderAdmissionConnection?.on('error', error => {
+  codeAgentLogger.error('Code Agent provider admission Redis error', { error });
+});
+const codeAgentProviderAdmission = codeAgentProviderAdmissionConnection
+  ? new RedisProviderAdmissionController(
+      codeAgentProviderAdmissionConnection,
+      resolveProviderAdmissionLimits(),
+      codeAgentLogger,
+    )
+  : undefined;
 const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
   ? new CodeAgentModelGateway({
     publicBaseUrl: codeAgentRuntimeConfig.modelGateway.publicBaseUrl,
@@ -269,6 +298,20 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
     stateStore: new RedisCodeAgentModelGatewayTokenStateStore(redisClient),
     logger: codeAgentLogger,
     observability: observabilityRecorder,
+    providerAdmission: codeAgentProviderAdmission,
+    resolveAccountScheduling: async clientId => {
+      const entitlement = await store.getAccountEntitlementByClientId(clientId);
+      return resolveAssistantRunScheduling(entitlement ? {
+        accountId: entitlement.accountId,
+        tier: entitlement.tier,
+        status: entitlement.status,
+        creditBalanceUsd: entitlement.creditBalanceUsd,
+        ...(entitlement.priorityOverride !== undefined
+          ? { priorityOverride: entitlement.priorityOverride }
+          : {}),
+      } : null);
+    },
+    settleAccountAIUsage: input => accountAIUsageSettlementQueue.settle(input),
   })
   : undefined;
 
@@ -342,6 +385,7 @@ const roomEventNotifier = new RoomEventNotifier(databaseUrl, postgresLogger, eve
 let roomEventPruneTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryReconcileTimer: ReturnType<typeof setInterval> | null = null;
+let accountAIUsageSettlementTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeAssistantRunEvents: (() => Promise<void>) | null = null;
 let realtimeLeaseEstablished = false;
 let realtimeRehydrateRequired = false;
@@ -552,6 +596,23 @@ const infrastructureReady = (async () => {
 
     await postgresStore.verifySchema();
     await roomEventNotifier.start();
+    if (codeAgentRuntimeConfig.modelGateway) {
+      const drainAccountAIUsageSettlements = async () => {
+        const result = await accountAIUsageSettlementQueue.drain(
+          parsePositiveIntegerEnv('ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE', 100),
+        );
+        if (result.settled > 0 || result.failed > 0) {
+          codeAgentLogger.info('Processed deferred account AI usage settlements', result);
+        }
+      };
+      await drainAccountAIUsageSettlements();
+      accountAIUsageSettlementTimer = setInterval(() => {
+        void drainAccountAIUsageSettlements().catch(error => {
+          codeAgentLogger.error('Deferred account AI usage settlement drain failed', { error });
+        });
+      }, parsePositiveIntegerEnv('ACCOUNT_AI_USAGE_SETTLEMENT_INTERVAL_MS', 5_000));
+      accountAIUsageSettlementTimer.unref?.();
+    }
     const instanceLeaseTtlMs = parsePositiveIntegerEnv('ROOMTALK_INSTANCE_LEASE_TTL_MS', 30_000);
     const instanceHeartbeatMs = Math.min(
       Math.max(1_000, parsePositiveIntegerEnv('ROOMTALK_INSTANCE_HEARTBEAT_MS', 10_000)),
@@ -854,6 +915,10 @@ const shutdown = () => {
     clearInterval(recoveryReconcileTimer);
     recoveryReconcileTimer = null;
   }
+  if (accountAIUsageSettlementTimer) {
+    clearInterval(accountAIUsageSettlementTimer);
+    accountAIUsageSettlementTimer = null;
+  }
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();
@@ -862,6 +927,7 @@ const shutdown = () => {
     assistantRunQueueReconciler.stop(),
   ]).then(() => Promise.allSettled([
     assistantRunQueue.close(),
+    codeAgentProviderAdmissionConnection?.quit() || Promise.resolve(),
     unsubscribeAssistantRunEvents?.() || Promise.resolve(),
     assistantRunEventSubClient.quit(),
     Promise.resolve(store.releaseAIStreamOwner?.(aiStreamOwnerId)),

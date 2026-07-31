@@ -155,7 +155,7 @@ App 与 `ai-worker` 使用同一镜像、不同进程。App 只提交业务事�
 | `ASSISTANT_RUN_RECONCILE_GRACE_MS` | 已确认 dispatch 至少经过多久才检查 missing/failed job，默认 `30000`。 |
 | `ASSISTANT_RUN_RECONCILE_BATCH_SIZE` | 每轮检查的 active dispatch 数，默认 `200`；满批次使用轮转 cursor。 |
 | `ASSISTANT_RUN_WORKER_CONCURRENCY` | 单个 Worker 进程并发 job 数，默认 `2`。 |
-| `ASSISTANT_PROVIDER_LIMITS_JSON` | 可选的 provider 级请求准入限制，通过 queue Redis 在 Worker 间共享。例如 `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`。未知 provider、无效值或非正整数会让 Worker 启动失败。 |
+| `ASSISTANT_PROVIDER_LIMITS_JSON` | 可选的 provider 级请求准入限制；普通 Chat Worker 与 Code Agent model gateway 通过 queue Redis 共享。例如 `{"openai":{"requestsPerSecond":8,"maxConcurrent":3},"anthropic":{"maxConcurrent":2}}`。未知 provider、无效值或非正整数会让进程启动失败。等待请求按账号服务优先级准入，同优先级保持 FIFO。 |
 | `ASSISTANT_RUN_WORKER_LEASE_MS` | Provider 执行期间续租的 PostgreSQL run owner lease，默认 `60000`。 |
 | `ASSISTANT_RUN_WORKER_MAX_ATTEMPTS` | `assistant_runs` 记录的 domain claim 上限，默认 `10`。 |
 | `ASSISTANT_RUN_WORKER_HEARTBEAT_INTERVAL_MS` | AI Worker 向 queue Redis 写心跳的间隔，默认 `5000`。 |
@@ -177,8 +177,17 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 | 变量 | 用途 |
 | --- | --- |
 | `MEMBERSHIP_ADMIN_TOKEN` | 可选的服务端 Bearer secret，用于 `PUT /api/admin/accounts/:accountId/membership`。未配置时管理接口返回 `404`。只能存放在部署 secret manager 中。 |
+| `CLIENT_AUTH_TOKEN_TTL_DAYS` | 新签发密码/Google 账号会话的有效天数；默认 `30`，范围 `1`–`365`。迁移时会给旧的无限期账号会话补上 30 天过期时间。 |
+| `CLIENT_AUTH_LOGIN_WINDOW_SECONDS` | Redis 共享登录尝试窗口；默认 `900`。 |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT_IP` | 同一 User ID/IP 每窗口允许的尝试数；默认 `10`。 |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_CLIENT` | 同一 User ID 跨 IP 每窗口允许的尝试数；默认 `30`。 |
+| `CLIENT_AUTH_LOGIN_MAX_ATTEMPTS_PER_IP` | 同一 IP 跨 User ID 每窗口允许的密码尝试数；默认 `100`。 |
+| `ACCOUNT_AI_USAGE_SETTLEMENT_INTERVAL_MS` | Code Agent usage 因 PostgreSQL 暂时不可用而进入 Redis 持久恢复队列后的重试间隔；默认 `5000`。 |
+| `ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE` | 每轮最多重试的延迟 usage 结算数；默认 `100`。 |
 
-会员管理请求可设置 `free`、`pro`、`priority`，以及 `active`、`past_due`、`cancelled` 状态，还可携带账期、外部订阅信息和有界 `priorityOverride`；非 active 的付费会员按 Free 服务等级调度。如同时传入正数 `creditGrantUsd`，必须提供 `Idempotency-Key` header，确保支付 webhook 重试不会重复发放额度。
+密码账号创建、密码轮换、旧会话撤销和新会话签发在同一事务内提交。账号会话有过期时间，并通过数据库外键绑定账号。认证存储异常统一返回 `503`，不会退化为匿名授权；Redis 尝试额度耗尽时，会在执行昂贵的密码校验前返回 `429` 和 `Retry-After`。
+
+会员管理请求可设置 `free`、`pro`、`priority`，以及 `active`、`past_due`、`cancelled` 状态，还可携带账期、外部订阅信息和有界 `priorityOverride`；非 active 的付费会员按 Free 服务等级调度。每次变更都必须提供 `Idempotency-Key`；会员状态、可选正数 `creditGrantUsd`、credit ledger 和不可变会员审计事件在同一事务提交，确保支付 webhook 重试不会部分生效或重复发放额度。
 
 | 服务等级 | 额度可用 | 额度耗尽 |
 | --- | ---: | ---: |
@@ -187,7 +196,7 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 | Free | `60` | `80` |
 | Guest | `100` | `100` |
 
-普通 Chat AI 任务在 PostgreSQL 创建时会固化账号、有效会员级别、额度状态和 BullMQ priority；数字越小越先执行。额度用完不会拒绝请求，而是降到该会员级别的 depleted service class。Provider 最终成本、用户可见消息、房间成本、账号 usage event、额度扣减和 run 终态在同一 PostgreSQL 事务内结算。当前 provider admission 控制每秒请求数和并发请求数；真正按 token/s 限流仍应放在能观察 token 流的 provider gateway。
+普通 Chat AI 任务在 PostgreSQL 创建时会固化账号、有效会员级别、额度状态和 BullMQ priority；Code Agent model gateway 在准入时解析同一服务等级。数字越小，越先通过持久队列和共享 provider admission 队列。普通 Chat 任务等待 Provider 容量时会退回 BullMQ delayed 状态，不占用 Worker processor；稳定的 admission waiter 会在重试之间保留原有优先级与同级 FIFO 位置。额度用完不会拒绝请求，而是降到该会员级别的 depleted service class。普通 Chat 的 Provider 成本、用户可见消息、房间成本、账号 usage event、额度扣减和 run 终态在同一 PostgreSQL 事务内结算；Code Agent gateway 使用幂等账号 usage event，并扣同一余额、累计同一 lifetime usage。其 usage 会先写入 Redis 恢复队列，因此 Provider 返回后即使 PostgreSQL 短暂故障，也会继续重试结算而不是静默漏扣。当前 provider admission 控制每秒请求数和并发请求数；精确 token/s 仍需要 token reservation 与流式计量。
 
 ## PostgreSQL Schema 生命周期
 

@@ -1,10 +1,12 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import {
+  createClientAuthSession,
   hashClientAuthToken,
   hashClientPassword,
   isClientRequestAuthorized,
   issueClientAuthToken,
+  resolveClientAuthTokenTtlDays,
   validateClientPassword,
   verifyClientPassword,
 } from './clientAuth';
@@ -86,5 +88,52 @@ describe('client auth service', () => {
     });
     assert.equal(savedTokens.get(hashClientAuthToken(rawToken))?.authMethod, 'google');
     assert.equal(await isClientRequestAuthorized(store, 'client-1', rawToken), true);
+  });
+
+  it('issues bounded expiring sessions and validates the configured TTL', () => {
+    const session = createClientAuthSession('client-1', {
+      accountId: 'account-1',
+      authMethod: 'password',
+      now: new Date('2026-07-31T00:00:00.000Z'),
+      ttlDays: 2,
+    });
+    assert.equal(session.record.createdAt, '2026-07-31T00:00:00.000Z');
+    assert.equal(session.record.expiresAt, '2026-08-02T00:00:00.000Z');
+    assert.equal(session.record.tokenHash, hashClientAuthToken(session.token));
+    assert.equal(resolveClientAuthTokenTtlDays(''), 30);
+    assert.equal(resolveClientAuthTokenTtlDays('365'), 365);
+    assert.throws(() => resolveClientAuthTokenTtlDays('0'), /CLIENT_AUTH_TOKEN_TTL_DAYS/);
+    assert.throws(() => resolveClientAuthTokenTtlDays('366'), /CLIENT_AUTH_TOKEN_TTL_DAYS/);
+  });
+
+  it('propagates account storage failures so authorization fails closed', async () => {
+    await assert.rejects(
+      isClientRequestAuthorized({
+        async getClientPasswordHash() {
+          throw new Error('password storage unavailable');
+        },
+        async getAccountByClientId() {
+          return null;
+        },
+        async isClientAuthTokenValid() {
+          return false;
+        },
+      }, 'client-1'),
+      /password storage unavailable/,
+    );
+    await assert.rejects(
+      isClientRequestAuthorized({
+        async getClientPasswordHash() {
+          return 'scrypt:salt:hash';
+        },
+        async getAccountByClientId() {
+          return null;
+        },
+        async isClientAuthTokenValid() {
+          throw new Error('token storage unavailable');
+        },
+      }, 'client-1', 'token'),
+      /token storage unavailable/,
+    );
   });
 });

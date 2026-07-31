@@ -124,6 +124,122 @@ describe('CodeAgentModelGateway', () => {
     assert.notEqual((calls[0].init.headers as Record<string, string>).authorization, `Bearer ${token}`);
   });
 
+  it('uses account priority for provider admission and settles reported usage to account credits', async () => {
+    const admittedPriorities: number[] = [];
+    const settlements: Array<Parameters<NonNullable<ConstructorParameters<typeof CodeAgentModelGateway>[0]['settleAccountAIUsage']>>[0]> = [];
+    let releases = 0;
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      resolveAccountScheduling: async () => ({
+        accountId: 'account-1',
+        membershipTier: 'priority',
+        creditState: 'available',
+        queuePriority: 1,
+      }),
+      providerAdmission: {
+        async acquire(_provider, options) {
+          admittedPriorities.push(options?.priority || 0);
+          return {
+            async release() {
+              releases += 1;
+            },
+          };
+        },
+      },
+      async settleAccountAIUsage(input) {
+        settlements.push(input);
+        return {
+          accountId: 'account-1',
+          membershipTier: 'priority',
+          costUsd: input.costUsd,
+          creditAppliedUsd: input.costUsd,
+          creditBalanceUsd: 9.5,
+          duplicate: false,
+        };
+      },
+      fetchFn: async () => new Response(JSON.stringify({
+        id: 'completion-billed',
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-billed',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+
+    const response = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: deepseekModel.apiModel, messages: [{ role: 'user', content: 'hello' }] }),
+    });
+
+    assert.equal(response.status, 200);
+    await response.json();
+    assert.deepEqual(admittedPriorities, [1]);
+    assert.equal(releases, 1);
+    assert.equal(settlements.length, 1);
+    assert.match(settlements[0].id, /^code-agent-gateway:.+:1$/);
+    assert.equal(settlements[0].source, 'code_agent_gateway');
+    assert.equal(settlements[0].clientId, 'client-1');
+    assert.equal(settlements[0].turnId, 'turn-billed');
+    assert.ok(settlements[0].costUsd > 0);
+  });
+
+  it('returns service unavailable when shared provider admission cannot be acquired', async () => {
+    const observability = createMemoryObservability();
+    let upstreamCalled = false;
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      observability: observability.recorder,
+      providerAdmission: {
+        async acquire() {
+          throw new Error('queue Redis unavailable');
+        },
+      },
+      fetchFn: async () => {
+        upstreamCalled = true;
+        return new Response('{}');
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-admission-failure',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+
+    const response = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: deepseekModel.apiModel, messages: [{ role: 'user', content: 'hello' }] }),
+    });
+
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      error: 'Provider admission is temporarily unavailable',
+    });
+    assert.equal(upstreamCalled, false);
+    assert.deepEqual(observability.events.map(event => event.event), [
+      'code_agent.model_gateway.request',
+      'code_agent.model_gateway.admission_unavailable',
+    ]);
+  });
+
   it('accepts code-agent gateway bodies larger than the default Express JSON limit', async () => {
     const calls: FetchCall[] = [];
     const gateway = new CodeAgentModelGateway({

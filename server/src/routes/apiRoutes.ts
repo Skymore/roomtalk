@@ -16,6 +16,7 @@ import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage 
 import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { AudioTranscriptionRunner } from '../services/audioTranscription';
 import {
+  createClientAuthSession,
   hashClientAuthToken,
   hashClientPassword,
   isClientRequestAuthorized,
@@ -40,6 +41,7 @@ import {
 } from '../services/mediaThumbnail';
 import type { AssistantRunQueueHealthSnapshot } from '../services/assistantRunQueue';
 import { MembershipStatus, MembershipTier } from '../services/accountEntitlements';
+import { ClientLoginRateLimiter, RedisClientLoginRateLimiter } from '../services/clientLoginRateLimiter';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -70,6 +72,7 @@ interface ApiRouteOptions {
     service?: GitHubConnectionService;
   };
   membershipAdminToken?: string;
+  clientLoginRateLimiter?: ClientLoginRateLimiter;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -337,6 +340,19 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const codexConnections = options.codexConnections || { enabled: false };
   const githubConnections = options.githubConnections || { enabled: false };
   const membershipAdminToken = options.membershipAdminToken ?? process.env.MEMBERSHIP_ADMIN_TOKEN ?? '';
+  const clientLoginRateLimiter = options.clientLoginRateLimiter
+    || new RedisClientLoginRateLimiter(redisClient);
+  const resetClientLoginRateLimitBestEffort = async (clientId: string, ipAddress: string) => {
+    try {
+      await clientLoginRateLimiter.resetClient(clientId, ipAddress);
+    } catch (error) {
+      routeLogger.warn('Failed to reset client login rate limit after successful authentication', {
+        error,
+        clientId,
+        ip: ipAddress,
+      });
+    }
+  };
   const mediaThumbnailService = options.mediaThumbnailService
     || new MediaThumbnailService(mediaObjectStorage, routeLogger);
 
@@ -507,8 +523,19 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   };
 
   const authorizeClientRequest = async (req: Request, res: Response, clientId: string, endpoint: string) => {
-    if (await isClientRequestAuthorized(store, clientId, getClientAuthToken(req))) {
-      return true;
+    try {
+      if (await isClientRequestAuthorized(store, clientId, getClientAuthToken(req))) {
+        return true;
+      }
+    } catch (error) {
+      routeLogger.error('Client authentication service is unavailable', {
+        error,
+        endpoint,
+        clientId,
+        ip: req.ip,
+      });
+      res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+      return false;
     }
 
     routeLogger.warn('Rejected request with invalid client auth token', { endpoint, clientId, ip: req.ip });
@@ -648,76 +675,90 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return;
     }
 
-    const [account, passwordHash, entitlement] = await Promise.all([
-      store.getAccountByClientId(clientId),
-      store.getClientPasswordHash(clientId),
-      store.getAccountEntitlementByClientId(clientId),
-    ]);
-    return res.json({
-      clientId,
-      hasPassword: Boolean(passwordHash),
-      googleConfigured: googleClientIds.length > 0,
-      account: serializeClientAccount(account),
-      entitlement,
-    });
+    try {
+      const [account, passwordHash, entitlement] = await Promise.all([
+        store.getAccountByClientId(clientId),
+        store.getClientPasswordHash(clientId),
+        store.getAccountEntitlementByClientId(clientId),
+      ]);
+      return res.json({
+        clientId,
+        hasPassword: Boolean(passwordHash),
+        googleConfigured: googleClientIds.length > 0,
+        account: serializeClientAccount(account),
+        entitlement,
+      });
+    } catch (error) {
+      routeLogger.error('Failed to read authenticated account', { error, clientId, ip: req.ip });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+    }
   });
 
   app.post('/api/auth/google', async (req: Request, res: Response) => {
     const credential = typeof req.body?.credential === 'string' ? req.body.credential : '';
     const requestedClientId = getBodyClientId(req);
-    const verified = await verifyGoogleCredentialFn(credential, googleClientIds);
-    if (!verified.ok) {
-      return res.status(verified.status).json({ error: verified.error });
-    }
-
-    const profile = verified.profile;
-    let account = await store.getAccountByGoogleSubject(profile.providerSubject);
-    if (account) {
-      account = await store.updateGoogleAccountLogin(account.accountId, profile) || account;
-    } else {
-      if (!requestedClientId) {
-        return res.status(400).json({ error: 'clientId is required' });
+    try {
+      const verified = await verifyGoogleCredentialFn(credential, googleClientIds);
+      if (!verified.ok) {
+        return res.status(verified.status).json({ error: verified.error });
       }
 
-      const existingClientAccount = await store.getAccountByClientId(requestedClientId);
-      if (existingClientAccount?.googleLinked) {
-        return res.status(409).json({ error: 'This User ID is already linked to another Google account' });
+      const profile = verified.profile;
+      let account = await store.getAccountByGoogleSubject(profile.providerSubject);
+      if (account) {
+        account = await store.updateGoogleAccountLogin(account.accountId, profile) || account;
+      } else {
+        if (!requestedClientId) {
+          return res.status(400).json({ error: 'clientId is required' });
+        }
+
+        const existingClientAccount = await store.getAccountByClientId(requestedClientId);
+        if (existingClientAccount?.googleLinked) {
+          return res.status(409).json({ error: 'This User ID is already linked to another Google account' });
+        }
+
+        if (!(await authorizeClientRequest(req, res, requestedClientId, 'POST /api/auth/google'))) {
+          return;
+        }
+
+        account = await store.createGoogleAccountForClient({
+          ...profile,
+          accountId: uuidv4(),
+          clientId: requestedClientId,
+        });
+        if (!account) {
+          return res.status(409).json({ error: 'Failed to link Google account to this User ID' });
+        }
       }
 
-      if (!(await authorizeClientRequest(req, res, requestedClientId, 'POST /api/auth/google'))) {
-        return;
-      }
-
-      account = await store.createGoogleAccountForClient({
-        ...profile,
-        accountId: uuidv4(),
-        clientId: requestedClientId,
+      const clientAuthToken = await issueClientAuthToken(store, account.primaryClientId, {
+        accountId: account.accountId,
+        authMethod: 'google',
       });
-      if (!account) {
-        return res.status(409).json({ error: 'Failed to link Google account to this User ID' });
+      const [passwordHash, nicknames] = await Promise.all([
+        store.getClientPasswordHash(account.primaryClientId),
+        store.getClientNicknames([account.primaryClientId]),
+      ]);
+      const nickname = nicknames[account.primaryClientId] || profile.displayName || null;
+      if (!nicknames[account.primaryClientId] && profile.displayName) {
+        await store.setClientNickname(account.primaryClientId, profile.displayName);
       }
-    }
 
-    const clientAuthToken = await issueClientAuthToken(store, account.primaryClientId, {
-      accountId: account.accountId,
-      authMethod: 'google',
-    });
-    const [passwordHash, nicknames] = await Promise.all([
-      store.getClientPasswordHash(account.primaryClientId),
-      store.getClientNicknames([account.primaryClientId]),
-    ]);
-    const nickname = nicknames[account.primaryClientId] || profile.displayName || null;
-    if (!nicknames[account.primaryClientId] && profile.displayName) {
-      await store.setClientNickname(account.primaryClientId, profile.displayName);
+      return res.json({
+        clientId: account.primaryClientId,
+        clientAuthToken,
+        hasPassword: Boolean(passwordHash),
+        nickname,
+        account: serializeClientAccount(account),
+      });
+    } catch (error) {
+      routeLogger.error('Google account authentication failed', {
+        error,
+        requestedClientId,
+        ip: req.ip,
+      });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
     }
-
-    return res.json({
-      clientId: account.primaryClientId,
-      clientAuthToken,
-      hasPassword: Boolean(passwordHash),
-      nickname,
-      account: serializeClientAccount(account),
-    });
   });
 
   app.get('/api/client-auth/:clientId/status', async (req: Request, res: Response) => {
@@ -726,11 +767,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'clientId is required' });
     }
 
-    const [passwordHash, account] = await Promise.all([
-      store.getClientPasswordHash(clientId),
-      store.getAccountByClientId(clientId),
-    ]);
-    return res.json({ clientId, hasPassword: Boolean(passwordHash), hasAccount: Boolean(account) });
+    try {
+      const [passwordHash, account] = await Promise.all([
+        store.getClientPasswordHash(clientId),
+        store.getAccountByClientId(clientId),
+      ]);
+      return res.json({ clientId, hasPassword: Boolean(passwordHash), hasAccount: Boolean(account) });
+    } catch (error) {
+      routeLogger.error('Failed to read client authentication status', { error, clientId, ip: req.ip });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+    }
   });
 
   app.post('/api/client-auth/password', async (req: Request, res: Response) => {
@@ -740,37 +786,58 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'clientId and a password of 8 to 128 characters are required' });
     }
 
-    const existingPasswordHash = await store.getClientPasswordHash(clientId);
-    if (existingPasswordHash) {
-      const currentPassword = req.body?.currentPassword;
-      const hasValidCurrentPassword = typeof currentPassword === 'string'
-        ? await verifyClientPassword(currentPassword, existingPasswordHash)
-        : false;
-      const hasValidToken = await isClientRequestAuthorized(store, clientId, getClientAuthToken(req));
-      if (!hasValidCurrentPassword && !hasValidToken) {
-        return res.status(401).json({ error: 'Current password or valid login token is required' });
+    try {
+      const rateLimit = await clientLoginRateLimiter.consume(clientId, req.ip || 'unknown');
+      if (!rateLimit.allowed) {
+        res.setHeader('Retry-After', rateLimit.retryAfterSeconds);
+        return res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
       }
-    }
+      const [existingPasswordHash, existingAccount] = await Promise.all([
+        store.getClientPasswordHash(clientId),
+        store.getAccountByClientId(clientId),
+      ]);
+      if (existingPasswordHash) {
+        const currentPassword = req.body?.currentPassword;
+        const hasValidCurrentPassword = typeof currentPassword === 'string'
+          ? await verifyClientPassword(currentPassword, existingPasswordHash)
+          : false;
+        const hasValidToken = hasValidCurrentPassword
+          ? false
+          : await isClientRequestAuthorized(store, clientId, getClientAuthToken(req));
+        if (!hasValidCurrentPassword && !hasValidToken) {
+          return res.status(401).json({ error: 'Current password or valid login token is required' });
+        }
+      }
 
-    const account = await store.createPasswordAccountForClient({
-      accountId: uuidv4(),
-      clientId,
-    });
-    if (!account) {
-      return res.status(500).json({ error: 'Unable to create the account for this User ID' });
+      if (existingPasswordHash && !existingAccount) {
+        throw new Error('Password credential is not linked to an account');
+      }
+      const accountId = existingAccount?.accountId || uuidv4();
+      const passwordHash = await hashClientPassword(password);
+      const session = createClientAuthSession(clientId, {
+        accountId,
+        authMethod: 'password',
+      });
+      const account = await store.setPasswordAccountCredentials({
+        accountId,
+        clientId,
+        passwordHash,
+        authToken: session.record,
+      });
+      if (!account) {
+        throw new Error('Atomic password credential update did not return an account');
+      }
+      await resetClientLoginRateLimitBestEffort(clientId, req.ip || 'unknown');
+      return res.json({
+        clientId,
+        clientAuthToken: session.token,
+        hasPassword: true,
+        account: serializeClientAccount(account),
+      });
+    } catch (error) {
+      routeLogger.error('Failed to set client password credentials', { error, clientId, ip: req.ip });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
     }
-    await store.setClientPasswordHash(clientId, await hashClientPassword(password));
-    await store.deleteClientAuthTokens(clientId);
-    const clientAuthToken = await issueClientAuthToken(store, clientId, {
-      accountId: account.accountId,
-      authMethod: 'password',
-    });
-    return res.json({
-      clientId,
-      clientAuthToken,
-      hasPassword: true,
-      account: serializeClientAccount(account),
-    });
   });
 
   app.post('/api/client-auth/login', async (req: Request, res: Response) => {
@@ -780,29 +847,44 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'clientId and password are required' });
     }
 
-    const passwordHash = await store.getClientPasswordHash(clientId);
-    if (!passwordHash || !(await verifyClientPassword(password, passwordHash))) {
-      return res.status(401).json({ error: 'Invalid user ID or password' });
-    }
+    try {
+      const rateLimit = await clientLoginRateLimiter.consume(clientId, req.ip || 'unknown');
+      if (!rateLimit.allowed) {
+        res.setHeader('Retry-After', rateLimit.retryAfterSeconds);
+        return res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
+      }
+      const passwordHash = await store.getClientPasswordHash(clientId);
+      if (!passwordHash || !(await verifyClientPassword(password, passwordHash))) {
+        return res.status(401).json({ error: 'Invalid user ID or password' });
+      }
 
-    const [account, nicknames] = await Promise.all([
-      store.getAccountByClientId(clientId),
-      store.getClientNicknames([clientId]),
-    ]);
-    if (!account) {
-      return res.status(500).json({ error: 'The password is not linked to an account' });
+      const [account, nicknames] = await Promise.all([
+        store.getAccountByClientId(clientId),
+        store.getClientNicknames([clientId]),
+      ]);
+      if (!account) {
+        throw new Error('Password credential is not linked to an account');
+      }
+      const clientAuthToken = await issueClientAuthToken(store, clientId, {
+        accountId: account.accountId,
+        authMethod: 'password',
+      });
+      await resetClientLoginRateLimitBestEffort(clientId, req.ip || 'unknown');
+      return res.json({
+        clientId,
+        clientAuthToken,
+        hasPassword: true,
+        nickname: nicknames[clientId] ?? null,
+        account: serializeClientAccount(account),
+      });
+    } catch (error) {
+      routeLogger.error('Client password login failed because authentication storage is unavailable', {
+        error,
+        clientId,
+        ip: req.ip,
+      });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
     }
-    const clientAuthToken = await issueClientAuthToken(store, clientId, {
-      accountId: account.accountId,
-      authMethod: 'password',
-    });
-    return res.json({
-      clientId,
-      clientAuthToken,
-      hasPassword: true,
-      nickname: nicknames[clientId] ?? null,
-      account: serializeClientAccount(account),
-    });
   });
 
   app.put('/api/admin/accounts/:accountId/membership', async (req: Request, res: Response) => {
@@ -838,15 +920,17 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
     if (
       creditGrantUsd !== undefined
-      && (!Number.isFinite(creditGrantUsd) || creditGrantUsd <= 0)
+      && (
+        !Number.isFinite(creditGrantUsd)
+        || creditGrantUsd <= 0
+        || creditGrantUsd > 999_999_999
+      )
     ) {
-      return res.status(400).json({ error: 'creditGrantUsd must be a positive number' });
+      return res.status(400).json({ error: 'creditGrantUsd must be a positive bounded number' });
     }
-    const creditIdempotencyKey = creditGrantUsd === undefined
-      ? undefined
-      : req.header('idempotency-key')?.trim();
-    if (creditGrantUsd !== undefined && !creditIdempotencyKey) {
-      return res.status(400).json({ error: 'Idempotency-Key is required for credit grants' });
+    const membershipIdempotencyKey = req.header('idempotency-key')?.trim();
+    if (!membershipIdempotencyKey) {
+      return res.status(400).json({ error: 'Idempotency-Key is required for membership changes' });
     }
     const currentPeriodStart = typeof req.body?.currentPeriodStart === 'string'
       ? req.body.currentPeriodStart
@@ -867,7 +951,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     try {
-      let entitlement = await store.updateAccountMembership({
+      const entitlement = await store.applyAccountMembershipChange({
+        id: uuidv4(),
+        idempotencyKey: membershipIdempotencyKey,
         accountId,
         tier,
         status,
@@ -883,32 +969,24 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         externalSubscriptionId: typeof req.body?.externalSubscriptionId === 'string'
           ? req.body.externalSubscriptionId
           : null,
+        ...(creditGrantUsd !== undefined ? { creditGrantUsd } : {}),
+        creditNote: typeof req.body?.creditNote === 'string' ? req.body.creditNote : undefined,
+        metadata: {
+          source: 'membership_admin_api',
+          tier,
+          status,
+        },
       });
       if (!entitlement) {
         return res.status(404).json({ error: 'Account not found' });
       }
 
-      if (creditGrantUsd !== undefined) {
-        entitlement = await store.grantAccountCredits({
-          id: uuidv4(),
-          accountId,
-          amountUsd: creditGrantUsd,
-          idempotencyKey: creditIdempotencyKey!,
-          note: typeof req.body?.creditNote === 'string' ? req.body.creditNote : undefined,
-          metadata: {
-            source: 'membership_admin_api',
-            tier,
-            status,
-          },
-        });
-        if (!entitlement) {
-          throw new Error('Credit grant did not return an account entitlement');
-        }
-      }
-
       return res.json({ entitlement });
     } catch (error) {
       routeLogger.error('Membership administration failed', { error, accountId });
+      if (error instanceof Error && error.message.includes('idempotency key is already bound')) {
+        return res.status(409).json({ error: 'Idempotency-Key is already bound to a different membership change' });
+      }
       return res.status(500).json({ error: 'Unable to update account membership' });
     }
   });
@@ -920,8 +998,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'clientId and clientAuthToken are required' });
     }
 
-    await store.deleteClientAuthToken(clientId, hashClientAuthToken(token));
-    return res.status(204).send();
+    try {
+      await store.deleteClientAuthToken(clientId, hashClientAuthToken(token));
+      return res.status(204).send();
+    } catch (error) {
+      routeLogger.error('Failed to revoke client authentication token', { error, clientId, ip: req.ip });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+    }
   });
 
   app.get('/api/rooms/:roomId/media-history', async (req: Request, res: Response) => {

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { promisify } from 'util';
-import { RoomStore } from '../repositories/store';
+import { ClientAuthTokenRecord, RoomStore } from '../repositories/store';
 
 const scryptAsync = promisify(crypto.scrypt);
 const PASSWORD_HASH_PREFIX = 'scrypt';
@@ -8,6 +8,8 @@ const PASSWORD_KEY_LENGTH = 64;
 
 export const MIN_CLIENT_PASSWORD_LENGTH = 8;
 export const MAX_CLIENT_PASSWORD_LENGTH = 128;
+export const DEFAULT_CLIENT_AUTH_TOKEN_TTL_DAYS = 30;
+export const MAX_CLIENT_AUTH_TOKEN_TTL_DAYS = 365;
 
 export const validateClientPassword = (password: unknown): password is string => (
   typeof password === 'string' &&
@@ -38,6 +40,52 @@ export const hashClientAuthToken = (token: string) => (
   crypto.createHash('sha256').update(token).digest('base64url')
 );
 
+export const resolveClientAuthTokenTtlDays = (
+  value = process.env.CLIENT_AUTH_TOKEN_TTL_DAYS,
+): number => {
+  if (value === undefined || value.trim() === '') {
+    return DEFAULT_CLIENT_AUTH_TOKEN_TTL_DAYS;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_CLIENT_AUTH_TOKEN_TTL_DAYS) {
+    throw new Error(
+      `CLIENT_AUTH_TOKEN_TTL_DAYS must be an integer between 1 and ${MAX_CLIENT_AUTH_TOKEN_TTL_DAYS}`,
+    );
+  }
+  return parsed;
+};
+
+export const createClientAuthSession = (
+  clientId: string,
+  options: {
+    accountId?: string;
+    authMethod?: 'password' | 'google';
+    expiresAt?: string;
+    now?: Date;
+    ttlDays?: number;
+  } = {},
+): { token: string; record: ClientAuthTokenRecord } => {
+  const now = options.now || new Date();
+  const token = createClientAuthToken();
+  const ttlDays = options.ttlDays ?? resolveClientAuthTokenTtlDays();
+  if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > MAX_CLIENT_AUTH_TOKEN_TTL_DAYS) {
+    throw new Error(`Client auth token TTL must be an integer between 1 and ${MAX_CLIENT_AUTH_TOKEN_TTL_DAYS} days`);
+  }
+  const expiresAt = options.expiresAt
+    || new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+  return {
+    token,
+    record: {
+      clientId,
+      tokenHash: hashClientAuthToken(token),
+      accountId: options.accountId,
+      authMethod: options.authMethod,
+      expiresAt,
+      createdAt: now.toISOString(),
+    },
+  };
+};
+
 export const isClientRequestAuthorized = async (
   store: Pick<RoomStore, 'getClientPasswordHash' | 'getAccountByClientId' | 'isClientAuthTokenValid'>,
   clientId: string,
@@ -65,16 +113,11 @@ export const issueClientAuthToken = async (
     accountId?: string;
     authMethod?: 'password' | 'google';
     expiresAt?: string;
+    now?: Date;
+    ttlDays?: number;
   } = {},
 ) => {
-  const token = createClientAuthToken();
-  await store.saveClientAuthToken({
-    clientId,
-    tokenHash: hashClientAuthToken(token),
-    accountId: options.accountId,
-    authMethod: options.authMethod,
-    expiresAt: options.expiresAt,
-    createdAt: new Date().toISOString(),
-  });
-  return token;
+  const session = createClientAuthSession(clientId, options);
+  await store.saveClientAuthToken(session.record);
+  return session.token;
 };

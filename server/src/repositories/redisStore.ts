@@ -1,13 +1,31 @@
 import { customAlphabet } from 'nanoid';
+import { createHash } from 'node:crypto';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
+const fingerprintAccountMembershipChange = (input: AccountMembershipChangeInput) => (
+  createHash('sha256')
+    .update(JSON.stringify({
+      accountId: input.accountId,
+      tier: input.tier,
+      status: input.status,
+      priorityOverride: input.priorityOverride ?? null,
+      currentPeriodStart: input.currentPeriodStart ?? null,
+      currentPeriodEnd: input.currentPeriodEnd ?? null,
+      externalProvider: input.externalProvider ?? null,
+      externalCustomerId: input.externalCustomerId ?? null,
+      externalSubscriptionId: input.externalSubscriptionId ?? null,
+      creditGrantUsd: input.creditGrantUsd ?? 0,
+      creditNote: input.creditNote ?? null,
+    }))
+    .digest('hex')
+);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
 export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:v2:room:';
@@ -45,6 +63,8 @@ const CLIENT_ACCOUNTS_KEY = 'client:accounts';
 const CLIENT_ACCOUNT_LINKS_KEY = 'client:account_links';
 const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
 const ACCOUNT_ENTITLEMENTS_KEY = 'account:entitlements';
+const ACCOUNT_AI_USAGE_KEY = 'account:ai_usage';
+const ACCOUNT_MEMBERSHIP_EVENTS_KEY = 'account:membership_events';
 const REALTIME_INSTANCES_KEY = 'realtime:instances';
 const SOCKET_INSTANCES_KEY = 'socket:instances';
 const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
@@ -110,6 +130,152 @@ end
 redis.call('DEL', KEYS[3])
 redis.call('SREM', KEYS[1], ARGV[1])
 return cleaned
+`;
+
+const SETTLE_ACCOUNT_AI_USAGE_SCRIPT = `
+local existing_usage = redis.call('HGET', KEYS[1], ARGV[1])
+local entitlement_json = redis.call('HGET', KEYS[2], ARGV[2])
+if not entitlement_json then
+  return {-1, '', ''}
+end
+if existing_usage then
+  return {0, existing_usage, entitlement_json}
+end
+
+local usage = cjson.decode(ARGV[3])
+local entitlement = cjson.decode(entitlement_json)
+local cost_usd = tonumber(usage.costUsd)
+local available_usd = tonumber(entitlement.creditBalanceUsd or 0)
+local credit_applied_usd = math.min(available_usd, cost_usd)
+local next_available_usd = math.max(0, available_usd - credit_applied_usd)
+local effective_tier = entitlement.status == 'active' and entitlement.tier or 'free'
+local credit_state = next_available_usd > 0 and 'available' or 'exhausted'
+local priorities = {
+  free = { available = 60, exhausted = 80 },
+  pro = { available = 20, exhausted = 40 },
+  priority = { available = 1, exhausted = 10 }
+}
+
+usage.accountId = ARGV[2]
+usage.membershipTier = effective_tier
+usage.creditAppliedUsd = credit_applied_usd
+entitlement.effectiveTier = effective_tier
+entitlement.creditBalanceUsd = next_available_usd
+entitlement.lifetimeUsageUsd = tonumber(entitlement.lifetimeUsageUsd or 0) + cost_usd
+entitlement.creditState = credit_state
+entitlement.queuePriority = entitlement.priorityOverride
+  or priorities[effective_tier][credit_state]
+entitlement.updatedAt = ARGV[4]
+
+local next_usage_json = cjson.encode(usage)
+local next_entitlement_json = cjson.encode(entitlement)
+redis.call('HSET', KEYS[1], ARGV[1], next_usage_json)
+redis.call('HSET', KEYS[2], ARGV[2], next_entitlement_json)
+return {1, next_usage_json, next_entitlement_json}
+`;
+
+const SET_PASSWORD_ACCOUNT_CREDENTIALS_SCRIPT = `
+local existing_account_id = redis.call('HGET', KEYS[2], ARGV[1])
+if existing_account_id and existing_account_id ~= ARGV[2] then
+  return {-1, ''}
+end
+
+local account_json = ARGV[3]
+if existing_account_id then
+  local current_account_json = redis.call('HGET', KEYS[1], existing_account_id)
+  if not current_account_json then
+    return {-2, ''}
+  end
+  local current_account = cjson.decode(current_account_json)
+  current_account.updatedAt = ARGV[7]
+  current_account.lastLoginAt = ARGV[7]
+  account_json = cjson.encode(current_account)
+end
+
+redis.call('HSET', KEYS[1], ARGV[2], account_json)
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])
+
+local old_token_hashes = redis.call('SMEMBERS', KEYS[5])
+for _, token_hash in ipairs(old_token_hashes) do
+  redis.call('HDEL', KEYS[4], token_hash)
+end
+redis.call('DEL', KEYS[5])
+redis.call('HSET', KEYS[4], ARGV[5], ARGV[6])
+redis.call('SADD', KEYS[5], ARGV[5])
+
+if redis.call('HEXISTS', KEYS[6], ARGV[2]) == 0 then
+  redis.call('HSET', KEYS[6], ARGV[2], ARGV[8])
+end
+
+return {1, account_json}
+`;
+
+const APPLY_ACCOUNT_MEMBERSHIP_CHANGE_SCRIPT = `
+local existing_event_json = redis.call('HGET', KEYS[3], ARGV[1])
+if existing_event_json then
+  local existing_event = cjson.decode(existing_event_json)
+  if existing_event.requestFingerprint ~= ARGV[3] then
+    return {-2, ''}
+  end
+  return {0, cjson.encode(existing_event.entitlement)}
+end
+if redis.call('HEXISTS', KEYS[1], ARGV[2]) == 0 then
+  return {-1, ''}
+end
+
+local request = cjson.decode(ARGV[4])
+local entitlement_json = redis.call('HGET', KEYS[2], ARGV[2])
+local entitlement = entitlement_json and cjson.decode(entitlement_json) or {
+  accountId = ARGV[2],
+  creditBalanceUsd = 0,
+  lifetimeUsageUsd = 0
+}
+local next_balance = tonumber(entitlement.creditBalanceUsd or 0)
+  + tonumber(request.creditGrantUsd or 0)
+local effective_tier = request.status == 'active' and request.tier or 'free'
+local credit_state = next_balance > 0 and 'available' or 'exhausted'
+local priority_override = request.priorityOverride
+if priority_override == cjson.null then priority_override = nil end
+local current_period_start = request.currentPeriodStart
+if current_period_start == cjson.null then current_period_start = nil end
+local current_period_end = request.currentPeriodEnd
+if current_period_end == cjson.null then current_period_end = nil end
+local external_provider = request.externalProvider
+if external_provider == cjson.null then external_provider = nil end
+local priorities = {
+  free = { available = 60, exhausted = 80 },
+  pro = { available = 20, exhausted = 40 },
+  priority = { available = 1, exhausted = 10 }
+}
+
+entitlement.accountId = ARGV[2]
+entitlement.tier = request.tier
+entitlement.status = request.status
+entitlement.effectiveTier = effective_tier
+entitlement.creditBalanceUsd = next_balance
+entitlement.lifetimeUsageUsd = tonumber(entitlement.lifetimeUsageUsd or 0)
+entitlement.creditState = credit_state
+entitlement.priorityOverride = priority_override
+entitlement.currentPeriodStart = current_period_start
+entitlement.currentPeriodEnd = current_period_end
+entitlement.externalProvider = external_provider
+entitlement.queuePriority = priority_override
+  or priorities[effective_tier][credit_state]
+entitlement.updatedAt = ARGV[5]
+
+local event = {
+  id = request.id,
+  accountId = ARGV[2],
+  requestFingerprint = ARGV[3],
+  entitlement = entitlement,
+  metadata = request.metadata,
+  createdAt = ARGV[5]
+}
+local next_entitlement_json = cjson.encode(entitlement)
+redis.call('HSET', KEYS[2], ARGV[2], next_entitlement_json)
+redis.call('HSET', KEYS[3], ARGV[1], cjson.encode(event))
+return {1, next_entitlement_json}
 `;
 
 interface RoomMessagesCachePayload {
@@ -2742,7 +2908,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return rawAccount ? JSON.parse(rawAccount) as ClientAccount : null;
     } catch (error) {
       this.logger.error('Error reading Redis account by client ID', { error, clientId });
-      return null;
+      throw error;
     }
   }
 
@@ -2756,7 +2922,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return rawAccount ? JSON.parse(rawAccount) as ClientAccount : null;
     } catch (error) {
       this.logger.error('Error reading Redis account by Google subject', { error });
-      return null;
+      throw error;
     }
   }
 
@@ -2783,6 +2949,92 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error creating Redis password account', { error, clientId: input.clientId });
       return null;
+    }
+  }
+
+  async setPasswordAccountCredentials(
+    input: SetPasswordAccountCredentialsInput,
+  ): Promise<ClientAccount | null> {
+    if (
+      !input.passwordHash
+      || input.authToken.clientId !== input.clientId
+      || input.authToken.accountId !== input.accountId
+      || input.authToken.authMethod !== 'password'
+    ) {
+      throw new Error('Password account credentials do not match their account and client');
+    }
+    const now = input.now || input.authToken.createdAt;
+    const account: ClientAccount = {
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      provider: 'password',
+      providerSubject: input.clientId,
+      googleLinked: false,
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+    const scheduling = resolveAssistantRunScheduling({
+      accountId: input.accountId,
+      tier: 'free',
+      status: 'active',
+      creditBalanceUsd: 0,
+    });
+    const entitlement: AccountEntitlement = {
+      accountId: input.accountId,
+      tier: 'free',
+      status: 'active',
+      effectiveTier: 'free',
+      creditBalanceUsd: 0,
+      lifetimeUsageUsd: 0,
+      creditState: 'exhausted',
+      queuePriority: scheduling.queuePriority,
+      updatedAt: now,
+    };
+    const tokenRecord = JSON.stringify({
+      ...input.authToken,
+      lastUsedAt: input.authToken.createdAt,
+    });
+
+    try {
+      const result = await (this.redisClient as any).eval(
+        SET_PASSWORD_ACCOUNT_CREDENTIALS_SCRIPT,
+        {
+          keys: [
+            CLIENT_ACCOUNTS_KEY,
+            CLIENT_ACCOUNT_LINKS_KEY,
+            CLIENT_PASSWORDS_KEY,
+            CLIENT_AUTH_TOKENS_KEY,
+            getClientAuthTokensKey(input.clientId),
+            ACCOUNT_ENTITLEMENTS_KEY,
+          ],
+          arguments: [
+            input.clientId,
+            input.accountId,
+            JSON.stringify(account),
+            input.passwordHash,
+            input.authToken.tokenHash,
+            tokenRecord,
+            now,
+            JSON.stringify(entitlement),
+          ],
+        },
+      ) as [number | string, string];
+      const outcome = Number(result[0]);
+      if (outcome === -1) {
+        throw new Error('Password credential update targeted a different account');
+      }
+      if (outcome === -2) {
+        throw new Error('Password credential update found a missing linked account');
+      }
+      return JSON.parse(String(result[1])) as ClientAccount;
+    } catch (error) {
+      this.logger.error('Error setting atomic Redis password account credentials', {
+        error,
+        clientId: input.clientId,
+        accountId: input.accountId,
+      });
+      throw error;
     }
   }
 
@@ -2835,7 +3087,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return account;
     } catch (error) {
       this.logger.error('Error creating Redis Google account', { error, clientId: input.clientId });
-      return null;
+      throw error;
     }
   }
 
@@ -2865,7 +3117,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return nextAccount;
     } catch (error) {
       this.logger.error('Error updating Redis Google account login', { error, accountId });
-      return null;
+      throw error;
     }
   }
 
@@ -2930,6 +3182,68 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     return entitlement;
   }
 
+  async applyAccountMembershipChange(
+    input: AccountMembershipChangeInput,
+  ): Promise<AccountEntitlement | null> {
+    if (!input.id || !input.idempotencyKey) {
+      throw new Error('Membership change requires an id and idempotency key');
+    }
+    if (
+      input.creditGrantUsd !== undefined
+      && (
+        !Number.isFinite(input.creditGrantUsd)
+        || input.creditGrantUsd <= 0
+        || input.creditGrantUsd > 999_999_999
+      )
+    ) {
+      throw new Error('Membership credit grant must be a positive bounded USD value');
+    }
+    const now = input.now || new Date().toISOString();
+    const requestFingerprint = fingerprintAccountMembershipChange(input);
+    try {
+      const result = await (this.redisClient as any).eval(
+        APPLY_ACCOUNT_MEMBERSHIP_CHANGE_SCRIPT,
+        {
+          keys: [
+            CLIENT_ACCOUNTS_KEY,
+            ACCOUNT_ENTITLEMENTS_KEY,
+            ACCOUNT_MEMBERSHIP_EVENTS_KEY,
+          ],
+          arguments: [
+            input.idempotencyKey,
+            input.accountId,
+            requestFingerprint,
+            JSON.stringify({
+              id: input.id,
+              tier: input.tier,
+              status: input.status,
+              priorityOverride: input.priorityOverride ?? null,
+              currentPeriodStart: input.currentPeriodStart ?? null,
+              currentPeriodEnd: input.currentPeriodEnd ?? null,
+              externalProvider: input.externalProvider ?? null,
+              creditGrantUsd: input.creditGrantUsd || 0,
+              metadata: input.metadata || {},
+            }),
+            now,
+          ],
+        },
+      ) as [number | string, string];
+      const outcome = Number(result[0]);
+      if (outcome === -1) return null;
+      if (outcome === -2) {
+        throw new Error('Membership idempotency key is already bound to a different change');
+      }
+      return JSON.parse(String(result[1])) as AccountEntitlement;
+    } catch (error) {
+      this.logger.error('Error applying atomic Redis account membership change', {
+        error,
+        accountId: input.accountId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      throw error;
+    }
+  }
+
   async grantAccountCredits(input: AccountCreditGrantInput): Promise<AccountEntitlement | null> {
     const account = JSON.parse(
       await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, input.accountId) || 'null',
@@ -2958,11 +3272,72 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     return entitlement;
   }
 
+  async settleAccountAIUsage(input: AccountAIUsageInput): Promise<AccountAIUsageSettlement | null> {
+    if (!Number.isFinite(input.costUsd) || input.costUsd <= 0 || input.costUsd > 999_999_999) {
+      throw new Error('Account AI usage cost must be a positive bounded USD value');
+    }
+    const account = await this.getAccountByClientId(input.clientId);
+    if (!account) return null;
+    const now = input.now || new Date().toISOString();
+    const result = await (this.redisClient as any).eval(SETTLE_ACCOUNT_AI_USAGE_SCRIPT, {
+      keys: [ACCOUNT_AI_USAGE_KEY, ACCOUNT_ENTITLEMENTS_KEY],
+      arguments: [
+        input.id,
+        account.accountId,
+        JSON.stringify({
+          id: input.id,
+          clientId: input.clientId,
+          source: input.source,
+          costUsd: input.costUsd,
+          provider: input.provider,
+          modelId: input.modelId,
+          roomId: input.roomId,
+          turnId: input.turnId,
+          messageId: input.messageId,
+          createdAt: now,
+        }),
+        now,
+      ],
+    }) as [number | string, string, string];
+    const outcome = Number(result[0]);
+    if (outcome === -1) {
+      throw new Error(`Account ${account.accountId} has no entitlement`);
+    }
+    const usage = JSON.parse(String(result[1])) as {
+      accountId: string;
+      source: AccountAIUsageInput['source'];
+      costUsd: number;
+      creditAppliedUsd: number;
+      membershipTier: AccountAIUsageSettlement['membershipTier'];
+      provider: string;
+      modelId: string;
+    };
+    if (
+      usage.accountId !== account.accountId
+      || usage.source !== input.source
+      || usage.provider !== input.provider
+      || usage.modelId !== input.modelId
+      || Math.abs(usage.costUsd - input.costUsd) >= 0.0000000005
+    ) {
+      throw new Error('Account AI usage id is already bound to different usage');
+    }
+    const entitlement = JSON.parse(String(result[2])) as AccountEntitlement;
+    return {
+      accountId: account.accountId,
+      membershipTier: usage.membershipTier,
+      costUsd: usage.costUsd,
+      creditAppliedUsd: usage.creditAppliedUsd,
+      creditBalanceUsd: entitlement.creditBalanceUsd,
+      duplicate: outcome === 0,
+    };
+  }
+
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
     try {
       await this.redisClient.hSet(CLIENT_PASSWORDS_KEY, clientId, passwordHash);
     } catch (error) {
       this.logger.error('Error setting Redis client password hash', { error, clientId });
+      throw error;
     }
   }
 
@@ -2971,7 +3346,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return await this.redisClient.hGet(CLIENT_PASSWORDS_KEY, clientId) || null;
     } catch (error) {
       this.logger.error('Error reading Redis client password hash', { error, clientId });
-      return null;
+      throw error;
     }
   }
 
@@ -2992,6 +3367,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       ]);
     } catch (error) {
       this.logger.error('Error saving Redis client auth token', { error, clientId: token.clientId });
+      throw error;
     }
   }
 
@@ -3020,7 +3396,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return true;
     } catch (error) {
       this.logger.error('Error checking Redis client auth token', { error, clientId });
-      return false;
+      throw error;
     }
   }
 
@@ -3043,7 +3419,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return removed > 0;
     } catch (error) {
       this.logger.error('Error deleting Redis client auth token', { error, clientId });
-      return false;
+      throw error;
     }
   }
 
@@ -3056,6 +3432,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       await this.redisClient.del(getClientAuthTokensKey(clientId));
     } catch (error) {
       this.logger.error('Error deleting Redis client auth tokens', { error, clientId });
+      throw error;
     }
   }
 

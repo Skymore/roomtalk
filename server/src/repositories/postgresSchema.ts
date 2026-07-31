@@ -2142,4 +2142,107 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         WHERE status IN ('pending', 'processing');
     `,
   },
+  {
+    // Generalize account usage audit rows beyond ordinary assistant runs so
+    // every provider-backed model gateway request participates in the same
+    // credit balance and lifetime-usage ledger.
+    id: '0015_account_usage_sources',
+    sql: `
+      ALTER TABLE account_ai_usage_events
+        ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'assistant_run',
+        ADD COLUMN IF NOT EXISTS room_id TEXT,
+        ADD COLUMN IF NOT EXISTS turn_id TEXT,
+        ADD COLUMN IF NOT EXISTS message_id TEXT;
+
+      ALTER TABLE account_ai_usage_events
+        DROP CONSTRAINT IF EXISTS account_ai_usage_events_source_check;
+      ALTER TABLE account_ai_usage_events
+        ADD CONSTRAINT account_ai_usage_events_source_check
+        CHECK (source IN ('assistant_run', 'code_agent_gateway'));
+
+      UPDATE account_ai_usage_events AS usage
+      SET room_id = run.room_id,
+        message_id = run.ai_message_id
+      FROM assistant_runs AS run
+      WHERE usage.assistant_run_id = run.id
+        AND usage.source = 'assistant_run'
+        AND (usage.room_id IS NULL OR usage.message_id IS NULL);
+
+      CREATE INDEX IF NOT EXISTS idx_account_ai_usage_events_source_created
+        ON account_ai_usage_events (source, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_account_ai_usage_events_turn
+        ON account_ai_usage_events (turn_id, created_at)
+        WHERE turn_id IS NOT NULL;
+    `,
+  },
+  {
+    // Account sessions are bounded credentials. Reconcile legacy token links,
+    // revoke orphaned account tokens, and ensure every account-backed token has
+    // both referential integrity and an expiry.
+    id: '0016_expiring_account_auth_sessions',
+    sql: `
+      UPDATE client_auth_tokens AS token
+      SET account_id = link.account_id
+      FROM client_account_links AS link
+      WHERE link.client_id = token.client_id
+        AND token.account_id IS DISTINCT FROM link.account_id;
+
+      DELETE FROM client_auth_tokens AS token
+      WHERE token.account_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM accounts
+          WHERE accounts.id = token.account_id
+        );
+
+      UPDATE client_auth_tokens
+      SET expires_at = GREATEST(last_used_at, created_at, clock_timestamp())
+        + INTERVAL '30 days'
+      WHERE account_id IS NOT NULL
+        AND expires_at IS NULL;
+
+      ALTER TABLE client_auth_tokens
+        DROP CONSTRAINT IF EXISTS client_auth_tokens_account_expiry_check;
+      ALTER TABLE client_auth_tokens
+        ADD CONSTRAINT client_auth_tokens_account_expiry_check
+        CHECK (account_id IS NULL OR expires_at IS NOT NULL);
+
+      ALTER TABLE client_auth_tokens
+        DROP CONSTRAINT IF EXISTS client_auth_tokens_account_id_fkey;
+      ALTER TABLE client_auth_tokens
+        ADD CONSTRAINT client_auth_tokens_account_id_fkey
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+        NOT VALID;
+      ALTER TABLE client_auth_tokens
+        VALIDATE CONSTRAINT client_auth_tokens_account_id_fkey;
+
+      CREATE INDEX IF NOT EXISTS idx_client_auth_tokens_expiry
+        ON client_auth_tokens (expires_at)
+        WHERE expires_at IS NOT NULL;
+    `,
+  },
+  {
+    // Membership providers deliver retries and may combine a tier transition
+    // with a credit grant. Persist one immutable idempotency/audit event so the
+    // entire change can commit atomically.
+    id: '0017_account_membership_events',
+    sql: `
+      CREATE TABLE IF NOT EXISTS account_membership_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_fingerprint TEXT NOT NULL,
+        tier TEXT NOT NULL CHECK (tier IN ('free', 'pro', 'priority')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'past_due', 'cancelled')),
+        credit_grant_usd NUMERIC(18, 9) NOT NULL DEFAULT 0
+          CHECK (credit_grant_usd >= 0),
+        entitlement_snapshot JSONB NOT NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_membership_events_account_created
+        ON account_membership_events (account_id, created_at DESC);
+    `,
+  },
 ];

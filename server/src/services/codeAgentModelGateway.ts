@@ -2,10 +2,19 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import express, { Express, Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
+import type {
+  AccountAIUsageInput,
+  AccountAIUsageSettlement,
+} from '../repositories/store';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
+import type { AssistantRunSchedulingSnapshot } from './accountEntitlements';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 import { normalizeCodeAgentMode } from './codeAgentModes';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
+import type {
+  ProviderAdmissionAcquireOptions,
+  ProviderAdmissionLease,
+} from './providerAdmission';
 
 export interface CodeAgentModelGatewayIssueInput {
   roomId: string;
@@ -69,6 +78,14 @@ export interface CodeAgentModelGatewayOptions {
   stateStore?: CodeAgentModelGatewayTokenStateStore;
   logger?: Logger;
   observability?: ObservabilityEventRecorder;
+  resolveAccountScheduling?: (clientId: string) => Promise<AssistantRunSchedulingSnapshot>;
+  settleAccountAIUsage?: (input: AccountAIUsageInput) => Promise<AccountAIUsageSettlement | null>;
+  providerAdmission?: {
+    acquire(
+      provider: AIModelProvider,
+      options?: ProviderAdmissionAcquireOptions,
+    ): Promise<ProviderAdmissionLease>;
+  };
 }
 
 const DEFAULT_TOKEN_TTL_SECONDS = 15 * 60;
@@ -516,6 +533,26 @@ export class CodeAgentModelGateway {
       return res.status(validation.status).json({ error: validation.error });
     }
 
+    let scheduling: AssistantRunSchedulingSnapshot = {
+      membershipTier: 'guest',
+      creditState: 'none',
+      queuePriority: 100,
+    };
+    if (this.options.resolveAccountScheduling) {
+      try {
+        scheduling = await this.options.resolveAccountScheduling(claims.clientId);
+      } catch (error) {
+        this.options.logger?.error('Code agent model gateway could not resolve account scheduling', {
+          error,
+          provider: claims.provider,
+          roomId: claims.roomId,
+          turnId: claims.turnId,
+          clientId: claims.clientId,
+        });
+        return res.status(503).json({ error: 'Account entitlement is temporarily unavailable' });
+      }
+    }
+
     const consumeResult = await this.stateStore.consumeRequest({
       tokenId: claims.jti,
       ttlSeconds: this.ttlSecondsForClaims(claims),
@@ -560,6 +597,9 @@ export class CodeAgentModelGateway {
         requestCount: consumeResult.requestCount,
         actualCostUsd: consumeResult.actualCostUsd,
         budgetUsd: claims.budgetUsd,
+        membershipTier: scheduling.membershipTier,
+        creditState: scheduling.creditState,
+        queuePriority: scheduling.queuePriority,
       },
     });
 
@@ -580,7 +620,24 @@ export class CodeAgentModelGateway {
       return res.status(502).json({ error: 'Provider is not configured' });
     }
 
+    const requestAbort = new AbortController();
+    const abortRequest = () => {
+      if (!requestAbort.signal.aborted) {
+        requestAbort.abort(new Error('Code agent model gateway request was aborted'));
+      }
+    };
+    req.once('aborted', abortRequest);
+    res.once('close', abortRequest);
+    let admission: ProviderAdmissionLease | null = null;
+    let admissionRequested = false;
     try {
+      if (this.options.providerAdmission) {
+        admissionRequested = true;
+        admission = await this.options.providerAdmission.acquire(claims.provider, {
+          priority: scheduling.queuePriority,
+          signal: requestAbort.signal,
+        });
+      }
       const upstream = await this.fetchFn(route.url, {
         method: req.method,
         headers: this.buildUpstreamHeaders(req, claims.provider, providerKey),
@@ -595,19 +652,52 @@ export class CodeAgentModelGateway {
       const contentType = upstream.headers.get('content-type') || '';
       if (!upstream.body) {
         const text = await upstream.text().catch(() => '');
-        await this.recordUsageFromText(text, contentType, route.countsBudget, claims, upstream.status);
+        await this.recordUsageFromText(
+          text,
+          contentType,
+          route.countsBudget,
+          claims,
+          upstream.status,
+          consumeResult.requestCount || 0,
+        );
         return res.end(text);
       }
       if (contentType.toLowerCase().includes('text/event-stream')) {
-        return this.proxySseResponse(upstream.body as ReadableStream<Uint8Array>, res, route.countsBudget, claims, upstream.status);
+        return this.proxySseResponse(
+          upstream.body as ReadableStream<Uint8Array>,
+          res,
+          route.countsBudget,
+          claims,
+          upstream.status,
+          consumeResult.requestCount || 0,
+        );
       }
 
       const text = await upstream.text();
-      await this.recordUsageFromText(text, contentType, route.countsBudget, claims, upstream.status);
+      await this.recordUsageFromText(
+        text,
+        contentType,
+        route.countsBudget,
+        claims,
+        upstream.status,
+        consumeResult.requestCount || 0,
+      );
       return res.end(text);
     } catch (error) {
-      this.options.logger?.error('Code agent model gateway upstream request failed', {
+      const admissionFailed = admissionRequested && !admission;
+      const status = admissionFailed ? 503 : 502;
+      const event = admissionFailed
+        ? 'code_agent.model_gateway.admission_unavailable'
+        : 'code_agent.model_gateway.upstream_error';
+      const errorCode = admissionFailed
+        ? 'provider_admission_unavailable'
+        : 'upstream_request_failed';
+      const responseError = admissionFailed
+        ? 'Provider admission is temporarily unavailable'
+        : 'Model gateway upstream request failed';
+      this.options.logger?.error('Code agent model gateway request failed', {
         error,
+        stage: admissionFailed ? 'provider_admission' : 'upstream',
         provider: claims.provider,
         roomId: claims.roomId,
         turnId: claims.turnId,
@@ -615,12 +705,23 @@ export class CodeAgentModelGateway {
       });
       await this.recordObservabilityEvent(claims, {
         level: 'error',
-        event: 'code_agent.model_gateway.upstream_error',
-        errorCode: 'upstream_request_failed',
+        event,
+        errorCode,
         errorMessage: error instanceof Error ? error.message : String(error),
         payload: { path: routePath, method: req.method },
       });
-      return res.status(502).json({ error: 'Model gateway upstream request failed' });
+      return res.status(status).json({ error: responseError });
+    } finally {
+      req.off('aborted', abortRequest);
+      res.off('close', abortRequest);
+      await admission?.release().catch(error => {
+        this.options.logger?.error('Failed to release Code Agent provider admission', {
+          error,
+          provider: claims.provider,
+          roomId: claims.roomId,
+          turnId: claims.turnId,
+        });
+      });
     }
   }
 
@@ -657,7 +758,8 @@ export class CodeAgentModelGateway {
     res: Response,
     countsBudget: boolean,
     claims: CodeAgentModelGatewayTokenClaims,
-    statusCode: number
+    statusCode: number,
+    requestCount: number,
   ) {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -684,7 +786,7 @@ export class CodeAgentModelGateway {
         if (sseState.buffer.trim()) {
           appendSseTextToUsage(accumulator, sseState, '\n\n');
         }
-        await this.recordUsageAccumulator(accumulator, claims, statusCode);
+        await this.recordUsageAccumulator(accumulator, claims, statusCode, requestCount);
       }
       return res.end();
     } catch (error) {
@@ -706,7 +808,8 @@ export class CodeAgentModelGateway {
     contentType: string,
     countsBudget: boolean,
     claims: CodeAgentModelGatewayTokenClaims,
-    statusCode: number
+    statusCode: number,
+    requestCount: number,
   ) {
     if (!countsBudget) {
       return;
@@ -722,13 +825,14 @@ export class CodeAgentModelGateway {
     } else {
       addJsonTextUsage(accumulator, text);
     }
-    await this.recordUsageAccumulator(accumulator, claims, statusCode);
+    await this.recordUsageAccumulator(accumulator, claims, statusCode, requestCount);
   }
 
   private async recordUsageAccumulator(
     accumulator: ReportedUsageAccumulator,
     claims: CodeAgentModelGatewayTokenClaims,
-    statusCode: number
+    statusCode: number,
+    requestCount: number,
   ) {
     const usage = readUsageFromAccumulator(accumulator);
     if (!usage) {
@@ -760,6 +864,18 @@ export class CodeAgentModelGateway {
         ttlSeconds: this.ttlSecondsForClaims(claims),
         costUsd,
       });
+      const accountSettlement = this.options.settleAccountAIUsage
+        ? await this.options.settleAccountAIUsage({
+            id: `code-agent-gateway:${claims.jti}:${requestCount}`,
+            clientId: claims.clientId,
+            source: 'code_agent_gateway',
+            costUsd,
+            provider: claims.provider,
+            modelId: claims.modelId,
+            roomId: claims.roomId,
+            turnId: claims.turnId,
+          })
+        : null;
       await this.recordObservabilityEvent(claims, {
         level: 'info',
         event: 'code_agent.model_gateway.settled',
@@ -774,6 +890,10 @@ export class CodeAgentModelGateway {
           totalTokens: usage.totalTokens,
           cachedPromptTokens: usage.cachedPromptTokens,
           cacheHitRate: usage.cacheHitRate,
+          billingAccountId: accountSettlement?.accountId,
+          creditAppliedUsd: accountSettlement?.creditAppliedUsd,
+          creditBalanceUsd: accountSettlement?.creditBalanceUsd,
+          billingDuplicate: accountSettlement?.duplicate,
         },
       });
       if (result.actualCostUsd > claims.budgetUsd) {

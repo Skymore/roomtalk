@@ -1,6 +1,6 @@
 import http from 'node:http';
 import dotenv from 'dotenv';
-import { Worker } from 'bullmq';
+import { DelayedError, Worker } from 'bullmq';
 import { createClient } from 'redis';
 import { Logger } from './logger';
 import { createPostgresPool } from './repositories/postgresPool';
@@ -103,12 +103,22 @@ const start = async () => {
       const data = decodeAssistantRunJobData(job.data);
       if (!data) throw new Error(`Invalid assistant run BullMQ payload for job ${job.id || 'unknown'}`);
       const run = await store.getAssistantRun(data.runId);
+      const providerWaiterId = `assistant-run:${data.runId}`;
       if (
         !run
         || run.status === 'complete'
         || run.status === 'error'
         || run.status === 'cancelled'
       ) {
+        if (run) {
+          await providerAdmission.cancel(run.provider, providerWaiterId).catch(error => {
+            logger.error('Failed to cancel stale provider admission waiter', {
+              error,
+              runId: data.runId,
+              provider: run.provider,
+            });
+          });
+        }
         return processAssistantRunJob(data, {
           store,
           logger,
@@ -116,7 +126,18 @@ const start = async () => {
           execute: async () => undefined,
         });
       }
-      const admission = await providerAdmission.acquire(run.provider);
+      const admissionAttempt = await providerAdmission.tryAcquire(run.provider, {
+        requestId: providerWaiterId,
+        priority: run.queuePriority,
+      });
+      if (!admissionAttempt.lease) {
+        await job.moveToDelayed(
+          Date.now() + Math.min(1_000, Math.max(25, admissionAttempt.retryAfterMs)),
+          job.token,
+        );
+        throw new DelayedError();
+      }
+      const admission = admissionAttempt.lease;
       try {
         return await processAssistantRunJob(data, {
           store,

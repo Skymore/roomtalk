@@ -10,7 +10,7 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { AccountCreditGrantInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, PendingMediaUpload, UpdateAccountMembershipInput } from '../repositories/store';
+import { AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, PendingMediaUpload, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
@@ -47,6 +47,7 @@ type TestServer = {
     pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     accounts: Map<string, ClientAccount>;
     entitlements: Map<string, AccountEntitlement>;
+    membershipChangeEntitlements: Map<string, AccountEntitlement>;
     googleSubjectAccountIds: Map<string, string>;
     clientAccountLinks: Map<string, string>;
     clientPasswords: Map<string, string>;
@@ -63,10 +64,12 @@ type TestServer = {
     getAccountByClientId: (clientId: string) => Promise<ClientAccount | null>;
     getAccountByGoogleSubject: (providerSubject: string) => Promise<ClientAccount | null>;
     createPasswordAccountForClient: (input: CreatePasswordAccountInput) => Promise<ClientAccount | null>;
+    setPasswordAccountCredentials: (input: SetPasswordAccountCredentialsInput) => Promise<ClientAccount | null>;
     createGoogleAccountForClient: (input: CreateGoogleAccountInput) => Promise<ClientAccount | null>;
     updateGoogleAccountLogin: (accountId: string, profile: GoogleAccountProfile, now?: string) => Promise<ClientAccount | null>;
     getAccountEntitlementByClientId: (clientId: string) => Promise<AccountEntitlement | null>;
     updateAccountMembership: (input: UpdateAccountMembershipInput) => Promise<AccountEntitlement | null>;
+    applyAccountMembershipChange: (input: AccountMembershipChangeInput) => Promise<AccountEntitlement | null>;
     grantAccountCredits: (input: AccountCreditGrantInput) => Promise<AccountEntitlement | null>;
     setClientPasswordHash: (clientId: string, passwordHash: string) => Promise<void>;
     getClientPasswordHash: (clientId: string) => Promise<string | null>;
@@ -205,6 +208,7 @@ async function createTestServer(overrides: {
   socketAdapterReady?: Parameters<typeof registerApiRoutes>[1]['socketAdapterReady'];
   assistantQueueHealth?: Parameters<typeof registerApiRoutes>[1]['assistantQueueHealth'];
   membershipAdminToken?: Parameters<typeof registerApiRoutes>[1]['membershipAdminToken'];
+  clientLoginRateLimiter?: Parameters<typeof registerApiRoutes>[1]['clientLoginRateLimiter'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -224,6 +228,7 @@ async function createTestServer(overrides: {
     pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     accounts: new Map<string, ClientAccount>(),
     entitlements: new Map<string, AccountEntitlement>(),
+    membershipChangeEntitlements: new Map<string, AccountEntitlement>(),
     googleSubjectAccountIds: new Map<string, string>(),
     clientAccountLinks: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
@@ -312,6 +317,16 @@ async function createTestServer(overrides: {
         queuePriority: scheduling.queuePriority,
         updatedAt: now,
       });
+      return account;
+    },
+    async setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput) {
+      const account = await this.createPasswordAccountForClient(input);
+      if (!account || account.accountId !== input.accountId) {
+        return null;
+      }
+      this.clientPasswords.set(input.clientId, input.passwordHash);
+      await this.deleteClientAuthTokens(input.clientId);
+      this.clientAuthTokens.set(input.authToken.tokenHash, input.authToken);
       return account;
     },
     async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
@@ -414,6 +429,27 @@ async function createTestServer(overrides: {
         updatedAt: input.now || '2026-05-03T00:00:00.000Z',
       };
       this.entitlements.set(input.accountId, entitlement);
+      return entitlement;
+    },
+    async applyAccountMembershipChange(input: AccountMembershipChangeInput) {
+      const existing = this.membershipChangeEntitlements.get(input.idempotencyKey);
+      if (existing) return existing;
+      let entitlement = await this.updateAccountMembership(input);
+      if (!entitlement) return null;
+      if (input.creditGrantUsd !== undefined) {
+        entitlement = await this.grantAccountCredits({
+          id: `membership-credit:${input.id}`,
+          accountId: input.accountId,
+          amountUsd: input.creditGrantUsd,
+          idempotencyKey: input.idempotencyKey,
+          note: input.creditNote,
+          metadata: input.metadata,
+          now: input.now,
+        });
+      }
+      if (entitlement) {
+        this.membershipChangeEntitlements.set(input.idempotencyKey, entitlement);
+      }
       return entitlement;
     },
     async grantAccountCredits(input: AccountCreditGrantInput) {
@@ -703,6 +739,12 @@ async function createTestServer(overrides: {
     codeAgentDefaultMode: 'plan',
     mediaUploadCleanup: overrides.mediaUploadCleanup,
     membershipAdminToken: overrides.membershipAdminToken,
+    clientLoginRateLimiter: overrides.clientLoginRateLimiter || {
+      async consume() {
+        return { allowed: true, retryAfterSeconds: 1 };
+      },
+      async resetClient() {},
+    },
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -1062,6 +1104,9 @@ describe('API routes', () => {
     assert.equal(typeof setPasswordPayload.clientAuthToken, 'string');
     assert.ok(setPasswordPayload.clientAuthToken.length > 20);
     assert.equal(server.store.clientPasswords.has('client-1'), true);
+    const issuedPasswordToken = [...server.store.clientAuthTokens.values()][0];
+    assert.ok(issuedPasswordToken?.expiresAt);
+    assert.ok(Date.parse(issuedPasswordToken!.expiresAt!) > Date.now());
 
     const updatedStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
     assert.equal(updatedStatusResponse.status, 200);
@@ -1095,6 +1140,60 @@ describe('API routes', () => {
     assert.equal(loginWithNicknameResponse.status, 200);
     const loginWithNicknamePayload = await loginWithNicknameResponse.json() as { nickname: string | null };
     assert.equal(loginWithNicknamePayload.nickname, 'Ada');
+  });
+
+  it('rate limits password authentication and returns a Retry-After boundary', async () => {
+    await server.close();
+    server = await createTestServer({
+      clientLoginRateLimiter: {
+        async consume() {
+          return { allowed: false, retryAfterSeconds: 42 };
+        },
+        async resetClient() {},
+      },
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/client-auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('retry-after'), '42');
+    assert.deepEqual(await response.json(), {
+      error: 'Too many authentication attempts. Try again later.',
+    });
+  });
+
+  it('does not persist partial password credentials when the atomic store operation fails', async () => {
+    server.store.setPasswordAccountCredentials = async () => {
+      throw new Error('forced credential transaction failure');
+    };
+
+    const response = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-atomic', password: 'password-1' }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal(server.store.clientPasswords.has('client-atomic'), false);
+    assert.equal(server.store.clientAccountLinks.has('client-atomic'), false);
+    assert.equal(
+      [...server.store.clientAuthTokens.values()].some(token => token.clientId === 'client-atomic'),
+      false,
+    );
+  });
+
+  it('fails closed when account authentication storage is unavailable', async () => {
+    server.store.getClientPasswordHash = async () => {
+      throw new Error('forced authentication read failure');
+    };
+
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1`);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      error: 'Authentication service temporarily unavailable',
+    });
   });
 
   it('updates membership and grants credits through the protected admin boundary', async () => {
@@ -1156,6 +1255,47 @@ describe('API routes', () => {
     assert.equal(payload.entitlement.tier, 'pro');
     assert.equal(payload.entitlement.creditBalanceUsd, 20);
     assert.equal(payload.entitlement.queuePriority, 20);
+
+    const retry = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer membership-secret',
+          'Idempotency-Key': 'invoice-1',
+        },
+        body: JSON.stringify({
+          tier: 'pro',
+          status: 'active',
+          creditGrantUsd: 20,
+        }),
+      },
+    );
+    assert.equal(retry.status, 200);
+    const retryPayload = await retry.json() as { entitlement: AccountEntitlement };
+    assert.equal(retryPayload.entitlement.creditBalanceUsd, 20);
+
+    server.store.applyAccountMembershipChange = async () => {
+      throw new Error('Membership idempotency key is already bound to a different change');
+    };
+    const conflict = await fetch(
+      `${server.baseUrl}/api/admin/accounts/${passwordPayload.account.accountId}/membership`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer membership-secret',
+          'Idempotency-Key': 'invoice-1',
+        },
+        body: JSON.stringify({
+          tier: 'priority',
+          status: 'active',
+          creditGrantUsd: 20,
+        }),
+      },
+    );
+    assert.equal(conflict.status, 409);
   });
 
   it('requires valid client auth tokens after a User ID password is set', async () => {

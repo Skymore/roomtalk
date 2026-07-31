@@ -31,6 +31,7 @@ const ROOMTALK_TABLES = [
   'account_identities',
   'client_account_links',
   'account_memberships',
+  'account_membership_events',
   'account_credit_balances',
   'account_credit_ledger',
   'account_ai_usage_events',
