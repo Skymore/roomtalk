@@ -18,6 +18,7 @@
     "migrate:code-agent-naming": "ts-node src/scripts/migrateCodeAgentNaming.ts",
     "backfill:misrouted-coco-costs": "ts-node src/scripts/backfillMisroutedCocoCosts.ts",
     "backfill:misrouted-coco-model-steps": "ts-node src/scripts/backfillMisroutedCocoModelSteps.ts",
+    "backfill:lifetime-ai-usage": "ts-node src/scripts/backfillLifetimeAIUsage.ts",
     "migrate:codex-sandboxes": "ts-node src/scripts/migrateCodexSandboxes.ts",
     "provision:postgres-app-user": "ts-node src/scripts/provisionPostgresAppUser.ts",
     "admin:set-role": "ts-node src/scripts/setPlatformAdmin.ts",
