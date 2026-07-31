@@ -318,8 +318,8 @@
 </head>
 <body>
 <div class="architecture-note">
-  <span data-lang="zh">当前代码架构版本：2026-07-29；生产发布状态单独记录，不用文档版本冒充部署证据。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、普通 AI stream 与 Code Agent turn 都有明确 ownership。普通 AI 用 <code>assistant_runs</code> generation；Code Agent 用 <code>{roomId, turnId, ownerId, fence}</code> room lease claim。完成的 Codex turn 还会进入 Agent-owned workspace revision DAG；跨 checkpoint 恢复按 LCA undo/redo，任一路径有 hash 冲突就整次回滚，不让文件与隐藏 context 落在两条分支。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
-  <span data-lang="en">Current source architecture: 2026-07-29. Production rollout is recorded separately rather than inferred from a documentation version. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, ordinary AI streams, and Code Agent turns each have explicit ownership. Ordinary AI uses an <code>assistant_runs</code> generation; Code Agent uses a <code>{roomId, turnId, ownerId, fence}</code> room-lease claim. Completed Codex turns also form an Agent-owned workspace revision DAG. Cross-checkpoint restore follows an LCA undo/redo path and rolls the whole operation back on any hash conflict, so files and hidden context never land on different branches. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
+  <span data-lang="zh">当前代码架构版本：2026-07-31；生产发布状态单独记录，不用文档版本冒充部署证据。Canonical PostgreSQL 状态 + 每房间有界、不可变的 after-image changelog 是唯一 durable 同步边界；NOTIFY 只是唤醒 hint，每个 App 只用 <code>io.local</code> 通知本机 Socket。连续 payload 直接应用，缺序补拉，单事件超限或落后超过 500 events 则切 snapshot。Redis presence、普通 AI stream 与 Code Agent turn 都有明确 ownership。普通 AI 用 <code>assistant_runs</code> generation；Code Agent 用 <code>{roomId, turnId, ownerId, fence}</code> room lease claim。RoomTalk 作为 harness control plane 统一编排 Coco、Codex app-server、OpenCode 与 Hermes Agent；后两者共享 capability-negotiated ACP adapter，并只通过 turn-scoped model gateway 访问模型。完成的 Codex turn 还会进入 Agent-owned workspace revision DAG；跨 checkpoint 恢复按 LCA undo/redo，任一路径有 hash 冲突就整次回滚，不让文件与隐藏 context 落在两条分支。详见 <a href="room-event-sync-portable-deployment.zh.md" style="color:#58a6ff">房间事件同步架构</a>。</span>
+  <span data-lang="en">Current source architecture: 2026-07-31. Production rollout is recorded separately rather than inferred from a documentation version. Canonical PostgreSQL state plus a bounded immutable per-room after-image changelog is the sole durable synchronization boundary. NOTIFY is only a wake-up hint, and each app informs only its local sockets with <code>io.local</code>. Contiguous payloads apply immediately; missing sequences replay; an oversized event or a gap over 500 events switches to a snapshot. Redis presence, ordinary AI streams, and Code Agent turns each have explicit ownership. Ordinary AI uses an <code>assistant_runs</code> generation; Code Agent uses a <code>{roomId, turnId, ownerId, fence}</code> room-lease claim. RoomTalk is the harness control plane for Coco, Codex app-server, OpenCode, and Hermes Agent; the latter two share a capability-negotiated ACP adapter and access models only through a turn-scoped gateway. Completed Codex turns also form an Agent-owned workspace revision DAG. Cross-checkpoint restore follows an LCA undo/redo path and rolls the whole operation back on any hash conflict, so files and hidden context never land on different branches. See the <a href="room-event-sync-portable-deployment.md" style="color:#58a6ff">room-event architecture</a>.</span>
 </div>
 <div class="lang-toggle">
   <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
@@ -385,10 +385,10 @@
 <h2 id="intro"><span data-lang="zh">一、30 秒项目介绍</span><span data-lang="en">1. 30-Second Pitch</span></h2>
 
 <blockquote data-lang="zh">
-RoomTalk 是一个实时 AI 协作平台。多人和 AI 可以在共享房间里对话，也可以让 Coco 或 Codex 在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器提供文件编辑、Git diff 审阅、行级 review comment、PTY terminal 和 dev-server preview，还能把静态产物发布到不受 sandbox 生命周期影响的稳定 URL。RoomTalk 目前通过 Docker Compose 和 Cloudflare Tunnel 运行在 MacBook 上。PostgreSQL 保存 canonical state、room event 与 <code>assistant_runs</code> 业务事实；Redis 同时承载 realtime/cache 和 AOF-backed BullMQ 调度；App 与独立 AI Worker 使用同一个 Node/TypeScript 镜像；SeaweedFS 提供 S3-compatible 对象存储。每个 Code Agent 房间另有独立 E2B execution plane，通过可复用 JSONL daemon 运行 Coco 或 Codex app-server。
+RoomTalk 是一个实时 AI 协作平台。多人和 AI 可以在共享房间里对话，也可以选择 Coco、Codex app-server、OpenCode 或 Hermes Agent，在房间绑定的沙盒 workspace 中修改代码、运行测试和启动应用。浏览器提供文件编辑、Git diff 审阅、行级 review comment、PTY terminal 和 dev-server preview，还能把静态产物发布到不受 sandbox 生命周期影响的稳定 URL。RoomTalk 目前通过 Docker Compose 和 Cloudflare Tunnel 运行在 MacBook 上。PostgreSQL 保存 canonical state、room event 与 <code>assistant_runs</code> 业务事实；Redis 同时承载 realtime/cache 和 AOF-backed BullMQ 调度；App 与独立 AI Worker 使用同一个 Node/TypeScript 镜像；SeaweedFS 提供 S3-compatible 对象存储。每个 Code Agent 房间另有独立 E2B execution plane，可复用 JSONL daemon 把统一 turn lifecycle 路由到所选 harness；OpenCode 与 Hermes 通过共享 ACP adapter 和 RoomTalk model gateway 接入。
 </blockquote>
 <blockquote data-lang="en">
-RoomTalk is a realtime AI collaboration platform. People and AI share rooms, while Coco or Codex can edit code, run tests, and start applications in a sandboxed workspace bound to each room. The browser includes file editing, Git diff review, line-level comments, a PTY terminal, and dev-server previews. It can also publish static artifacts to stable URLs that outlive the sandbox. RoomTalk runs on a MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL stores canonical state, room events, and <code>assistant_runs</code> business facts; Redis serves realtime/cache plus AOF-backed BullMQ scheduling; App and a dedicated AI Worker run the same Node/TypeScript image; SeaweedFS provides S3-compatible object storage. Each code-agent room has a separate E2B execution plane where a reusable JSONL daemon runs Coco or Codex app-server.
+RoomTalk is a realtime AI collaboration platform. People and AI share rooms, while users can select Coco, Codex app-server, OpenCode, or Hermes Agent to edit code, run tests, and start applications in a sandboxed workspace bound to each room. The browser includes file editing, Git diff review, line-level comments, a PTY terminal, and dev-server previews. It can also publish static artifacts to stable URLs that outlive the sandbox. RoomTalk runs on a MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL stores canonical state, room events, and <code>assistant_runs</code> business facts; Redis serves realtime/cache plus AOF-backed BullMQ scheduling; App and a dedicated AI Worker run the same Node/TypeScript image; SeaweedFS provides S3-compatible object storage. Each code-agent room has a separate E2B execution plane where a reusable JSONL daemon routes one normalized turn lifecycle to the selected harness. OpenCode and Hermes connect through a shared ACP adapter and the RoomTalk model gateway.
 </blockquote>
 
 <p data-lang="zh">面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
@@ -417,7 +417,8 @@ RoomTalk is a realtime AI collaboration platform. People and AI share rooms, whi
                                    │ lifecycle + JSONL protocol
 ┌──────────────────────────────────▼──────────────────────────────────┐
 │ Per-room E2B execution plane                                       │
-│ reusable daemon → Coco (in-house CLI) | Codex (room-owner subscription) │
+│ reusable daemon → Coco | Codex app-server | OpenCode ACP | Hermes ACP   │
+│ native + ACP adapters · capability gates · turn-scoped model gateway    │
 │ /workspace → Git · files · PTY · processes · dev-server previews   │
 │ roomtalk CLI → context broker · model gateway · site publishing    │
 └─────────────────────────────────────────────────────────────────────┘</div>
@@ -562,8 +563,8 @@ Large file bodies do not pass through the RoomTalk app. The client first request
 
 <h3 id="arch-agent"><span data-lang="zh">5. Code Agent: 两个 Security Plane / 三层 Runtime</span><span data-lang="en">5. Code Agent: Two Security Planes / Three Runtime Layers</span></h3>
 
-<p data-lang="zh">Code Agent 房间不是"后端替模型执行几个 Shell 命令"。安全边界分成两个 plane：可信的 RoomTalk control plane 与隔离的 E2B execution plane；实际请求链路再分成三层 runtime：<strong>RoomTalk 编排 → sandbox-local JSONL daemon/runner → Coco 或 Codex app-server backend。</strong>完整边界如下：</p>
-<p data-lang="en">A code-agent room is not "the backend running a few shell commands for the model." The security boundary has two planes: the trusted RoomTalk control plane and the isolated E2B execution plane. The request path has three runtime layers: <strong>RoomTalk orchestration → sandbox-local JSONL daemon/runner → Coco or Codex app-server backend.</strong> The full boundary is:</p>
+<p data-lang="zh">Code Agent 房间不是"后端替模型执行几个 Shell 命令"。安全边界分成两个 plane：可信的 RoomTalk control plane 与隔离的 E2B execution plane；实际请求链路再分成三层 runtime：<strong>RoomTalk 编排 → sandbox-local JSONL daemon/runner → Coco、Codex app-server、OpenCode 或 Hermes Agent harness。</strong>完整边界如下：</p>
+<p data-lang="en">A code-agent room is not "the backend running a few shell commands for the model." The security boundary has two planes: the trusted RoomTalk control plane and the isolated E2B execution plane. The request path has three runtime layers: <strong>RoomTalk orchestration → sandbox-local JSONL daemon/runner → the Coco, Codex app-server, OpenCode, or Hermes Agent harness.</strong> The full boundary is:</p>
 
 <table data-lang="zh">
   <thead><tr><th>组件</th><th>负责</th><th>不负责</th></tr></thead>
@@ -572,7 +573,7 @@ Large file bodies do not pass through the RoomTalk app. The client first request
     <tr><td>RoomTalk control plane</td><td>身份、房间权限、turn 编排、message position、usage/cost、scoped token、sandbox lifecycle</td><td>在应用容器执行用户命令</td></tr>
     <tr><td>E2B execution plane</td><td>隔离边界、<code>/workspace</code>、Git、PTY、进程和 dev server</td><td>成员权限、持久消息、公开 URL 所有权</td></tr>
     <tr><td>Sandbox daemon / runner</td><td>JSONL request/control、turn 串行化、backend 路由、事件归一化和 <code>turn_released</code></td><td>房间授权、Agent 推理和 durable truth</td></tr>
-    <tr><td>Agent backend</td><td>自研 Coco 或用户订阅的 Codex app-server；推理、原生 tool loop、session/thread</td><td>RoomTalk 数据库、其他成员凭据和基础设施 secret</td></tr>
+    <tr><td>Agent harness</td><td>Coco、Codex app-server、OpenCode 或 Hermes Agent；推理、tool loop 与 backend session</td><td>RoomTalk 数据库、其他成员凭据和基础设施 secret</td></tr>
   </tbody>
 </table>
 <table data-lang="en">
@@ -582,15 +583,43 @@ Large file bodies do not pass through the RoomTalk app. The client first request
     <tr><td>RoomTalk control plane</td><td>Identity, room access, turn orchestration, message positions, usage/cost, scoped tokens, sandbox lifecycle</td><td>Executing user commands inside the application container</td></tr>
     <tr><td>E2B execution plane</td><td>Isolation boundary, <code>/workspace</code>, Git, PTY, processes, and dev servers</td><td>Membership, durable messages, public URL ownership</td></tr>
     <tr><td>Sandbox daemon / runner</td><td>JSONL requests/controls, turn serialization, backend routing, event normalization, and <code>turn_released</code></td><td>Room authorization, agent reasoning, durable truth</td></tr>
-    <tr><td>Agent backend</td><td>In-house Coco or subscription-backed Codex app-server; reasoning, native tool loop, session/thread state</td><td>RoomTalk database, other members' credentials, infrastructure secrets</td></tr>
+    <tr><td>Agent harness</td><td>Coco, Codex app-server, OpenCode, or Hermes Agent; reasoning, tool loops, and backend sessions</td><td>RoomTalk database, other members' credentials, infrastructure secrets</td></tr>
   </tbody>
 </table>
 
+<table data-lang="zh">
+  <thead><tr><th>产品 Backend</th><th>接入方式</th><th>关键边界</th></tr></thead>
+  <tbody>
+    <tr><td><code>code-agent</code> / Coco</td><td>原生 runner adapter</td><td>自研 Agent 路径；保留自己的 tool/session 语义</td></tr>
+    <tr><td><code>codex-app-server</code></td><td>Codex app-server adapter + 房主 subscription auth</td><td>支持 Codex thread、live steer 与精确 context fork</td></tr>
+    <tr><td><code>opencode</code></td><td>共享 ACP adapter + RoomTalk model gateway</td><td>只声明 ACP 实际协商成功的 permission/session/control 能力</td></tr>
+    <tr><td><code>hermes-agent</code></td><td>共享 ACP adapter + RoomTalk model gateway</td><td>使用隔离 named provider，避免模型被隐式改路由</td></tr>
+  </tbody>
+</table>
+<table data-lang="en">
+  <thead><tr><th>Product Backend</th><th>Integration</th><th>Key Boundary</th></tr></thead>
+  <tbody>
+    <tr><td><code>code-agent</code> / Coco</td><td>Native runner adapter</td><td>In-house agent path with its own tool and session semantics</td></tr>
+    <tr><td><code>codex-app-server</code></td><td>Codex app-server adapter plus room-owner subscription auth</td><td>Codex threads, live steering, and exact context forks</td></tr>
+    <tr><td><code>opencode</code></td><td>Shared ACP adapter plus RoomTalk model gateway</td><td>Advertises only permission, session, and control capabilities actually negotiated through ACP</td></tr>
+    <tr><td><code>hermes-agent</code></td><td>Shared ACP adapter plus RoomTalk model gateway</td><td>Uses an isolated named provider so model selection cannot silently reroute</td></tr>
+  </tbody>
+</table>
+
+<div class="card warn" data-lang="zh">
+  <h4>边界：Harness 编排层，不是 Multi-Agent 调度器</h4>
+  <p>RoomTalk 已经是 Agent harness 的 control plane：统一 backend 选择、turn ownership、sandbox、session、permission、tool/usage 事件、审批、取消和模型网关。当前执行单位仍是“一个 room turn 选择一个 harness”；它还不负责 multi-agent DAG、并行 fan-out、角色协作或跨 Agent 任务调度。服务端只有在 model gateway 已配置且生产 pin 命中确切 multi-harness artifact 时才广告 OpenCode/Hermes，避免滚动发布期间把新 UI 接到旧 sandbox。</p>
+</div>
+<div class="card warn" data-lang="en">
+  <h4>Boundary: Harness Orchestration, Not a Multi-Agent Scheduler</h4>
+  <p>RoomTalk is the control plane for agent harnesses: it normalizes backend selection, turn ownership, sandboxes, sessions, permissions, tool/usage events, approvals, cancellation, and model access. The execution unit is still one selected harness per room turn; RoomTalk does not yet schedule multi-agent DAGs, parallel fan-out, role collaboration, or cross-agent tasks. The server advertises OpenCode and Hermes only when the model gateway is configured and production is pinned to the exact multi-harness artifact, so a rolling release cannot connect new UI to an old sandbox.</p>
+</div>
+
 <blockquote data-lang="zh">
-我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。安全上分为 RoomTalk control plane 和 E2B execution plane；运行时请求经过 RoomTalk 编排、sandbox-local daemon/runner、Coco 或 Codex app-server 三层。版本化 JSONL 协议把控制面与 daemon 隔开，backend adapter 再把 daemon 与 Agent tool loop 隔开，所以三层可以独立演进和测试。
+我把这个系统设计成共享 cloud code-agent room，而不是 remote shell widget。安全上分为 RoomTalk control plane 和 E2B execution plane；运行时请求经过 RoomTalk 编排、sandbox-local daemon/runner、所选 Agent harness 三层。版本化 JSONL 协议把控制面与 daemon 隔开，native/ACP adapter 再把 daemon 与 Coco、Codex app-server、OpenCode 或 Hermes tool loop 隔开，所以三层可以独立演进和测试。
 </blockquote>
 <blockquote data-lang="en">
-I designed it as a shared cloud code-agent room, not a remote-shell widget. Security is split between the RoomTalk control plane and E2B execution plane; runtime requests pass through three layers: RoomTalk orchestration, the sandbox-local daemon/runner, and Coco or Codex app-server. Versioned JSONL separates the control plane from the daemon, while backend adapters separate the daemon from each agent tool loop, so the layers can evolve and be tested independently.
+I designed it as a shared cloud code-agent room, not a remote-shell widget. Security is split between the RoomTalk control plane and E2B execution plane; runtime requests pass through three layers: RoomTalk orchestration, the sandbox-local daemon/runner, and the selected agent harness. Versioned JSONL separates the control plane from the daemon, while native and ACP adapters separate the daemon from the Coco, Codex app-server, OpenCode, or Hermes tool loop, so the layers can evolve and be tested independently.
 </blockquote>
 
 <h3 id="arch-security"><span data-lang="zh">6. 权限、Context 与 Scoped Token</span><span data-lang="en">6. Permissions, Context, and Scoped Tokens</span></h3>
@@ -661,13 +690,13 @@ User opens Git diff ── comments on line 42 ──▶ structured review conte
 <p data-lang="zh"><strong>问题</strong>：Agent 要读写文件、安装依赖、运行测试和启动服务，但这些命令不能进入拥有生产凭据的 RoomTalk 应用进程；同时房间成员、消息、权限、计费和恢复又必须由 RoomTalk 统一管理。</p>
 <p data-lang="en"><strong>Problem</strong>: The agent must edit files, install dependencies, run tests, and start services, but none of that can execute in the RoomTalk application process that owns production credentials. Room membership, messages, permissions, billing, and recovery still need one RoomTalk source of truth.</p>
 
-<p data-lang="zh"><strong>方案</strong>：安全边界拆成 control plane 与 execution plane，运行时链路拆成 RoomTalk → daemon/runner → Agent backend 三层。每个房间绑定一个 E2B sandbox。<code>CodeAgentSessionService</code> 先用一个 PostgreSQL 事务锁定 room、递增 lease fence、物化 prompt、创建 placeholder/turn 并把 room 标为 running；提交后才返回 ack。接着签发 scoped capability，把版本化 JSONL request 交给 daemon，由它路由到自研 Coco 或 Codex app-server。运行中由执行过程产生的 text/tool/model-step 与 steer materialization 都携带同一 turn claim，持久化成功后才广播。结束时再用一个事务收敛最终消息、费用、room/session、turn 与精确 lease release。</p>
-<p data-lang="en"><strong>Solution</strong>: Split the security boundary into control and execution planes, then split the runtime path into three layers: RoomTalk → daemon/runner → agent backend. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> first uses one PostgreSQL transaction to lock the room, increment the lease fence, materialize the prompt, create the placeholder/turn, and mark the room running; acknowledgement follows commit. It then issues scoped capabilities and hands the versioned JSONL request to the daemon, which routes it to the self-built Coco agent or Codex app-server. Every execution-produced text/tool/model-step write and steering materialization carries the same turn claim and is broadcast only after persistence succeeds. A second transaction converges the final message, cost, room/session, turn, and exact lease release.</p>
+<p data-lang="zh"><strong>方案</strong>：安全边界拆成 control plane 与 execution plane，运行时链路拆成 RoomTalk → daemon/runner → Agent harness 三层。每个房间绑定一个 E2B sandbox。<code>CodeAgentSessionService</code> 先用一个 PostgreSQL 事务锁定 room、递增 lease fence、物化 prompt、创建 placeholder/turn 并把 room 标为 running；提交后才返回 ack。接着签发 scoped capability，把版本化 JSONL request 交给 daemon，由它路由到 Coco、Codex app-server、OpenCode 或 Hermes Agent。OpenCode/Hermes 共用 capability-negotiated ACP adapter，把 text/tool/usage/permission/cancel/session 映射为同一 RoomTalk 协议，并只通过 turn-scoped gateway 访问模型。运行中由执行过程产生的 text/tool/model-step 与 steer materialization 都携带同一 turn claim，持久化成功后才广播。结束时再用一个事务收敛最终消息、费用、room/session、turn 与精确 lease release。</p>
+<p data-lang="en"><strong>Solution</strong>: Split the security boundary into control and execution planes, then split the runtime path into three layers: RoomTalk → daemon/runner → agent harness. Each room binds to one E2B sandbox. <code>CodeAgentSessionService</code> first uses one PostgreSQL transaction to lock the room, increment the lease fence, materialize the prompt, create the placeholder/turn, and mark the room running; acknowledgement follows commit. It then issues scoped capabilities and hands the versioned JSONL request to the daemon, which routes it to Coco, Codex app-server, OpenCode, or Hermes Agent. OpenCode and Hermes share a capability-negotiated ACP adapter that maps text, tools, usage, permissions, cancellation, and sessions into one RoomTalk protocol, and they reach models only through a turn-scoped gateway. Every execution-produced text/tool/model-step write and steering materialization carries the same turn claim and is broadcast only after persistence succeeds. A second transaction converges the final message, cost, room/session, turn, and exact lease release.</p>
 
 <div class="diagram">1. Browser ──authenticated Socket.IO prompt──▶ RoomTalk control plane
 2. RoomTalk ──one transaction──▶ prompt + placeholder + turn + fenced lease
 3. RoomTalk ──resume E2B + issue turn-scoped capabilities──▶ JSONL daemon
-4. Daemon ──route──▶ Coco (self-built CLI) | Codex app-server
+4. Daemon ──route──▶ Coco | Codex app-server | OpenCode ACP | Hermes ACP
 5. /workspace tools ──ordered events──▶ fenced persist ──▶ broadcast
 6. final/error ──one transaction──▶ message + cost + room/session + turn + lease</div>
 
@@ -1826,11 +1855,11 @@ AI context passes through three filters. A retry or edit first truncates history
   <tbody>
     <tr><td>服务端 contract</td><td>Node test runner</td><td>store/socket、snapshot/event API、turn protocol、ordering、lifecycle、daemon registry、model gateway、publish</td></tr>
     <tr><td>真实 PostgreSQL</td><td>Integration test</td><td>trigger、repeatable snapshot、连续 seq、并发 writer、rollback、retention、delete authorization</td></tr>
-    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex mapping、mode、broker/CLI、control、image input、顺序事件</td></tr>
+    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex app-server/OpenCode/Hermes 路由、ACP capability mapping、mode、broker/CLI、approval/cancel/session、image input、顺序事件</td></tr>
     <tr><td>客户端 component</td><td>Vitest + RTL</td><td>event reducer、cache resume/gap/expiry、消息/turn、queue、files/diff/review、terminal、browser</td></tr>
     <tr><td>PostgreSQL E2E</td><td>Playwright</td><td>reload、offline replay、two-client、AI/media/share、edit/delete/clear 与 tombstone</td></tr>
     <tr><td>本地 runtime</td><td>Docker Compose smoke</td><td>health、restart、paired backup/restore、public HTTP/WebSocket/S3 edge</td></tr>
-    <tr><td>真实 sandbox smoke</td><td>E2B</td><td>固定 artifact、daemon/backend、permission、context、toolchain、publish</td></tr>
+    <tr><td>真实 sandbox smoke</td><td>E2B</td><td>固定 artifact、四种 backend、OpenCode/Hermes ACP lifecycle、生产 model gateway streaming、permission、context、toolchain、publish</td></tr>
     <tr><td>i18n 完整性</td><td>check:i18n</td><td>build 时校验所有翻译 key</td></tr>
   </tbody>
 </table>
@@ -1841,11 +1870,11 @@ AI context passes through three filters. A retry or edit first truncates history
   <tbody>
     <tr><td>Server contracts</td><td>Node test runner</td><td>Store/socket, snapshot/event API, turn protocol, ordering, lifecycle, daemon registry, model gateway, publishing</td></tr>
     <tr><td>Real PostgreSQL</td><td>Integration tests</td><td>Triggers, repeatable snapshots, contiguous sequences, concurrent writers, rollback, retention, delete authorization</td></tr>
-    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex mapping, modes, broker/CLI, controls, image input, ordered events</td></tr>
+    <tr><td>Runner / daemon</td><td>Pytest</td><td>Coco/Codex app-server/OpenCode/Hermes routing, ACP capability mapping, modes, broker/CLI, approval/cancellation/sessions, image input, and ordered events</td></tr>
     <tr><td>Client components</td><td>Vitest + RTL</td><td>Event reducer, cache resume/gap/expiry, messages/turns, queue, files/diffs/reviews, terminal, browser</td></tr>
     <tr><td>PostgreSQL E2E</td><td>Playwright</td><td>Reload, offline replay, two clients, AI/media/share, edit/delete/clear, and tombstones</td></tr>
     <tr><td>Local runtime</td><td>Docker Compose smoke</td><td>Health, restart, paired backup/restore, public HTTP/WebSocket/S3 edge</td></tr>
-    <tr><td>Real sandbox smoke</td><td>E2B</td><td>Pinned artifact, daemon/backend, permissions, context, toolchain, publishing</td></tr>
+    <tr><td>Real sandbox smoke</td><td>E2B</td><td>Pinned artifact, all four backends, OpenCode/Hermes ACP lifecycle, production model-gateway streaming, permissions, context, toolchains, and publishing</td></tr>
     <tr><td>i18n completeness</td><td>check:i18n</td><td>build-time validation of all translation keys</td></tr>
   </tbody>
 </table>
@@ -1868,18 +1897,18 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
   <h4>故事 1：从聊天功能演进为共享 Code Agent Runtime</h4>
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk 已支持 AI chat，但模型不能安全地读写项目、运行命令，也没有多人可检查的 workspace 或可靠的长任务生命周期。</div>
-    <div class="star-label t">Task</div><div class="star-val">在不把不可信执行放进 RoomTalk control plane、也不重写 Coco/Codex 工具循环的前提下，构建生产可用的共享 cloud code-agent room。</div>
-    <div class="star-label a">Action</div><div class="star-val">设计两个 security plane、三层 runtime：RoomTalk control plane → E2B 中的 JSONL daemon/runner → 自研 Coco 或用户订阅的 Codex app-server；加入四种权限模式、scoped model/context/publish capability、按 turn 持久化与 queue/steer/interrupt，并在前端加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
-    <div class="star-label r">Result</div><div class="star-val">同一房间可以持续完成代码任务并在刷新后保留可审计 transcript；sandbox 可 pause/autoResume，artifact URL 独立于 sandbox 存活；Node/Vitest/Playwright/E2B smoke 覆盖关键边界。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不把不可信执行放进 RoomTalk control plane、也不重写各 Agent 工具循环的前提下，构建生产可用、可扩展到多种 harness 的共享 cloud code-agent room。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计两个 security plane、三层 runtime：RoomTalk control plane → E2B 中的 JSONL daemon/runner → 可插拔 Agent harness；为 Coco 与 Codex app-server 保留 native adapter，为 OpenCode/Hermes 加入共享 ACP adapter；统一 capability negotiation、model gateway、permission/approval、session、cancel、usage 与 ordered event，再加入 files、Git diff/review、PTY、browser preview 和 artifacts。</div>
+    <div class="star-label r">Result</div><div class="star-val">同一房间可选择四种生产 backend，同时复用一致的 ownership、sandbox 与 UI contract；OpenCode/Hermes 的真实 E2B lifecycle 和生产 gateway streaming 均通过。Sandbox 可 pause/autoResume，artifact URL 独立于 sandbox 存活，关键边界由 Node/Vitest/Playwright/Pytest/E2B 分层覆盖。</div>
   </div>
 </div>
 <div class="card" data-lang="en">
   <h4>Story 1: Evolving Chat into a Shared Code-Agent Runtime</h4>
   <div class="star-grid">
     <div class="star-label s">Situation</div><div class="star-val">RoomTalk supported AI chat, but models could not safely edit projects or run commands, and users had no shared inspectable workspace or reliable long-task lifecycle.</div>
-    <div class="star-label t">Task</div><div class="star-val">Build a production-ready shared cloud code-agent room without executing untrusted work in the RoomTalk control plane or reimplementing Coco/Codex tool loops.</div>
-    <div class="star-label a">Action</div><div class="star-val">Designed two security planes and a three-layer runtime: RoomTalk control plane → JSONL daemon/runner in E2B → our self-built Coco agent or subscription-backed Codex app-server; added four permission modes, scoped model/context/publish capabilities, durable turn ordering, queue/steer/interrupt controls, plus files, Git diff/review, PTY, browser preview, and artifact UI.</div>
-    <div class="star-label r">Result</div><div class="star-val">A room can carry out sustained coding tasks with an auditable transcript that survives refresh. Sandboxes pause/auto-resume, artifact URLs outlive sandboxes, and Node/Vitest/Playwright/E2B smoke tests cover the critical boundaries.</div>
+    <div class="star-label t">Task</div><div class="star-val">Build a production-ready shared cloud code-agent room that can grow across harnesses without executing untrusted work in the RoomTalk control plane or reimplementing each agent's tool loop.</div>
+    <div class="star-label a">Action</div><div class="star-val">Designed two security planes and a three-layer runtime: RoomTalk control plane → JSONL daemon/runner in E2B → pluggable agent harness. Coco and Codex app-server keep native adapters, while OpenCode and Hermes share an ACP adapter. The control plane normalizes capability negotiation, model access, permissions/approvals, sessions, cancellation, usage, and ordered events, then exposes files, Git diff/review, PTY, browser previews, and artifacts in one UI.</div>
+    <div class="star-label r">Result</div><div class="star-val">A room can select any of four production backends while reusing one ownership, sandbox, and UI contract. Real E2B lifecycle and production gateway-streaming tests pass for OpenCode and Hermes. Sandboxes pause/auto-resume, artifact URLs outlive sandboxes, and Node/Vitest/Playwright/Pytest/E2B tests cover the critical boundaries.</div>
   </div>
 </div>
 
@@ -1963,6 +1992,15 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 <details data-lang="en">
   <summary>Why use a sandbox daemon instead of starting one runner per turn?</summary>
   <div class="answer">Per-turn processes are useful for an MVP, but repeatedly load the runtime and cannot naturally own terminals, background services, or backend thread state across turns. One daemon per sandbox reuses the environment while RoomTalk still serializes mutating turns. The tradeoff is explicit stale-process cleanup, health checks, shutdown ownership, and lost-release handling.</div>
+</details>
+
+<details data-lang="zh">
+  <summary>支持四种 Agent harness 后，RoomTalk 算不算 Agent 编排层？</summary>
+  <div class="answer">算 harness orchestration/control plane，但要说清范围。RoomTalk 统一选择 backend，拥有 room/turn lease、sandbox、session、permission、approval、cancel、tool/usage event 和 model gateway；daemon 再通过 native 或 ACP adapter 驱动具体 Agent。服务端按 runtime 配置和精确 artifact pin 广告可用 backend，客户端 fail-closed，旧房间的 legacy 值只做兼容。当前仍是一个 room turn 选择一个 harness，不是 multi-agent DAG、并行 fan-out 或角色协作调度器；那会需要新的任务图、跨 Agent context、预算和失败收敛协议。</div>
+</details>
+<details data-lang="en">
+  <summary>With four agent harnesses, is RoomTalk now an agent orchestration layer?</summary>
+  <div class="answer">It is a harness orchestration and control plane, with a precise boundary. RoomTalk selects the backend and owns room/turn leases, sandboxes, sessions, permissions, approvals, cancellation, tool/usage events, and the model gateway; the daemon drives each agent through a native or ACP adapter. The server advertises backends from runtime configuration plus an exact artifact pin, while the client fails closed and exposes legacy values only for existing rooms. A room turn still selects one harness. Multi-agent DAGs, parallel fan-out, and role collaboration would require new task-graph, cross-agent context, budget, and failure-convergence contracts.</div>
 </details>
 
 <details data-lang="zh">
@@ -2344,10 +2382,10 @@ Tests are layered by failure boundary: Python covers runner/daemon protocols, No
 <p data-lang="en">Concrete numbers are more convincing in interviews:</p>
 
 <div class="stats">
-  <div class="stat"><div class="num">2</div><div class="label" data-lang="zh">支持的 Agent Backend</div><div class="label" data-lang="en">Supported Agent Backends</div></div>
+  <div class="stat"><div class="num">4</div><div class="label" data-lang="zh">生产 Agent Backend</div><div class="label" data-lang="en">Production Agent Backends</div></div>
   <div class="stat"><div class="num">4</div><div class="label" data-lang="zh">权限模式</div><div class="label" data-lang="en">Permission Modes</div></div>
   <div class="stat"><div class="num">5</div><div class="label" data-lang="zh">支持语言</div><div class="label" data-lang="en">Supported Languages</div></div>
-  <div class="stat"><div class="num">180+</div><div class="label" data-lang="zh">Test / Spec 文件</div><div class="label" data-lang="en">Test / Spec Files</div></div>
+  <div class="stat"><div class="num">200+</div><div class="label" data-lang="zh">Test / Spec 文件</div><div class="label" data-lang="en">Test / Spec Files</div></div>
 </div>
 <div class="stats">
   <div class="stat"><div class="num">1</div><div class="label" data-lang="zh">Durable Authority</div><div class="label" data-lang="en">Durable Authority</div></div>
