@@ -3,9 +3,11 @@ import { FALLBACK_FEATURE_FLAGS, FeatureFlags } from './features';
 import {
   CODE_AGENT_BACKEND_OPTIONS,
   getCodeAgentAssistantDisplayName,
+  getCodeAgentAvailableBackends,
   getCodeAgentBackend,
   getCodeAgentAvailableModes,
   getCodeAgentDefaultMode,
+  getVisibleCodeAgentBackendOptions,
   getCodeAgentMode,
   getCodeAgentStatus,
   isCodeAgentRoom,
@@ -26,6 +28,22 @@ describe('codeAgent room adapters', () => {
     expect(getCodeAgentAssistantDisplayName('CodexApp')).toBe('Codex');
     expect(getCodeAgentAssistantDisplayName(' Codex ')).toBe('Codex');
     expect(getCodeAgentAssistantDisplayName(undefined)).toBeUndefined();
+  });
+
+  it('only shows the legacy Codex backend when it is the current backend', () => {
+    const available = ['code-agent', 'codex', 'codex-app-server', 'opencode'] as const;
+
+    expect(getVisibleCodeAgentBackendOptions(available, 'code-agent')).toEqual([
+      'code-agent',
+      'codex-app-server',
+      'opencode',
+    ]);
+    expect(getVisibleCodeAgentBackendOptions(available, 'codex')).toEqual([
+      'codex',
+      'code-agent',
+      'codex-app-server',
+      'opencode',
+    ]);
   });
 
   it('leaves ordinary chat rooms outside the code-agent path', () => {
@@ -57,6 +75,7 @@ describe('codeAgent room adapters', () => {
         mode: 'acceptEdits',
         availableModes: ['plan', 'acceptEdits'],
         defaultMode: 'plan',
+        availableBackends: ['code-agent', 'opencode'],
       },
       codex: {
         connections: {
@@ -96,5 +115,12 @@ describe('codeAgent room adapters', () => {
       'opencode',
       'hermes-agent',
     ]);
+    expect(getCodeAgentAvailableBackends({
+      ...FALLBACK_FEATURE_FLAGS,
+      codeAgent: {
+        ...FALLBACK_FEATURE_FLAGS.codeAgent,
+        availableBackends: ['code-agent', 'codex', 'codex-app-server'],
+      },
+    })).toEqual(['code-agent', 'codex', 'codex-app-server']);
   });
 });

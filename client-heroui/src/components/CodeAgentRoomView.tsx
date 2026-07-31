@@ -58,6 +58,7 @@ interface CodeAgentRoomViewProps {
   username: string;
   clientId: string;
   backend: CodeAgentBackend;
+  availableBackends: CodeAgentBackend[];
   availableModes: CodeAgentMode[];
   defaultMode: CodeAgentMode;
   handleCopyToClipboard: (text: string) => void;
@@ -128,6 +129,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   username,
   clientId,
   backend,
+  availableBackends,
   availableModes,
   defaultMode,
   handleCopyToClipboard,
@@ -253,14 +255,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, [currentRoom.id, effectiveDefaultMode, isRoomSessionReady, normalizedAvailableModes, onRoomUpdated]);
 
   const handleCodeAgentBackendChange = React.useCallback((nextBackend: CodeAgentBackend) => {
-    if (!isRoomSessionReady || !isSupportedCodeAgentBackend(nextBackend)) {
+    if (!isRoomSessionReady || !availableBackends.includes(nextBackend)) {
       return;
     }
     updateRoomSettings({ roomId: currentRoom.id, codeAgentBackend: nextBackend }).then(
       (room) => onRoomUpdated(room),
       (error) => console.error('Failed to update code agent backend', error),
     );
-  }, [currentRoom.id, isRoomSessionReady, onRoomUpdated]);
+  }, [availableBackends, currentRoom.id, isRoomSessionReady, onRoomUpdated]);
 
   const setFileManagerCollapsed = React.useCallback((collapsed: boolean) => {
     setIsFileManagerCollapsed(collapsed);
@@ -468,11 +470,12 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       roomPermissions={effectiveRoomPermissions}
       codeAgentAvailableModes={normalizedAvailableModes}
       codeAgentDefaultMode={effectiveDefaultMode}
+      codeAgentAvailableBackends={availableBackends}
       onRoomUpdated={onRoomUpdated}
     />
   );
 
-  if (!isSupportedCodeAgentBackend(backend)) {
+  if (!isSupportedCodeAgentBackend(backend) || !availableBackends.includes(backend)) {
     return (
       <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
         {header}
@@ -563,6 +566,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               codeAgentMode={selectedMode}
               codeAgentBackend={backend}
               codeAgentAvailableModes={normalizedAvailableModes}
+              codeAgentAvailableBackends={availableBackends}
               onCodeAgentModeChange={handleCodeAgentModeChange}
               onCodeAgentBackendChange={handleCodeAgentBackendChange}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}

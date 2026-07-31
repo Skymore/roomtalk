@@ -26,12 +26,12 @@ import {
   updateRoomSettings,
 } from '../utils/socket';
 import {
-  CODE_AGENT_BACKEND_OPTIONS,
   CodeAgentMode,
   getCodeAgentBackend,
   getCodeAgentModeIcon,
   getCodeAgentModeLabelKey,
   getCodeAgentBackendLabelKey,
+  getVisibleCodeAgentBackendOptions,
   normalizeCodeAgentMode,
   normalizeCodeAgentModeList,
   type CodeAgentBackend,
@@ -97,6 +97,7 @@ interface RoomSettingsModalProps {
   onDeleteRoom: (roomId: string) => void;
   codeAgentAvailableModes?: CodeAgentMode[];
   codeAgentDefaultMode?: CodeAgentMode;
+  codeAgentAvailableBackends?: CodeAgentBackend[];
   onRoomUpdated?: (room: Room) => void;
 }
 
@@ -111,6 +112,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   onDeleteRoom,
   codeAgentAvailableModes = ['plan'],
   codeAgentDefaultMode = 'plan',
+  codeAgentAvailableBackends = ['code-agent'],
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -737,7 +739,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             <div className="space-y-2">
               {renderSectionLabel('lucide:terminal', t('codeAgentEngine'))}
               <div className="flex flex-wrap gap-1.5">
-                {CODE_AGENT_BACKEND_OPTIONS.map(backend => {
+                {getVisibleCodeAgentBackendOptions(
+                  codeAgentAvailableBackends,
+                  getCodeAgentBackend(room),
+                ).map(backend => {
                   const current = getCodeAgentBackend(room) || 'code-agent';
                   const selected = current === backend;
                   const labelKey = getCodeAgentBackendLabelKey(backend);

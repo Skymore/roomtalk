@@ -124,6 +124,66 @@ describe('CodeAgentModelGateway', () => {
     assert.notEqual((calls[0].init.headers as Record<string, string>).authorization, `Bearer ${token}`);
   });
 
+  it('aborts the upstream provider request when the sandbox request disconnects', async () => {
+    let started!: () => void;
+    const upstreamStarted = new Promise<void>(resolve => { started = resolve; });
+    let aborted!: () => void;
+    const upstreamAborted = new Promise<void>(resolve => { aborted = resolve; });
+    let releases = 0;
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      providerAdmission: {
+        async acquire() {
+          return {
+            async release() {
+              releases += 1;
+            },
+          };
+        },
+      },
+      fetchFn: async (_url, init) => {
+        const signal = init?.signal;
+        assert.ok(signal);
+        started();
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            aborted();
+            reject(signal.reason || new Error('aborted'));
+          }, { once: true });
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+    const controller = new AbortController();
+
+    const response = fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }] }),
+      signal: controller.signal,
+    });
+    await upstreamStarted;
+    controller.abort();
+
+    await assert.rejects(response, error => error instanceof Error && error.name === 'AbortError');
+    await upstreamAborted;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(releases, 1);
+  });
+
   it('uses account priority for provider admission and settles reported usage to account credits', async () => {
     const admittedPriorities: number[] = [];
     const settlements: Array<Parameters<NonNullable<ConstructorParameters<typeof CodeAgentModelGateway>[0]['settleAccountAIUsage']>>[0]> = [];

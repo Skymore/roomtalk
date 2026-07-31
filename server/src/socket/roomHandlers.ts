@@ -4,7 +4,8 @@ import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
 import { isClientRequestAuthorized } from '../services/clientAuth';
 import { normalizeCodeAgentMode } from '../services/codeAgentModes';
-import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
+import { CodeAgentBackend, Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
+import { CODE_AGENT_BACKENDS } from '../services/codeAgentBackends';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
 import { clearCodeAgentWorkspaceRuntimeState } from './codeAgentWorkspaceHandlers';
@@ -267,6 +268,7 @@ export function registerRoomHandlers({
   socketLogger,
   resolveClientId,
   codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
+  codeAgentAvailableBackends = ['code-agent'],
   codeAgentSandboxService,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
@@ -1154,9 +1156,12 @@ export function registerRoomHandlers({
         updates.codeAgentMode = null;
       }
 
-      const VALID_CODE_AGENT_BACKENDS = ['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'] as const;
-      if (typeof data.codeAgentBackend === 'string' && VALID_CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as any)) {
-        updates.codeAgentBackend = data.codeAgentBackend as typeof VALID_CODE_AGENT_BACKENDS[number];
+      if (typeof data.codeAgentBackend === 'string' && CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as CodeAgentBackend)) {
+        if (!codeAgentAvailableBackends.includes(data.codeAgentBackend as CodeAgentBackend)) {
+          callback?.({ success: false, error: 'Selected Workspace backend is not enabled' });
+          return;
+        }
+        updates.codeAgentBackend = data.codeAgentBackend as CodeAgentBackend;
       } else if (data.codeAgentBackend === null) {
         updates.codeAgentBackend = null;
       }

@@ -22,6 +22,26 @@ export const isAcpCodeAgentBackend = (backend: CodeAgentBackend): boolean => (
   backend === 'opencode' || backend === 'hermes-agent'
 );
 
+export const CODE_AGENT_ACP_ARTIFACT_VERSION = 'roomtalk-code-agent-2026-07-31-multi-harness-v3';
+
+export const availableCodeAgentBackends = ({
+  codexEnabled,
+  acpEnabled,
+  artifactVersion,
+  developmentArtifact = false,
+}: {
+  codexEnabled: boolean;
+  acpEnabled: boolean;
+  artifactVersion?: string;
+  developmentArtifact?: boolean;
+}): CodeAgentBackend[] => [
+  'code-agent',
+  ...(codexEnabled ? ['codex-app-server', 'codex'] as const : []),
+  ...(acpEnabled && (developmentArtifact || artifactVersion === CODE_AGENT_ACP_ARTIFACT_VERSION)
+    ? ['opencode', 'hermes-agent'] as const
+    : []),
+];
+
 export const codeAgentBackendSupportsInterrupt = (backend: CodeAgentBackend): boolean => (
   backend === 'code-agent' || backend === 'codex-app-server' || isAcpCodeAgentBackend(backend)
 );

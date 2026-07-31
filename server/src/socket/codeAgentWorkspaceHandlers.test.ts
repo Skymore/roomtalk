@@ -3,7 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import { CodeAgentWorkspaceChanges, CodeAgentWorkspaceEntry, CodeAgentWorkspacePreviewServer, CodeAgentWorkspaceRef } from '../services/codeAgentSandboxService';
-import { Message, Room, RoomMember } from '../types';
+import { CodeAgentBackend, Message, Room, RoomMember } from '../types';
 import { clearCodeAgentWorkspaceRuntimeState, registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
 
 afterEach(async () => {
@@ -172,6 +172,7 @@ const createHarness = (options: {
     store: store as any,
     socketLogger: logger as any,
     openaiLogger: logger as any,
+    codeAgentAvailableBackends: ['code-agent'] as CodeAgentBackend[],
     normalizeAIModel: (() => ({})) as any,
     getAIClientForModel: (() => ({})) as any,
     codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),

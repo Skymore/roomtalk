@@ -68,6 +68,23 @@ export const getCodeAgentAvailableModes = (featureFlags: FeatureFlags): CodeAgen
   normalizeCodeAgentModeList(featureFlags.codeAgent.availableModes)
 );
 
+export const getCodeAgentAvailableBackends = (featureFlags: FeatureFlags): CodeAgentBackend[] => {
+  const available = featureFlags.codeAgent.availableBackends.filter(backend => (
+    CODE_AGENT_BACKENDS.has(backend)
+  ));
+  return available.length ? Array.from(new Set(available)) : ['code-agent'];
+};
+
+export const getVisibleCodeAgentBackendOptions = (
+  availableBackends: readonly CodeAgentBackend[],
+  currentBackend?: CodeAgentBackend | null,
+): CodeAgentBackend[] => {
+  const selectable = CODE_AGENT_BACKEND_OPTIONS.filter(backend => availableBackends.includes(backend));
+  return currentBackend === 'codex' && availableBackends.includes('codex')
+    ? ['codex', ...selectable]
+    : selectable;
+};
+
 export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMode => (
   getCodeAgentAvailableModes(featureFlags).includes(normalizeCodeAgentMode(featureFlags.codeAgent.defaultMode))
     ? normalizeCodeAgentMode(featureFlags.codeAgent.defaultMode)

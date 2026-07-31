@@ -32,6 +32,7 @@ ACP_BACKENDS = ("opencode", "hermes-agent")
 MAX_ACP_TOOL_OUTPUT_CHARS = 20_000
 MAX_ACP_IMAGE_BYTES = 10 * 1024 * 1024
 HARNESS_STATE_ROOT = Path("/tmp/roomtalk-harnesses")
+HERMES_ROOMTALK_PROVIDER = "roomtalk"
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,11 @@ def harness_spec(backend: str) -> ACPHarnessSpec:
 def _safe_state_segment(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
     return normalized[:80] or "room"
+
+
+def _ensure_private_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.chmod(0o700)
 
 
 def _model_gateway(env: Mapping[str, str]) -> tuple[str, str]:
@@ -104,7 +110,11 @@ def opencode_config(request: RunnerRequest, base_url: str, token: str) -> dict[s
         "model": f"roomtalk/{request.api_model}",
         "provider": {
             "roomtalk": {
-                "npm": "@ai-sdk/openai-compatible",
+                "npm": (
+                    "@ai-sdk/anthropic"
+                    if request.provider == "anthropic"
+                    else "@ai-sdk/openai-compatible"
+                ),
                 "name": "RoomTalk",
                 "options": {
                     "baseURL": base_url,
@@ -121,12 +131,30 @@ def opencode_config(request: RunnerRequest, base_url: str, token: str) -> dict[s
     }
 
 
-def hermes_config(request: RunnerRequest, base_url: str) -> dict[str, Any]:
+def hermes_config(request: RunnerRequest, base_url: str, token: str) -> dict[str, Any]:
+    api_mode = (
+        "anthropic_messages"
+        if request.provider == "anthropic"
+        else "chat_completions"
+    )
     return {
         "model": {
             "default": request.api_model,
-            "provider": "custom",
+            "provider": f"custom:{HERMES_ROOMTALK_PROVIDER}",
             "base_url": base_url,
+            "api_key": token,
+            "api_mode": api_mode,
+        },
+        "providers": {
+            HERMES_ROOMTALK_PROVIDER: {
+                "name": "RoomTalk",
+                "base_url": base_url,
+                "api_key": token,
+                "default_model": request.api_model,
+                "models": {request.api_model: {}},
+                "api_mode": api_mode,
+                "discover_models": False,
+            },
         },
         "terminal": {
             "cwd": str(request.workspace),
@@ -146,9 +174,12 @@ def build_harness_env(
     base_url, token = _model_gateway(env)
     child_env = dict(env)
     room_root = state_root / _safe_state_segment(request.room_id)
+    _ensure_private_directory(state_root)
+    _ensure_private_directory(room_root)
 
     if backend == "opencode":
         opencode_root = room_root / "opencode"
+        _ensure_private_directory(opencode_root)
         child_env.update({
             "OPENCODE_CONFIG_CONTENT": json.dumps(
                 opencode_config(request, base_url, token),
@@ -161,16 +192,18 @@ def build_harness_env(
             "XDG_STATE_HOME": str(opencode_root / "state"),
         })
         for path in ("cache", "config", "data", "state"):
-            (opencode_root / path).mkdir(parents=True, exist_ok=True)
+            _ensure_private_directory(opencode_root / path)
         return child_env
 
     if backend == "hermes-agent":
         hermes_home = room_root / "hermes"
-        hermes_home.mkdir(parents=True, exist_ok=True)
-        (hermes_home / "config.yaml").write_text(
-            json.dumps(hermes_config(request, base_url), ensure_ascii=False, indent=2) + "\n",
+        _ensure_private_directory(hermes_home)
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            json.dumps(hermes_config(request, base_url, token), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        config_path.chmod(0o600)
         child_env.update({
             "HERMES_HOME": str(hermes_home),
             "HERMES_ACP_SKIP_CONFIGURED_MCP": "1",
@@ -309,12 +342,19 @@ class ACPEventBridge:
         self.completed_tools: set[str] = set()
         self.pending_permissions: dict[str, asyncio.Future[str]] = {}
         self.connection: Any = None
+        self._forward_session_updates = True
+        self.interrupted = False
 
     def on_connect(self, conn: Any) -> None:
         self.connection = conn
 
+    def set_session_update_forwarding(self, enabled: bool) -> None:
+        self._forward_session_updates = enabled
+
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
         del session_id, kwargs
+        if not self._forward_session_updates:
+            return
         update_type = getattr(update, "session_update", None)
         if update_type == "agent_message_chunk":
             content = getattr(update, "content", None)
@@ -479,9 +519,33 @@ class ACPEventBridge:
         future.set_result(decision)
         return True
 
+    def resolve_all_permissions(self, decision: str) -> list[str]:
+        resolved: list[str] = []
+        for approval_id in tuple(self.pending_permissions):
+            if self.resolve_permission(approval_id, decision):
+                resolved.append(approval_id)
+        return resolved
+
     async def write_text_file(self, **kwargs: Any) -> None:
-        del kwargs
-        raise RunnerError("ACP client filesystem writes are disabled", code="acp_client_fs_disabled")
+        raw_path = kwargs.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise RunnerError("ACP client filesystem path is invalid", code="acp_client_fs_invalid")
+        workspace = self.request.workspace.resolve()
+        requested = Path(raw_path)
+        if not requested.is_absolute():
+            requested = workspace / requested
+        try:
+            requested.resolve().relative_to(workspace)
+        except ValueError as exc:
+            raise RunnerError(
+                "ACP client filesystem path escapes the workspace",
+                code="acp_client_fs_outside_workspace",
+            ) from exc
+        # The agent-side tool owns the actual workspace mutation. OpenCode may
+        # still issue this client RPC for editor mirroring before it resumes the
+        # approved tool; acknowledging it avoids a second writer while keeping
+        # the ACP permission flow intact.
+        return None
 
     async def read_text_file(self, **kwargs: Any) -> None:
         del kwargs
@@ -538,6 +602,30 @@ def _emit_control_result(
     emitter.emit(event)
 
 
+def _emit_approval_result(
+    emitter: EventEmitter,
+    request: RunnerRequest,
+    approval_id: str,
+    decision: str,
+) -> None:
+    success = decision in {"accept", "acceptForSession"}
+    output = {
+        "accept": "Approved.",
+        "acceptForSession": "Approved for this session.",
+        "decline": "Declined.",
+        "cancel": "Cancelled.",
+    }.get(decision, "Cancelled.")
+    emitter.emit({
+        "type": "tool_result",
+        "turnId": request.turn_id,
+        "id": approval_id,
+        "name": "approval_request",
+        "success": success,
+        "output": output,
+        "messageId": f"acp_approval_result_{approval_id}",
+    })
+
+
 async def _control_loop(
     *,
     request: RunnerRequest,
@@ -566,7 +654,14 @@ async def _control_loop(
             )
             continue
         if control_type == "interrupt":
-            await connection.cancel(session_id=session_id)
+            for approval_id in bridge.resolve_all_permissions("cancel"):
+                _emit_approval_result(emitter, request, approval_id, "cancel")
+            bridge.interrupted = True
+            try:
+                await connection.cancel(session_id=session_id)
+            except Exception:
+                bridge.interrupted = False
+                raise
             _emit_control_result(emitter, request, control, accepted=True)
             continue
         if control_type == "steer":
@@ -586,6 +681,8 @@ async def _control_loop(
                 and isinstance(decision, str)
                 and bridge.resolve_permission(approval_id, decision)
             )
+            if accepted:
+                _emit_approval_result(emitter, request, approval_id, decision)
             _emit_control_result(
                 emitter,
                 request,
@@ -690,6 +787,21 @@ async def _prompt_blocks(request: RunnerRequest, text: str, supports_images: boo
     return blocks
 
 
+async def _prompt_session(
+    *,
+    connection: Any,
+    session_id: str,
+    blocks: list[Any],
+    bridge: ACPEventBridge,
+) -> Any:
+    try:
+        return await connection.prompt(session_id=session_id, prompt=blocks)
+    except Exception:
+        if not bridge.interrupted:
+            raise
+        return None
+
+
 def _mode_ids(session_response: Any) -> set[str]:
     modes = getattr(session_response, "modes", None)
     available = getattr(modes, "available_modes", None) or []
@@ -698,6 +810,39 @@ def _mode_ids(session_response: Any) -> set[str]:
         for mode in available
         if getattr(mode, "id", None)
     }
+
+
+async def _open_session(
+    *,
+    backend: str,
+    request: RunnerRequest,
+    connection: Any,
+    capabilities: Any,
+    bridge: ACPEventBridge,
+) -> tuple[Any, str, bool]:
+    native_session_id = _unwrap_session_id(request.session_id, backend)
+    restored_session = False
+    session_response: Any = None
+    if native_session_id and getattr(capabilities, "load_session", False):
+        bridge.set_session_update_forwarding(False)
+        try:
+            session_response = await connection.load_session(
+                cwd=str(request.workspace),
+                session_id=native_session_id,
+                mcp_servers=[],
+            )
+            restored_session = session_response is not None
+        except Exception:
+            native_session_id = None
+        finally:
+            bridge.set_session_update_forwarding(True)
+    if not native_session_id or not restored_session:
+        session_response = await connection.new_session(
+            cwd=str(request.workspace),
+            mcp_servers=[],
+        )
+        native_session_id = str(session_response.session_id)
+    return session_response, native_session_id, restored_session
 
 
 async def _configure_session(
@@ -711,7 +856,7 @@ async def _configure_session(
     desired_model = (
         f"roomtalk/{request.api_model}"
         if backend == "opencode"
-        else f"custom:{request.api_model}"
+        else f"custom:{HERMES_ROOMTALK_PROVIDER}:{request.api_model}"
     )
     try:
         await connection.set_session_model(session_id=session_id, model_id=desired_model)
@@ -802,25 +947,13 @@ async def _run_request_async(
                     ),
                 )
                 capabilities = getattr(initialized, "agent_capabilities", None)
-                native_session_id = _unwrap_session_id(request.session_id, backend)
-                restored_session = False
-                session_response: Any = None
-                if native_session_id and getattr(capabilities, "load_session", False):
-                    try:
-                        session_response = await connection.load_session(
-                            cwd=str(request.workspace),
-                            session_id=native_session_id,
-                            mcp_servers=[],
-                        )
-                        restored_session = session_response is not None
-                    except Exception:
-                        native_session_id = None
-                if not native_session_id or not restored_session:
-                    session_response = await connection.new_session(
-                        cwd=str(request.workspace),
-                        mcp_servers=[],
-                    )
-                    native_session_id = str(session_response.session_id)
+                session_response, native_session_id, restored_session = await _open_session(
+                    backend=backend,
+                    request=request,
+                    connection=connection,
+                    capabilities=capabilities,
+                    bridge=bridge,
+                )
 
                 await _configure_session(
                     backend=backend,
@@ -852,9 +985,11 @@ async def _run_request_async(
                         prompt,
                         bool(getattr(prompt_capabilities, "image", False)),
                     )
-                    response = await connection.prompt(
+                    response = await _prompt_session(
+                        connection=connection,
                         session_id=native_session_id,
-                        prompt=blocks,
+                        blocks=blocks,
+                        bridge=bridge,
                     )
                 finally:
                     control_task.cancel()

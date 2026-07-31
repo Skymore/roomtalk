@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { executeAssistantRun, registerAIHandlers } from './aiHandlers';
-import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentBackend, Message, Room, RoomAICostTotal } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 
 type SocketEmit = {
@@ -428,6 +428,7 @@ const createHarness = (options: {
     store: store as any,
     socketLogger: logger as any,
     openaiLogger: logger as any,
+    codeAgentAvailableBackends: ['code-agent'] as CodeAgentBackend[],
     normalizeAIModel: (modelId?: unknown) => {
       store.normalizeAIModelCalls.push(modelId);
       return options.model || selectedModel;

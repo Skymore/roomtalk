@@ -128,6 +128,7 @@ interface MessageListProps {
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
   codeAgentAvailableModes?: CodeAgentMode[];
+  codeAgentAvailableBackends?: CodeAgentBackend[];
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   onCodeAgentBackendChange?: (backend: CodeAgentBackend) => void;
   onOpenWorkspaceFile?: (path: string) => void;
@@ -166,6 +167,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   codeAgentMode = 'plan',
   codeAgentBackend,
   codeAgentAvailableModes = ['plan'],
+  codeAgentAvailableBackends = ['code-agent'],
   onCodeAgentModeChange,
   onCodeAgentBackendChange,
   onOpenWorkspaceFile,
@@ -1161,6 +1163,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             messages={messages}
             mode={codeAgentMode}
             availableModes={codeAgentAvailableModes}
+            availableBackends={codeAgentAvailableBackends}
             backend={codeAgentBackend}
             canSwitchMode={codeAgentAvailableModes.length > 1 && canManageCodeAgentMode}
             canSwitchBackend={canManageCodeAgentMode}

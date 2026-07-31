@@ -6,7 +6,7 @@ import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, ClientAccount, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
-import { MediaAsset, MediaKind, Message, Room } from '../types';
+import { CodeAgentBackend, MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
@@ -63,6 +63,7 @@ interface ApiRouteOptions {
   codeAgentMode?: CodeAgentRunnerMode;
   codeAgentAvailableModes?: CodeAgentRunnerMode[];
   codeAgentDefaultMode?: CodeAgentRunnerMode;
+  codeAgentAvailableBackends?: CodeAgentBackend[];
   codexConnections?: {
     enabled: boolean;
     service?: CodexConnectionService;
@@ -1788,6 +1789,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         mode: codeAgentMode,
         availableModes: codeAgentAvailableModes,
         defaultMode: codeAgentDefaultMode,
+        availableBackends: options.codeAgentAvailableBackends,
       },
       codex: {
         connections: {
@@ -2015,6 +2017,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           mode: codeAgentMode,
           availableModes: codeAgentAvailableModes,
           defaultMode: codeAgentDefaultMode,
+          availableBackends: options.codeAgentAvailableBackends,
         },
         codex: {
           connections: {

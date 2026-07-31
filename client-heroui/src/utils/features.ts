@@ -1,5 +1,21 @@
 import { normalizeCodeAgentMode, normalizeCodeAgentModeList } from './codeAgentModes';
-import type { CodeAgentMode } from './types';
+import type { CodeAgentBackend, CodeAgentMode } from './types';
+
+const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>([
+  'code-agent',
+  'codex',
+  'codex-app-server',
+  'opencode',
+  'hermes-agent',
+]);
+
+const normalizeCodeAgentBackends = (value: unknown): CodeAgentBackend[] => {
+  if (!Array.isArray(value)) return ['code-agent'];
+  const normalized = Array.from(new Set(value.filter(
+    (backend): backend is CodeAgentBackend => typeof backend === 'string' && CODE_AGENT_BACKENDS.has(backend as CodeAgentBackend)
+  )));
+  return normalized.length ? normalized : ['code-agent'];
+};
 
 export interface FeatureFlags {
   codeAgent: {
@@ -7,6 +23,7 @@ export interface FeatureFlags {
     mode: CodeAgentMode;
     availableModes: CodeAgentMode[];
     defaultMode: CodeAgentMode;
+    availableBackends: CodeAgentBackend[];
     rollout?: 'disabled' | 'allowlist' | 'all';
     reason?: string;
   };
@@ -23,7 +40,14 @@ export interface FeatureFlags {
 }
 
 export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
-  codeAgent: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
+  codeAgent: {
+    enabled: false,
+    mode: 'plan',
+    availableModes: ['plan'],
+    defaultMode: 'plan',
+    availableBackends: ['code-agent'],
+    rollout: 'disabled',
+  },
   codex: { connections: { enabled: false } },
   github: { connections: { enabled: false } },
 };
@@ -62,6 +86,7 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
       mode: codeAgentMode,
       availableModes: normalizedAvailableModes,
       defaultMode: normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan',
+      availableBackends: normalizeCodeAgentBackends(data.codeAgent.availableBackends),
       rollout: data.codeAgent.rollout,
       reason: data.codeAgent.reason,
     },

@@ -16,7 +16,7 @@ ARG POWERLEVEL10K_REF=9253fb1c5034410c43a0c681ff8294181c54016c
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-30-multi-harness-v1
+ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-31-multi-harness-v3
 ENV ROOMTALK_CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
 ENV ROOMTALK_OPENCODE_VERSION=${OPENCODE_NPM_VERSION}
@@ -165,10 +165,11 @@ RUN apt-get update \
   && zsh --version >/dev/null \
   && roomtalk --help >/dev/null \
   && python -m pip install --no-cache-dir "uv==${UV_VERSION}" \
-  && uv sync --frozen --no-dev --extra acp --project /opt/hermes-agent \
+  && uv sync --frozen --no-dev --extra acp --extra anthropic --project /opt/hermes-agent \
   && ln -sf /opt/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes \
   && ln -sf /opt/hermes-agent/.venv/bin/hermes-acp /usr/local/bin/hermes-acp \
   && hermes acp --check >/dev/null \
+  && /opt/hermes-agent/.venv/bin/python -c 'import anthropic' \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-code-agent-requirements.lock \
   && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
   && python -c 'import importlib; importlib.import_module("acp"); importlib.import_module("core.engine"); importlib.import_module("roomtalk_code_agent_runner.runner"); importlib.import_module("roomtalk_code_agent_runner.codex_cli"); importlib.import_module("roomtalk_code_agent_runner.codex_app_server"); importlib.import_module("roomtalk_code_agent_runner.acp_harness"); importlib.import_module("openai_codex")' \

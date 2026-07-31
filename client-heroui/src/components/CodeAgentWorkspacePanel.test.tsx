@@ -202,6 +202,7 @@ describe('CodeAgentWorkspacePanel', () => {
         messages={[]}
         mode="plan"
         backend="code-agent"
+        availableBackends={['code-agent', 'codex-app-server', 'opencode', 'hermes-agent']}
         canSwitchBackend
         onBackendChange={onBackendChange}
         sessionCostUsd={0}
@@ -215,6 +216,45 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByTestId('code-agent-backend-codex-app-server'));
 
     expect(onBackendChange).toHaveBeenCalledWith('codex-app-server');
+  });
+
+  it('only renders backends advertised by the server', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        backend="code-agent"
+        availableBackends={['code-agent', 'hermes-agent']}
+        canSwitchBackend
+        onBackendChange={vi.fn()}
+        sessionCostUsd={0}
+      />
+    );
+
+    expect(screen.getByTestId('code-agent-backend-code-agent')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-backend-hermes-agent')).toBeTruthy();
+    expect(screen.queryByTestId('code-agent-backend-codex-app-server')).toBeNull();
+    expect(screen.queryByTestId('code-agent-backend-opencode')).toBeNull();
+  });
+
+  it('shows legacy Codex only for a room that is already using it', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        backend="codex"
+        availableBackends={['code-agent', 'codex', 'codex-app-server']}
+        canSwitchBackend
+        onBackendChange={vi.fn()}
+        sessionCostUsd={0}
+      />
+    );
+
+    expect(screen.getByTestId('code-agent-backend-codex')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-backend-codex').className).toContain('bg-[#30302e]');
+    expect(screen.getByTestId('code-agent-backend-codex-app-server')).toBeTruthy();
   });
 
   it('shows the latest Codex context usage and opens its details', async () => {

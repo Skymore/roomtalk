@@ -21,10 +21,10 @@ import {
 } from '../utils/codeAgentWorkspace';
 import { Message, Room } from '../utils/types';
 import {
-  CODE_AGENT_BACKEND_OPTIONS,
   CodeAgentBackend,
   CodeAgentMode,
   getCodeAgentBackendLabelKey,
+  getVisibleCodeAgentBackendOptions,
   getCodeAgentModeDescriptionKey,
   getCodeAgentModeIcon,
   getCodeAgentModeLabelKey,
@@ -63,6 +63,7 @@ interface CodeAgentWorkspacePanelProps {
   messages: Message[];
   mode: CodeAgentMode;
   availableModes?: CodeAgentMode[];
+  availableBackends?: CodeAgentBackend[];
   backend?: CodeAgentBackend;
   canSwitchMode?: boolean;
   canSwitchBackend?: boolean;
@@ -273,6 +274,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   messages,
   mode,
   availableModes,
+  availableBackends = ['code-agent'],
   backend,
   canSwitchMode = false,
   canSwitchBackend = false,
@@ -583,7 +585,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               data-testid="code-agent-backend-toggle"
               className="inline-flex h-6 shrink-0 overflow-hidden rounded-full border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#242421]"
             >
-              {CODE_AGENT_BACKEND_OPTIONS.map((option) => {
+              {getVisibleCodeAgentBackendOptions(availableBackends, currentBackend).map((option) => {
                 const selected = currentBackend === option;
                 const labelKey = getCodeAgentBackendLabelKey(option);
                 return (

@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { registerRoomHandlers } from './roomHandlers';
-import { Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
+import { CodeAgentBackend, Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
 import { hashClientAuthToken } from '../services/clientAuth';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { hashRoomPassword } from '../services/roomSecurity';
@@ -116,6 +116,7 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
 });
 
 type HarnessOptions = {
+  codeAgentAvailableBackends?: CodeAgentBackend[];
   publishedStaticSiteService?: {
     deleteSitesForRoom(roomId: string): Promise<{ slugCount: number; objectCount: number }>;
   };
@@ -374,6 +375,7 @@ const createHarness = (
     store: store as any,
     socketLogger: logger as any,
     codeAgentAccess,
+    codeAgentAvailableBackends: options.codeAgentAvailableBackends,
     publishedStaticSiteService: options.publishedStaticSiteService as any,
     resolveClientId: () => store.getClientId(),
   } as any);
@@ -1316,6 +1318,26 @@ describe('room socket handlers', () => {
 
     assert.deepEqual(response, { success: false, error: 'Only the room owner can manage Workspace access' });
     assert.equal(store.rooms[0].codeAgentAccess, undefined);
+  });
+
+  it('rejects selecting a code-agent backend that is not enabled', async () => {
+    const { socket, store } = createHarness(
+      'client-1',
+      createCodeAgentAccessControl({ enabled: true }),
+      { codeAgentAvailableBackends: ['code-agent'] },
+    );
+    store.rooms[0] = { ...store.rooms[0], type: 'codeAgent' };
+    let response: unknown;
+
+    await socket.invoke('update_room_settings', {
+      roomId: 'room-1',
+      codeAgentBackend: 'opencode',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Selected Workspace backend is not enabled' });
+    assert.equal(store.rooms[0].codeAgentBackend, undefined);
   });
 
   it('returns the room without writing or broadcasting for empty settings updates', async () => {

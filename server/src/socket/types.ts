@@ -1,7 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import type { Logger } from '../logger';
 import type { RoomStore } from '../repositories/store';
-import type { AIModelOption } from '../types';
+import type { AIModelOption, CodeAgentBackend } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
 import type { CodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import type { CodeAgentSandboxLifecycleService } from '../services/codeAgentSandboxLifecycle';
@@ -24,6 +24,7 @@ export interface SocketHandlerDeps {
   assemblyAIApiKey?: string;
   codeAgentSessionService?: CodeAgentSessionService;
   codeAgentAccess?: CodeAgentAccessControl;
+  codeAgentAvailableBackends: CodeAgentBackend[];
   codeAgentSandboxLifecycle?: Pick<CodeAgentSandboxLifecycleService, 'ensureReadySandbox'>;
   codeAgentSandboxService?: CodeAgentSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;

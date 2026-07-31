@@ -8,7 +8,14 @@ describe('feature flags', () => {
 
   it('defaults code agent to disabled for fail-closed UI behavior', () => {
     expect(FALLBACK_FEATURE_FLAGS).toEqual({
-      codeAgent: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
+      codeAgent: {
+        enabled: false,
+        mode: 'plan',
+        availableModes: ['plan'],
+        defaultMode: 'plan',
+        availableBackends: ['code-agent'],
+        rollout: 'disabled',
+      },
       codex: { connections: { enabled: false } },
       github: { connections: { enabled: false } },
     });
@@ -23,6 +30,7 @@ describe('feature flags', () => {
           mode: 'acceptEdits',
           availableModes: ['plan', 'acceptEdits'],
           defaultMode: 'plan',
+          availableBackends: ['code-agent', 'codex-app-server', 'opencode', 'hermes-agent'],
           rollout: 'allowlist',
         },
         codex: {
@@ -44,6 +52,7 @@ describe('feature flags', () => {
         mode: 'edit',
         availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
+        availableBackends: ['code-agent', 'codex-app-server', 'opencode', 'hermes-agent'],
         rollout: 'allowlist',
         reason: undefined,
       },

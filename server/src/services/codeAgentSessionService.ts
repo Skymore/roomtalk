@@ -95,6 +95,7 @@ export interface CodeAgentSessionServiceOptions {
   mode?: CodeAgentRunnerMode;
   availableModes?: CodeAgentRunnerMode[];
   defaultMode?: CodeAgentRunnerMode;
+  availableBackends?: CodeAgentBackend[];
   modelGateway?: CodeAgentModelGateway;
   backend?: CodeAgentBackend;
   runnerClient?: CodeAgentRunnerClientKind;
@@ -1936,6 +1937,9 @@ export class CodeAgentSessionService {
   }
 
   private validateTurnBackend(backend: CodeAgentBackend): { ok: true } | { ok: false; error: string } {
+    if (this.options.availableBackends && !this.options.availableBackends.includes(backend)) {
+      return { ok: false, error: `${this.displayBackendName(backend)} backend is not enabled` };
+    }
     if (isCodexBackend(backend) && this.options.codexBackendEnabled === false) {
       return { ok: false, error: 'Codex CLI backend is not enabled' };
     }
@@ -2449,9 +2453,11 @@ export class CodeAgentSessionService {
       if (appendResult.outcome !== 'applied') {
         throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
       }
-      if (event.type === 'tool_call') {
-        state.pendingToolCalls.set(event.id, { name: event.name });
-        if (backend === 'code-agent') {
+      if (event.type === 'tool_call' || event.type === 'approval_request') {
+        state.pendingToolCalls.set(event.id, {
+          name: event.type === 'approval_request' ? 'approval_request' : event.name,
+        });
+        if (event.type === 'tool_call' && backend === 'code-agent') {
           const stepId = state.modelStepIdByToolCallId.get(event.id)!;
           const step = state.modelSteps.get(stepId)!;
           if (step.anchorMessageId === mapped.message.id) {

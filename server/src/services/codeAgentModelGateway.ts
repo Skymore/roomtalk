@@ -628,6 +628,9 @@ export class CodeAgentModelGateway {
     };
     req.once('aborted', abortRequest);
     res.once('close', abortRequest);
+    if (req.aborted || res.destroyed) {
+      abortRequest();
+    }
     let admission: ProviderAdmissionLease | null = null;
     let admissionRequested = false;
     try {
@@ -642,6 +645,7 @@ export class CodeAgentModelGateway {
         method: req.method,
         headers: this.buildUpstreamHeaders(req, claims.provider, providerKey),
         body: req.method === 'GET' ? undefined : stableJson(req.body ?? {}),
+        signal: requestAbort.signal,
       });
       res.status(upstream.status);
       upstream.headers.forEach((value, key) => {
@@ -670,6 +674,7 @@ export class CodeAgentModelGateway {
           claims,
           upstream.status,
           consumeResult.requestCount || 0,
+          requestAbort.signal,
         );
       }
 
@@ -684,6 +689,9 @@ export class CodeAgentModelGateway {
       );
       return res.end(text);
     } catch (error) {
+      if (requestAbort.signal.aborted) {
+        return;
+      }
       const admissionFailed = admissionRequested && !admission;
       const status = admissionFailed ? 503 : 502;
       const event = admissionFailed
@@ -760,6 +768,7 @@ export class CodeAgentModelGateway {
     claims: CodeAgentModelGatewayTokenClaims,
     statusCode: number,
     requestCount: number,
+    abortSignal: AbortSignal,
   ) {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -790,6 +799,9 @@ export class CodeAgentModelGateway {
       }
       return res.end();
     } catch (error) {
+      if (abortSignal.aborted) {
+        return;
+      }
       this.options.logger?.error('Code agent model gateway streaming response failed', {
         error,
         provider: claims.provider,

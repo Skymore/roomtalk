@@ -949,6 +949,7 @@ const createService = (options: {
   mode?: CodeAgentMode;
   availableModes?: CodeAgentMode[];
   defaultMode?: CodeAgentMode;
+  availableBackends?: CodeAgentBackend[];
   modelGateway?: CodeAgentModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
   roomContext?: CodeAgentRoomContextService;
@@ -983,6 +984,7 @@ const createService = (options: {
       mode: options.mode,
       availableModes: options.availableModes,
       defaultMode: options.defaultMode,
+      availableBackends: options.availableBackends,
       modelGateway: options.modelGateway,
       backend: options.backend,
       runnerClient: options.runnerClient,
@@ -1425,6 +1427,24 @@ describe('CodeAgentSessionService', () => {
       success: false,
       error: 'Image input requires Codex app-server or Coco',
     });
+    assert.equal(runner.requests.length, 0);
+  });
+
+  it('rejects turns for a backend that is not currently available', async () => {
+    const store = new MemoryCodeAgentStore(
+      room({ codeAgentBackend: 'opencode' }),
+      [userMessage()],
+    );
+    const runner = new FakeCodeAgentRunnerClient([]);
+    const { service } = createService({
+      store,
+      runner,
+      availableBackends: ['code-agent'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(result, { success: false, error: 'OpenCode backend is not enabled' });
     assert.equal(runner.requests.length, 0);
   });
 
@@ -3455,6 +3475,44 @@ describe('CodeAgentSessionService', () => {
     assert.match(messages[3].content, /Tool interrupted before completion/);
     assert.match(messages[3].content, /E2B command wait failed/);
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
+  });
+
+  it('closes a pending ACP approval card when the runner errors', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'approval_request',
+        turnId: 'turn-1',
+        id: 'approval-1',
+        approvalType: 'command',
+        title: 'Run command',
+        args: { command: 'npm test' },
+      },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'error',
+        message: 'ACP connection closed',
+        code: 'acp_harness_failed',
+        retryable: false,
+      },
+    ]);
+    const { service, store } = createService({ runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), [
+      'text',
+      'ai',
+      'tool_call',
+      'tool_result',
+      'sandbox_status',
+    ]);
+    assert.equal(messages[2].toolName, 'approval_request');
+    assert.equal(messages[3].toolCallId, 'approval-1');
+    assert.equal(messages[3].status, 'error');
+    assert.match(messages[3].content, /ACP connection closed/);
   });
 
   it('closes pending tool calls with failed results when the runner finalizes after interruption', async () => {

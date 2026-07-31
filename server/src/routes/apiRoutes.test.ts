@@ -775,6 +775,7 @@ async function createTestServer(overrides: {
     codeAgentMode: 'acceptEdits',
     codeAgentAvailableModes: ['plan', 'acceptEdits'],
     codeAgentDefaultMode: 'plan',
+    codeAgentAvailableBackends: ['code-agent', 'opencode', 'hermes-agent'],
     mediaUploadCleanup: overrides.mediaUploadCleanup,
     clientLoginRateLimiter: overrides.clientLoginRateLimiter || {
       async consume() {
@@ -841,7 +842,7 @@ describe('API routes', () => {
       rooms: number;
       dependencies: Record<string, string>;
       features: {
-        codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
+        codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string; availableBackends: string[] };
         codex: { connections: { enabled: boolean } };
         github: { connections: { enabled: boolean } };
       };
@@ -858,7 +859,14 @@ describe('API routes', () => {
       socketAdapter: 'ready',
     });
     assert.equal(status.rooms, 1);
-    assert.deepEqual(status.features.codeAgent, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
+    assert.deepEqual(status.features.codeAgent, {
+      enabled: true,
+      rollout: 'all',
+      mode: 'edit',
+      availableModes: ['plan', 'edit'],
+      defaultMode: 'plan',
+      availableBackends: ['code-agent', 'opencode', 'hermes-agent'],
+    });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
     assert.deepEqual(status.features.github, { connections: { enabled: false } });
 
@@ -871,6 +879,7 @@ describe('API routes', () => {
         mode: 'edit',
         availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
+        availableBackends: ['code-agent', 'opencode', 'hermes-agent'],
       },
       codex: {
         connections: {

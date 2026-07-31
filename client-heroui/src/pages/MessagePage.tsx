@@ -31,7 +31,7 @@ import { getStoredRoom, getStoredRoomPermissions, getStoredUsername, getStoredVi
 import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
-import { getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode } from "../utils/codeAgent";
+import { getCodeAgentAvailableBackends, getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode } from "../utils/codeAgent";
 import { reactivateCachedRoomMessageWindow } from "../utils/messageHistoryCache";
 import { invalidatePersistentRoomCache } from "../utils/persistentCacheLifecycle";
 import { logRoomSessionDiagnostic } from "../utils/roomDiagnostics";
@@ -1369,6 +1369,7 @@ export const MessagePage: React.FC = () => {
               username={username}
               clientId={clientId}
               backend={codeAgentBackend}
+              availableBackends={getCodeAgentAvailableBackends(featureFlags)}
               availableModes={getCodeAgentAvailableModes(featureFlags)}
               defaultMode={getCodeAgentDefaultMode(featureFlags)}
               handleCopyToClipboard={handleCopyToClipboard}

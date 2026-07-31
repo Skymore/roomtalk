@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-30-multi-harness-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-31-multi-harness-v3",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.38",
+    "packageVersion": "0.1.40",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -40,7 +40,8 @@
       "hermes_agent_acp": {
         "command": "python -m roomtalk_code_agent_runner.acp_harness --backend hermes-agent",
         "hermesAgentVersion": "0.19.1",
-        "acpSdkVersion": "0.9.0"
+        "acpSdkVersion": "0.9.0",
+        "extras": ["acp", "anthropic"]
       },
       "daemon": {
         "command": "python -m roomtalk_code_agent_runner.daemon"

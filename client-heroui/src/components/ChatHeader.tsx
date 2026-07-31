@@ -17,7 +17,7 @@ import {
 } from '@heroui/react';
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { CodeAgentMode, Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
+import { CodeAgentBackend, CodeAgentMode, Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
 import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
@@ -48,6 +48,7 @@ interface ChatHeaderProps {
   clientId: string;
   codeAgentAvailableModes?: CodeAgentMode[];
   codeAgentDefaultMode?: CodeAgentMode;
+  codeAgentAvailableBackends?: CodeAgentBackend[];
   onRoomUpdated: (room: Room) => void;
 }
 
@@ -74,6 +75,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   clientId,
   codeAgentAvailableModes,
   codeAgentDefaultMode,
+  codeAgentAvailableBackends,
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -337,6 +339,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       onDeleteRoom={handleDeleteRoom}
       codeAgentAvailableModes={codeAgentAvailableModes}
       codeAgentDefaultMode={codeAgentDefaultMode}
+      codeAgentAvailableBackends={codeAgentAvailableBackends}
       onRoomUpdated={onRoomUpdated}
     />
     <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">

@@ -93,6 +93,7 @@ import { resolveRuntimeInstanceId } from './services/runtimeInstance';
 import { AITerminalPersistReconciler } from './services/aiTerminalPersistReconciler';
 import { enforceRoomEventAuthorizationBarrier } from './services/roomEventAuthorizationBarrier';
 import { AccountAIUsageSettlementQueue } from './services/accountAIUsageSettlementQueue';
+import { availableCodeAgentBackends } from './services/codeAgentBackends';
 
 dotenv.config();
 
@@ -315,6 +316,19 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
     settleAccountAIUsage: input => accountAIUsageSettlementQueue.settle(input),
   })
   : undefined;
+const codexBackendEnabled = codexCliRunnerConfig.enabled && Boolean(codexConnectionService);
+const acpBackendEnabled = Boolean(
+  codeAgentModelGateway || (
+    codeAgentRuntimeConfig.runnerEnv.CODE_AGENT_MODEL_PROXY_URL &&
+    codeAgentRuntimeConfig.runnerEnv.CODE_AGENT_MODEL_PROXY_TOKEN
+  )
+);
+const codeAgentAvailableBackends = availableCodeAgentBackends({
+  codexEnabled: codexBackendEnabled,
+  acpEnabled: acpBackendEnabled,
+  artifactVersion: codeAgentRuntimeConfig.artifactVersion,
+  developmentArtifact: codeAgentRuntimeConfig.artifactMode === 'development',
+});
 
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
@@ -534,6 +548,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     mode: codeAgentRuntimeConfig.mode,
     availableModes: codeAgentRuntimeConfig.availableModes,
     defaultMode: codeAgentRuntimeConfig.defaultMode,
+    availableBackends: codeAgentAvailableBackends,
     modelGateway: codeAgentModelGateway,
     backend: codeAgentRuntimeConfig.backend,
     runnerClient: codeAgentRuntimeConfig.runnerClient,
@@ -551,7 +566,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
       'hermes-agent': codeAgentRuntimeConfig.runnerEnv,
     },
     runnerProviderEnvByProvider: codeAgentRuntimeConfig.runnerProviderEnvByProvider,
-    codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),
+    codexBackendEnabled,
     codexConnectionService,
     githubConnectionService,
     staticSitePublisher: publishedStaticSiteService,
@@ -767,6 +782,7 @@ registerSocketHandlers({
   assemblyAIApiKey,
   codeAgentSessionService,
   codeAgentAccess,
+  codeAgentAvailableBackends,
   codeAgentSandboxLifecycle,
   codeAgentSandboxService,
   codeWorkspaceAssetAccess,
@@ -809,6 +825,7 @@ registerApiRoutes(app, {
   codeAgentMode: codeAgentRuntimeConfig.mode,
   codeAgentAvailableModes: codeAgentRuntimeConfig.availableModes,
   codeAgentDefaultMode: codeAgentRuntimeConfig.defaultMode,
+  codeAgentAvailableBackends,
   codexConnections: {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,
