@@ -1,4 +1,5 @@
 import assert from 'assert/strict';
+import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomAgentTurn } from '../types';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -157,6 +158,19 @@ describe('PostgresStore', () => {
     assert.ok(normalizeIndex > dropIndex);
     assert.ok(addIndex > normalizeIndex);
     assert.match(POSTGRES_SCHEMA_SQL[normalizeIndex], /message_type IN \('image', 'voice', 'audio', 'video'\)/);
+  });
+
+  it('keeps the production initial schema immutable and widens agent backends in a later migration', () => {
+    const initialSchemaChecksum = createHash('sha256')
+      .update(POSTGRES_SCHEMA_SQL.join('\u0000'))
+      .digest('hex');
+    const backendMigration = POSTGRES_MIGRATIONS.find(migration => migration.id === '0018_expand_code_agent_backends');
+
+    assert.equal(initialSchemaChecksum, '466d7ef0776b0f2593555a1400ab8a977644937dff3779e0c92f5517777c2fd9');
+    assert.ok(backendMigration);
+    assert.match(backendMigration.sql, /rooms_code_agent_backend_check/);
+    assert.match(backendMigration.sql, /room_agent_turns_backend_check/);
+    assert.match(backendMigration.sql, /'opencode', 'hermes-agent'/);
   });
 
   it('applies pending migrations exactly once inside the schema transaction', async () => {

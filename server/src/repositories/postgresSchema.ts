@@ -57,7 +57,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_backend TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_backend_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_backend_check
-    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'))`,
+    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('code-agent', 'codex', 'codex-app-server'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
     CHECK (type IN ('chat', 'codeAgent'))`,
@@ -177,7 +177,7 @@ export const POSTGRES_SCHEMA_SQL = [
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ,
     final_message_id TEXT REFERENCES room_messages(id) ON DELETE SET NULL,
-    backend TEXT NOT NULL CHECK (backend IN ('code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent')),
+    backend TEXT NOT NULL CHECK (backend IN ('code-agent', 'codex', 'codex-app-server')),
     assistant_name TEXT NOT NULL,
     phase TEXT,
     phase_message TEXT,
@@ -187,9 +187,6 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS phase TEXT`,
   `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS phase_message TEXT`,
   `ALTER TABLE room_agent_turns ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`,
-  `ALTER TABLE room_agent_turns DROP CONSTRAINT IF EXISTS room_agent_turns_backend_check`,
-  `ALTER TABLE room_agent_turns ADD CONSTRAINT room_agent_turns_backend_check
-    CHECK (backend IN ('code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'))`,
   `ALTER TABLE room_agent_turns DROP CONSTRAINT IF EXISTS room_agent_turns_phase_check`,
   `ALTER TABLE room_agent_turns ADD CONSTRAINT room_agent_turns_phase_check
     CHECK (phase IS NULL OR phase IN ('preparing_context', 'preparing_sandbox', 'starting_agent', 'running', 'waiting_approval', 'completing'))`,
@@ -2243,6 +2240,29 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_account_membership_events_account_created
         ON account_membership_events (account_id, created_at DESC);
+    `,
+  },
+  {
+    // The initial schema was already recorded in production before OpenCode
+    // and Hermes support existed. Keep that migration immutable and widen the
+    // two backend constraints only through this ordered migration.
+    id: '0018_expand_code_agent_backends',
+    sql: `
+      ALTER TABLE rooms
+        DROP CONSTRAINT IF EXISTS rooms_code_agent_backend_check;
+      ALTER TABLE rooms
+        ADD CONSTRAINT rooms_code_agent_backend_check
+        CHECK (code_agent_backend IS NULL OR code_agent_backend IN (
+          'code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'
+        ));
+
+      ALTER TABLE room_agent_turns
+        DROP CONSTRAINT IF EXISTS room_agent_turns_backend_check;
+      ALTER TABLE room_agent_turns
+        ADD CONSTRAINT room_agent_turns_backend_check
+        CHECK (backend IN (
+          'code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent'
+        ));
     `,
   },
 ];
