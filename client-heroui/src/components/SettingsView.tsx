@@ -23,6 +23,7 @@ import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from "../utils/accessibility";
 import {
   ClientAccountStatus,
   ClientAuthStatus,
+  disconnectGoogleAccount,
   getClientAccountStatus,
   getClientAuthStatus,
   loginWithClientPassword,
@@ -179,6 +180,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isUpdatingGoogleAuth, setIsUpdatingGoogleAuth] = React.useState(false);
   const [googleAuthError, setGoogleAuthError] = React.useState('');
   const [googleAuthMessage, setGoogleAuthMessage] = React.useState('');
+  const [isGoogleDisconnectModalOpen, setIsGoogleDisconnectModalOpen] = React.useState(false);
   const googleButtonRef = React.useRef<HTMLDivElement | null>(null);
   const [codexStatus, setCodexStatus] = React.useState<CodexConnectionStatus | null>(null);
   const [codexDeviceAuth, setCodexDeviceAuth] = React.useState<CodexDeviceAuthInfo | null>(null);
@@ -526,6 +528,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [pushStatus, t]);
 
+  const handleDisconnectGoogle = async () => {
+    setGoogleAuthError('');
+    setGoogleAuthMessage('');
+    setIsUpdatingGoogleAuth(true);
+    try {
+      setAccountStatus(await disconnectGoogleAccount(clientId));
+      setIsGoogleDisconnectModalOpen(false);
+      setGoogleAuthMessage(t('googleDisconnectSuccess'));
+    } catch (error) {
+      setGoogleAuthError(error instanceof Error ? error.message : t('googleDisconnectUnknownError'));
+    } finally {
+      setIsUpdatingGoogleAuth(false);
+    }
+  };
+
   const isGoogleLoginAvailable = Boolean(GOOGLE_CLIENT_ID) && Boolean(accountStatus?.googleConfigured);
   const isGoogleLinked = accountStatus?.account?.googleLinked === true;
   const shouldRenderGoogleButton = isGoogleLoginAvailable && !isGoogleLinked;
@@ -843,6 +860,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       : 'membershipStatusCancelled')}
                   </Chip>
                 )}
+                {accountStatus?.roles?.includes('admin') && (
+                  <Chip size="sm" variant="flat" color="secondary">
+                    {t('platformAdministrator')}
+                  </Chip>
+                )}
               </div>
               {accountStatus?.entitlement ? (
                 <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#e8e6dc] p-3 text-xs dark:bg-[#242423]">
@@ -915,6 +937,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     {accountStatus.account.emailVerified ? t("googleEmailVerified") : t("googleEmailUnverified")}
                   </Chip>
                 )}
+                {isGoogleLinked && (
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    color="danger"
+                    isDisabled={!accountStatus?.hasPassword || isUpdatingGoogleAuth}
+                    startContent={!isUpdatingGoogleAuth ? <Icon icon="lucide:unlink" /> : undefined}
+                    onPress={() => setIsGoogleDisconnectModalOpen(true)}
+                  >
+                    {t('disconnectGoogle')}
+                  </Button>
+                )}
               </div>
               {isGoogleLinked && accountStatus?.account && (
                 <div className="flex min-w-0 items-center gap-3 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
@@ -946,6 +980,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
               {accountStatus && !isGoogleLoginAvailable && !isGoogleLinked && (
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">{t("googleAccountUnavailable")}</p>
+              )}
+              {isGoogleLinked && !accountStatus?.hasPassword && (
+                <p className="flex items-start gap-1.5 text-xs leading-5 text-[#9a651f] dark:text-[#e9b96e]">
+                  <Icon icon="lucide:shield-alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{t('googleDisconnectPasswordRequired')}</span>
+                </p>
               )}
               {isUpdatingGoogleAuth && (
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">{t("googleSignInInProgress")}</p>
@@ -1347,6 +1387,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </section>
       </div>
     </div>
+    <Modal
+      isOpen={isGoogleDisconnectModalOpen}
+      onClose={() => !isUpdatingGoogleAuth && setIsGoogleDisconnectModalOpen(false)}
+      size="md"
+    >
+      <ModalContent className="border border-[#dedbd0] bg-[#faf9f5] text-[#141413] shadow-2xl dark:border-[#3a3936] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
+        <ModalHeader className="flex items-center gap-2 text-danger-600 dark:text-danger-400">
+          <Icon icon="lucide:unlink" aria-hidden="true" />
+          {t('googleDisconnectTitle')}
+        </ModalHeader>
+        <ModalBody className="gap-3 text-sm leading-6 text-[#5e5d59] dark:text-[#b0aea5]">
+          <p>{t('googleDisconnectDescription')}</p>
+          <p>{t('googleDisconnectKeepsData')}</p>
+          {googleAuthError && (
+            <p role="alert" aria-atomic="true" className="text-[#b54832] dark:text-[#ff8b6e]">
+              {googleAuthError}
+            </p>
+          )}
+        </ModalBody>
+        <ModalFooter className="gap-2 border-t border-[#e5e2d9] dark:border-[#30302e]">
+          <Button
+            variant="light"
+            isDisabled={isUpdatingGoogleAuth}
+            onPress={() => setIsGoogleDisconnectModalOpen(false)}
+          >
+            {t('cancel')}
+          </Button>
+          <Button
+            color="danger"
+            isLoading={isUpdatingGoogleAuth}
+            startContent={!isUpdatingGoogleAuth ? <Icon icon="lucide:unlink" /> : undefined}
+            onPress={handleDisconnectGoogle}
+          >
+            {t('disconnectGoogle')}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
     <Modal
       isOpen={isCodexLoginModalOpen && Boolean(codexDeviceAuth)}
       onClose={handleCloseCodexLoginModal}

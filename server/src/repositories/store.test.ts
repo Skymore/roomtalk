@@ -110,6 +110,9 @@ const durableClientAccountStubs = () => ({
       lastLoginAt: now,
     });
   },
+  async disconnectGoogleAccount() {
+    return 'not_linked' as const;
+  },
   async getAccountEntitlementByClientId() {
     return null;
   },
@@ -438,6 +441,7 @@ describe('CompositeRoomStore', () => {
         return clientAccount({ accountId: input.accountId, primaryClientId: input.clientId, providerSubject: input.providerSubject });
       },
       async updateGoogleAccountLogin(accountId: string) { calls.push('durable.updateGoogleAccountLogin'); return clientAccount({ accountId }); },
+      async disconnectGoogleAccount() { calls.push('durable.disconnectGoogleAccount'); return 'disconnected' as const; },
       async getAccountEntitlementByClientId() { calls.push('durable.getAccountEntitlementByClientId'); return null; },
       async updateAccountMembership() { calls.push('durable.updateAccountMembership'); return null; },
       async applyAccountMembershipChange() { calls.push('durable.applyAccountMembershipChange'); return null; },
@@ -619,6 +623,10 @@ describe('CompositeRoomStore', () => {
       clientAccount({ accountId: 'account-2', primaryClientId: 'client-2', providerSubject: 'google-subject-2' }),
     );
     assert.deepEqual(await store.updateGoogleAccountLogin('account-1', { providerSubject: 'google-subject-1' }), clientAccount());
+    assert.equal(await store.disconnectGoogleAccount({
+      id: 'identity-event-1',
+      clientId: 'client-1',
+    }), 'disconnected');
     assert.equal(await store.getAccountEntitlementByClientId('client-1'), null);
     assert.equal(await store.updateAccountMembership({
       accountId: 'account-1',
@@ -742,6 +750,7 @@ describe('CompositeRoomStore', () => {
       'durable.setPasswordAccountCredentials',
       'durable.createGoogleAccountForClient',
       'durable.updateGoogleAccountLogin',
+      'durable.disconnectGoogleAccount',
       'durable.getAccountEntitlementByClientId',
       'durable.updateAccountMembership',
       'durable.applyAccountMembershipChange',

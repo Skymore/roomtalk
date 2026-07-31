@@ -266,6 +266,76 @@ describe('PostgresStore', () => {
     assert.equal(client.released, true);
   });
 
+  it('disconnects a Google identity and writes its audit event in one transaction', async () => {
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ account_id: 'account-1', has_password: true, google_linked: true }],
+        assertCall(call) {
+          assert.match(call.sql, /FOR UPDATE OF link, a/);
+          assert.deepEqual(call.params, ['client-1']);
+        },
+      },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM account_identities/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /UPDATE accounts/) },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO account_identity_events/);
+          assert.deepEqual(call.params, [
+            'identity-event-1',
+            'account-1',
+            'client-1',
+            JSON.stringify({ source: 'account_settings' }),
+            '2026-05-03T00:00:00.000Z',
+          ]);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.equal(await store.disconnectGoogleAccount({
+      id: 'identity-event-1',
+      clientId: 'client-1',
+      now: '2026-05-03T00:00:00.000Z',
+    }), 'disconnected');
+    assert.equal(client.released, true);
+  });
+
+  it('locks the account before refreshing its Google identity and rejects a removed identity', async () => {
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [{ id: 'account-1' }],
+        assertCall(call) {
+          assert.match(call.sql, /FROM accounts WHERE id = \$1 FOR UPDATE/);
+          assert.deepEqual(call.params, ['account-1']);
+        },
+      },
+      {
+        rows: [],
+        assertCall(call) {
+          assert.match(call.sql, /FROM account_identities/);
+          assert.match(call.sql, /FOR UPDATE/);
+          assert.deepEqual(call.params, ['account-1', 'google-subject-1']);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'ROLLBACK') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.equal(await store.updateGoogleAccountLogin('account-1', {
+      providerSubject: 'google-subject-1',
+      email: 'ada@example.com',
+      emailVerified: true,
+    }), null);
+    assert.equal(client.calls.some(call => /UPDATE accounts/.test(call.sql)), false);
+    assert.equal(client.released, true);
+  });
+
   it('saves, reads, counts, and deletes rooms', async () => {
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },

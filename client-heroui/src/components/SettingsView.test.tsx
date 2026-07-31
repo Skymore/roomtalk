@@ -17,6 +17,7 @@ const githubApiMock = vi.hoisted(() => ({
 }));
 const accountApiMock = vi.hoisted(() => ({
   getClientAccountStatus: vi.fn(),
+  disconnectGoogleAccount: vi.fn(),
 }));
 const i18nMock = vi.hoisted(() => ({
   t: (key: string) => key,
@@ -37,6 +38,7 @@ vi.mock('@iconify/react', () => ({
 vi.mock('../utils/socket', () => ({
   getClientAuthStatus: vi.fn(async (clientId: string) => ({ clientId, hasPassword: false })),
   getClientAccountStatus: accountApiMock.getClientAccountStatus,
+  disconnectGoogleAccount: accountApiMock.disconnectGoogleAccount,
   loginWithClientPassword: vi.fn(),
   loginWithGoogleCredential: vi.fn(),
   setClientPassword: vi.fn(),
@@ -116,6 +118,20 @@ describe('SettingsView Codex connection controls', () => {
       hasPassword: false,
       googleConfigured: false,
       account: null,
+      roles: [],
+      entitlement: null,
+    });
+    accountApiMock.disconnectGoogleAccount.mockResolvedValue({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: true,
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-1',
+        provider: 'password',
+        googleLinked: false,
+      },
+      roles: [],
       entitlement: null,
     });
     githubApiMock.connectGitHub.mockResolvedValue({
@@ -280,6 +296,74 @@ describe('SettingsView Codex connection controls', () => {
 
     expect(await screen.findByText('ada@example.com')).toBeTruthy();
     expect(screen.queryByText('googleAccountIntroTitle')).toBeNull();
+  });
+
+  it('requires a password fallback before Google can be disconnected', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: false,
+      googleConfigured: true,
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-1',
+        provider: 'google',
+        googleLinked: true,
+        email: 'ada@example.com',
+        emailVerified: true,
+      },
+      roles: [],
+      entitlement: null,
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    const disconnectButton = await screen.findByRole('button', { name: 'disconnectGoogle' });
+    expect((disconnectButton as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('googleDisconnectPasswordRequired')).toBeTruthy();
+  });
+
+  it('confirms Google disconnect and shows the resulting account status', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: true,
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-1',
+        provider: 'google',
+        googleLinked: true,
+        email: 'ada@example.com',
+        emailVerified: true,
+      },
+      roles: ['admin'],
+      entitlement: null,
+    });
+    accountApiMock.disconnectGoogleAccount.mockResolvedValueOnce({
+      clientId: 'client-1',
+      hasPassword: true,
+      googleConfigured: true,
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-1',
+        provider: 'password',
+        googleLinked: false,
+      },
+      roles: ['admin'],
+      entitlement: null,
+    });
+
+    render(<SettingsView {...baseProps} />);
+
+    expect(await screen.findByText('platformAdministrator')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'disconnectGoogle' }));
+    expect(await screen.findByText('googleDisconnectTitle')).toBeTruthy();
+    const disconnectButtons = screen.getAllByRole('button', { name: 'disconnectGoogle' });
+    fireEvent.click(disconnectButtons[disconnectButtons.length - 1]);
+
+    await waitFor(() => expect(accountApiMock.disconnectGoogleAccount).toHaveBeenCalledWith('client-1'));
+    expect(await screen.findByText('googleDisconnectSuccess')).toBeTruthy();
+    expect(screen.getByText('googleAccountNotLinked')).toBeTruthy();
+    expect(screen.getByText('platformAdministrator')).toBeTruthy();
   });
 
   it('shows the effective membership, credits, usage, and queue priority', async () => {

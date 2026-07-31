@@ -187,6 +187,8 @@ Queue Redis 在 PostgreSQL 接受请求后不可用时，dispatch row 会保持 
 
 密码账号创建、密码轮换、旧会话撤销和新会话签发在同一事务内提交。账号会话有过期时间，并通过数据库外键绑定账号。认证存储异常统一返回 `503`，不会退化为匿名授权；Redis 尝试额度耗尽时，会在执行昂贵的密码校验前返回 `429` 和 `Retry-After`。
 
+已认证账号可以调用 `DELETE /api/auth/google` 断开 Google 登录 identity，但必须先设置 User ID 密码，防止用户把自己锁在账号外。断开只删除 Google identity 与对应资料字段，不会删除账号、当前 App 会话、房间、会员、额度、用量历史或已持久化角色；同一事务还会写入不可变的 `account_identity_events` 审计记录。因此平台管理员断开 Google 后仍保留数据库中的 `admin` 角色，但在重新绑定前不能再通过 Google 登录。
+
 平台管理员权限是 `account_roles` 中的持久数据库状态，不再存在部署级会员 Bearer secret。`PLATFORM_ADMIN_EMAILS` 只声明哪些已验证 Google identity 可以自举该数据库角色：匹配账号首次发起已认证账号请求时，会在同一事务中写入 `admin` 角色与不可变授权审计事件。只知道或声称拥有某个邮箱不能获得权限。`PUT /api/admin/accounts/:accountId/membership` 必须通过 `X-Client-Id` 和 `X-Client-Auth-Token` 提供未过期账号会话，服务端再从 PostgreSQL 检查已持久化的 `admin` 角色。
 
 只配置一个邮箱时，也可以在用户下次登录前从生产 App 容器预先落库，不需要把邮箱写进命令行：

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -5101,8 +5101,31 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = new Date().toISOString()): Promise<ClientAccount | null> {
+    const client = await this.pool.connect();
     try {
-      await this.pool.query(
+      await client.query('BEGIN');
+      const account = await client.query<{ id: string }>(
+        `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`,
+        [accountId],
+      );
+      if (!account.rows[0]) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const identity = await client.query<{ account_id: string }>(
+        `SELECT account_id
+        FROM account_identities
+        WHERE account_id = $1
+          AND provider = 'google'
+          AND provider_subject = $2
+        FOR UPDATE`,
+        [accountId, profile.providerSubject],
+      );
+      if (!identity.rows[0]) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await client.query(
         `UPDATE accounts
         SET display_name = COALESCE($2, display_name),
             avatar_url = COALESCE($3, avatar_url),
@@ -5111,7 +5134,7 @@ export class PostgresStore implements DurableRoomStore {
         WHERE id = $1`,
         [accountId, profile.displayName || null, profile.avatarUrl || null, now]
       );
-      await this.pool.query(
+      await client.query(
         `UPDATE account_identities
         SET email = COALESCE($2, email),
             email_verified = $3,
@@ -5125,7 +5148,7 @@ export class PostgresStore implements DurableRoomStore {
           profile.providerSubject,
         ]
       );
-      const result = await this.pool.query<ClientAccountRow>(
+      const result = await client.query<ClientAccountRow>(
         `SELECT ${ACCOUNT_SELECT_COLUMNS}
         FROM accounts a
         LEFT JOIN account_identities google_identity
@@ -5135,10 +5158,95 @@ export class PostgresStore implements DurableRoomStore {
         LIMIT 1`,
         [accountId]
       );
+      await client.query('COMMIT');
       return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
     } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
       this.logger.error('Error updating PostgreSQL Google account login', { error, accountId });
       throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async disconnectGoogleAccount(
+    input: DisconnectGoogleAccountInput,
+  ): Promise<DisconnectGoogleAccountResult> {
+    const now = input.now || new Date().toISOString();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const state = await client.query<{
+        account_id: string;
+        has_password: boolean;
+        google_linked: boolean;
+      }>(
+        `SELECT link.account_id,
+          EXISTS (
+            SELECT 1 FROM client_passwords password
+            WHERE password.client_id = link.client_id
+          ) AS has_password,
+          EXISTS (
+            SELECT 1 FROM account_identities identity
+            WHERE identity.account_id = link.account_id
+              AND identity.provider = 'google'
+          ) AS google_linked
+        FROM client_account_links link
+        INNER JOIN accounts a ON a.id = link.account_id
+        WHERE link.client_id = $1
+        FOR UPDATE OF link, a`,
+        [input.clientId],
+      );
+      const account = state.rows[0];
+      if (!account) {
+        await client.query('ROLLBACK');
+        return 'account_not_found';
+      }
+      if (!account.google_linked) {
+        await client.query('ROLLBACK');
+        return 'not_linked';
+      }
+      if (!account.has_password) {
+        await client.query('ROLLBACK');
+        return 'password_required';
+      }
+
+      await client.query(
+        `DELETE FROM account_identities
+        WHERE account_id = $1 AND provider = 'google'`,
+        [account.account_id],
+      );
+      await client.query(
+        `UPDATE accounts
+        SET display_name = NULL,
+          avatar_url = NULL,
+          updated_at = $2
+        WHERE id = $1`,
+        [account.account_id, now],
+      );
+      await client.query(
+        `INSERT INTO account_identity_events (
+          id, account_id, provider, action, actor_client_id, metadata, created_at
+        ) VALUES ($1, $2, 'google', 'disconnect', $3, $4::jsonb, $5)`,
+        [
+          input.id,
+          account.account_id,
+          input.clientId,
+          JSON.stringify({ source: 'account_settings' }),
+          now,
+        ],
+      );
+      await client.query('COMMIT');
+      return 'disconnected';
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      this.logger.error('Error disconnecting PostgreSQL Google account', {
+        error,
+        clientId: input.clientId,
+      });
+      throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -6264,7 +6372,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_identity_events, account_role_events, account_roles, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

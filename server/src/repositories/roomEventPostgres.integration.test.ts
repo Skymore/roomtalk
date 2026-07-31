@@ -1610,6 +1610,85 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     });
   });
 
+  it('disconnects Google only with a password fallback and preserves durable account state', async () => {
+    const accountId = 'google-disconnect-account';
+    const clientId = 'google-disconnect-client';
+    const providerSubject = 'google-disconnect-subject';
+    const googleAccount = await store.createGoogleAccountForClient({
+      accountId,
+      clientId,
+      providerSubject,
+      email: 'disconnect@example.com',
+      emailVerified: true,
+      displayName: 'Disconnect Test',
+      now: createdAt,
+    });
+    assert.equal(googleAccount?.googleLinked, true);
+    assert.equal(await store.disconnectGoogleAccount({
+      id: 'identity-event-without-password',
+      clientId,
+      now: createdAt,
+    }), 'password_required');
+    assert.equal((await store.getAccountByClientId(clientId))?.googleLinked, true);
+
+    assert.ok(await store.setPasswordAccountCredentials({
+      accountId,
+      clientId,
+      passwordHash: 'password-hash',
+      authToken: {
+        clientId,
+        accountId,
+        authMethod: 'password',
+        tokenHash: 'google-disconnect-password-token',
+        createdAt,
+        expiresAt: '2026-08-19T12:00:00.000Z',
+      },
+      now: createdAt,
+    }));
+    assert.ok(await store.updateAccountMembership({
+      accountId,
+      tier: 'pro',
+      status: 'active',
+      now: createdAt,
+    }));
+    assert.ok(await store.grantAccountCredits({
+      id: 'google-disconnect-credit',
+      accountId,
+      amountUsd: 5,
+      idempotencyKey: 'google-disconnect-credit',
+      now: createdAt,
+    }));
+    assert.equal(await store.grantAccountRole({
+      id: 'google-disconnect-role-event',
+      accountId,
+      role: 'admin',
+      now: createdAt,
+    }), true);
+
+    assert.equal(await store.disconnectGoogleAccount({
+      id: 'google-disconnect-identity-event',
+      clientId,
+      now: createdAt,
+    }), 'disconnected');
+    const disconnected = await store.getAccountByClientId(clientId);
+    assert.equal(disconnected?.accountId, accountId);
+    assert.equal(disconnected?.googleLinked, false);
+    assert.equal(disconnected?.provider, 'password');
+    assert.equal(disconnected?.email, undefined);
+    assert.equal(disconnected?.displayName, undefined);
+    assert.equal(await store.getAccountByGoogleSubject(providerSubject), null);
+    assert.deepEqual(await store.getAccountRoles(accountId), ['admin']);
+    const entitlement = await store.getAccountEntitlementByClientId(clientId);
+    assert.equal(entitlement?.tier, 'pro');
+    assert.equal(entitlement?.creditBalanceUsd, 5);
+    assert.equal((await pool.query(
+      `SELECT COUNT(*) AS count
+      FROM account_identity_events
+      WHERE account_id = $1 AND provider = 'google' AND action = 'disconnect'`,
+      [accountId],
+    )).rows[0]?.count, '1');
+  });
+
   it('applies membership transitions and credit grants as one idempotent transaction', async () => {
     const accountId = 'atomic-membership-account';
     const clientId = 'atomic-membership-client';

@@ -10,7 +10,7 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, GoogleAccountProfile, GrantAccountRoleInput, PendingMediaUpload, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from '../repositories/store';
+import { AccountCreditGrantInput, AccountMembershipChangeInput, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, GoogleAccountProfile, GrantAccountRoleInput, PendingMediaUpload, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
@@ -71,6 +71,7 @@ type TestServer = {
     setPasswordAccountCredentials: (input: SetPasswordAccountCredentialsInput) => Promise<ClientAccount | null>;
     createGoogleAccountForClient: (input: CreateGoogleAccountInput) => Promise<ClientAccount | null>;
     updateGoogleAccountLogin: (accountId: string, profile: GoogleAccountProfile, now?: string) => Promise<ClientAccount | null>;
+    disconnectGoogleAccount: (input: DisconnectGoogleAccountInput) => Promise<DisconnectGoogleAccountResult>;
     getAccountEntitlementByClientId: (clientId: string) => Promise<AccountEntitlement | null>;
     updateAccountMembership: (input: UpdateAccountMembershipInput) => Promise<AccountEntitlement | null>;
     applyAccountMembershipChange: (input: AccountMembershipChangeInput) => Promise<AccountEntitlement | null>;
@@ -411,6 +412,27 @@ async function createTestServer(overrides: {
       };
       this.accounts.set(accountId, updated);
       return updated;
+    },
+    async disconnectGoogleAccount(input: DisconnectGoogleAccountInput): Promise<DisconnectGoogleAccountResult> {
+      const accountId = this.clientAccountLinks.get(input.clientId);
+      if (!accountId) return 'account_not_found';
+      const account = this.accounts.get(accountId);
+      if (!account?.googleLinked) return 'not_linked';
+      if (!this.clientPasswords.has(input.clientId)) return 'password_required';
+      const updated: ClientAccount = {
+        ...account,
+        provider: 'password',
+        providerSubject: input.clientId,
+        googleLinked: false,
+        updatedAt: input.now || '2026-05-03T00:00:00.000Z',
+      };
+      delete updated.email;
+      delete updated.emailVerified;
+      delete updated.displayName;
+      delete updated.avatarUrl;
+      this.accounts.set(accountId, updated);
+      this.googleSubjectAccountIds.delete(account.providerSubject);
+      return 'disconnected';
     },
     async getAccountEntitlementByClientId(clientId: string) {
       const accountId = this.clientAccountLinks.get(clientId);
@@ -1059,6 +1081,84 @@ describe('API routes', () => {
     assert.equal(reusePayload.clientId, 'client-1');
     assert.equal(reusePayload.account.accountId, linkPayload.account.accountId);
     assert.equal(await server.store.getAccountByClientId('client-new'), null);
+  });
+
+  it('disconnects Google only after a password exists and preserves account state', async () => {
+    await server.close();
+    server = await createTestServer({
+      googleClientIds: ['google-client-id'],
+      platformAdminEmails: ['ada@example.com'],
+      verifyGoogleCredential: async () => ({
+        ok: true,
+        profile: {
+          providerSubject: 'google-disconnect-subject',
+          email: 'ada@example.com',
+          emailVerified: true,
+          displayName: 'Ada Lovelace',
+        },
+      }),
+    });
+
+    const googleResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token' }),
+    });
+    assert.equal(googleResponse.status, 200);
+    const googleSession = await googleResponse.json() as {
+      clientAuthToken: string;
+      account: ClientAccount;
+      roles: string[];
+    };
+    assert.deepEqual(googleSession.roles, ['admin']);
+
+    const lockedOutResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'DELETE',
+      headers: {
+        'X-Client-Id': 'client-1',
+        'X-Client-Auth-Token': googleSession.clientAuthToken,
+      },
+    });
+    assert.equal(lockedOutResponse.status, 409);
+    assert.deepEqual(await lockedOutResponse.json(), {
+      error: 'Set a User ID password before disconnecting Google',
+      code: 'PASSWORD_REQUIRED',
+    });
+    assert.equal((await server.store.getAccountByClientId('client-1'))?.googleLinked, true);
+
+    const passwordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-1',
+        password: 'password-1',
+        clientAuthToken: googleSession.clientAuthToken,
+      }),
+    });
+    assert.equal(passwordResponse.status, 200);
+    const passwordSession = await passwordResponse.json() as { clientAuthToken: string };
+
+    const disconnectResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'DELETE',
+      headers: {
+        'X-Client-Id': 'client-1',
+        'X-Client-Auth-Token': passwordSession.clientAuthToken,
+      },
+    });
+    assert.equal(disconnectResponse.status, 200);
+    const disconnected = await disconnectResponse.json() as {
+      account: ClientAccount;
+      hasPassword: boolean;
+      roles: string[];
+      entitlement: AccountEntitlement;
+    };
+    assert.equal(disconnected.hasPassword, true);
+    assert.equal(disconnected.account.googleLinked, false);
+    assert.equal(disconnected.account.provider, 'password');
+    assert.equal(disconnected.account.email, undefined);
+    assert.deepEqual(disconnected.roles, ['admin']);
+    assert.equal(disconnected.entitlement.tier, 'free');
+    assert.equal(await server.store.getAccountByGoogleSubject('google-disconnect-subject'), null);
   });
 
   it('requires an existing auth token before linking Google to a protected User ID', async () => {

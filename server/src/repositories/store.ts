@@ -609,6 +609,18 @@ export interface GrantAccountRoleInput {
   now?: string;
 }
 
+export interface DisconnectGoogleAccountInput {
+  id: string;
+  clientId: string;
+  now?: string;
+}
+
+export type DisconnectGoogleAccountResult =
+  | 'disconnected'
+  | 'password_required'
+  | 'not_linked'
+  | 'account_not_found';
+
 export interface CreateGoogleAccountInput extends GoogleAccountProfile {
   accountId: string;
   clientId: string;
@@ -799,6 +811,7 @@ export interface DurableRoomStore {
   setPasswordAccountCredentials(input: SetPasswordAccountCredentialsInput): Promise<ClientAccount | null>;
   createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string): Promise<ClientAccount | null>;
+  disconnectGoogleAccount(input: DisconnectGoogleAccountInput): Promise<DisconnectGoogleAccountResult>;
   getAccountEntitlementByClientId(clientId: string): Promise<AccountEntitlement | null>;
   updateAccountMembership(input: UpdateAccountMembershipInput): Promise<AccountEntitlement | null>;
   applyAccountMembershipChange(input: AccountMembershipChangeInput): Promise<AccountEntitlement | null>;
@@ -1478,6 +1491,10 @@ export class CompositeRoomStore implements RoomStore {
 
   updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string) {
     return this.durableStore.updateGoogleAccountLogin(accountId, profile, now);
+  }
+
+  disconnectGoogleAccount(input: DisconnectGoogleAccountInput) {
+    return this.durableStore.disconnectGoogleAccount(input);
   }
 
   getAccountEntitlementByClientId(clientId: string) {

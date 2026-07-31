@@ -5,7 +5,7 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 import { AccountEntitlement, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -67,6 +67,7 @@ const ACCOUNT_AI_USAGE_KEY = 'account:ai_usage';
 const ACCOUNT_MEMBERSHIP_EVENTS_KEY = 'account:membership_events';
 const ACCOUNT_ADMIN_ROLES_KEY = 'account:roles:admin';
 const ACCOUNT_ROLE_EVENTS_KEY = 'account:role_events';
+const ACCOUNT_IDENTITY_EVENTS_KEY = 'account:identity_events';
 const REALTIME_INSTANCES_KEY = 'realtime:instances';
 const SOCKET_INSTANCES_KEY = 'socket:instances';
 const getRealtimeInstanceHeartbeatKey = (instanceId: string) => `realtime:instance:${instanceId}:heartbeat`;
@@ -3158,6 +3159,54 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return nextAccount;
     } catch (error) {
       this.logger.error('Error updating Redis Google account login', { error, accountId });
+      throw error;
+    }
+  }
+
+  async disconnectGoogleAccount(
+    input: DisconnectGoogleAccountInput,
+  ): Promise<DisconnectGoogleAccountResult> {
+    try {
+      const account = await this.getAccountByClientId(input.clientId);
+      if (!account) return 'account_not_found';
+      if (!account.googleLinked) return 'not_linked';
+      if (!(await this.redisClient.hExists(CLIENT_PASSWORDS_KEY, input.clientId))) {
+        return 'password_required';
+      }
+
+      const providerSubject = account.providerSubject;
+      const now = input.now || new Date().toISOString();
+      const nextAccount: ClientAccount = {
+        ...account,
+        provider: 'password',
+        providerSubject: input.clientId,
+        googleLinked: false,
+        updatedAt: now,
+      };
+      delete nextAccount.email;
+      delete nextAccount.emailVerified;
+      delete nextAccount.displayName;
+      delete nextAccount.avatarUrl;
+
+      await Promise.all([
+        this.redisClient.hSet(CLIENT_ACCOUNTS_KEY, account.accountId, JSON.stringify(nextAccount)),
+        this.redisClient.hDel(GOOGLE_ACCOUNT_SUBJECTS_KEY, providerSubject),
+        this.redisClient.hSet(ACCOUNT_IDENTITY_EVENTS_KEY, input.id, JSON.stringify({
+          id: input.id,
+          accountId: account.accountId,
+          provider: 'google',
+          action: 'disconnect',
+          actorClientId: input.clientId,
+          metadata: { source: 'account_settings' },
+          createdAt: now,
+        })),
+      ]);
+      return 'disconnected';
+    } catch (error) {
+      this.logger.error('Error disconnecting Redis Google account', {
+        error,
+        clientId: input.clientId,
+      });
       throw error;
     }
   }

@@ -758,8 +758,10 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       const profile = verified.profile;
       let account = await store.getAccountByGoogleSubject(profile.providerSubject);
       if (account) {
-        account = await store.updateGoogleAccountLogin(account.accountId, profile) || account;
-      } else {
+        const refreshed = await store.updateGoogleAccountLogin(account.accountId, profile);
+        account = refreshed?.googleLinked ? refreshed : null;
+      }
+      if (!account) {
         if (!requestedClientId) {
           return res.status(400).json({ error: 'clientId is required' });
         }
@@ -811,6 +813,50 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         requestedClientId,
         ip: req.ip,
       });
+      return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
+    }
+  });
+
+  app.delete('/api/auth/google', async (req: Request, res: Response) => {
+    const clientId = getQueryClientId(req);
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'DELETE /api/auth/google'))) {
+      return;
+    }
+
+    try {
+      const result = await store.disconnectGoogleAccount({
+        id: uuidv4(),
+        clientId,
+      });
+      if (result === 'password_required') {
+        return res.status(409).json({
+          error: 'Set a User ID password before disconnecting Google',
+          code: 'PASSWORD_REQUIRED',
+        });
+      }
+      if (result === 'account_not_found') {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+
+      const [account, passwordHash, entitlement] = await Promise.all([
+        store.getAccountByClientId(clientId),
+        store.getClientPasswordHash(clientId),
+        store.getAccountEntitlementByClientId(clientId),
+      ]);
+      const roles = account ? await resolveAccountRoles(account) : [];
+      return res.json({
+        clientId,
+        hasPassword: Boolean(passwordHash),
+        googleConfigured: googleClientIds.length > 0,
+        account: serializeClientAccount(account),
+        roles,
+        entitlement,
+      });
+    } catch (error) {
+      routeLogger.error('Failed to disconnect Google account', { error, clientId, ip: req.ip });
       return res.status(503).json({ error: 'Authentication service temporarily unavailable' });
     }
   });

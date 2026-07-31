@@ -244,6 +244,7 @@ export type ClientAccountStatus = {
   hasPassword: boolean;
   googleConfigured: boolean;
   account: ClientAccountInfo | null;
+  roles: Array<'admin'>;
   entitlement: AccountEntitlementInfo | null;
 };
 
@@ -934,6 +935,19 @@ export const getClientAccountStatus = async (targetClientId = getClientId()): Pr
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to load account status'));
+  }
+  return response.json() as Promise<ClientAccountStatus>;
+};
+
+export const disconnectGoogleAccount = async (
+  targetClientId = getClientId(),
+): Promise<ClientAccountStatus> => {
+  const response = await fetch(apiPath('/api/auth/google'), {
+    method: 'DELETE',
+    headers: clientAuthHeaders(targetClientId),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to disconnect Google account'));
   }
   return response.json() as Promise<ClientAccountStatus>;
 };

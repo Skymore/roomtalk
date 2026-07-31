@@ -2293,4 +2293,23 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON account_role_events (account_id, created_at DESC);
     `,
   },
+  {
+    // Identity unlinking removes the mutable provider row, so keep a separate
+    // immutable account-scoped audit record for security review and support.
+    id: '0020_account_identity_events',
+    sql: `
+      CREATE TABLE IF NOT EXISTS account_identity_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL CHECK (provider IN ('google')),
+        action TEXT NOT NULL CHECK (action IN ('disconnect')),
+        actor_client_id TEXT NOT NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_identity_events_account_created
+        ON account_identity_events (account_id, created_at DESC);
+    `,
+  },
 ];

@@ -86,6 +86,7 @@ vi.mock('uuid', () => ({
 const {
   ensureRoomJoined,
   ensureRegisteredSocket,
+  disconnectGoogleAccount,
   getAudioTranscription,
   getClientAccountStatus,
   getClientAuthStatus,
@@ -783,6 +784,8 @@ describe('socket message acknowledgement helpers', () => {
         hasPassword: false,
         googleConfigured: true,
         account: null,
+        roles: [],
+        entitlement: null,
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -802,6 +805,22 @@ describe('socket message acknowledgement helpers', () => {
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        clientId: 'client-google',
+        hasPassword: true,
+        googleConfigured: true,
+        account: {
+          accountId: 'account-1',
+          primaryClientId: 'client-google',
+          provider: 'password',
+          googleLinked: false,
+        },
+        roles: ['admin'],
+        entitlement: null,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
       }));
 
     await expect(getClientAccountStatus()).resolves.toEqual({
@@ -809,6 +828,8 @@ describe('socket message acknowledgement helpers', () => {
       hasPassword: false,
       googleConfigured: true,
       account: null,
+      roles: [],
+      entitlement: null,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/account', { cache: 'no-store', headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'old-token' } });
 
@@ -834,6 +855,17 @@ describe('socket message acknowledgement helpers', () => {
     expect(localStorage.getItem('clientId')).toBe('client-google');
     expect(localStorage.getItem('clientAuthToken')).toBe('google-token');
     expect(localStorage.getItem('roomtalk_username')).toBe('Ada');
+
+    await expect(disconnectGoogleAccount()).resolves.toMatchObject({
+      clientId: 'client-google',
+      hasPassword: true,
+      roles: ['admin'],
+      account: { googleLinked: false },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/auth/google', {
+      method: 'DELETE',
+      headers: { 'X-Client-Id': 'client-google', 'X-Client-Auth-Token': 'google-token' },
+    });
   });
 
   it('uploads media objects through relative local media URLs', async () => {
