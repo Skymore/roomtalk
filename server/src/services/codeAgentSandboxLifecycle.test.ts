@@ -99,8 +99,10 @@ class MemoryRoomStore implements CodeAgentSandboxLifecycleStore {
       this.rooms.set(roomId, room);
       this.forceSandboxIdBeforeNextReplace = null;
     }
-    if (room.sandboxId !== expectedSandboxId) return null;
+    if ((room.sandboxId || '') !== expectedSandboxId) return null;
     const updatedRoom = { ...room, ...next };
+    delete updatedRoom.codeAgentSessionId;
+    delete updatedRoom.codeAgentLastTurnId;
     this.rooms.set(roomId, updatedRoom);
     return updatedRoom;
   }
@@ -212,6 +214,8 @@ describe('CodeAgentSandboxLifecycleService', () => {
       sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
       sandboxArtifactVersion: 'artifact-v1',
       sandboxCodeAgentSourceRef: 'source-v1',
+      codeAgentSessionId: 'acp:hermes-agent:old-session',
+      codeAgentLastTurnId: 'old-turn',
     })]);
     const { lifecycle } = createLifecycle(
       store,
@@ -235,6 +239,8 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.equal(savedRoom?.sandboxId, result.ok && result.handle.id);
     assert.equal(savedRoom?.sandboxArtifactVersion, 'artifact-v2');
     assert.equal(savedRoom?.sandboxCodeAgentSourceRef, 'source-v2');
+    assert.equal(savedRoom?.codeAgentSessionId, undefined);
+    assert.equal(savedRoom?.codeAgentLastTurnId, undefined);
     assert.equal(result.ok && (await sandboxService.readWorkspaceFile(result.handle, 'src/app.ts')).content, 'console.log("old workspace");');
   });
 
@@ -398,7 +404,7 @@ describe('CodeAgentSandboxLifecycleService', () => {
   it('destroys a newly-created sandbox when persisting ready state fails', async () => {
     const store = new MemoryRoomStore([room()]);
     const { lifecycle, sandboxService } = createLifecycle(store);
-    store.failNextSaveRoom = true;
+    store.failNextReplaceRoomSandbox = true;
 
     const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
     assert.equal(failureReason(result), 'store_conflict');

@@ -6575,9 +6575,11 @@ export class PostgresStore implements DurableRoomStore {
           sandbox_updated_at = $5::timestamptz,
           sandbox_artifact_version = $6,
           sandbox_code_agent_source_ref = $7,
+          code_agent_session_id = NULL,
+          code_agent_last_turn_id = NULL,
           updated_at = NOW()
         WHERE id = $1
-          AND sandbox_id = $2
+          AND sandbox_id IS NOT DISTINCT FROM NULLIF($2, '')
         RETURNING ${ROOM_COLUMNS}`,
         [
           roomId,

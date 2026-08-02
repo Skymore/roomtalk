@@ -411,13 +411,15 @@ if not ok then
   return ''
 end
 
-if room['sandboxId'] ~= ARGV[2] then
+if (room['sandboxId'] or '') ~= ARGV[2] then
   return ''
 end
 
 room['sandboxId'] = ARGV[3]
 room['sandboxStatus'] = ARGV[4]
 room['sandboxUpdatedAt'] = ARGV[5]
+room['codeAgentSessionId'] = nil
+room['codeAgentLastTurnId'] = nil
 if ARGV[6] == '' then
   room['sandboxArtifactVersion'] = nil
 else

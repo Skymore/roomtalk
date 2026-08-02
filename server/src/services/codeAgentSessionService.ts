@@ -561,6 +561,7 @@ export class CodeAgentSessionService {
         promptContext.imageMessageIds,
       );
       await updatePhase('starting_agent', 'Starting the agent');
+      const runnerSessionId = sandbox.created ? null : (room!.codeAgentSessionId || null);
 
       streamState = {
         activeMessageId: aiMessageId,
@@ -595,7 +596,7 @@ export class CodeAgentSessionService {
         roomId: input.roomId,
         clientId: input.clientId,
         turnId,
-        sessionId: room!.codeAgentSessionId || null,
+        sessionId: runnerSessionId,
         prompt: promptContext.prompt,
         priorMessages: promptContext.priorMessages,
         mode: turnMode.mode,
@@ -673,6 +674,22 @@ export class CodeAgentSessionService {
       }
       if (!runResult.finalEvent) {
         throw new Error('code agent runner exited without a final event');
+      }
+
+      const streamedAnswer = streamState.segmentContent || streamState.fullContent;
+      const finalEventAnswer = runResult.finalEvent.answer;
+      if (!streamedAnswer.trim() && finalEventAnswer.trim() && turnBackend !== 'code-agent') {
+        streamState.segmentContent = finalEventAnswer;
+        streamState.fullContent = finalEventAnswer;
+        streamState.segmentHasUnsealedText = true;
+        streamState.nonEmptySegmentIds.add(streamState.activeMessageId);
+      } else if (
+        !streamedAnswer.trim()
+        && !finalEventAnswer.trim()
+        && streamState.lastMessageId === aiMessageId
+        && streamState.modelSteps.size === 0
+      ) {
+        throw new Error('Agent runner returned an empty response without tool activity');
       }
 
       if (checkpointStarted && turnSandbox) {

@@ -203,7 +203,7 @@ class MemoryRedis {
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return '';
       const room = JSON.parse(roomJson);
-      if (room.sandboxId !== expectedSandboxId) return '';
+      if ((room.sandboxId || '') !== expectedSandboxId) return '';
       const updatedRoom = {
         ...room,
         sandboxId,
@@ -211,6 +211,8 @@ class MemoryRedis {
         sandboxUpdatedAt,
         updatedAt,
       };
+      delete updatedRoom.codeAgentSessionId;
+      delete updatedRoom.codeAgentLastTurnId;
       if (artifactVersion) {
         updatedRoom.sandboxArtifactVersion = artifactVersion;
       } else {
@@ -1035,7 +1037,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const roomId = String(params[0]);
       const expectedSandboxId = String(params[1]);
       const room = this.rooms.get(roomId);
-      if (!room || room.sandbox_id !== expectedSandboxId) return { rows: [], rowCount: 0 };
+      if (!room || (room.sandbox_id || '') !== expectedSandboxId) return { rows: [], rowCount: 0 };
       const updated = {
         ...room,
         sandbox_id: String(params[2]),
@@ -1043,6 +1045,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         sandbox_updated_at: String(params[4]),
         sandbox_artifact_version: params[5] === null || params[5] === undefined ? null : String(params[5]),
         sandbox_code_agent_source_ref: params[6] === null || params[6] === undefined ? null : String(params[6]),
+        code_agent_session_id: null,
+        code_agent_last_turn_id: null,
         updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
@@ -2060,6 +2064,8 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
         sandboxArtifactVersion: 'artifact-old',
         sandboxCodeAgentSourceRef: 'source-old',
+        codeAgentSessionId: 'acp:hermes-agent:old-session',
+        codeAgentLastTurnId: 'old-turn',
       });
       const creatingRoom = room({ id: 'creating-room', type: 'codeAgent', sandboxStatus: 'creating' });
       const runningRoom = room({ id: 'running-room', type: 'codeAgent', sandboxStatus: 'ready', codeAgentStatus: 'running' });
@@ -2125,6 +2131,11 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxArtifactVersion: 'artifact-new',
         sandboxCodeAgentSourceRef: 'source-new',
       }), null);
+      const {
+        codeAgentSessionId: _replacedSessionId,
+        codeAgentLastTurnId: _replacedLastTurnId,
+        ...replaceRoomWithoutSessionContinuity
+      } = replaceRoom;
       assert.deepEqual(stripRoomStamp(await store.replaceRoomSandbox(replaceRoom.id, 'old-sandbox', {
         sandboxId: 'new-sandbox',
         sandboxStatus: 'ready',
@@ -2132,7 +2143,7 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxArtifactVersion: 'artifact-new',
         sandboxCodeAgentSourceRef: 'source-new',
       })), {
-        ...replaceRoom,
+        ...replaceRoomWithoutSessionContinuity,
         sandboxId: 'new-sandbox',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: statusChangedAt,

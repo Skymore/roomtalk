@@ -660,8 +660,10 @@ class MemoryCodeAgentStore {
 
   async replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: any) {
     const room = this.rooms.get(roomId);
-    if (!room || room.sandboxId !== expectedSandboxId) return null;
+    if (!room || (room.sandboxId || '') !== expectedSandboxId) return null;
     const updated = { ...room, ...next };
+    delete updated.codeAgentSessionId;
+    delete updated.codeAgentLastTurnId;
     this.rooms.set(roomId, updated);
     return updated;
   }
@@ -1554,6 +1556,90 @@ describe('CodeAgentSessionService', () => {
     assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
   });
 
+  it('persists an ACP final answer when the harness does not stream text deltas', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done without streaming',
+        sessionId: 'acp:hermes-agent:session-1',
+      },
+    ]);
+    const { service, store } = createService({
+      runner,
+      backend: 'hermes-agent',
+      availableBackends: ['hermes-agent'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    const aiMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'ai');
+    assert.equal(aiMessage?.status, 'complete');
+    assert.equal(aiMessage?.content, 'Done without streaming');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'acp:hermes-agent:session-1');
+  });
+
+  it('fails an ACP turn that finalizes without text or tool activity', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: '',
+        sessionId: 'acp:hermes-agent:stale-session',
+      },
+    ]);
+    const { service, store } = createService({
+      runner,
+      backend: 'hermes-agent',
+      availableBackends: ['hermes-agent'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const aiMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'ai');
+    assert.equal(aiMessage?.status, 'error');
+    assert.match(aiMessage?.content || '', /empty response without tool activity/);
+    assert.equal([...store.agentTurns.values()][0]?.status, 'error');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, undefined);
+  });
+
+  it('starts a fresh ACP session in the same turn that replaces its sandbox', async () => {
+    const store = new MemoryCodeAgentStore(room({
+      sandboxId: 'expired-sandbox',
+      sandboxStatus: 'expired',
+      sandboxUpdatedAt: '2026-05-02T00:00:00.000Z',
+      codeAgentSessionId: 'acp:hermes-agent:stale-session',
+      codeAgentLastTurnId: 'stale-turn',
+    }), [userMessage()]);
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Fresh session' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Fresh session',
+        sessionId: 'acp:hermes-agent:fresh-session',
+      },
+    ]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'hermes-agent',
+      availableBackends: ['hermes-agent'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    assert.equal(runner.requests[0].sessionId, null);
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'acp:hermes-agent:fresh-session');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentLastTurnId, undefined);
+  });
+
   it('fails loudly when a Coco runner omits provider usage', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
@@ -2041,7 +2127,7 @@ describe('CodeAgentSessionService', () => {
       const runner: CodeAgentRunnerClient = {
         async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
           contexts.push({ backend: context?.backend });
-          assert.equal(request.sessionId, previousSessionId);
+          assert.equal(request.sessionId, null);
           assert.equal(request.provider, selectedModel.provider);
           assert.equal(request.modelId, selectedModel.id);
           assert.equal(request.apiModel, selectedModel.apiModel);
@@ -2452,7 +2538,7 @@ describe('CodeAgentSessionService', () => {
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     assert.equal(runner.requests[0].prompt, 'what did I ask before?');
-    assert.equal(runner.requests[0].sessionId, 'session-prev');
+    assert.equal(runner.requests[0].sessionId, null);
     assert.deepEqual(runner.requests[0].priorMessages, [
       { role: 'user', content: 'list files' },
       {

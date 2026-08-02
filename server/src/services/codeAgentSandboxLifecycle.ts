@@ -204,8 +204,7 @@ export class CodeAgentSandboxLifecycleService {
         ttlMs: this.options.sandboxTtlMs,
       });
       await this.initializeNewSandboxWorkspace(handle);
-      const readyRoom = await this.store.saveRoom({
-        ...lockedRoom,
+      const readyRoom = await this.store.replaceRoomSandbox(room.id, lockedRoom.sandboxId || '', {
         sandboxId: handle.id,
         sandboxStatus: 'ready',
         sandboxUpdatedAt: handle.createdAt,
