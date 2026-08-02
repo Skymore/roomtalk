@@ -3,7 +3,7 @@
 [English](code-agent-sandbox-artifact.md)
 
 状态：当前 release 合约
-已按 `master` 和生产非 secret runtime pin 核对：2026-07-30
+已按 `master` 和生产非 secret runtime pin 核对：2026-08-02
 
 ## 用途
 
@@ -23,9 +23,9 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-07-31-multi-harness-v3
+artifactVersion: roomtalk-code-agent-2026-08-02-harness-lifecycle-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.40
+roomtalk-code-agent-runner: 0.1.41
 openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
 opencode-ai: 1.18.10

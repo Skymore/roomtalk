@@ -246,7 +246,7 @@ class MemoryCodeAgentStore {
     this.turnInternals.set(input.turn.id, {
       ...(input.backendSessionIdBefore ? { backendSessionIdBefore: input.backendSessionIdBefore } : {}),
       ...(input.backendLastTurnIdBefore ? { backendLastTurnIdBefore: input.backendLastTurnIdBefore } : {}),
-      ...(input.turn.backend === 'codex-app-server'
+      ...(input.captureWorkspaceRevision
         ? { workspaceParentRevisionId: this.roomRevisionHeads.get(input.roomId)! }
         : {}),
     });
@@ -348,7 +348,7 @@ class MemoryCodeAgentStore {
       ...(this.turnInternals.get(turn.id) || {}),
       ...(input.workspaceCheckpoint ? { workspaceCheckpoint: input.workspaceCheckpoint } : {}),
     });
-    if (turn.backend === 'codex-app-server') {
+    if (this.turnInternals.get(turn.id)?.workspaceParentRevisionId) {
       const internal = this.turnInternals.get(turn.id)!;
       const revisionId = `turn:${turn.id}`;
       const parentRevisionId = internal.workspaceParentRevisionId || this.roomRevisionHeads.get(turn.roomId)!;
@@ -495,6 +495,7 @@ class MemoryCodeAgentStore {
       currentRevisionId,
       targetRevisionId,
       alreadyAtTarget: traversed.every(revision => revision.kind === 'restore'),
+      targetBackend: this.agentTurns.get(turnId)?.backend,
       ...((targetBoundary === 'before' ? selected.backendSessionIdBefore : selectedRevision.backendSessionId)
         ? { targetBackendSessionId: targetBoundary === 'before' ? selected.backendSessionIdBefore : selectedRevision.backendSessionId }
         : {}),
@@ -2034,6 +2035,7 @@ describe('CodeAgentSessionService', () => {
       const store = new MemoryCodeAgentStore(room({
         codeAgentBackend: harness.backend,
         codeAgentSessionId: previousSessionId,
+        codeAgentMode: 'fullAccess',
       }), [userMessage()]);
       const contexts: Array<{ backend?: CodeAgentBackend }> = [];
       const runner: CodeAgentRunnerClient = {
@@ -2113,6 +2115,8 @@ describe('CodeAgentSessionService', () => {
           deepseek: { DEEPSEEK_API_KEY: 'must-not-leak' },
         },
         modelGateway: gateway,
+        availableModes: ['fullAccess'],
+        mediaObjectStorage: new MemoryMediaObjectStorage(),
         ids: ['ai-1', 'turn-1', 'tool-message-1', 'tool-result-1', 'ai-2'],
       });
 
@@ -2153,10 +2157,75 @@ describe('CodeAgentSessionService', () => {
       assert.ok((messages[4].cost?.totalUsd || 0) > 0);
       assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, nextSessionId);
       assert.equal([...store.agentTurns.values()][0]?.backend, harness.backend);
+      assert.equal(store.workspaceRevisions.get('turn:turn-1')?.traversable, true);
+      assert.equal(store.roomRevisionHeads.get('room-1'), 'turn:turn-1');
       assert.equal(
         emitter.roomEmits.some(event => event.event === 'ai_stream_end'),
         true,
       );
+    });
+
+    it(`completes a ${harness.displayName} final that arrives immediately after a tool result`, async () => {
+      const runner = new FakeCodeAgentRunnerClient([
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: `${harness.backend}-message-1`,
+          delta: 'The inspection is complete.',
+        },
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'tool_call',
+          id: `${harness.backend}-tool-1`,
+          name: 'Read',
+          args: { file_path: 'README.md' },
+        },
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'tool_result',
+          id: `${harness.backend}-tool-1`,
+          name: 'Read',
+          success: true,
+          output: '# RoomTalk',
+        },
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final',
+          messageId: `${harness.backend}-message-1`,
+          answer: 'The inspection is complete.',
+          sessionId: `acp:${harness.backend}:session-1`,
+          usage: {
+            promptTokens: 100,
+            completionTokens: 20,
+            totalTokens: 120,
+            source: 'reported',
+          },
+        },
+      ]);
+      const gateway = new CodeAgentModelGateway({
+        publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+        tokenSecret: 'gateway-secret',
+        providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      });
+      const store = new MemoryCodeAgentStore(room({
+        codeAgentBackend: harness.backend,
+      }), [userMessage()]);
+      const { service } = createService({
+        store,
+        runner,
+        backend: 'code-agent',
+        modelGateway: gateway,
+        ids: ['ai-1', 'turn-1', 'tool-message-1', 'tool-result-1'],
+      });
+
+      const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+      assert.equal(store.agentTurns.get('turn-1')?.status, 'complete');
+      const messages = store.messages.get('room-1') || [];
+      assert.equal(messages[1].status, 'complete');
+      assert.equal(messages[1].content, 'The inspection is complete.');
+      assert.ok((messages[1].cost?.totalUsd || 0) > 0);
     });
   }
 
@@ -3515,7 +3584,7 @@ describe('CodeAgentSessionService', () => {
     assert.match(messages[3].content, /ACP connection closed/);
   });
 
-  it('closes pending tool calls with failed results when the runner finalizes after interruption', async () => {
+  it('closes pending tool calls without fabricating an interruption when the runner finalizes normally', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'sleep 30' } },
@@ -3536,9 +3605,9 @@ describe('CodeAgentSessionService', () => {
     assert.equal(result.success, true);
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result']);
     assert.equal(messages[2].toolCallId, 'tool-1');
-    assert.equal(messages[2].status, 'error');
-    assert.equal(messages[2].isError, true);
-    assert.match(messages[2].content, /agent turn ended before tool completion/);
+    assert.equal(messages[2].status, 'complete');
+    assert.equal(messages[2].isError, false);
+    assert.match(messages[2].content, /without reporting a terminal result/);
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 });

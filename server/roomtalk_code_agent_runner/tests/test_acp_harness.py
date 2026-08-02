@@ -242,6 +242,52 @@ def test_event_bridge_maps_text_and_tool_lifecycle_to_roomtalk_jsonl():
     assert emitted[2]["output"] == "contents"
 
 
+def test_event_bridge_closes_missing_terminal_tool_updates_before_final():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    async def run() -> None:
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-1",
+                title="Read file",
+                kind="read",
+                raw_input={"path": "README.md"},
+                locations=[],
+                content=[],
+            ),
+        )
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call_update",
+                tool_call_id="tool-1",
+                title="Read file",
+                kind="read",
+                status="in_progress",
+                raw_input=None,
+                raw_output="partial contents",
+                locations=[],
+                content=[],
+            ),
+        )
+
+    asyncio.run(run())
+    bridge.close_tools_at_final()
+    bridge.close_tools_at_final()
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
+    assert emitted[1]["success"] is True
+    assert emitted[1]["output"] == "partial contents"
+
+
 def test_loading_a_session_suppresses_replayed_updates_before_the_new_turn():
     output = io.StringIO()
     request = runner_request(session_id="acp:opencode:session-1")

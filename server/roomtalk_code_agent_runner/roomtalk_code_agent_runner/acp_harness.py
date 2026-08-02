@@ -339,6 +339,7 @@ class ACPEventBridge:
         self.emitter = emitter
         self.answer_parts: list[str] = []
         self.tool_names: dict[str, str] = {}
+        self.tool_outputs: dict[str, str] = {}
         self.completed_tools: set[str] = set()
         self.pending_permissions: dict[str, asyncio.Future[str]] = {}
         self.connection: Any = None
@@ -381,20 +382,23 @@ class ACPEventBridge:
             if tool_call_id not in self.tool_names:
                 self._emit_tool_call(update)
             status = getattr(update, "status", None)
+            output = getattr(update, "raw_output", None)
+            if output is None:
+                output = _content_text(getattr(update, "content", None))
+            output_text = _stringify(output)
+            if output_text:
+                self.tool_outputs[tool_call_id] = output_text
             if status not in {"completed", "failed"} or tool_call_id in self.completed_tools:
                 return
             self.completed_tools.add(tool_call_id)
             name = self.tool_names.get(tool_call_id, str(getattr(update, "title", "") or "tool"))
-            output = getattr(update, "raw_output", None)
-            if output is None:
-                output = _content_text(getattr(update, "content", None))
             self.emitter.emit({
                 "type": "tool_result",
                 "turnId": self.request.turn_id,
                 "id": tool_call_id,
                 "name": name,
                 "success": status == "completed",
-                "output": _stringify(output),
+                "output": output_text,
                 "messageId": f"acp_tool_result_{tool_call_id}",
             })
             return
@@ -428,6 +432,24 @@ class ACPEventBridge:
             "args": _tool_args(update),
             "messageId": f"acp_tool_call_{tool_call_id}",
         })
+
+    def close_tools_at_final(self) -> None:
+        for tool_call_id, name in tuple(self.tool_names.items()):
+            if tool_call_id in self.completed_tools:
+                continue
+            self.completed_tools.add(tool_call_id)
+            self.emitter.emit({
+                "type": "tool_result",
+                "turnId": self.request.turn_id,
+                "id": tool_call_id,
+                "name": name,
+                "success": True,
+                "output": self.tool_outputs.get(
+                    tool_call_id,
+                    "The ACP harness finished without reporting a terminal tool status.",
+                ),
+                "messageId": f"acp_tool_result_{tool_call_id}",
+            })
 
     async def request_permission(
         self,
@@ -999,6 +1021,8 @@ async def _run_request_async(
                         pass
 
                 usage = getattr(response, "usage", None)
+                if not bridge.interrupted:
+                    bridge.close_tools_at_final()
                 final_event: dict[str, Any] = {
                     "type": "final",
                     "turnId": request.turn_id,

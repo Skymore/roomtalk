@@ -2365,7 +2365,7 @@ export class PostgresStore implements DurableRoomStore {
         if (!room.rows[0]) return { outcome: 'missing_room' as const };
 
         let workspaceParentRevisionId: string | null = null;
-        if (input.turn.backend === 'codex-app-server') {
+        if (input.captureWorkspaceRevision) {
           const rootRevisionId = `root:${input.roomId}`;
           await client.query(
             `INSERT INTO code_agent_workspace_revisions (
@@ -2776,11 +2776,8 @@ export class PostgresStore implements DurableRoomStore {
       );
       if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
 
-      if (turn.rows[0].backend === 'codex-app-server') {
+      if (turn.rows[0].workspace_parent_revision_id) {
         const parentRevisionId = turn.rows[0].workspace_parent_revision_id;
-        if (!parentRevisionId) {
-          throw new Error(`Code-agent turn ${claim.turnId} has no workspace parent revision`);
-        }
         const revisionId = `turn:${claim.turnId}`;
         const checkpoint = input.workspaceCheckpoint;
         const traversable = Boolean(
@@ -2891,6 +2888,77 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async readCodeAgentWorkspaceActivity(roomId: string, commandLimit = 20) {
+    const limit = Math.min(100, Math.max(1, Math.floor(commandLimit || 20)));
+    try {
+      const [summaryResult, toolIdsResult] = await Promise.all([
+        this.pool.query<{
+          tool_calls: number | string;
+          tool_results: number | string;
+          tool_errors: number | string;
+          last_tool_name: string | null;
+        }>(
+          `SELECT
+            COUNT(*) FILTER (WHERE message_type = 'tool_call') AS tool_calls,
+            COUNT(*) FILTER (WHERE message_type = 'tool_result') AS tool_results,
+            COUNT(*) FILTER (WHERE message_type = 'tool_result' AND is_error = TRUE) AS tool_errors,
+            (
+              SELECT recent.tool_name
+              FROM room_messages AS recent
+              WHERE recent.room_id = $1
+                AND recent.message_type IN ('tool_call', 'tool_result')
+                AND recent.tool_name IS NOT NULL
+              ORDER BY recent.position DESC
+              LIMIT 1
+            ) AS last_tool_name
+          FROM room_messages
+          WHERE room_id = $1
+            AND message_type IN ('tool_call', 'tool_result')`,
+          [roomId],
+        ),
+        this.pool.query<{ tool_call_id: string }>(
+          `SELECT tool_call_id
+          FROM room_messages
+          WHERE room_id = $1
+            AND message_type IN ('tool_call', 'tool_result')
+            AND tool_call_id IS NOT NULL
+          GROUP BY tool_call_id
+          ORDER BY MAX(position) DESC
+          LIMIT $2`,
+          [roomId, limit],
+        ),
+      ]);
+      const toolCallIds = toolIdsResult.rows.map(row => row.tool_call_id);
+      const messageRows = toolCallIds.length > 0
+        ? (await this.pool.query<MessageRow>(
+            `SELECT ${MESSAGE_COLUMNS}
+            FROM room_messages
+            WHERE room_id = $1
+              AND tool_call_id = ANY($2::text[])
+              AND message_type IN ('tool_call', 'tool_result')
+            ORDER BY position ASC, timestamp ASC`,
+            [roomId, toolCallIds],
+          )).rows
+        : [];
+      const summary = summaryResult.rows[0];
+      return {
+        messages: orderMessageBatches(messageRows.map(mapMessage)),
+        summary: {
+          toolCalls: Number(summary?.tool_calls || 0),
+          toolResults: Number(summary?.tool_results || 0),
+          toolErrors: Number(summary?.tool_errors || 0),
+          ...(summary?.last_tool_name ? { lastToolName: summary.last_tool_name } : {}),
+        },
+      };
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL code-agent workspace activity', { error, roomId, commandLimit: limit });
+      return {
+        messages: [],
+        summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+      };
+    }
+  }
+
   async readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string): Promise<{
     turn: RoomAgentTurn;
     backendSessionIdBefore?: string;
@@ -2942,7 +3010,7 @@ export class PostgresStore implements DurableRoomStore {
       this.pool.query<Pick<RoomAgentTurnRow, 'id' | 'workspace_checkpoint'>>(
         `SELECT id, workspace_checkpoint
         FROM room_agent_turns
-        WHERE room_id = $1 AND backend = 'codex-app-server'`,
+        WHERE room_id = $1 AND workspace_checkpoint IS NOT NULL`,
         [roomId],
       ),
     ]);
@@ -3038,6 +3106,7 @@ export class PostgresStore implements DurableRoomStore {
       currentRevisionId,
       targetRevisionId,
       alreadyAtTarget: traversedRevisions.every(revision => revision.kind === 'restore'),
+      targetBackend: selectedTurn.backend,
       ...((targetBoundary === 'before' ? selectedTurn.backend_session_id_before : selectedRevision.backend_session_id)
         ? { targetBackendSessionId: (targetBoundary === 'before' ? selectedTurn.backend_session_id_before : selectedRevision.backend_session_id)! }
         : {}),
@@ -3272,15 +3341,16 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async hasActiveCodeAgentRoomLease(roomId: string, now: string): Promise<boolean> {
+  async hasActiveCodeAgentRoomLease(roomId: string, now: string, turnId?: string): Promise<boolean> {
     const result = await this.pool.query<{ active: boolean }>(
       `SELECT EXISTS (
         SELECT 1
         FROM code_agent_room_leases
         WHERE room_id = $1
           AND expires_at > $2::timestamptz
+          AND ($3::text IS NULL OR turn_id = $3)
       ) AS active`,
-      [roomId, now],
+      [roomId, now, turnId || null],
     );
     return result.rows[0]?.active === true;
   }
@@ -6168,6 +6238,14 @@ export class PostgresStore implements DurableRoomStore {
           code_agent_access = CASE WHEN $6::boolean THEN $7 ELSE code_agent_access END,
           code_agent_mode = CASE WHEN $8::boolean THEN $9 ELSE code_agent_mode END,
           code_agent_backend = CASE WHEN $10::boolean THEN $11 ELSE code_agent_backend END,
+          code_agent_session_id = CASE
+            WHEN $10::boolean AND code_agent_backend IS DISTINCT FROM $11 THEN NULL
+            ELSE code_agent_session_id
+          END,
+          code_agent_last_turn_id = CASE
+            WHEN $10::boolean AND code_agent_backend IS DISTINCT FROM $11 THEN NULL
+            ELSE code_agent_last_turn_id
+          END,
           updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
@@ -6773,8 +6851,10 @@ export class PostgresStore implements DurableRoomStore {
         ai_stream_owner_id = NULL
       WHERE id = $1
         AND room_id = $2
-        AND status = 'streaming'
-        AND ai_stream_owner_id IS NOT DISTINCT FROM $3
+        AND (
+          (status = 'streaming' AND ai_stream_owner_id IS NOT DISTINCT FROM $3)
+          OR (status = $7 AND ai_stream_owner_id IS NULL)
+        )
         AND ai_stream_fence = $15
       RETURNING ${MESSAGE_COLUMNS}`,
       [

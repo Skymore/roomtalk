@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -148,9 +148,20 @@ export interface CodeAgentTurnStartInput {
   ownerId: string;
   now: string;
   leaseTtlMs: number;
+  captureWorkspaceRevision?: boolean;
   backendSessionIdBefore?: string;
   backendLastTurnIdBefore?: string;
   queuedMessageId?: string;
+}
+
+export interface CodeAgentWorkspaceActivity {
+  messages: Message[];
+  summary: {
+    toolCalls: number;
+    toolResults: number;
+    toolErrors: number;
+    lastToolName?: string;
+  };
 }
 
 export interface CodeAgentWorkspaceCheckpointRecord {
@@ -194,6 +205,7 @@ export interface CodeAgentCheckpointRestorePlan {
   currentRevisionId: string;
   targetRevisionId: string;
   alreadyAtTarget: boolean;
+  targetBackend?: CodeAgentBackend;
   targetBackendSessionId?: string;
   targetBackendLastTurnId?: string;
   steps: CodeAgentCheckpointRestoreStep[];
@@ -740,6 +752,7 @@ export interface DurableRoomStore {
   pruneRoomEvents?(options: RoomEventRetentionOptions): Promise<number>;
   upsertRoomAgentTurn?(turn: RoomAgentTurn): Promise<RoomAgentTurn | null>;
   readRoomAgentTurns?(roomId: string, turnIds?: string[]): Promise<RoomAgentTurn[]>;
+  readCodeAgentWorkspaceActivity?(roomId: string, commandLimit?: number): Promise<CodeAgentWorkspaceActivity>;
   beginCodeAgentTurn?(input: CodeAgentTurnStartInput): Promise<CodeAgentTurnStartResult>;
   updateCodeAgentTurn?(turn: RoomAgentTurn, claim: CodeAgentTurnClaim): Promise<RoomAgentTurn | null>;
   appendCodeAgentMessage?(message: Message, claim: CodeAgentTurnClaim, cost?: AICost | null): Promise<CodeAgentMessageMutationResult>;
@@ -757,7 +770,7 @@ export interface DurableRoomStore {
   recoverInterruptedCodeAgentRoomStates?(now?: string): Promise<number>;
   failInterruptedRoomAgentTurns?(completedAt?: string): Promise<number>;
   acquireCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number): Promise<CodeAgentRoomLease | null>;
-  hasActiveCodeAgentRoomLease?(roomId: string, now: string): Promise<boolean>;
+  hasActiveCodeAgentRoomLease?(roomId: string, now: string, turnId?: string): Promise<boolean>;
   renewCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number): Promise<CodeAgentRoomLease | null>;
   releaseCodeAgentRoomLease?(roomId: string, turnId: string, ownerId: string, fence?: number): Promise<boolean>;
   saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
@@ -1175,6 +1188,13 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.readRoomAgentTurns?.(roomId, turnIds) || Promise.resolve([]);
   }
 
+  readCodeAgentWorkspaceActivity(roomId: string, commandLimit?: number) {
+    return this.durableStore.readCodeAgentWorkspaceActivity?.(roomId, commandLimit) || Promise.resolve({
+      messages: [],
+      summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+    });
+  }
+
   async beginCodeAgentTurn(input: CodeAgentTurnStartInput) {
     if (!this.durableStore.beginCodeAgentTurn) {
       throw new Error('The durable store does not support atomic code-agent turns');
@@ -1262,8 +1282,8 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.acquireCodeAgentRoomLease?.(roomId, turnId, ownerId, now, ttlMs) || Promise.resolve(null);
   }
 
-  hasActiveCodeAgentRoomLease(roomId: string, now: string) {
-    return this.durableStore.hasActiveCodeAgentRoomLease?.(roomId, now) || Promise.resolve(false);
+  hasActiveCodeAgentRoomLease(roomId: string, now: string, turnId?: string) {
+    return this.durableStore.hasActiveCodeAgentRoomLease?.(roomId, now, turnId) || Promise.resolve(false);
   }
 
   renewCodeAgentRoomLease(roomId: string, turnId: string, ownerId: string, now: string, ttlMs: number, fence?: number) {

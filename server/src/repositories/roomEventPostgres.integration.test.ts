@@ -844,6 +844,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       ownerId: 'checkpoint-instance',
       now,
       leaseTtlMs: 60_000,
+      captureWorkspaceRevision: true,
       backendSessionIdBefore: 'thread-before',
       backendLastTurnIdBefore: 'codex-turn-before',
     });
@@ -993,6 +994,62 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       `SELECT target_boundary FROM code_agent_checkpoint_restores WHERE id = 'restore-2'`,
     );
     assert.equal(leafAudit.rows[0]?.target_boundary, 'after');
+  });
+
+  it('clears backend-specific session continuity when the workspace backend changes', async () => {
+    const roomId = 'backend-session-switch-room';
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentBackend: 'hermes-agent',
+      codeAgentSessionId: 'acp:hermes-agent:session-1',
+      codeAgentLastTurnId: 'hermes-turn-1',
+    }));
+
+    const changed = await store.updateRoomSettings(roomId, { codeAgentBackend: 'opencode' });
+
+    assert.equal(changed?.codeAgentBackend, 'opencode');
+    assert.equal(changed?.codeAgentSessionId, undefined);
+    assert.equal(changed?.codeAgentLastTurnId, undefined);
+  });
+
+  it('reads exact workspace activity totals while bounding command history', async () => {
+    const roomId = 'workspace-activity-room';
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+    }));
+    for (let index = 1; index <= 3; index += 1) {
+      assert.ok(await store.appendMessage(message(roomId, `tool-call-${index}`, {
+        messageType: 'tool_call',
+        toolCallId: `tool-${index}`,
+        toolName: `Tool ${index}`,
+        content: `input ${index}`,
+      })));
+      assert.ok(await store.appendMessage(message(roomId, `tool-result-${index}`, {
+        messageType: 'tool_result',
+        toolCallId: `tool-${index}`,
+        toolName: `Tool ${index}`,
+        content: `output ${index}`,
+        status: index === 2 ? 'error' : 'complete',
+        isError: index === 2,
+      })));
+    }
+
+    const activity = await store.readCodeAgentWorkspaceActivity(roomId, 2);
+
+    assert.deepEqual(activity.summary, {
+      toolCalls: 3,
+      toolResults: 3,
+      toolErrors: 1,
+      lastToolName: 'Tool 3',
+    });
+    assert.deepEqual(activity.messages.map(item => item.id), [
+      'tool-call-2',
+      'tool-result-2',
+      'tool-call-3',
+      'tool-result-3',
+    ]);
   });
 
   it('backfills legacy turns and exact restores into an honest workspace revision graph', async () => {
@@ -1266,6 +1323,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readRoomAgentTurns(roomId))[0]?.status, 'running');
     assert.equal((await store.getRoomById(roomId))?.codeAgentStatus, 'running');
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0);
+
+    const sealed = await store.finalizeCodeAgentMessage(
+      completedMessage,
+      { ownerId: 'atomic-stream-owner', fence: 0 },
+      claim,
+    );
+    assert.equal(sealed.outcome, 'applied');
 
     const terminal = await store.finishCodeAgentTurn({
       claim,

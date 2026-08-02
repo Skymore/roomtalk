@@ -482,8 +482,16 @@ end
 
 local codeAgentBackendMode = ARGV[11]
 if codeAgentBackendMode == 'set' then
+  if room['codeAgentBackend'] ~= ARGV[12] then
+    room['codeAgentSessionId'] = nil
+    room['codeAgentLastTurnId'] = nil
+  end
   room['codeAgentBackend'] = ARGV[12]
 elseif codeAgentBackendMode == 'clear' then
+  if room['codeAgentBackend'] ~= nil then
+    room['codeAgentSessionId'] = nil
+    room['codeAgentLastTurnId'] = nil
+  end
   room['codeAgentBackend'] = nil
 end
 

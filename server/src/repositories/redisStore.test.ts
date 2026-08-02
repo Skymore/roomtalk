@@ -462,8 +462,16 @@ class MemoryRedis {
         delete room.codeAgentMode;
       }
       if (codeAgentBackendMode === 'set') {
+        if (room.codeAgentBackend !== codeAgentBackend) {
+          delete room.codeAgentSessionId;
+          delete room.codeAgentLastTurnId;
+        }
         room.codeAgentBackend = codeAgentBackend;
       } else if (codeAgentBackendMode === 'clear') {
+        if (room.codeAgentBackend !== undefined) {
+          delete room.codeAgentSessionId;
+          delete room.codeAgentLastTurnId;
+        }
         delete room.codeAgentBackend;
       }
       const updatedRoom = {
@@ -1034,6 +1042,21 @@ describe('RedisStore', () => {
     assert.equal(settingsUpdated?.codeAgentBackend, 'codex');
     assert.equal(settingsUpdated?.hasPassword, true);
     assert.equal(await settingsStore.readRoomPasswordHash('room-1'), 'secret-hash');
+  });
+
+  it('clears backend-specific session continuity when the workspace backend changes', async () => {
+    const { store } = createStore();
+    await store.saveRoom(room({
+      codeAgentBackend: 'hermes-agent',
+      codeAgentSessionId: 'acp:hermes-agent:session-1',
+      codeAgentLastTurnId: 'hermes-turn-1',
+    }));
+
+    const changed = await store.updateRoomSettings('room-1', { codeAgentBackend: 'opencode' });
+
+    assert.equal(changed?.codeAgentBackend, 'opencode');
+    assert.equal(changed?.codeAgentSessionId, undefined);
+    assert.equal(changed?.codeAgentLastTurnId, undefined);
   });
 
   it('lists user rooms by most recent activity first', async () => {

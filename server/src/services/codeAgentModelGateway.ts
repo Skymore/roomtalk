@@ -80,6 +80,7 @@ export interface CodeAgentModelGatewayOptions {
   observability?: ObservabilityEventRecorder;
   resolveAccountScheduling?: (clientId: string) => Promise<AssistantRunSchedulingSnapshot>;
   settleAccountAIUsage?: (input: AccountAIUsageInput) => Promise<AccountAIUsageSettlement | null>;
+  isTurnActive?: (roomId: string, turnId: string, clientId: string) => Promise<boolean>;
   providerAdmission?: {
     acquire(
       provider: AIModelProvider,
@@ -89,6 +90,7 @@ export interface CodeAgentModelGatewayOptions {
 }
 
 const DEFAULT_TOKEN_TTL_SECONDS = 15 * 60;
+const DEFAULT_TOKEN_STATE_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_MAX_REQUESTS_PER_TURN = 0;
 const DEFAULT_TURN_BUDGET_USD = 2;
 export const DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH = '/api/code-agent/model-gateway';
@@ -214,7 +216,7 @@ export class InMemoryCodeAgentModelGatewayTokenStateStore implements CodeAgentMo
     this.usage.set(input.tokenId, {
       requestCount,
       actualCostUsd: current.actualCostUsd,
-      expiresAtMs: current.expiresAtMs,
+      expiresAtMs: now + input.ttlSeconds * 1000,
     });
     return { ok: true, requestCount, actualCostUsd: current.actualCostUsd };
   }
@@ -233,7 +235,7 @@ export class InMemoryCodeAgentModelGatewayTokenStateStore implements CodeAgentMo
     this.usage.set(input.tokenId, {
       requestCount: current.requestCount,
       actualCostUsd,
-      expiresAtMs: current.expiresAtMs,
+      expiresAtMs: now + input.ttlSeconds * 1000,
     });
     return { actualCostUsd };
   }
@@ -522,6 +524,25 @@ export class CodeAgentModelGateway {
     }
 
     const claims = verification.claims;
+    if (this.options.isTurnActive) {
+      let active = false;
+      try {
+        active = await this.options.isTurnActive(claims.roomId, claims.turnId, claims.clientId);
+      } catch (error) {
+        this.options.logger?.error('Code agent model gateway could not validate the active turn', {
+          error,
+          roomId: claims.roomId,
+          turnId: claims.turnId,
+          clientId: claims.clientId,
+        });
+        return res.status(503).json({ error: 'Code agent turn validation is temporarily unavailable' });
+      }
+      if (!active) {
+        return res.status(401).json({ error: 'Inactive model gateway turn' });
+      }
+    } else if (verification.expired) {
+      return res.status(401).json({ error: 'Expired model gateway token' });
+    }
     const routePath = normalizeRoutePath(String(req.params[0] || ''));
     const route = this.resolveRoute(routePath, req.method, claims);
     if (!route.ok) {
@@ -757,8 +778,8 @@ export class CodeAgentModelGateway {
     });
   }
 
-  private ttlSecondsForClaims(claims: CodeAgentModelGatewayTokenClaims) {
-    return Math.max(1, claims.exp - Math.floor(this.nowMs() / 1000));
+  private ttlSecondsForClaims(_claims: CodeAgentModelGatewayTokenClaims) {
+    return Math.max(this.tokenTtlSeconds, DEFAULT_TOKEN_STATE_TTL_SECONDS);
   }
 
   private async proxySseResponse(
@@ -947,7 +968,7 @@ export class CodeAgentModelGateway {
     }
   }
 
-  private verifyToken(token: string): { ok: true; claims: CodeAgentModelGatewayTokenClaims } | { ok: false; error: string } {
+  private verifyToken(token: string): { ok: true; claims: CodeAgentModelGatewayTokenClaims; expired: boolean } | { ok: false; error: string } {
     if (!token) {
       return { ok: false, error: 'Missing model gateway token' };
     }
@@ -978,10 +999,11 @@ export class CodeAgentModelGateway {
     ) {
       return { ok: false, error: 'Invalid model gateway token' };
     }
-    if (claims.exp <= Math.floor(this.nowMs() / 1000)) {
-      return { ok: false, error: 'Expired model gateway token' };
-    }
-    return { ok: true, claims };
+    return {
+      ok: true,
+      claims,
+      expired: claims.exp <= Math.floor(this.nowMs() / 1000),
+    };
   }
 
   private resolveRoute(

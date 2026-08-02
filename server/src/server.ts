@@ -314,6 +314,13 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
       } : null);
     },
     settleAccountAIUsage: input => accountAIUsageSettlementQueue.settle(input),
+    isTurnActive: async (roomId, turnId) => {
+      const [turns, hasLease] = await Promise.all([
+        store.readRoomAgentTurns?.(roomId, [turnId]) || Promise.resolve([]),
+        store.hasActiveCodeAgentRoomLease?.(roomId, new Date().toISOString(), turnId) || Promise.resolve(false),
+      ]);
+      return turns[0]?.status === 'running' && hasLease;
+    },
   })
   : undefined;
 const codexBackendEnabled = codexCliRunnerConfig.enabled && Boolean(codexConnectionService);

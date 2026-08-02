@@ -713,4 +713,73 @@ describe('CodeAgentModelGateway', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, 'https://api.anthropic.com/v1/messages');
   });
+
+  it('extends an expired token only while its exact turn lease remains active', async () => {
+    let nowMs = 1_800_000_000_000;
+    let active = true;
+    let upstreamCalls = 0;
+    const stateTtls: number[] = [];
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'test-secret',
+      tokenTtlSeconds: 1,
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => nowMs,
+      isTurnActive: async (roomId, turnId, clientId) => (
+        active && roomId === 'room-1' && turnId === 'turn-1' && clientId === 'client-1'
+      ),
+      stateStore: {
+        async consumeRequest(input) {
+          stateTtls.push(input.ttlSeconds);
+          return { ok: true, requestCount: 1, actualCostUsd: 0 };
+        },
+        async recordActualCost(input) {
+          stateTtls.push(input.ttlSeconds);
+          return { actualCostUsd: input.costUsd };
+        },
+      },
+      fetchFn: async () => {
+        upstreamCalls += 1;
+        return new Response(JSON.stringify({
+          id: 'completion-1',
+          usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+      model: deepseekModel,
+    });
+    nowMs += 2_000;
+    server = await createTestServer(gateway);
+
+    const completed = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [] }),
+    });
+
+    assert.equal(completed.status, 200);
+    assert.equal(upstreamCalls, 1);
+    assert.deepEqual(stateTtls, [24 * 60 * 60, 24 * 60 * 60]);
+
+    active = false;
+    const freshToken = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'fullAccess',
+      model: deepseekModel,
+    });
+    const rejected = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/models`, {
+      headers: { authorization: `Bearer ${freshToken}` },
+    });
+
+    assert.equal(rejected.status, 401);
+    assert.deepEqual(await rejected.json(), { error: 'Inactive model gateway turn' });
+    assert.equal(upstreamCalls, 1);
+  });
 });

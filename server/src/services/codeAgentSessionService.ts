@@ -299,6 +299,7 @@ export class CodeAgentSessionService {
       input.codexRunSettings?.permissionMode,
       input.codexRunSettings?.serviceTier
     );
+    const captureWorkspaceRevision = codeAgentModeAllowsWriteTools(turnMode.mode);
 
     let aiMessageId = '';
     let turnId = '';
@@ -394,6 +395,7 @@ export class CodeAgentSessionService {
         ownerId: this.leaseOwnerId,
         now: turnStartedAt,
         leaseTtlMs: this.roomLeaseTtlMs,
+        captureWorkspaceRevision,
         ...(room!.codeAgentSessionId ? { backendSessionIdBefore: room!.codeAgentSessionId } : {}),
         ...(room!.codeAgentLastTurnId ? { backendLastTurnIdBefore: room!.codeAgentLastTurnId } : {}),
         ...(input.promptMessageId && input.promptMessage?.codeAgentQueuedInput?.state === 'starting'
@@ -538,7 +540,7 @@ export class CodeAgentSessionService {
       if (activeTurn) {
         activeTurn.sandbox = turnSandbox;
       }
-      if (turnBackend === 'codex-app-server') {
+      if (captureWorkspaceRevision) {
         if (
           this.sandboxService.beginWorkspaceCheckpoint
           && this.sandboxService.finalizeWorkspaceCheckpoint
@@ -547,7 +549,7 @@ export class CodeAgentSessionService {
           await this.sandboxService.beginWorkspaceCheckpoint(turnSandbox, turnId);
           checkpointStarted = true;
         } else {
-          this.logger.warn('Workspace checkpoint capture is unavailable for Codex turn', {
+          this.logger.warn('Workspace checkpoint capture is unavailable for write-capable agent turn', {
             roomId: input.roomId,
             turnId,
             sandboxId: turnSandbox.id,
@@ -677,21 +679,26 @@ export class CodeAgentSessionService {
         workspaceCheckpoint = await this.finalizeTurnWorkspaceCheckpoint(input.roomId, turnId, turnSandbox);
       }
 
-      // An interrupted Codex turn can still arrive as a terminal `final` event.
-      // Close any tool calls that never received a result so clients do not
-      // render them as running forever after the turn has ended.
-      await this.flushInterruptedToolCalls(
-        input.roomId,
-        turnId,
-        turnClaim!,
-        streamState,
-        new Error('agent turn ended before tool completion'),
-        aiMessage!,
-        turnBackend
-      );
-
-      if (turnBackend !== 'code-agent' && streamState.needsNewSegment) {
-        await this.sealCurrentSegment(input.roomId, turnClaim!, aiMessage!, streamState);
+      const activeAtFinal = this.activeTurns.get(input.roomId);
+      if (activeAtFinal?.turnId === turnId && activeAtFinal.interruptedByUser) {
+        await this.flushInterruptedToolCalls(
+          input.roomId,
+          turnId,
+          turnClaim!,
+          streamState,
+          new Error('agent turn was interrupted by the user'),
+          aiMessage!,
+          turnBackend
+        );
+      } else {
+        await this.flushIncompleteToolCallsAtFinal(
+          input.roomId,
+          turnId,
+          turnClaim!,
+          streamState,
+          aiMessage!,
+          turnBackend,
+        );
       }
 
       const answer = streamState.segmentContent || streamState.fullContent;
@@ -1336,7 +1343,11 @@ export class CodeAgentSessionService {
       if (!plan) {
         return { success: false, error: 'This turn is not connected to the workspace revision graph' };
       }
-      if (Boolean(plan.targetBackendSessionId) !== Boolean(plan.targetBackendLastTurnId)) {
+      const targetBackend = plan.targetBackend || (plan.targetBackendSessionId ? 'codex-app-server' : undefined);
+      if (
+        targetBackend === 'codex-app-server'
+        && Boolean(plan.targetBackendSessionId) !== Boolean(plan.targetBackendLastTurnId)
+      ) {
         return { success: false, error: 'This checkpoint predates the recorded Codex turn boundary and cannot restore context safely' };
       }
       if (plan.alreadyAtTarget) {
@@ -1416,7 +1427,7 @@ export class CodeAgentSessionService {
       }
 
       let sessionId: string | undefined;
-      if (plan.targetBackendSessionId) {
+      if (targetBackend === 'codex-app-server' && plan.targetBackendSessionId) {
         const request: CodeAgentRunnerThreadForkRequest = {
           schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'thread_fork',
@@ -1450,7 +1461,7 @@ export class CodeAgentSessionService {
         resultRevisionId,
         targetBoundary: plan.targetBoundary,
         ...(sessionId ? { sessionId } : {}),
-        ...(plan.targetBackendLastTurnId ? { lastTurnId: plan.targetBackendLastTurnId } : {}),
+        ...(sessionId && plan.targetBackendLastTurnId ? { lastTurnId: plan.targetBackendLastTurnId } : {}),
         restoredPaths,
         conflictPaths: [],
         unavailablePaths: [],
@@ -2614,6 +2625,62 @@ export class CodeAgentSessionService {
           exitCode: 1,
           interrupted: true,
           reason,
+        },
+      });
+    }
+  }
+
+  private async flushIncompleteToolCallsAtFinal(
+    roomId: string,
+    turnId: string,
+    claim: CodeAgentTurnClaim,
+    state: CodeAgentTurnStreamState,
+    baseAIMessage: Message,
+    backend: CodeAgentBackend,
+  ) {
+    if (state.pendingToolCalls.size === 0) {
+      return;
+    }
+    const pending = Array.from(state.pendingToolCalls.entries());
+    state.pendingToolCalls.clear();
+    for (const [toolCallId, toolCall] of pending) {
+      const modelStepId = state.modelStepIdByToolCallId.get(toolCallId);
+      const content = 'The agent finished without reporting a terminal result for this tool.';
+      const message: Message = {
+        id: `tool_result_${toolCallId}_${this.createId()}`,
+        clientId: 'code_agent_runner',
+        content,
+        roomId,
+        timestamp: this.now().toISOString(),
+        messageType: 'tool_result',
+        username: this.displayBackendName(backend),
+        status: 'complete',
+        turnId,
+        modelStepId,
+        modelStepSequence: modelStepId ? state.modelSteps.get(modelStepId)?.sequence : undefined,
+        toolCallId,
+        toolName: toolCall.name,
+        toolOutputPreview: content,
+        isError: false,
+        codeAgentMode: baseAIMessage.codeAgentMode,
+      };
+      const appendResult = await this.appendFencedCodeAgentMessage(message, claim).catch(error => {
+        this.logger.warn('Failed to persist incomplete tool result', { error, roomId, turnId, toolCallId });
+        return { outcome: 'stale' as const };
+      });
+      if (appendResult.outcome === 'applied') {
+        this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      }
+      await this.recordObservabilityEvent({
+        level: 'warn',
+        event: 'code_agent.runner.tool_result_missing',
+        roomId,
+        turnId,
+        payload: {
+          backend,
+          toolCallId,
+          toolName: toolCall.name,
+          terminalTurnEvent: 'final',
         },
       });
     }

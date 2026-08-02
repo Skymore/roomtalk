@@ -177,7 +177,8 @@ export const buildCodeAgentWorkspaceSnapshot = (
     diffSummary: null,
   },
   artifacts: CodeAgentWorkspaceArtifact[] = [],
-  workspaceRoot?: string | null
+  workspaceRoot?: string | null,
+  summary?: CodeAgentWorkspaceSummary,
 ): CodeAgentWorkspaceSnapshot => {
   return {
     roomId: room.id,
@@ -190,7 +191,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
       agentStatus: room.codeAgentStatus || 'idle',
       hasSession: Boolean(room.codeAgentSessionId),
     },
-    summary: summarizeWorkspaceMessages(messages),
+    summary: summary || summarizeWorkspaceMessages(messages),
     artifacts,
     changes,
     commands: buildCommandHistory(messages),

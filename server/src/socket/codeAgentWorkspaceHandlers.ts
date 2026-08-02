@@ -1725,7 +1725,14 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: access.error });
         return;
       }
-      const messages = await store.readMessagesByRoom(access.room.id);
+      const activity = store.readCodeAgentWorkspaceActivity
+        ? await store.readCodeAgentWorkspaceActivity(access.room.id, 20)
+        : {
+            messages: typeof store.readMessagePageByRoom === 'function'
+              ? (await store.readMessagePageByRoom(access.room.id, { limit: 20 })).messages
+              : await store.readMessagesByRoom(access.room.id),
+            summary: undefined,
+          };
       const workspaceState = await loadWorkspaceSnapshotState(access.room);
       const artifacts = await loadPublishedArtifacts(access.room);
 
@@ -1733,11 +1740,12 @@ export function registerCodeAgentWorkspaceHandlers({
         success: true,
         snapshot: buildCodeAgentWorkspaceSnapshot(
           access.room,
-          messages,
+          activity.messages,
           new Date(),
           workspaceState.changes,
           artifacts,
           workspaceState.workspaceRoot,
+          activity.summary,
         ),
       });
     } catch (error) {
