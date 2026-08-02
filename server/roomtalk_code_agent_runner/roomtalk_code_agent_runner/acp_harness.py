@@ -373,34 +373,11 @@ class ACPEventBridge:
 
         if update_type == "tool_call":
             self._emit_tool_call(update)
+            self._emit_tool_result_if_terminal(update)
             return
 
         if update_type == "tool_call_update":
-            tool_call_id = str(getattr(update, "tool_call_id", "") or "")
-            if not tool_call_id:
-                return
-            if tool_call_id not in self.tool_names:
-                self._emit_tool_call(update)
-            status = getattr(update, "status", None)
-            output = getattr(update, "raw_output", None)
-            if output is None:
-                output = _content_text(getattr(update, "content", None))
-            output_text = _stringify(output)
-            if output_text:
-                self.tool_outputs[tool_call_id] = output_text
-            if status not in {"completed", "failed"} or tool_call_id in self.completed_tools:
-                return
-            self.completed_tools.add(tool_call_id)
-            name = self.tool_names.get(tool_call_id, str(getattr(update, "title", "") or "tool"))
-            self.emitter.emit({
-                "type": "tool_result",
-                "turnId": self.request.turn_id,
-                "id": tool_call_id,
-                "name": name,
-                "success": status == "completed",
-                "output": output_text,
-                "messageId": f"acp_tool_result_{tool_call_id}",
-            })
+            self._emit_tool_result_if_terminal(update)
             return
 
         if update_type == "usage_update":
@@ -431,6 +408,33 @@ class ACPEventBridge:
             "name": name,
             "args": _tool_args(update),
             "messageId": f"acp_tool_call_{tool_call_id}",
+        })
+
+    def _emit_tool_result_if_terminal(self, update: Any) -> None:
+        tool_call_id = str(getattr(update, "tool_call_id", "") or "")
+        if not tool_call_id:
+            return
+        if tool_call_id not in self.tool_names:
+            self._emit_tool_call(update)
+        status = getattr(update, "status", None)
+        output = getattr(update, "raw_output", None)
+        if output is None:
+            output = _content_text(getattr(update, "content", None))
+        output_text = _stringify(output)
+        if output_text:
+            self.tool_outputs[tool_call_id] = output_text
+        if status not in {"completed", "failed"} or tool_call_id in self.completed_tools:
+            return
+        self.completed_tools.add(tool_call_id)
+        name = self.tool_names.get(tool_call_id, str(getattr(update, "title", "") or "tool"))
+        self.emitter.emit({
+            "type": "tool_result",
+            "turnId": self.request.turn_id,
+            "id": tool_call_id,
+            "name": name,
+            "success": status == "completed",
+            "output": output_text,
+            "messageId": f"acp_tool_result_{tool_call_id}",
         })
 
     def close_tools_at_final(self) -> None:

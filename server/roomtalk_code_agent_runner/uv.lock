@@ -231,7 +231,7 @@ wheels = [
 
 [[package]]
 name = "roomtalk-code-agent-runner"
-version = "0.1.41"
+version = "0.1.42"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },

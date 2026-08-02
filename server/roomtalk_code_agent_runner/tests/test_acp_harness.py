@@ -242,6 +242,35 @@ def test_event_bridge_maps_text_and_tool_lifecycle_to_roomtalk_jsonl():
     assert emitted[2]["output"] == "contents"
 
 
+def test_event_bridge_maps_a_terminal_tool_call_start_without_waiting_for_an_update():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call",
+            tool_call_id="tool-1",
+            title="Read file",
+            kind="read",
+            status="completed",
+            raw_input={"path": "README.md"},
+            raw_output="contents from terminal start",
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
+    assert emitted[1]["success"] is True
+    assert emitted[1]["output"] == "contents from terminal start"
+
+
 def test_event_bridge_closes_missing_terminal_tool_updates_before_final():
     output = io.StringIO()
     bridge = ACPEventBridge(
