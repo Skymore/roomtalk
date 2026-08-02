@@ -9,6 +9,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import uuid
@@ -333,18 +334,24 @@ class ACPEventBridge:
         backend: str,
         request: RunnerRequest,
         emitter: EventEmitter,
+        hermes_state_db: Path | None = None,
     ) -> None:
         self.backend = backend
         self.request = request
         self.emitter = emitter
         self.answer_parts: list[str] = []
         self.tool_names: dict[str, str] = {}
+        self.tool_kinds: dict[str, str] = {}
+        self.tool_ids: list[str] = []
         self.tool_outputs: dict[str, str] = {}
+        self.tool_statuses: dict[str, str] = {}
         self.completed_tools: set[str] = set()
         self.pending_permissions: dict[str, asyncio.Future[str]] = {}
         self.connection: Any = None
         self._forward_session_updates = True
         self.interrupted = False
+        self.hermes_state_db = hermes_state_db
+        self.hermes_prompt_message_id: int | None = None
 
     def on_connect(self, conn: Any) -> None:
         self.connection = conn
@@ -353,7 +360,7 @@ class ACPEventBridge:
         self._forward_session_updates = enabled
 
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
-        del session_id, kwargs
+        del kwargs
         if not self._forward_session_updates:
             return
         update_type = getattr(update, "session_update", None)
@@ -361,6 +368,7 @@ class ACPEventBridge:
             content = getattr(update, "content", None)
             if getattr(content, "type", None) != "text":
                 return
+            await self._flush_hermes_tool_results(session_id)
             delta = str(getattr(content, "text", "") or "")
             self.answer_parts.append(delta)
             self.emitter.emit({
@@ -401,6 +409,8 @@ class ACPEventBridge:
             return
         name = str(getattr(update, "title", "") or getattr(update, "kind", "") or "tool")
         self.tool_names[tool_call_id] = name
+        self.tool_kinds[tool_call_id] = str(getattr(update, "kind", "") or "")
+        self.tool_ids.append(tool_call_id)
         self.emitter.emit({
             "type": "tool_call",
             "turnId": self.request.turn_id,
@@ -417,6 +427,8 @@ class ACPEventBridge:
         if tool_call_id not in self.tool_names:
             self._emit_tool_call(update)
         status = getattr(update, "status", None)
+        if status:
+            self.tool_statuses[tool_call_id] = str(status)
         output = getattr(update, "raw_output", None)
         if output is None:
             output = _content_text(getattr(update, "content", None))
@@ -425,35 +437,236 @@ class ACPEventBridge:
             self.tool_outputs[tool_call_id] = output_text
         if status not in {"completed", "failed"} or tool_call_id in self.completed_tools:
             return
+        # Hermes persists exact tool results before the model can continue, but
+        # its ACP adapter can omit a completion from a parallel tool batch. It
+        # also formats some empty command outputs as the command preview. Defer
+        # Hermes completion emission until the state DB can supply the exact
+        # per-session tool record; OpenCode continues to use native ACP events.
+        if (
+            self.backend == "hermes-agent"
+            and self.hermes_state_db is not None
+            and self.hermes_prompt_message_id is not None
+        ):
+            return
+        self._emit_tool_result(
+            tool_call_id,
+            success=status == "completed",
+            output=output_text,
+            fallback_name=str(getattr(update, "title", "") or "tool"),
+        )
+
+    def _emit_tool_result(
+        self,
+        tool_call_id: str,
+        *,
+        success: bool,
+        output: str,
+        fallback_name: str = "tool",
+        exit_code: int | None = None,
+    ) -> None:
+        if tool_call_id in self.completed_tools:
+            return
         self.completed_tools.add(tool_call_id)
-        name = self.tool_names.get(tool_call_id, str(getattr(update, "title", "") or "tool"))
-        self.emitter.emit({
+        name = self.tool_names.get(tool_call_id, fallback_name)
+        event: dict[str, Any] = {
             "type": "tool_result",
             "turnId": self.request.turn_id,
             "id": tool_call_id,
             "name": name,
-            "success": status == "completed",
-            "output": output_text,
+            "success": success,
+            "output": output,
             "messageId": f"acp_tool_result_{tool_call_id}",
-        })
+        }
+        if exit_code is not None:
+            event["exitCode"] = exit_code
+        self.emitter.emit(event)
+
+    async def begin_prompt(self, session_id: str) -> None:
+        if self.backend != "hermes-agent" or self.hermes_state_db is None:
+            return
+        self.hermes_prompt_message_id = await asyncio.to_thread(
+            self._latest_hermes_message_id,
+            session_id,
+        )
+
+    def _latest_hermes_message_id(self, session_id: str) -> int | None:
+        try:
+            with sqlite3.connect(
+                f"file:{self.hermes_state_db}?mode=ro",
+                uri=True,
+                timeout=1,
+            ) as connection:
+                row = connection.execute(
+                    "SELECT COALESCE(MAX(id), 0) FROM messages WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        except (OSError, sqlite3.Error):
+            return None
+        return int(row[0] or 0) if row else 0
+
+    def _hermes_tool_rows(self, session_id: str) -> list[tuple[str, str]]:
+        if self.hermes_state_db is None or self.hermes_prompt_message_id is None:
+            return []
+        try:
+            with sqlite3.connect(
+                f"file:{self.hermes_state_db}?mode=ro",
+                uri=True,
+                timeout=1,
+            ) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT COALESCE(tool_name, ''), content
+                    FROM messages
+                    WHERE session_id = ? AND id > ? AND role = 'tool'
+                    ORDER BY id
+                    """,
+                    (session_id, self.hermes_prompt_message_id),
+                ).fetchall()
+        except (OSError, sqlite3.Error):
+            return []
+        return [
+            (str(row[0] or ""), _stringify(row[1] or ""))
+            for row in rows
+        ]
+
+    @staticmethod
+    def _hermes_tool_kind(tool_name: str) -> str:
+        return {
+            "read_file": "read",
+            "skill_view": "read",
+            "skills_list": "read",
+            "browser_snapshot": "read",
+            "browser_vision": "read",
+            "browser_get_images": "read",
+            "vision_analyze": "read",
+            "write_file": "edit",
+            "patch": "edit",
+            "skill_manage": "edit",
+            "search_files": "search",
+            "terminal": "execute",
+            "process": "execute",
+            "execute_code": "execute",
+            "delegate_task": "execute",
+            "browser_click": "execute",
+            "browser_type": "execute",
+            "browser_scroll": "execute",
+            "browser_press": "execute",
+            "browser_back": "execute",
+            "image_generate": "execute",
+            "text_to_speech": "execute",
+            "web_search": "fetch",
+            "web_extract": "fetch",
+            "browser_navigate": "fetch",
+        }.get(tool_name, "other")
+
+    @staticmethod
+    def _hermes_title_matches_tool(title: str, tool_name: str) -> bool:
+        normalized = title.strip().lower()
+        if normalized == tool_name.lower():
+            return True
+        prefixes = {
+            "terminal": "terminal:",
+            "read_file": "read:",
+            "write_file": "write:",
+            "patch": "patch ",
+            "search_files": "search:",
+            "web_search": "web search:",
+        }
+        prefix = prefixes.get(tool_name)
+        return bool(prefix and normalized.startswith(prefix))
+
+    def _align_hermes_tool_rows(
+        self,
+        rows: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Pair persisted Hermes results with ACP calls without trusting thread order."""
+        if len(rows) < len(self.tool_ids):
+            return []
+        unused = list(range(len(rows)))
+        aligned: list[tuple[str, str]] = []
+        for tool_call_id in self.tool_ids:
+            title = self.tool_names.get(tool_call_id, "")
+            kind = self.tool_kinds.get(tool_call_id, "")
+            exact = [
+                index
+                for index in unused
+                if self._hermes_title_matches_tool(title, rows[index][0])
+            ]
+            same_kind = [
+                index
+                for index in unused
+                if kind and self._hermes_tool_kind(rows[index][0]) == kind
+            ]
+            index = (exact or same_kind or unused)[0]
+            unused.remove(index)
+            aligned.append(rows[index])
+        return aligned
+
+    @staticmethod
+    def _hermes_tool_success(output: str) -> tuple[bool, int | None]:
+        try:
+            value = json.loads(output)
+        except (TypeError, json.JSONDecodeError):
+            return True, None
+        if not isinstance(value, dict):
+            return True, None
+        exit_code = value.get("exit_code", value.get("returncode"))
+        normalized_exit_code = exit_code if isinstance(exit_code, int) else None
+        failed = (
+            value.get("success") is False
+            or value.get("ok") is False
+            or bool(value.get("error"))
+            or (normalized_exit_code is not None and normalized_exit_code != 0)
+        )
+        return not failed, normalized_exit_code
+
+    async def _flush_hermes_tool_results(self, session_id: str) -> None:
+        if self.backend != "hermes-agent" or self.hermes_state_db is None:
+            return
+        pending_count = len(self.tool_ids)
+        if pending_count == 0 or len(self.completed_tools) >= pending_count:
+            return
+        rows: list[tuple[str, str]] = []
+        for attempt in range(20):
+            rows = await asyncio.to_thread(self._hermes_tool_rows, session_id)
+            if len(rows) >= pending_count:
+                break
+            if attempt < 19:
+                await asyncio.sleep(0.025)
+        aligned_rows = self._align_hermes_tool_rows(rows)
+        if not aligned_rows:
+            return
+        for tool_call_id, (_tool_name, output) in zip(self.tool_ids, aligned_rows):
+            if tool_call_id in self.completed_tools:
+                continue
+            success, exit_code = self._hermes_tool_success(output)
+            self._emit_tool_result(
+                tool_call_id,
+                success=success,
+                output=output,
+                exit_code=exit_code,
+            )
+            if exit_code is not None:
+                self.tool_statuses[tool_call_id] = "completed" if success else "failed"
+
+    async def flush_tools_at_final(self, session_id: str) -> None:
+        await self._flush_hermes_tool_results(session_id)
+        self.close_tools_at_final()
 
     def close_tools_at_final(self) -> None:
         for tool_call_id, name in tuple(self.tool_names.items()):
             if tool_call_id in self.completed_tools:
                 continue
-            self.completed_tools.add(tool_call_id)
-            self.emitter.emit({
-                "type": "tool_result",
-                "turnId": self.request.turn_id,
-                "id": tool_call_id,
-                "name": name,
-                "success": True,
-                "output": self.tool_outputs.get(
+            status = self.tool_statuses.get(tool_call_id)
+            self._emit_tool_result(
+                tool_call_id,
+                success=status != "failed",
+                output=self.tool_outputs.get(
                     tool_call_id,
                     "The ACP harness finished without reporting a terminal tool status.",
                 ),
-                "messageId": f"acp_tool_result_{tool_call_id}",
-            })
+                fallback_name=name,
+            )
 
     async def request_permission(
         self,
@@ -942,7 +1155,16 @@ async def _run_request_async(
     child_env = build_harness_env(backend, request, env)
     command, args = _launch_command(spec, request, child_env)
     spawn_agent = spawn or spawn_agent_process
-    bridge = ACPEventBridge(backend=backend, request=request, emitter=emitter)
+    bridge = ACPEventBridge(
+        backend=backend,
+        request=request,
+        emitter=emitter,
+        hermes_state_db=(
+            Path(child_env["HERMES_HOME"]) / "state.db"
+            if backend == "hermes-agent" and child_env.get("HERMES_HOME")
+            else None
+        ),
+    )
     stderr_tail: list[str] = []
 
     emitter.emit({
@@ -1011,6 +1233,7 @@ async def _run_request_async(
                         prompt,
                         bool(getattr(prompt_capabilities, "image", False)),
                     )
+                    await bridge.begin_prompt(native_session_id)
                     response = await _prompt_session(
                         connection=connection,
                         session_id=native_session_id,
@@ -1026,7 +1249,7 @@ async def _run_request_async(
 
                 usage = getattr(response, "usage", None)
                 if not bridge.interrupted:
-                    bridge.close_tools_at_final()
+                    await bridge.flush_tools_at_final(native_session_id)
                 final_event: dict[str, Any] = {
                     "type": "final",
                     "turnId": request.turn_id,

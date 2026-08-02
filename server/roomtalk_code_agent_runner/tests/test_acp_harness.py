@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import queue
+import sqlite3
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -269,6 +270,144 @@ def test_event_bridge_maps_a_terminal_tool_call_start_without_waiting_for_an_upd
     assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
     assert emitted[1]["success"] is True
     assert emitted[1]["output"] == "contents from terminal start"
+
+
+def test_hermes_event_bridge_recovers_exact_parallel_tool_results_before_answer_text(tmp_path: Path):
+    state_db = tmp_path / "state.db"
+    with sqlite3.connect(state_db) as connection:
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO messages (session_id, role, content) VALUES (?, 'tool', ?)",
+            ("session-1", "old result from a prior prompt"),
+        )
+
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+        hermes_state_db=state_db,
+    )
+
+    async def run() -> None:
+        await bridge.begin_prompt("session-1")
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-read",
+                title="Read file",
+                kind="read",
+                raw_input={"path": "README.md"},
+                locations=[],
+                content=[],
+            ),
+        )
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-shell",
+                title="Run status",
+                kind="execute",
+                raw_input={"command": "git status --short"},
+                locations=[],
+                content=[],
+            ),
+        )
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call_update",
+                tool_call_id="tool-shell",
+                title="Run status",
+                kind="execute",
+                status="completed",
+                raw_input=None,
+                raw_output="$ git status --short",
+                locations=[],
+                content=[],
+            ),
+        )
+        with sqlite3.connect(state_db) as connection:
+            connection.executemany(
+                "INSERT INTO messages (session_id, role, content, tool_name) VALUES (?, 'tool', ?, ?)",
+                [
+                    ("session-1", '{"output":"","exit_code":0,"error":null}', "terminal"),
+                    ("session-1", '{"content":"# RoomTalk"}', "read_file"),
+                ],
+            )
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="agent_message_chunk",
+                content=SimpleNamespace(type="text", text="done"),
+            ),
+        )
+        await bridge.flush_tools_at_final("session-1")
+
+    asyncio.run(run())
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == [
+        "tool_call",
+        "tool_call",
+        "tool_result",
+        "tool_result",
+        "text_delta",
+    ]
+    assert emitted[2]["id"] == "tool-read"
+    assert emitted[2]["output"] == '{"content":"# RoomTalk"}'
+    assert emitted[3]["id"] == "tool-shell"
+    assert emitted[3]["output"] == '{"output":"","exit_code":0,"error":null}'
+    assert emitted[3]["exitCode"] == 0
+    assert emitted[4]["delta"] == "done"
+
+
+def test_hermes_event_bridge_marks_recovered_tool_failures(tmp_path: Path):
+    state_db = tmp_path / "state.db"
+    with sqlite3.connect(state_db) as connection:
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT)"
+        )
+
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+        hermes_state_db=state_db,
+    )
+
+    async def run() -> None:
+        await bridge.begin_prompt("session-1")
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-fail",
+                title="Run failing command",
+                kind="execute",
+                raw_input={"command": "false"},
+                locations=[],
+                content=[],
+            ),
+        )
+        with sqlite3.connect(state_db) as connection:
+            connection.execute(
+                "INSERT INTO messages (session_id, role, content, tool_name) VALUES (?, 'tool', ?, ?)",
+                ("session-1", '{"output":"","exit_code":7,"error":"failed"}', "terminal"),
+            )
+        await bridge.flush_tools_at_final("session-1")
+
+    asyncio.run(run())
+
+    emitted = events(output)
+    assert emitted[-1]["type"] == "tool_result"
+    assert emitted[-1]["success"] is False
+    assert emitted[-1]["exitCode"] == 7
 
 
 def test_event_bridge_closes_missing_terminal_tool_updates_before_final():
