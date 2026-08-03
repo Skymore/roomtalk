@@ -18,6 +18,7 @@ import {
   RoomOnlineMember,
   RoomPermissions,
   RoomPostingSchedule,
+  AICostTotalEvent,
   RoomRoleMember,
   RoomSnapshotPayload,
   RoomType,
@@ -111,6 +112,10 @@ type RoomSnapshotAckResponse = SocketAckResponse & {
 
 type RoomEventsAckResponse = SocketAckResponse & {
   events?: RoomEventPagePayload;
+};
+
+type RoomAICostAckResponse = SocketAckResponse & {
+  cost?: AICostTotalEvent;
 };
 
 type SendMessageAndAskAIAckResponse = SocketAckResponse & {
@@ -852,6 +857,25 @@ export const requestRoomSnapshot = (request: {
       throw new SocketRequestError('INVALID_SNAPSHOT_RESPONSE', 'Server returned an invalid room snapshot response');
     }
     return response.snapshot;
+  })
+);
+
+export const requestRoomAICost = (roomId: string): Promise<AICostTotalEvent> => (
+  emitWithAck<RoomAICostAckResponse>(
+    'get_room_ai_cost',
+    { roomId },
+    'Timed out while loading room cost',
+    'Failed to load room cost',
+  ).then(response => {
+    if (
+      !response.cost
+      || response.cost.roomId !== roomId
+      || response.cost.currency !== 'USD'
+      || !Number.isFinite(response.cost.totalUsd)
+    ) {
+      throw new SocketRequestError('INVALID_COST_RESPONSE', 'Server returned an invalid room cost response');
+    }
+    return response.cost;
   })
 );
 

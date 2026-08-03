@@ -2330,4 +2330,66 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         CHECK (monthly_credit_remaining_usd <= monthly_credit_granted_usd);
     `,
   },
+  {
+    // Provider settlements are independent of account billing. This ledger is
+    // the idempotency authority for room cost, including failed turns, late
+    // responses, and clients that are not linked to an account.
+    id: '0022_room_ai_usage_events',
+    sql: `
+      CREATE TABLE IF NOT EXISTS room_ai_usage_events (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL,
+        cost_usd NUMERIC(18, 9) NOT NULL CHECK (cost_usd > 0),
+        provider TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        prompt_tokens BIGINT NOT NULL CHECK (prompt_tokens >= 0),
+        completion_tokens BIGINT NOT NULL CHECK (completion_tokens >= 0),
+        total_tokens BIGINT NOT NULL CHECK (total_tokens >= 0),
+        cached_prompt_tokens BIGINT NOT NULL DEFAULT 0 CHECK (cached_prompt_tokens >= 0),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_room_ai_usage_events_room_created
+        ON room_ai_usage_events (room_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_room_ai_usage_events_turn_created
+        ON room_ai_usage_events (turn_id, created_at);
+
+      WITH inserted_failed_acp_usage AS (
+        INSERT INTO room_ai_usage_events (
+          id, room_id, turn_id, cost_usd, provider, model_id,
+          prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, created_at
+        )
+        SELECT usage.assistant_run_id,
+          usage.room_id,
+          usage.turn_id,
+          usage.cost_usd,
+          usage.provider,
+          usage.model_id,
+          0, 0, 0, 0,
+          usage.created_at
+        FROM account_ai_usage_events AS usage
+        JOIN room_agent_turns AS turn
+          ON turn.id = usage.turn_id
+          AND turn.room_id = usage.room_id
+        WHERE usage.source = 'code_agent_gateway'
+          AND usage.room_id IS NOT NULL
+          AND usage.turn_id IS NOT NULL
+          AND turn.status IN ('error', 'cancelled')
+          AND turn.backend IN ('opencode', 'hermes-agent')
+        ON CONFLICT (id) DO NOTHING
+        RETURNING room_id, cost_usd
+      ), failed_acp_totals AS (
+        SELECT room_id, SUM(cost_usd) AS total_usd
+        FROM inserted_failed_acp_usage
+        GROUP BY room_id
+      )
+      INSERT INTO room_ai_cost_totals (room_id, total_usd, updated_at)
+      SELECT room_id, total_usd, clock_timestamp()
+      FROM failed_acp_totals
+      ON CONFLICT (room_id) DO UPDATE SET
+        total_usd = room_ai_cost_totals.total_usd + EXCLUDED.total_usd,
+        updated_at = clock_timestamp();
+    `,
+  },
 ];

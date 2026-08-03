@@ -173,6 +173,49 @@ describe('PostgresStore', () => {
     assert.match(backendMigration.sql, /'opencode', 'hermes-agent'/);
   });
 
+  it('adds an independent idempotency ledger for room model usage', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0022_room_ai_usage_events');
+    assert.ok(migration);
+    assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS room_ai_usage_events/);
+    assert.match(migration.sql, /id TEXT PRIMARY KEY/);
+    assert.match(migration.sql, /room_id TEXT NOT NULL REFERENCES rooms/);
+    assert.match(migration.sql, /turn\.backend IN \('opencode', 'hermes-agent'\)/);
+    assert.match(migration.sql, /turn\.status IN \('error', 'cancelled'\)/);
+  });
+
+  it('settles one room model usage event and increments the total in the same transaction', async () => {
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /pg_advisory_xact_lock/) },
+      { rows: [], assertCall: call => assert.match(call.sql, /FROM room_ai_usage_events/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /INSERT INTO room_ai_usage_events/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /INSERT INTO room_ai_cost_totals/) },
+      { rows: [{ total_usd: '0.25' }] },
+      { rows: [{ total_usd: '0.25' }] },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const store = new PostgresStore(new ScriptedPool([], client), logger as any);
+
+    const result = await store.settleRoomAIUsage({
+      id: 'code-agent-gateway:token-1:1',
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      costUsd: 0.25,
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      cachedPromptTokens: 4,
+    });
+
+    assert.deepEqual(result, {
+      id: 'code-agent-gateway:token-1:1',
+      roomCostTotal: { roomId: 'room-1', currency: 'USD', totalUsd: 0.25 },
+      duplicate: false,
+    });
+  });
+
   it('applies pending migrations exactly once inside the schema transaction', async () => {
     const migrationCount = POSTGRES_MIGRATIONS.length;
     const clientResults: ScriptedResult[] = [

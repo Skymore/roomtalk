@@ -1,5 +1,5 @@
 import { Dispatch, MutableRefObject, RefObject, SetStateAction, useEffect, useRef } from 'react';
-import { requestRoomEvents, requestRoomSnapshot, SocketRequestError, socket } from '../utils/socket';
+import { requestRoomAICost, requestRoomEvents, requestRoomSnapshot, SocketRequestError, socket } from '../utils/socket';
 import {
   A2UIUpdateEvent,
   AICostTotalEvent,
@@ -317,6 +317,18 @@ export const useRoomMessageEvents = ({
     setShowScrollButton(false);
     closeDeleteModal();
     closeEditModal();
+
+    void requestRoomAICost(roomId)
+      .then(cost => {
+        if (!cancelled && cost.roomId === roomId) setSessionCostUsd(cost.totalUsd);
+      })
+      .catch(error => {
+        if (cancelled) return;
+        logRoomMessageDiagnostic('room-cost-request-failed', {
+          roomId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
     const filterMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
     const filterTurns = (turns: RoomAgentTurn[]) => turns.filter(turn => turn.roomId === roomId);

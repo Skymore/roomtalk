@@ -5,6 +5,8 @@ import { Logger } from '../logger';
 import type {
   AccountAIUsageInput,
   AccountAIUsageSettlement,
+  RoomAIUsageInput,
+  RoomAIUsageSettlement,
 } from '../repositories/store';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
 import type { AssistantRunSchedulingSnapshot } from './accountEntitlements';
@@ -80,6 +82,7 @@ export interface CodeAgentModelGatewayOptions {
   observability?: ObservabilityEventRecorder;
   resolveAccountScheduling?: (clientId: string) => Promise<AssistantRunSchedulingSnapshot>;
   settleAccountAIUsage?: (input: AccountAIUsageInput) => Promise<AccountAIUsageSettlement | null>;
+  settleRoomAIUsage?: (input: RoomAIUsageInput) => Promise<RoomAIUsageSettlement | null>;
   isTurnActive?: (roomId: string, turnId: string, clientId: string) => Promise<boolean>;
   providerAdmission?: {
     acquire(
@@ -897,9 +900,25 @@ export class CodeAgentModelGateway {
         ttlSeconds: this.ttlSecondsForClaims(claims),
         costUsd,
       });
-      const accountSettlement = this.options.settleAccountAIUsage
-        ? await this.options.settleAccountAIUsage({
-            id: `code-agent-gateway:${claims.jti}:${requestCount}`,
+      const settlementId = `code-agent-gateway:${claims.jti}:${requestCount}`;
+      const [roomSettlement, accountSettlement] = await Promise.all([
+        this.options.settleRoomAIUsage
+          ? this.options.settleRoomAIUsage({
+              id: settlementId,
+              roomId: claims.roomId,
+              turnId: claims.turnId,
+              costUsd,
+              provider: claims.provider,
+              modelId: claims.modelId,
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+              cachedPromptTokens: usage.cachedPromptTokens,
+            })
+          : Promise.resolve(null),
+        this.options.settleAccountAIUsage
+          ? this.options.settleAccountAIUsage({
+            id: settlementId,
             clientId: claims.clientId,
             source: 'code_agent_gateway',
             costUsd,
@@ -908,7 +927,8 @@ export class CodeAgentModelGateway {
             roomId: claims.roomId,
             turnId: claims.turnId,
           })
-        : null;
+          : Promise.resolve(null),
+      ]);
       await this.recordObservabilityEvent(claims, {
         level: 'info',
         event: 'code_agent.model_gateway.settled',
@@ -927,6 +947,8 @@ export class CodeAgentModelGateway {
           creditAppliedUsd: accountSettlement?.creditAppliedUsd,
           creditBalanceUsd: accountSettlement?.creditBalanceUsd,
           billingDuplicate: accountSettlement?.duplicate,
+          roomCostTotalUsd: roomSettlement?.roomCostTotal.totalUsd,
+          roomCostDuplicate: roomSettlement?.duplicate,
         },
       });
       if (result.actualCostUsd > claims.budgetUsd) {

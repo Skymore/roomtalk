@@ -16,6 +16,7 @@ const socketMock = vi.hoisted(() => {
     listeners,
     requestSnapshot: vi.fn(),
     requestEvents: vi.fn(),
+    requestCost: vi.fn(),
     SocketRequestError: MockSocketRequestError,
     socket: {
       connected: true,
@@ -38,6 +39,7 @@ const socketMock = vi.hoisted(() => {
 vi.mock('../utils/socket', () => ({
   requestRoomSnapshot: socketMock.requestSnapshot,
   requestRoomEvents: socketMock.requestEvents,
+  requestRoomAICost: socketMock.requestCost,
   SocketRequestError: socketMock.SocketRequestError,
   socket: socketMock.socket,
 }));
@@ -172,7 +174,7 @@ const Harness = ({
   const [oldestMessageId, setOldestMessageId] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [, setIsLoadingMore] = useState(false);
-  const [, setSessionCostUsd] = useState<number | null>(null);
+  const [sessionCostUsd, setSessionCostUsd] = useState<number | null>(null);
   const [, setShowScrollButton] = useState(false);
   const messagesRef = useRef(messages);
   const turnsRef = useRef(turns);
@@ -226,6 +228,7 @@ const Harness = ({
       data-more={String(hasMore)}
       data-oldest={oldestMessageId || ''}
       data-loading={String(isLoading)}
+      data-cost={sessionCostUsd === null ? '' : String(sessionCostUsd)}
     />
     {optimisticMessageToAdd && <button
       type="button"
@@ -242,6 +245,7 @@ const installDefaultProtocolMocks = () => {
   socketMock.requestEvents.mockImplementation(async (request: { requestId: string; afterSeq: number }) => (
     eventPage(request.requestId, request.afterSeq)
   ));
+  socketMock.requestCost.mockResolvedValue({ roomId: 'room-1', currency: 'USD', totalUsd: 1.25 });
 };
 
 describe('useRoomMessageEvents event-log synchronization', () => {
@@ -290,6 +294,8 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.messages).toContain('cached-message');
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('6'));
     expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('state').dataset.cost).toBe('1.25'));
+    expect(socketMock.requestCost).toHaveBeenCalledWith('room-1');
     expect(screen.getByTestId('state').dataset.messages).toBe('cached-message,message-6');
   });
 

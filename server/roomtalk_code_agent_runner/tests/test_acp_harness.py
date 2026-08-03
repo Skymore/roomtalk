@@ -12,10 +12,12 @@ from typing import Any
 
 from roomtalk_code_agent_runner.acp_harness import (
     ACPEventBridge,
+    MAX_ACP_FRAME_BYTES,
     _configure_session,
     _control_loop,
     _open_session,
     _prompt_session,
+    _run_request_async,
     _unwrap_session_id,
     _wrap_session_id,
     build_harness_env,
@@ -50,6 +52,42 @@ def runner_request(**overrides: Any) -> RunnerRequest:
 
 def events(buffer: io.StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in buffer.getvalue().splitlines()]
+
+
+def test_acp_process_transport_accepts_bounded_frames_larger_than_asyncio_default(tmp_path: Path):
+    captured: dict[str, Any] = {}
+
+    class FailingContext:
+        async def __aenter__(self):
+            raise RuntimeError("stop after transport creation")
+
+        async def __aexit__(self, *_args: Any):
+            return False
+
+    def spawn(*args: Any, **kwargs: Any) -> FailingContext:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FailingContext()
+
+    try:
+        asyncio.run(_run_request_async(
+            "opencode",
+            runner_request(workspace=tmp_path),
+            emitter=EventEmitter(io.StringIO()),
+            env={
+                "CODE_AGENT_MODEL_PROXY_URL": "https://room.example/api/code-agent/model-gateway/v1",
+                "CODE_AGENT_MODEL_PROXY_TOKEN": "turn-token",
+            },
+            control_queue=queue.Queue(),
+            spawn=spawn,
+        ))
+    except RunnerError as error:
+        assert error.code == "acp_harness_failed"
+    else:
+        raise AssertionError("the fake process context must stop the request")
+
+    assert MAX_ACP_FRAME_BYTES > 64 * 1024
+    assert captured["kwargs"]["transport_kwargs"] == {"limit": MAX_ACP_FRAME_BYTES}
 
 
 def test_opencode_config_routes_models_through_roomtalk_gateway_and_enforces_plan():

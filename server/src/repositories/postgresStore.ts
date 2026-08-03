@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -3781,6 +3781,108 @@ export class PostgresStore implements DurableRoomStore {
       this.logger.error('Error incrementing PostgreSQL room AI cost total', { error, roomId, cost });
       throw error;
     }
+  }
+
+  async settleRoomAIUsage(input: RoomAIUsageInput): Promise<RoomAIUsageSettlement> {
+    if (!Number.isFinite(input.costUsd) || input.costUsd <= 0 || input.costUsd > 999_999_999) {
+      throw new Error('Room AI usage cost must be a positive bounded USD value');
+    }
+    if (
+      !input.id
+      || !input.roomId
+      || !input.turnId
+      || !input.provider
+      || !input.modelId
+      || !Number.isSafeInteger(input.promptTokens)
+      || input.promptTokens < 0
+      || !Number.isSafeInteger(input.completionTokens)
+      || input.completionTokens < 0
+      || !Number.isSafeInteger(input.totalTokens)
+      || input.totalTokens < 0
+      || (input.cachedPromptTokens !== undefined && (
+        !Number.isSafeInteger(input.cachedPromptTokens) || input.cachedPromptTokens < 0
+      ))
+    ) {
+      throw new Error('Room AI usage requires bounded identity, model, and token fields');
+    }
+    const now = input.now || new Date().toISOString();
+    return this.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [input.id]);
+      const existing = await client.query<{
+        room_id: string;
+        turn_id: string;
+        cost_usd: number | string;
+        provider: string;
+        model_id: string;
+        prompt_tokens: number | string;
+        completion_tokens: number | string;
+        total_tokens: number | string;
+        cached_prompt_tokens: number | string;
+      }>(
+        `SELECT room_id, turn_id, cost_usd, provider, model_id,
+          prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens
+        FROM room_ai_usage_events
+        WHERE id = $1`,
+        [input.id],
+      );
+      const row = existing.rows[0];
+      let duplicate = false;
+      if (row) {
+        duplicate = true;
+        if (
+          row.room_id !== input.roomId
+          || row.turn_id !== input.turnId
+          || row.provider !== input.provider
+          || row.model_id !== input.modelId
+          || Math.abs(Number(row.cost_usd) - input.costUsd) >= 0.0000000005
+          || Number(row.prompt_tokens) !== input.promptTokens
+          || Number(row.completion_tokens) !== input.completionTokens
+          || Number(row.total_tokens) !== input.totalTokens
+          || Number(row.cached_prompt_tokens) !== (input.cachedPromptTokens || 0)
+        ) {
+          throw new Error('Room AI usage id is already bound to different usage');
+        }
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO room_ai_usage_events (
+            id, room_id, turn_id, cost_usd, provider, model_id,
+            prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, created_at
+          )
+          SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz
+          WHERE EXISTS (SELECT 1 FROM rooms WHERE id = $2)`,
+          [
+            input.id,
+            input.roomId,
+            input.turnId,
+            input.costUsd,
+            input.provider,
+            input.modelId,
+            input.promptTokens,
+            input.completionTokens,
+            input.totalTokens,
+            input.cachedPromptTokens || 0,
+            now,
+          ],
+        );
+        if (inserted.rowCount !== 1) {
+          throw new Error(`Room ${input.roomId} does not exist for AI usage settlement`);
+        }
+        await this.incrementRoomAICostWithClient(client, input.roomId, {
+          currency: 'USD',
+          inputUsd: input.costUsd,
+          outputUsd: 0,
+          totalUsd: input.costUsd,
+          inputPerMillion: 0,
+          outputPerMillion: 0,
+          estimated: false,
+        });
+      }
+      return {
+        id: input.id,
+        roomCostTotal: await this.incrementRoomAICostWithClient(client, input.roomId),
+        duplicate,
+      };
+    });
   }
 
   async setRoomAICostTotal(roomId: string, totalUsd: number): Promise<RoomAICostTotal> {

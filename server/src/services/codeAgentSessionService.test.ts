@@ -1602,7 +1602,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(result.success, false);
     const aiMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'ai');
     assert.equal(aiMessage?.status, 'error');
-    assert.match(aiMessage?.content || '', /empty response without tool activity/);
+    assert.equal(aiMessage?.content, 'Hermes task failed. Retry, or switch engines if the problem continues.');
     assert.equal([...store.agentTurns.values()][0]?.status, 'error');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, undefined);
   });
@@ -1653,7 +1653,7 @@ describe('CodeAgentSessionService', () => {
     const finalMessage = messages[messages.length - 1];
     assert.equal(result.success, false);
     assert.equal(finalMessage.status, 'error');
-    assert.match(finalMessage.content, /without provider-reported usage/);
+    assert.equal(finalMessage.content, 'Coco task failed. Retry, or switch engines if the problem continues.');
   });
 
   it('rejects estimated usage from a Coco runner', async () => {
@@ -1676,7 +1676,7 @@ describe('CodeAgentSessionService', () => {
     const finalMessage = messages[messages.length - 1];
     assert.equal(result.success, false);
     assert.equal(finalMessage.status, 'error');
-    assert.match(finalMessage.content, /without provider-reported usage/);
+    assert.equal(finalMessage.content, 'Coco task failed. Retry, or switch engines if the problem continues.');
   });
 
   it('extends sandbox timeout while a turn is active and shortens it after completion', async () => {
@@ -2233,6 +2233,7 @@ describe('CodeAgentSessionService', () => {
       assert.equal(messages[3].username, harness.displayName);
       assert.equal(messages[4].content, ' It is ready.');
       assert.equal(messages[4].status, 'complete');
+      assert.equal(store.roomCost.totalUsd, 0);
       assert.deepEqual(messages[4].aiModel, {
         id: selectedModel.id,
         apiModel: selectedModel.apiModel,
@@ -2430,7 +2431,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(runner.requests.length, 0);
     const messages = store.messages.get('room-1') || [];
     assert.equal(messages[1].status, 'error');
-    assert.equal(messages[1].content, 'Codex connection service is not configured');
+    assert.equal(messages[1].content, 'Codex task failed. Retry, or switch engines if the problem continues.');
   });
 
   it('persists interleaved AI text and tool events in runner order', async () => {
@@ -3563,7 +3564,7 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai']);
     assert.equal(messages[1].status, 'error');
-    assert.equal(messages[1].content, 'Unable to persist agent tool_call event');
+    assert.equal(messages[1].content, 'Coco task failed. Retry, or switch engines if the problem continues.');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
@@ -3588,7 +3589,8 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'runner crashed', code: 'runner_exit', retryable: false },
     ]);
-    const { emitter, service, store } = createService({ runner });
+    const observability = createMemoryObservability();
+    const { emitter, service, store } = createService({ runner, observability: observability.recorder });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
@@ -3596,9 +3598,12 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.equal(messages[1].messageType, 'ai');
     assert.equal(messages[1].status, 'error');
-    assert.equal(messages[1].content, 'runner crashed');
+    assert.equal(messages[1].content, 'Coco task failed. Retry, or switch engines if the problem continues.');
+    assert.equal(messages[1].content.includes('runner crashed'), false);
     assert.equal(messages[2].messageType, 'sandbox_status');
     assert.equal(messages[2].isError, true);
+    assert.equal(messages[2].content, 'Coco task failed. Retry, or switch engines if the problem continues.');
+    assert.equal(messages[2].content.includes('runner crashed'), false);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
     const streamError = emitter.roomEmits.find(event => event.event === 'ai_stream_error');
@@ -3606,6 +3611,10 @@ describe('CodeAgentSessionService', () => {
     assert.equal((streamError.args[0] as any).persisted, true);
     assert.deepEqual((streamError.args[0] as any).message, messages[1]);
     assert.equal(Object.prototype.hasOwnProperty.call((streamError.args[0] as any).message, 'aiStreamOwnerId'), false);
+    assert.equal(
+      observability.events.find(event => event.event === 'code_agent.turn.failed')?.errorMessage,
+      'runner crashed',
+    );
   });
 
   it('closes pending tool calls with failed results when the runner errors', async () => {
@@ -3628,7 +3637,10 @@ describe('CodeAgentSessionService', () => {
     assert.ok((messages[2].cost?.totalUsd || 0) > 0);
     assert.equal(store.roomCost.totalUsd, messages[2].cost?.totalUsd);
     assert.match(messages[3].content, /Tool interrupted before completion/);
-    assert.match(messages[3].content, /E2B command wait failed/);
+    assert.match(messages[3].content, /Coco task failed/);
+    assert.doesNotMatch(messages[3].content, /E2B command wait failed/);
+    assert.match(messages[4].content, /Coco task failed/);
+    assert.doesNotMatch(messages[4].content, /E2B command wait failed/);
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 
@@ -3667,7 +3679,10 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[2].toolName, 'approval_request');
     assert.equal(messages[3].toolCallId, 'approval-1');
     assert.equal(messages[3].status, 'error');
-    assert.match(messages[3].content, /ACP connection closed/);
+    assert.match(messages[3].content, /Coco task failed/);
+    assert.doesNotMatch(messages[3].content, /ACP connection closed/);
+    assert.match(messages[4].content, /Coco task failed/);
+    assert.doesNotMatch(messages[4].content, /ACP connection closed/);
   });
 
   it('closes pending tool calls without fabricating an interruption when the runner finalizes normally', async () => {

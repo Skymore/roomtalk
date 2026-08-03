@@ -790,7 +790,9 @@ export class CodeAgentSessionService {
         sessionId: runResult.finalEvent.sessionId,
         backendTurnId: runResult.finalEvent.backendTurnId,
         ...(workspaceCheckpoint ? { workspaceCheckpoint } : {}),
-        cost: turnBackend === 'code-agent' ? null : (turnCost || null),
+        cost: this.modelGatewaySettlesRoomCost(turnBackend) ? null : (
+          turnBackend === 'code-agent' ? null : (turnCost || null)
+        ),
       });
       if (terminal.outcome === 'stale') {
         leaseLost = true;
@@ -850,13 +852,15 @@ export class CodeAgentSessionService {
       const publicCodexError = error instanceof CodexConnectionError
         ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
         : undefined;
-      const reportedError = publicCodexError ? new Error(publicCodexError) : error;
       if (publicCodexError) publicFailureMessage = publicCodexError;
+      const visibleFailureMessage = publicFailureMessage
+        || `${this.displayBackendName(turnBackend)} task failed. Retry, or switch engines if the problem continues.`;
+      const reportedError = new Error(visibleFailureMessage);
       const errorTargetId = streamState?.activeMessageId || aiMessageId;
       this.logger.error('Code agent turn failed', { error, roomId: input.roomId, messageId: errorTargetId, backend: turnBackend });
       await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode: 'turn_failed',
-        errorMessage: reportedError instanceof Error ? reportedError.message : String(reportedError),
+        errorMessage: error instanceof Error ? error.message : String(error),
         payload: {
           backend: turnBackend,
           messageId: errorTargetId,
@@ -877,7 +881,7 @@ export class CodeAgentSessionService {
             });
         }
         const alreadyCompleted = streamState?.completedAIMessageById.get(errorTargetId);
-        const content = reportedError instanceof Error ? reportedError.message : 'Agent task failed';
+        const content = visibleFailureMessage;
         const errorMessage: Message | undefined = alreadyCompleted
           ? undefined
           : {
@@ -2387,10 +2391,23 @@ export class CodeAgentSessionService {
       await this.handleCocoModelStep(event, roomId, turnId, claim, baseAIMessage, selectedModel, state);
       return;
     }
+    const publicRunnerFailureMessage = `${this.displayBackendName(backend)} task failed. Retry, or switch engines if the problem continues.`;
     if (event.type === 'error') {
-      await this.flushInterruptedToolCalls(roomId, turnId, claim, state, event.message, baseAIMessage, backend);
+      await this.flushInterruptedToolCalls(
+        roomId,
+        turnId,
+        claim,
+        state,
+        new Error(publicRunnerFailureMessage),
+        baseAIMessage,
+        backend,
+      );
     }
-    const mapped = mapCodeAgentRunnerEvent(event, {
+    const publicEvent: CodeAgentRunnerEvent = event.type === 'error'
+      || (event.type === 'status' && event.status === 'error')
+      ? { ...event, message: publicRunnerFailureMessage }
+      : event;
+    const mapped = mapCodeAgentRunnerEvent(publicEvent, {
       roomId,
       turnId,
       username: this.displayBackendName(backend),
@@ -2468,7 +2485,11 @@ export class CodeAgentSessionService {
           stepCost = step.cost;
         }
       }
-      const appendResult = await this.appendFencedCodeAgentMessage(mapped.message, claim, stepCost)
+      const appendResult = await this.appendFencedCodeAgentMessage(
+        mapped.message,
+        claim,
+        this.modelGatewaySettlesRoomCost(backend) ? null : stepCost,
+      )
         .catch(error => {
           this.logger.error('Unable to persist code-agent runner message', {
             error,
@@ -2564,7 +2585,7 @@ export class CodeAgentSessionService {
       const completedResult = await this.finalizeFencedCodeAgentMessage(
         completedMessage,
         claim,
-        step.cost,
+        this.modelGatewaySettlesRoomCost('code-agent') ? null : step.cost,
       );
       if (completedResult.outcome !== 'applied') {
         throw new Error(`Coco model-step message was superseded: ${event.stepId}`);
@@ -2739,6 +2760,10 @@ export class CodeAgentSessionService {
       throw new Error('Fenced code-agent message storage is unavailable');
     }
     return this.store.appendCodeAgentMessage(message, claim, cost);
+  }
+
+  private modelGatewaySettlesRoomCost(backend: CodeAgentBackend): boolean {
+    return Boolean(this.options.modelGateway) && !isCodexBackend(backend);
   }
 
   private async finalizeFencedCodeAgentMessage(

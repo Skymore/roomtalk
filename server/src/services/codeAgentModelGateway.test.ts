@@ -187,6 +187,7 @@ describe('CodeAgentModelGateway', () => {
   it('uses account priority for provider admission and settles reported usage to account credits', async () => {
     const admittedPriorities: number[] = [];
     const settlements: Array<Parameters<NonNullable<ConstructorParameters<typeof CodeAgentModelGateway>[0]['settleAccountAIUsage']>>[0]> = [];
+    const roomSettlements: Array<Parameters<NonNullable<ConstructorParameters<typeof CodeAgentModelGateway>[0]['settleRoomAIUsage']>>[0]> = [];
     let releases = 0;
     const gateway = new CodeAgentModelGateway({
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
@@ -217,6 +218,14 @@ describe('CodeAgentModelGateway', () => {
           costUsd: input.costUsd,
           creditAppliedUsd: input.costUsd,
           creditBalanceUsd: 9.5,
+          duplicate: false,
+        };
+      },
+      async settleRoomAIUsage(input) {
+        roomSettlements.push(input);
+        return {
+          id: input.id,
+          roomCostTotal: { roomId: input.roomId, currency: 'USD', totalUsd: input.costUsd },
           duplicate: false,
         };
       },
@@ -253,6 +262,14 @@ describe('CodeAgentModelGateway', () => {
     assert.equal(settlements[0].clientId, 'client-1');
     assert.equal(settlements[0].turnId, 'turn-billed');
     assert.ok(settlements[0].costUsd > 0);
+    assert.equal(roomSettlements.length, 1);
+    assert.equal(roomSettlements[0].id, settlements[0].id);
+    assert.equal(roomSettlements[0].roomId, 'room-1');
+    assert.deepEqual({
+      promptTokens: roomSettlements[0].promptTokens,
+      completionTokens: roomSettlements[0].completionTokens,
+      totalTokens: roomSettlements[0].totalTokens,
+    }, { promptTokens: 10, completionTokens: 2, totalTokens: 12 });
   });
 
   it('returns service unavailable when shared provider admission cannot be acquired', async () => {

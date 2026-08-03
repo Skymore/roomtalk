@@ -32,6 +32,11 @@ from .runner import (
 ACP_BACKENDS = ("opencode", "hermes-agent")
 MAX_ACP_TOOL_OUTPUT_CHARS = 20_000
 MAX_ACP_IMAGE_BYTES = 10 * 1024 * 1024
+# ACP transports one JSON-RPC message per line. The SDK otherwise inherits
+# asyncio's 64 KiB StreamReader limit, which is too small for real tool calls.
+# Keep the replacement bounded so a broken harness cannot grow memory without
+# limit while still leaving room for the separately-truncated tool payloads.
+MAX_ACP_FRAME_BYTES = 8 * 1024 * 1024
 HARNESS_STATE_ROOT = Path("/tmp/roomtalk-harnesses")
 HERMES_ROOMTALK_PROVIDER = "roomtalk"
 
@@ -1182,6 +1187,7 @@ async def _run_request_async(
             env=child_env,
             cwd=request.workspace,
             use_unstable_protocol=True,
+            transport_kwargs={"limit": MAX_ACP_FRAME_BYTES},
         )
         async with context as (connection, process):
             stderr_task = asyncio.create_task(_drain_stderr(getattr(process, "stderr", None), stderr_tail))

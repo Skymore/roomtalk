@@ -7,7 +7,7 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
-import { A2UIActionEvent, Message, RoomEventPage, RoomSnapshot } from '../types';
+import { A2UIActionEvent, Message, RoomAICostTotal, RoomEventPage, RoomSnapshot } from '../types';
 import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError, RoomEventTooLargeError, RoomPaginationBoundaryExpiredError } from '../repositories/store';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -95,6 +95,53 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
       code: 'UPGRADE_REQUIRED',
       error: 'This client uses the retired message-version sync protocol. Reload to upgrade.',
     });
+  });
+
+  socket.on('get_room_ai_cost', async (request: { roomId: string }, callback?: (response: {
+    success: boolean;
+    code?: string;
+    error?: string;
+    cost?: RoomAICostTotal;
+  }) => void) => {
+    if (!isRecord(request) || !isBoundedSocketIdentifier(request.roomId)) {
+      callback?.({ success: false, code: 'INVALID_COST_REQUEST', error: 'Invalid room cost request' });
+      return;
+    }
+    const userId = await resolveClientId();
+    if (!userId) {
+      callback?.({ success: false, code: 'NOT_REGISTERED', error: 'You are not registered' });
+      return;
+    }
+    let canReadCost = false;
+    try {
+      canReadCost = store.readRoomMemberClientIds
+        ? (await store.readRoomMemberClientIds(request.roomId, [userId])).has(userId)
+        : await hasRoomAccess(store, request.roomId, userId);
+    } catch (error) {
+      socketLogger.warn('Room cost authorization is temporarily unavailable', {
+        socketId: socket.id,
+        userId,
+        roomId: request.roomId,
+        error,
+      });
+      callback?.({ success: false, code: 'ROOM_AUTH_UNAVAILABLE', error: 'Room authorization is temporarily unavailable' });
+      return;
+    }
+    if (!canReadCost) {
+      callback?.({ success: false, code: 'ROOM_ACCESS_DENIED', error: 'You are not authorized to access this room' });
+      return;
+    }
+    try {
+      callback?.({ success: true, cost: await store.readRoomAICost(request.roomId) });
+    } catch (error) {
+      socketLogger.error('Failed to load room AI cost', {
+        socketId: socket.id,
+        userId,
+        roomId: request.roomId,
+        error,
+      });
+      callback?.({ success: false, code: 'COST_READ_FAILED', error: 'Failed to load room cost' });
+    }
   });
 
   socket.on('get_room_snapshot', async (request: {

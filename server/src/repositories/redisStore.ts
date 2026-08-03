@@ -5,7 +5,7 @@ import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { orderMessageBatches } from '../services/messageDomain';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, GoogleAccountProfile, GrantAccountRoleInput, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, UpdateAccountMembershipInput } from './store';
 import { AccountEntitlement, FREE_MONTHLY_CREDIT_USD, resolveAssistantRunScheduling, resolveEffectiveMembershipTier } from '../services/accountEntitlements';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -27,6 +27,7 @@ const fingerprintAccountMembershipChange = (input: AccountMembershipChangeInput)
     .digest('hex')
 );
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
+const ROOM_AI_USAGE_EVENTS_KEY = 'room_ai_usage_events';
 export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:v2:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
@@ -2592,6 +2593,40 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       this.logger.error('Error incrementing room AI cost total', { error, roomId, cost });
       return this.readRoomAICost(roomId);
     }
+  }
+
+  async settleRoomAIUsage(input: RoomAIUsageInput): Promise<RoomAIUsageSettlement> {
+    if (!Number.isFinite(input.costUsd) || input.costUsd <= 0) {
+      throw new Error('Room AI usage cost must be positive');
+    }
+    const serialized = JSON.stringify(input);
+    const result = await (this.redisClient as any).eval(
+      `local existing = redis.call('HGET', KEYS[1], ARGV[1])
+      if existing then
+        return {0, existing, redis.call('GET', KEYS[2]) or '0'}
+      end
+      redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+      local total = redis.call('INCRBYFLOAT', KEYS[2], ARGV[3])
+      return {1, ARGV[2], total}`,
+      {
+        keys: [ROOM_AI_USAGE_EVENTS_KEY, this.getRoomAICostKey(input.roomId)],
+        arguments: [input.id, serialized, String(input.costUsd)],
+      },
+    ) as [number | string, string, string];
+    const existing = JSON.parse(String(result[1])) as RoomAIUsageInput;
+    if (JSON.stringify(existing) !== serialized) {
+      throw new Error('Room AI usage id is already bound to different usage');
+    }
+    const totalUsd = Number.parseFloat(String(result[2]));
+    return {
+      id: input.id,
+      roomCostTotal: {
+        roomId: input.roomId,
+        currency: 'USD',
+        totalUsd: Number.isFinite(totalUsd) ? totalUsd : input.costUsd,
+      },
+      duplicate: Number(result[0]) === 0,
+    };
   }
 
   async createOutboxEvent(event: OutboxEventRecord): Promise<OutboxEventRecord | null> {

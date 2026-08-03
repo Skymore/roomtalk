@@ -705,6 +705,26 @@ export interface AccountAIUsageSettlement {
   duplicate: boolean;
 }
 
+export interface RoomAIUsageInput {
+  id: string;
+  roomId: string;
+  turnId: string;
+  costUsd: number;
+  provider: AIModelProvider;
+  modelId: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedPromptTokens?: number;
+  now?: string;
+}
+
+export interface RoomAIUsageSettlement {
+  id: string;
+  roomCostTotal: RoomAICostTotal;
+  duplicate: boolean;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -789,6 +809,7 @@ export interface DurableRoomStore {
   updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate): Promise<AudioTranscriptionRecord | null>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
+  settleRoomAIUsage?(input: RoomAIUsageInput): Promise<RoomAIUsageSettlement>;
   getAssistantRun?(runId: string): Promise<AssistantRunRecord | null>;
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
   createAssistantRunWithMessage?(message: Message, run: AssistantRunRecord): Promise<AssistantRunCreationResult | null>;
@@ -1360,6 +1381,13 @@ export class CompositeRoomStore implements RoomStore {
 
   incrementRoomAICost(roomId: string, cost: AICost | null) {
     return this.durableStore.incrementRoomAICost(roomId, cost);
+  }
+
+  settleRoomAIUsage(input: RoomAIUsageInput) {
+    if (!this.durableStore.settleRoomAIUsage) {
+      throw new Error('Room AI usage settlement is unavailable');
+    }
+    return this.durableStore.settleRoomAIUsage(input);
   }
 
   getAssistantRun(runId: string) {

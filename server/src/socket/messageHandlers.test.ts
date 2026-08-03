@@ -302,6 +302,18 @@ describe('message socket handlers', () => {
     assert.deepEqual(socket.emitted, [{ event: 'ai_cost_total', args: [roomCost()] }]);
   });
 
+  it('loads room cost independently of the message snapshot', async () => {
+    const { socket } = createHarness();
+    let response: unknown;
+
+    await socket.invoke('get_room_ai_cost', { roomId: 'room-1' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: true, cost: roomCost() });
+    assert.deepEqual(socket.emitted, []);
+  });
+
   it('returns slim asset-backed media history without exposing object storage keys', async () => {
     const { socket, store } = createHarness();
     store.messages = [

@@ -13,7 +13,7 @@ import dotenv from 'dotenv';
 import { RedisStore } from './repositories/redisStore';
 import { createPostgresPool } from './repositories/postgresPool';
 import { PostgresPool, PostgresStore } from './repositories/postgresStore';
-import { CompositeRoomStore } from './repositories/store';
+import { CompositeRoomStore, RoomAIUsageSettlement } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
@@ -93,6 +93,7 @@ import { resolveRuntimeInstanceId } from './services/runtimeInstance';
 import { AITerminalPersistReconciler } from './services/aiTerminalPersistReconciler';
 import { enforceRoomEventAuthorizationBarrier } from './services/roomEventAuthorizationBarrier';
 import { AccountAIUsageSettlementQueue } from './services/accountAIUsageSettlementQueue';
+import { RoomAIUsageSettlementQueue } from './services/roomAIUsageSettlementQueue';
 import { availableCodeAgentBackends } from './services/codeAgentBackends';
 
 dotenv.config();
@@ -196,6 +197,13 @@ const accountAIUsageSettlementQueue = new AccountAIUsageSettlementQueue(
   redisClient,
   input => store.settleAccountAIUsage(input),
   codeAgentLogger,
+);
+let broadcastRoomAIUsageSettlement: (settlement: RoomAIUsageSettlement) => void = () => undefined;
+const roomAIUsageSettlementQueue = new RoomAIUsageSettlementQueue(
+  redisClient,
+  input => store.settleRoomAIUsage(input),
+  codeAgentLogger,
+  settlement => broadcastRoomAIUsageSettlement(settlement),
 );
 
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
@@ -314,6 +322,7 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
       } : null);
     },
     settleAccountAIUsage: input => accountAIUsageSettlementQueue.settle(input),
+    settleRoomAIUsage: input => roomAIUsageSettlementQueue.settle(input),
     isTurnActive: async (roomId, turnId) => {
       const [turns, hasLease] = await Promise.all([
         store.readRoomAgentTurns?.(roomId, [turnId]) || Promise.resolve([]),
@@ -371,6 +380,9 @@ const io = new Server(server, {
   pingTimeout: 60000, // 60秒超时
   pingInterval: 25000 // 25秒ping一次
 });
+broadcastRoomAIUsageSettlement = settlement => {
+  io.to(settlement.roomCostTotal.roomId).emit('ai_cost_total', settlement.roomCostTotal);
+};
 const aiTerminalPersistReconciler = new AITerminalPersistReconciler(store, openaiLogger, {
   onPersisted: message => {
     io.local.to(message.roomId).emit('room_sync_required', { reason: 'ai_terminal_reconciled' });
@@ -621,11 +633,16 @@ const infrastructureReady = (async () => {
     await roomEventNotifier.start();
     if (codeAgentRuntimeConfig.modelGateway) {
       const drainAccountAIUsageSettlements = async () => {
-        const result = await accountAIUsageSettlementQueue.drain(
-          parsePositiveIntegerEnv('ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE', 100),
-        );
-        if (result.settled > 0 || result.failed > 0) {
-          codeAgentLogger.info('Processed deferred account AI usage settlements', result);
+        const batchSize = parsePositiveIntegerEnv('ACCOUNT_AI_USAGE_SETTLEMENT_BATCH_SIZE', 100);
+        const [accountResult, roomResult] = await Promise.all([
+          accountAIUsageSettlementQueue.drain(batchSize),
+          roomAIUsageSettlementQueue.drain(batchSize),
+        ]);
+        if (accountResult.settled > 0 || accountResult.failed > 0) {
+          codeAgentLogger.info('Processed deferred account AI usage settlements', accountResult);
+        }
+        if (roomResult.settled > 0 || roomResult.failed > 0) {
+          codeAgentLogger.info('Processed deferred room AI usage settlements', roomResult);
         }
       };
       await drainAccountAIUsageSettlements();
