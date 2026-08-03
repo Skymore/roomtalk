@@ -725,6 +725,16 @@ export interface RoomAIUsageSettlement {
   duplicate: boolean;
 }
 
+export interface RoomAITurnUsageSummary {
+  roomId: string;
+  turnId: string;
+  costUsd: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedPromptTokens: number;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -810,6 +820,7 @@ export interface DurableRoomStore {
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   settleRoomAIUsage?(input: RoomAIUsageInput): Promise<RoomAIUsageSettlement>;
+  readRoomAIUsageForTurn?(roomId: string, turnId: string): Promise<RoomAITurnUsageSummary | null>;
   getAssistantRun?(runId: string): Promise<AssistantRunRecord | null>;
   createOutboxEvent?(event: OutboxEventRecord): Promise<OutboxEventRecord | null>;
   createAssistantRunWithMessage?(message: Message, run: AssistantRunRecord): Promise<AssistantRunCreationResult | null>;
@@ -1388,6 +1399,10 @@ export class CompositeRoomStore implements RoomStore {
       throw new Error('Room AI usage settlement is unavailable');
     }
     return this.durableStore.settleRoomAIUsage(input);
+  }
+
+  readRoomAIUsageForTurn(roomId: string, turnId: string) {
+    return this.durableStore.readRoomAIUsageForTurn?.(roomId, turnId) || Promise.resolve(null);
   }
 
   getAssistantRun(runId: string) {

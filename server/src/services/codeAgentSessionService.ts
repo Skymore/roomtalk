@@ -734,6 +734,34 @@ export class CodeAgentSessionService {
         const stepSummary = summarizeCocoModelStepCosts(Array.from(streamState.modelSteps.values()), usage!);
         turnUsage = stepSummary.usage;
         turnCost = stepSummary.cost;
+      } else if (this.modelGatewaySettlesRoomCost(turnBackend) && this.store.readRoomAIUsageForTurn) {
+        try {
+          const settledUsage = await this.store.readRoomAIUsageForTurn(input.roomId, turnId);
+          if (settledUsage) {
+            turnUsage = {
+              ...(turnUsage || {}),
+              promptTokens: settledUsage.promptTokens,
+              completionTokens: settledUsage.completionTokens,
+              totalTokens: settledUsage.totalTokens,
+              cachedPromptTokens: settledUsage.cachedPromptTokens,
+              cacheHitRate: settledUsage.promptTokens > 0
+                ? Math.min(settledUsage.cachedPromptTokens, settledUsage.promptTokens) / settledUsage.promptTokens
+                : 0,
+              source: 'reported',
+            };
+            const calculatedCost = calculateAICost(input.selectedModel, turnUsage);
+            turnCost = calculatedCost
+              ? { ...calculatedCost, totalUsd: settledUsage.costUsd }
+              : undefined;
+          }
+        } catch (error) {
+          this.logger.warn('Unable to reconcile agent turn display cost with provider settlements', {
+            error,
+            roomId: input.roomId,
+            turnId,
+            backend: turnBackend,
+          });
+        }
       }
 
       const finalActiveId = streamState.activeMessageId;
@@ -753,8 +781,8 @@ export class CodeAgentSessionService {
             status: 'complete',
             timestamp: this.now().toISOString(),
             aiModel: completionMetadata.aiModel,
-            usage: completionMetadata.usage,
-            cost: completionMetadata.cost,
+            usage: turnUsage,
+            cost: turnCost,
           };
         }
       }

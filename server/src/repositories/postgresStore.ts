@@ -3885,6 +3885,53 @@ export class PostgresStore implements DurableRoomStore {
     });
   }
 
+  async readRoomAIUsageForTurn(roomId: string, turnId: string) {
+    const result = await this.pool.query<{
+      cost_usd: string | number;
+      prompt_tokens: string | number;
+      completion_tokens: string | number;
+      total_tokens: string | number;
+      cached_prompt_tokens: string | number;
+    }>(
+      `SELECT
+        SUM(cost_usd) AS cost_usd,
+        SUM(prompt_tokens) AS prompt_tokens,
+        SUM(completion_tokens) AS completion_tokens,
+        SUM(total_tokens) AS total_tokens,
+        SUM(cached_prompt_tokens) AS cached_prompt_tokens
+      FROM room_ai_usage_events
+      WHERE room_id = $1 AND turn_id = $2
+      HAVING COUNT(*) > 0`,
+      [roomId, turnId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const summary = {
+      roomId,
+      turnId,
+      costUsd: Number(row.cost_usd),
+      promptTokens: Number(row.prompt_tokens),
+      completionTokens: Number(row.completion_tokens),
+      totalTokens: Number(row.total_tokens),
+      cachedPromptTokens: Number(row.cached_prompt_tokens),
+    };
+    if (
+      !Number.isFinite(summary.costUsd)
+      || summary.costUsd <= 0
+      || !Number.isSafeInteger(summary.promptTokens)
+      || summary.promptTokens < 0
+      || !Number.isSafeInteger(summary.completionTokens)
+      || summary.completionTokens < 0
+      || !Number.isSafeInteger(summary.totalTokens)
+      || summary.totalTokens < 0
+      || !Number.isSafeInteger(summary.cachedPromptTokens)
+      || summary.cachedPromptTokens < 0
+    ) {
+      throw new Error(`Invalid room AI usage summary for turn ${turnId}`);
+    }
+    return summary;
+  }
+
   async setRoomAICostTotal(roomId: string, totalUsd: number): Promise<RoomAICostTotal> {
     if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
       try {

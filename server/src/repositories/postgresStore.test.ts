@@ -216,6 +216,34 @@ describe('PostgresStore', () => {
     });
   });
 
+  it('sums every provider settlement for one room turn', async () => {
+    const pool = new ScriptedPool([{
+      rows: [{
+        cost_usd: '0.010415255',
+        prompt_tokens: '123937',
+        completion_tokens: '505',
+        total_tokens: '124442',
+        cached_prompt_tokens: '51584',
+      }],
+      assertCall(call) {
+        assert.match(call.sql, /SUM\(cost_usd\)/);
+        assert.match(call.sql, /HAVING COUNT\(\*\) > 0/);
+        assert.deepEqual(call.params, ['room-1', 'turn-1']);
+      },
+    }]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.readRoomAIUsageForTurn('room-1', 'turn-1'), {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      costUsd: 0.010415255,
+      promptTokens: 123937,
+      completionTokens: 505,
+      totalTokens: 124442,
+      cachedPromptTokens: 51584,
+    });
+  });
+
   it('applies pending migrations exactly once inside the schema transaction', async () => {
     const migrationCount = POSTGRES_MIGRATIONS.length;
     const clientResults: ScriptedResult[] = [

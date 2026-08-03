@@ -87,6 +87,15 @@ class MemoryCodeAgentStore {
   appendFailures = 0;
   upsertFailures = 0;
   roomCost: RoomAICostTotal = { roomId: 'room-1', currency: 'USD', totalUsd: 0 };
+  turnUsageSummary: {
+    roomId: string;
+    turnId: string;
+    costUsd: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens: number;
+  } | null = null;
 
   constructor(initialRoom: Room, initialMessages: Message[] = []) {
     this.rooms.set(initialRoom.id, initialRoom);
@@ -646,6 +655,11 @@ class MemoryCodeAgentStore {
       totalUsd: this.roomCost.totalUsd + (cost?.totalUsd || 0),
     };
     return this.roomCost;
+  }
+
+  async readRoomAIUsageForTurn(roomId: string, turnId: string) {
+    const summary = this.turnUsageSummary;
+    return summary?.roomId === roomId && summary.turnId === turnId ? summary : null;
   }
 
   async compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: string[], nextStatus: any, updatedAt = '2026-05-03T00:00:00.000Z') {
@@ -1579,6 +1593,57 @@ describe('CodeAgentSessionService', () => {
     assert.equal(aiMessage?.status, 'complete');
     assert.equal(aiMessage?.content, 'Done without streaming');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'acp:hermes-agent:session-1');
+  });
+
+  it('uses every gateway settlement for an ACP message cost', async () => {
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'hermes-agent' }), [userMessage()]);
+    store.turnUsageSummary = {
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      costUsd: 0.010415255,
+      promptTokens: 123937,
+      completionTokens: 505,
+      totalTokens: 124442,
+      cachedPromptTokens: 51584,
+    };
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'gateway-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      stateStore: new InMemoryCodeAgentModelGatewayTokenStateStore(),
+    });
+    const runner = new FakeCodeAgentRunnerClient([{
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'final',
+      messageId: 'ai-1',
+      answer: 'Done',
+      sessionId: 'acp:hermes-agent:session-1',
+      usage: {
+        promptTokens: 123563,
+        completionTokens: 445,
+        totalTokens: 124008,
+        cachedPromptTokens: 51584,
+        source: 'reported',
+      },
+    }]);
+    const { emitter, service } = createService({
+      store,
+      runner,
+      backend: 'hermes-agent',
+      availableBackends: ['hermes-agent'],
+      modelGateway: gateway,
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    const aiMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'ai');
+    assert.equal(aiMessage?.usage?.promptTokens, 123937);
+    assert.equal(aiMessage?.usage?.completionTokens, 505);
+    assert.equal(aiMessage?.usage?.totalTokens, 124442);
+    assert.equal(aiMessage?.cost?.totalUsd, 0.010415255);
+    const streamEnd = emitter.roomEmits.find(event => event.event === 'ai_stream_end');
+    assert.equal((streamEnd?.args[0] as any)?.cost?.totalUsd, 0.010415255);
   });
 
   it('fails an ACP turn that finalizes without text or tool activity', async () => {
