@@ -121,6 +121,21 @@ describe('validateStoredRoomEventPayload', () => {
     });
   });
 
+  it('accepts canonical message positions while retaining legacy V1 events without them', () => {
+    expectValid('messages.upserted', {
+      messageRows: [messageRow({ position: 42 })],
+      mediaAssets: [],
+    });
+    expectValid('messages.upserted', {
+      messageRows: [messageRow()],
+      mediaAssets: [],
+    });
+    expectInvalid('messages.upserted', {
+      messageRows: [messageRow({ position: -1 })],
+      mediaAssets: [],
+    }, /position must be a non-negative safe integer/);
+  });
+
   it('accepts every non-message V1 payload', () => {
     const cases: Array<[RoomEventType, unknown]> = [
       ['messages.deleted', { messageIds: ['message-1'], deletedAt: CREATED_AT }],

@@ -1,6 +1,40 @@
 import { A2UIPayload, Message } from "./types";
 
-export const sortMessages = (messages: Message[]) => {
+const hasCanonicalPosition = (message: Message): message is Message & { position: number } => (
+  typeof message.position === "number"
+  && Number.isSafeInteger(message.position)
+  && message.position >= 0
+);
+
+const batchKey = (message: Message) => (
+  message.clientBatchId && message.clientBatchIndex !== undefined
+    ? `${message.clientId}:${message.clientBatchId}`
+    : undefined
+);
+
+const orderBatchMembers = (messages: Message[]) => {
+  const batchMembers = new Map<string, Message[]>();
+  messages.forEach(message => {
+    const key = batchKey(message);
+    if (!key) return;
+    const members = batchMembers.get(key) || [];
+    members.push(message);
+    batchMembers.set(key, members);
+  });
+  batchMembers.forEach(members => members.sort((a, b) => (
+    (a.clientBatchIndex! - b.clientBatchIndex!) || a.id.localeCompare(b.id)
+  )));
+  const emitted = new Set<string>();
+  return messages.flatMap(message => {
+    const key = batchKey(message);
+    if (!key) return [message];
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    return batchMembers.get(key) || [message];
+  });
+};
+
+const orderLegacyMessages = (messages: Message[]) => {
   const chronological = [...messages].sort((a, b) => {
     const timeA = new Date(a.timestamp).getTime();
     const timeB = new Date(b.timestamp).getTime();
@@ -21,25 +55,49 @@ export const sortMessages = (messages: Message[]) => {
 
     return a.id.localeCompare(b.id);
   });
-  const batchMembers = new Map<string, Message[]>();
-  chronological.forEach(message => {
-    if (!message.clientBatchId || message.clientBatchIndex === undefined) return;
-    const key = `${message.clientId}:${message.clientBatchId}`;
-    const members = batchMembers.get(key) || [];
-    members.push(message);
-    batchMembers.set(key, members);
+  return orderBatchMembers(chronological);
+};
+
+export const sortMessages = (messages: Message[]) => {
+  const unsettledBatchKeys = new Set(messages.flatMap(message => {
+    const key = batchKey(message);
+    return key && (message.deliveryStatus === "pending" || message.deliveryStatus === "failed")
+      ? [key]
+      : [];
+  }));
+  const optimisticTail: Message[] = [];
+  const durable: Message[] = [];
+  messages.forEach(message => {
+    const key = batchKey(message);
+    if (
+      message.deliveryStatus === "pending"
+      || message.deliveryStatus === "failed"
+      || (key !== undefined && unsettledBatchKeys.has(key))
+    ) {
+      optimisticTail.push(message);
+    } else {
+      durable.push(message);
+    }
   });
-  batchMembers.forEach(members => members.sort((a, b) => (
-    (a.clientBatchIndex! - b.clientBatchIndex!) || a.id.localeCompare(b.id)
-  )));
-  const emitted = new Set<string>();
-  return chronological.flatMap(message => {
-    if (!message.clientBatchId || message.clientBatchIndex === undefined) return [message];
-    const key = `${message.clientId}:${message.clientBatchId}`;
-    if (emitted.has(key)) return [];
-    emitted.add(key);
-    return batchMembers.get(key) || [message];
-  });
+
+  const positionedCount = durable.filter(hasCanonicalPosition).length;
+  const orderedDurable = positionedCount === durable.length && durable.length > 0
+    ? durable
+      .map((message, index) => ({ message, index }))
+      .sort((left, right) => (
+        left.message.position! - right.message.position! || left.index - right.index
+      ))
+      .map(item => item.message)
+    : positionedCount === 0
+      ? orderLegacyMessages(durable)
+      // A rolling deployment or a pre-v5 browser cache can temporarily mix
+      // positioned and legacy durable messages. Preserve their current order
+      // until a replacement snapshot provides a complete canonical window;
+      // treating every missing position as "infinity" would jump history to
+      // the bottom and creates a non-transitive comparator.
+      : durable;
+
+  return [...orderedDurable, ...orderBatchMembers(optimisticTail)];
 };
 
 export const markMessageSent = (message: Message): Message => ({
@@ -63,6 +121,9 @@ export const upsertMessage = (messages: Message[], message: Message) => {
       const localMediaPreviewUrl = optimisticMessage.localMediaPreviewUrl;
       next[clientMessageIndex] = {
         ...serverMessage,
+        ...(!hasCanonicalPosition(serverMessage) && hasCanonicalPosition(optimisticMessage)
+          ? { position: optimisticMessage.position }
+          : {}),
         // The optimistic timestamp is also the sender's stable display order.
         // Server acknowledgements for text and media finish at different times;
         // replacing it with the acknowledgement timestamp makes a mixed send
@@ -84,7 +145,16 @@ export const upsertMessage = (messages: Message[], message: Message) => {
   const idIndex = messages.findIndex(existing => existing.id === serverMessage.id);
   if (idIndex !== -1) {
     const next = [...messages];
-    next[idIndex] = serverMessage;
+    const existing = messages[idIndex];
+    next[idIndex] = {
+      ...serverMessage,
+      // A retained pre-position room event can replay after a position-rich
+      // snapshot during rollout. Do not discard the canonical key already
+      // known for that durable row.
+      ...(!hasCanonicalPosition(serverMessage) && hasCanonicalPosition(existing)
+        ? { position: existing.position }
+        : {}),
+    };
     return sortMessages(next);
   }
 

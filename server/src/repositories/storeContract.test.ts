@@ -883,7 +883,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         roomMessages[existingIndex] = row;
       }
       this.messages.set(String(roomId), roomMessages);
-      return { rows: [], rowCount: 1 };
+      return {
+        rows: (/\bRETURNING\b/.test(compactSql) ? [row] : []) as T[],
+        rowCount: 1,
+      };
     }
 
     if (/INSERT INTO media_assets/.test(compactSql)) {
@@ -1376,7 +1379,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
 
     if (/UPDATE room_messages SET status = 'error'/.test(compactSql)) {
       let updatedCount = 0;
-      const timestamp = new Date().toISOString();
+      const updatedAt = new Date().toISOString();
       const aiStreamOwnerId = params[1] === null || params[1] === undefined ? null : String(params[1]);
       for (const [roomId, messages] of this.messages.entries()) {
         this.messages.set(roomId, messages.map(message => {
@@ -1391,7 +1394,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
             ...message,
             status: 'error',
             content: String(params[0]),
-            timestamp,
+            updated_at: updatedAt,
           };
         }));
       }
@@ -1467,6 +1470,12 @@ const storeFactories: Array<[string, () => StoreFixture]> = [
 
 for (const [storeName, createFixture] of storeFactories) {
   describe(`${storeName} durable contract`, () => {
+    const expectedPersistedMessages = (messages: Message[]) => (
+      storeName === 'PostgresStore'
+        ? messages.map((item, position) => ({ ...item, position }))
+        : messages
+    );
+
     it('persists client nicknames and reads them back in batch', async () => {
       const { store } = createFixture();
 
@@ -1531,13 +1540,19 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.upsertMessage(updatedSecond);
       await store.upsertMessage(third);
 
-      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [first, updatedSecond, third]);
+      assert.deepEqual(
+        await store.readMessagesByRoom(initialRoom.id),
+        expectedPersistedMessages([first, updatedSecond, third]),
+      );
       assert.deepEqual((await store.readRoomsByUser(initialRoom.creatorId)).map(item => item.id), [initialRoom.id]);
 
       const savedHistoryRoom = await store.saveMessageHistory(initialRoom.id, [replacement]);
       assert.equal(savedHistoryRoom?.id, initialRoom.id);
       assert.equal(savedHistoryRoom?.lastActivityAt, replacement.timestamp);
-      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [replacement]);
+      assert.deepEqual(
+        await store.readMessagesByRoom(initialRoom.id),
+        expectedPersistedMessages([replacement]),
+      );
       assert.equal(await store.clearRoomMessages(initialRoom.id), 1);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
       assert.deepEqual((await store.readMessagePageByRoom(initialRoom.id)).messages, []);
@@ -1569,7 +1584,10 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(duplicateResult?.message.id, first.id);
       assert.equal(duplicateResult?.message.content, first.content);
       assert.deepEqual(duplicateResult?.room, firstResult?.room);
-      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [first]);
+      assert.deepEqual(
+        await store.readMessagesByRoom(initialRoom.id),
+        expectedPersistedMessages([first]),
+      );
 
       const otherClient = message({
         id: 'other-client-message',
@@ -1608,10 +1626,19 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.appendMessageIdempotent(image);
 
       const history = await store.readMessagesByRoom(baseRoom.id);
-      assert.deepEqual(history.map(item => item.id), ['batch-image', 'batch-text']);
-      assert.deepEqual(history.map(item => item.clientBatchIndex), [0, 1]);
+      const expectedIds = storeName === 'PostgresStore'
+        ? ['batch-text', 'batch-image']
+        : ['batch-image', 'batch-text'];
+      assert.deepEqual(history.map(item => item.id), expectedIds);
+      assert.deepEqual(
+        history.map(item => item.clientBatchIndex),
+        storeName === 'PostgresStore' ? [1, 0] : [0, 1],
+      );
+      if (storeName === 'PostgresStore') {
+        assert.deepEqual(history.map(item => item.position), [0, 1]);
+      }
       const page = await store.readMessagePageByRoom(baseRoom.id, { limit: 1 });
-      assert.deepEqual(page.messages.map(item => item.id), ['batch-image', 'batch-text']);
+      assert.deepEqual(page.messages.map(item => item.id), expectedIds);
     });
 
     it('reads latest message windows and older pages in durable order', async () => {
@@ -1740,7 +1767,7 @@ for (const [storeName, createFixture] of storeFactories) {
 
       await store.appendMessage(imageMessage);
 
-      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [{
+      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), expectedPersistedMessages([{
         ...imageMessage,
         mediaAsset: {
           id: asset.id,
@@ -1751,7 +1778,7 @@ for (const [storeName, createFixture] of storeFactories) {
           width: asset.width,
           height: asset.height,
         },
-      }]);
+      }]));
       await store.deleteMediaAsset(asset.id);
       assert.equal(await store.getMediaAsset(asset.id), null);
       assert.deepEqual(await store.readMediaAssetsByRoom(initialRoom.id), []);
@@ -1787,7 +1814,7 @@ for (const [storeName, createFixture] of storeFactories) {
 
       assert.equal(result?.found, true);
       assert.deepEqual(stripRoomStamp(result?.room), initialRoom);
-      assert.deepEqual(result?.updatedMessage, {
+      assert.deepEqual(result?.updatedMessage, expectedPersistedMessages([{
         ...legacyImage,
         content: '',
         messageType: 'media',
@@ -1800,7 +1827,7 @@ for (const [storeName, createFixture] of storeFactories) {
           width: asset.width,
           height: asset.height,
         },
-      });
+      }])[0]);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [result?.updatedMessage]);
       assert.deepEqual(stripRoomStamp(await store.getRoomById(initialRoom.id)), initialRoom);
       assert.deepEqual(await store.getMediaAsset(asset.id), asset);
@@ -2050,7 +2077,10 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.appendMessageWithAtomicPosition(toolResult);
       await store.upsertMessage(sandboxStatus);
 
-      assert.deepEqual(await store.readMessagesByRoom(codeAgentRoom.id), [toolCall, toolResult, sandboxStatus]);
+      assert.deepEqual(
+        await store.readMessagesByRoom(codeAgentRoom.id),
+        expectedPersistedMessages([toolCall, toolResult, sandboxStatus]),
+      );
     });
 
     it('compares sandbox status and finds code-agent recovery work', async () => {

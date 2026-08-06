@@ -9,6 +9,7 @@ import { clearCachedRoomMessageWindow, writeCachedRoomMessageWindow } from '../u
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
+const requestRoomAICostMock = vi.hoisted(() => vi.fn(() => new Promise(() => {})));
 const editQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const steerQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const cancelQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
@@ -202,6 +203,7 @@ vi.mock('../utils/socket', () => ({
   removeRoomAdmin: removeRoomAdminMock,
   removeRoomMember: removeRoomMemberMock,
   transferRoomOwnership: transferRoomOwnershipMock,
+  requestRoomAICost: requestRoomAICostMock,
   requestRoomSnapshot: socketMock.requestHistory,
   requestRoomEvents: socketMock.requestEvents,
   SocketRequestError: socketMock.SocketRequestError,

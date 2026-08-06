@@ -44,7 +44,11 @@ import {
   DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES,
   DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS,
 } from './services/codeAgentSandboxLifecycle';
-import { CodeAgentSessionService } from './services/codeAgentSessionService';
+import {
+  CodeAgentSessionService,
+  DEFAULT_CODE_AGENT_TURN_DEADLINE_SAFETY_MS,
+  resolveCodeAgentTurnTimeoutMs,
+} from './services/codeAgentSessionService';
 import { E2BCodeAgentSandboxService, E2BSandboxDriver } from './services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
@@ -492,6 +496,15 @@ const codeAgentActiveSandboxTtlMs = parsePositiveIntegerEnv(
   'CODE_AGENT_ACTIVE_SANDBOX_TTL_MS',
   DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS
 );
+const codeAgentTurnDeadlineSafetyMs = parsePositiveIntegerEnv(
+  'CODE_AGENT_TURN_DEADLINE_SAFETY_MS',
+  DEFAULT_CODE_AGENT_TURN_DEADLINE_SAFETY_MS,
+);
+const codeAgentTurnTimeoutMs = resolveCodeAgentTurnTimeoutMs(
+  codeAgentActiveSandboxTtlMs,
+  parsePositiveIntegerEnv('CODE_AGENT_TURN_MAX_MS', codeAgentActiveSandboxTtlMs),
+  codeAgentTurnDeadlineSafetyMs,
+);
 const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, codeAgentSandboxService, codeAgentLogger, {
   sandboxTtlMs: codeAgentIdleSandboxTtlMs,
   idleSandboxTtlMs: codeAgentIdleSandboxTtlMs,
@@ -593,6 +606,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     observability: observabilityRecorder,
     mediaObjectStorage,
     aiStreamOwnerId,
+    turnTimeoutMs: codeAgentTurnTimeoutMs,
   }
 );
 

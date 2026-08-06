@@ -275,6 +275,69 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(socketMock.requestEvents).toHaveBeenCalledWith(expect.objectContaining({ roomId: 'room-1', afterSeq: 4 }));
   });
 
+  it('keeps canonical position through snapshot, replay upsert, and prepend pagination', async () => {
+    const requestHistoryRef: { current: RoomMessageHistoryRequest | null } = { current: null };
+    const ai = message({
+      id: 'ai',
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      status: 'complete',
+      position: 10,
+      timestamp: '2026-08-06T00:04:20.000Z',
+    });
+    const tool = message({
+      id: 'tool',
+      messageType: 'tool_call',
+      toolCallId: 'call-1',
+      position: 11,
+      timestamp: '2026-08-06T00:04:13.000Z',
+    });
+    const result = message({
+      id: 'result',
+      messageType: 'tool_result',
+      toolCallId: 'call-1',
+      position: 12,
+      timestamp: '2026-08-06T00:04:17.000Z',
+    });
+    socketMock.requestSnapshot.mockImplementation(async request => request.beforeMessageId
+      ? snapshot({
+          requestId: request.requestId,
+          mode: 'prepend',
+          messages: [message({ id: 'older', position: 9, timestamp: '2026-08-06T00:04:30.000Z' })],
+          snapshotSeq: 5,
+          hasMore: false,
+          oldestMessageId: 'older',
+        })
+      : snapshot({
+          requestId: request.requestId,
+          messages: [result, ai, tool],
+          snapshotSeq: 4,
+          hasMore: true,
+          oldestMessageId: 'ai',
+        }));
+
+    render(<Harness requestHistoryRef={requestHistoryRef} />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('ai,tool,result'));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 5,
+      events: [event(5, {
+        payload: {
+          messageIds: ['ai'],
+          messages: [{ ...ai, timestamp: '2026-08-06T00:05:00.000Z' }],
+        },
+      })],
+    }));
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('5'));
+    expect(screen.getByTestId('state').dataset.messages).toBe('ai,tool,result');
+
+    await act(async () => {
+      await requestHistoryRef.current?.({ beforeMessageId: 'ai' });
+    });
+    expect(screen.getByTestId('state').dataset.messages).toBe('older,ai,tool,result');
+  });
+
   it('renders a cached baseline immediately and only requests missing events', async () => {
     cacheMock.memory = {
       roomId: 'room-1',
@@ -298,6 +361,30 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(socketMock.requestCost).toHaveBeenCalledWith('room-1');
     expect(screen.getByTestId('state').dataset.messages).toBe('cached-message,message-6');
   });
+
+  it.each(['memory', 'persistent'] as const)(
+    'hydrates a %s cache window in canonical position order',
+    async cacheSource => {
+      const cachedWindow = {
+        roomId: 'room-1',
+        messages: [
+          message({ id: 'result', position: 12, timestamp: '2026-08-06T00:04:17.000Z' }),
+          message({ id: 'ai', position: 10, timestamp: '2026-08-06T00:04:20.000Z' }),
+          message({ id: 'tool', position: 11, timestamp: '2026-08-06T00:04:13.000Z' }),
+        ],
+        turns: [],
+        lastAppliedSeq: 5,
+        hasMore: false,
+        cachedAt: Date.now(),
+      };
+      cacheMock[cacheSource] = cachedWindow;
+
+      render(<Harness />);
+
+      await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('ai,tool,result'));
+      expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    },
+  );
 
   it('automatically retries replay after transient socket registration loss', async () => {
     cacheMock.memory = {

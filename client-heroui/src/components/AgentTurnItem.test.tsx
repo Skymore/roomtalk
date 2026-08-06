@@ -159,6 +159,29 @@ describe('AgentTurnItem', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
   });
 
+  it('expands AI, tool call, and result by canonical position instead of mutable timestamps', () => {
+    const messages = [
+      message({ id: 'result', content: 'result', messageType: 'tool_result', position: 12, timestamp: '2026-08-06T00:04:17.000Z' }),
+      message({ id: 'tool', content: 'tool', clientId: 'code_agent_runner', messageType: 'tool_call', position: 11, timestamp: '2026-08-06T00:04:13.000Z' }),
+      message({ id: 'ai-final', content: 'explanation', position: 10, timestamp: '2026-08-06T00:04:20.000Z' }),
+    ];
+    const { container } = render(
+      <AgentTurnItem
+        turn={turn()}
+        messages={messages}
+        renderAgentMessage={item => <div data-order={item.id}>{item.content}</div>}
+        renderStandaloneMessage={item => <div data-order={item.id}>{item.content}</div>}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'agentExpandWork' }));
+    expect(Array.from(container.querySelectorAll('[data-order]')).map(node => node.getAttribute('data-order'))).toEqual([
+      'ai-final',
+      'tool',
+      'result',
+    ]);
+  });
+
   it('formats second, minute, and hour durations', () => {
     expect(formatAgentTurnDuration(12_900)).toBe('12s');
     expect(formatAgentTurnDuration(270_000)).toBe('4m 30s');

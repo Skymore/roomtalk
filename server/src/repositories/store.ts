@@ -240,8 +240,11 @@ export interface CodeAgentTurnTerminalInput {
   outcome: 'complete' | 'error' | 'cancelled';
   completedAt: string;
   finalMessageId?: string;
+  /** Finalize an existing streaming segment in the terminal transaction. */
   message?: Message;
   expectedMessageOwnership?: AIStreamOwnership;
+  /** Append a new terminal error after tool history in the same transaction. */
+  appendMessage?: Message;
   deleteMessageIds?: string[];
   sessionId?: string;
   backendTurnId?: string;

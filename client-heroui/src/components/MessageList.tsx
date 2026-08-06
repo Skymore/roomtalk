@@ -195,7 +195,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // parent so these run per room).
   const [messages, setMessages] = useState<Message[]>(() => {
     const cached = readMemoryRoomMessageWindow(roomId);
-    return cached ? cached.messages.filter(msg => msg.roomId === roomId) : [];
+    return cached ? sortMessages(cached.messages.filter(msg => msg.roomId === roomId)) : [];
   });
   const [agentTurns, setAgentTurns] = useState<RoomAgentTurn[]>(() => (
     readMemoryRoomMessageWindow(roomId)?.turns || []

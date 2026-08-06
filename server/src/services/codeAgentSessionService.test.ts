@@ -6,7 +6,7 @@ import { AIModelOption, CodeAgentMode, MediaAsset, Message, Room, RoomAgentTurn,
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
-import { CodeAgentSessionService } from './codeAgentSessionService';
+import { CodeAgentSessionService, resolveCodeAgentTurnTimeoutMs } from './codeAgentSessionService';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import { CodeAgentRunnerClient, CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
@@ -316,11 +316,42 @@ class MemoryCodeAgentStore {
         message = result.message;
       }
     }
-    const messages = this.messages.get(input.claim.roomId) || [];
+    const messages = [...(this.messages.get(input.claim.roomId) || [])];
+    if (input.appendMessage) {
+      messages.push(input.appendMessage);
+      message = input.appendMessage;
+    }
     const deleteIds = new Set(input.deleteMessageIds || []);
+    const safeDeleteIds = new Set(messages.filter(item => (
+      deleteIds.has(item.id)
+      && item.roomId === input.claim.roomId
+      && item.turnId === input.claim.turnId
+      && item.status === 'streaming'
+      && item.content === ''
+    )).map(item => item.id));
+    if (safeDeleteIds.size !== deleteIds.size) {
+      throw new Error('refused unsafe test segment cleanup');
+    }
+    const remainingMessages = messages.filter(item => !safeDeleteIds.has(item.id) || item.id === message?.id);
+    if (remainingMessages.some(item => item.turnId === input.claim.turnId && item.status === 'streaming')) {
+      throw new Error('test terminal transition left streaming messages');
+    }
+    const danglingToolCall = remainingMessages.find(item => (
+      item.turnId === input.claim.turnId
+      && item.messageType === 'tool_call'
+      && item.toolCallId
+      && !remainingMessages.some(candidate => (
+        candidate.turnId === input.claim.turnId
+        && candidate.messageType === 'tool_result'
+        && candidate.toolCallId === item.toolCallId
+      ))
+    ));
+    if (danglingToolCall) {
+      throw new Error('test terminal transition left pending tools');
+    }
     this.messages.set(
       input.claim.roomId,
-      messages.filter(item => !deleteIds.has(item.id) || item.id === message?.id),
+      remainingMessages,
     );
     if (actualOutcome === 'complete') {
       await this.incrementRoomAICost(input.claim.roomId, input.cost);
@@ -772,6 +803,52 @@ class BlockingRunner implements CodeAgentRunnerClient {
   }
 }
 
+class PendingToolBlockingRunner implements CodeAgentRunnerClient {
+  requests: CodeAgentRunnerRunRequest[] = [];
+  private markStarted!: () => void;
+  readonly started = new Promise<void>(resolve => {
+    this.markStarted = resolve;
+  });
+
+  async run(request: CodeAgentRunnerRunRequest, handlers: CodeAgentRunnerHandlers): Promise<CodeAgentRunnerRunResult> {
+    this.requests.push(request);
+    await handlers.onEvent(cocoModelStep(1, false, ['tool-timeout'], {
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+    }));
+    await handlers.onEvent({
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'tool_call',
+      id: 'tool-timeout',
+      name: 'Shell',
+      args: { command: 'ROOMTALK_TEST_SECRET=must-not-be-logged sleep 999' },
+    });
+    this.markStarted();
+    return new Promise<CodeAgentRunnerRunResult>(() => undefined);
+  }
+}
+
+class ControlledTurnDeadline {
+  callback?: () => void;
+  delayMs?: number;
+  cleared = false;
+
+  schedule = (callback: () => void, delayMs: number) => {
+    this.callback = callback;
+    this.delayMs = delayMs;
+    return this;
+  };
+
+  clear = () => {
+    this.cleared = true;
+  };
+
+  fire() {
+    this.callback?.();
+  }
+}
+
 class SequencedBlockingRunner implements CodeAgentRunnerClient {
   requests: CodeAgentRunnerRunRequest[] = [];
   completed = 0;
@@ -975,10 +1052,15 @@ const createService = (options: {
   aiStreamOwnerId?: string;
   activeSandboxTtlMs?: number;
   idleSandboxTtlMs?: number;
+  turnTimeoutMs?: number;
+  scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
+  clearTurnDeadline?: (handle: unknown) => void;
+  now?: () => Date;
 } = {}) => {
   const store = options.store || new MemoryCodeAgentStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
-  const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+  const now = options.now || (() => new Date('2026-05-03T00:00:00.000Z'));
+  const sandboxService = new FakeCodeAgentSandboxService(now);
   const lifecycle = new CodeAgentSandboxLifecycleService(store as any, sandboxService, logger, {
     sandboxTtlMs: 60 * 60 * 1000,
     activeSandboxTtlMs: options.activeSandboxTtlMs ?? 60 * 60 * 1000,
@@ -986,7 +1068,7 @@ const createService = (options: {
     creatingStaleMs: 2 * 60 * 1000,
     maxActiveSandboxes: 10,
     maxActiveSandboxesPerUser: 10,
-  }, () => new Date('2026-05-03T00:00:00.000Z'));
+  }, now);
   const ids = [...(options.ids || ['ai-1', 'turn-1', 'status-1', 'result-1', 'error-1'])];
   const service = new CodeAgentSessionService(
     store as any,
@@ -1017,11 +1099,14 @@ const createService = (options: {
       codexBackendEnabled: options.codexBackendEnabled,
       codexConnectionService: options.codexConnectionService,
       githubConnectionService: options.githubConnectionService,
-      now: () => new Date('2026-05-03T00:00:00.000Z'),
+      now,
       createId: () => ids.shift() || 'id-fallback',
       observability: options.observability,
       mediaObjectStorage: options.mediaObjectStorage,
       aiStreamOwnerId: options.aiStreamOwnerId,
+      turnTimeoutMs: options.turnTimeoutMs,
+      scheduleTurnDeadline: options.scheduleTurnDeadline,
+      clearTurnDeadline: options.clearTurnDeadline,
     }
   );
   return { emitter, lifecycle, sandboxService, service, store };
@@ -1749,10 +1834,15 @@ describe('CodeAgentSessionService', () => {
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
+    const deadline = new ControlledTurnDeadline();
+    const turnTimeoutMs = resolveCodeAgentTurnTimeoutMs(60 * 60 * 1000, 60 * 60 * 1000, 30_000);
     const { sandboxService, service } = createService({
       runner,
       activeSandboxTtlMs: 60 * 60 * 1000,
       idleSandboxTtlMs: 2 * 60 * 1000,
+      turnTimeoutMs,
+      scheduleTurnDeadline: deadline.schedule,
+      clearTurnDeadline: deadline.clear,
     });
 
     await service.startTurn({
@@ -1765,6 +1855,62 @@ describe('CodeAgentSessionService', () => {
       60 * 60 * 1000,
       2 * 60 * 1000,
     ]);
+    assert.equal(turnTimeoutMs, 3_570_000);
+    assert.equal(deadline.delayMs, turnTimeoutMs);
+    assert.equal(deadline.cleared, true);
+  });
+
+  it('owns the hard turn timeout before the sandbox TTL and closes pending tools without logging command data', async () => {
+    const startedAtMs = Date.parse('2026-05-03T00:00:00.000Z');
+    let currentMs = startedAtMs;
+    const deadline = new ControlledTurnDeadline();
+    const runner = new PendingToolBlockingRunner();
+    const observability = createMemoryObservability();
+    const { sandboxService, service, store } = createService({
+      runner,
+      observability: observability.recorder,
+      now: () => new Date(currentMs),
+      turnTimeoutMs: 5_000,
+      activeSandboxTtlMs: 60 * 60 * 1000,
+      idleSandboxTtlMs: 2 * 60 * 1000,
+      scheduleTurnDeadline: deadline.schedule,
+      clearTurnDeadline: deadline.clear,
+    });
+
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    assert.equal(deadline.delayMs, 5_000);
+    assert.deepEqual(sandboxService.sandboxTimeoutUpdates.map(update => update.ttlMs), [60 * 60 * 1000]);
+
+    currentMs += 5_000;
+    deadline.fire();
+    const result = await active;
+
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /task time limit/);
+    assert.equal(deadline.cleared, true);
+    assert.deepEqual(sandboxService.sandboxTimeoutUpdates.map(update => update.ttlMs), [
+      60 * 60 * 1000,
+      2 * 60 * 1000,
+    ]);
+    assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(item => item.messageType), ['text', 'tool_call', 'tool_result', 'ai']);
+    assert.equal(messages[2].toolCallId, 'tool-timeout');
+    assert.equal(messages[2].status, 'error');
+    assert.equal(messages[3].status, 'error');
+    assert.equal(messages.some(item => item.status === 'streaming'), false);
+    const failed = observability.events.find(item => item.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'turn_timeout');
+    assert.equal((failed?.payload as any)?.turnTimeoutMs, 5_000);
+    const syntheticResult = observability.events.find(item => (
+      item.event === 'code_agent.runner.tool_result'
+      && (item.payload as any)?.timedOut
+    ));
+    assert.equal(syntheticResult?.durationMs, 5_000);
+    assert.equal((syntheticResult?.payload as any)?.toolCallId, 'tool-timeout');
+    assert.equal((syntheticResult?.payload as any)?.toolName, 'Shell');
+    assert.equal(JSON.stringify(observability.events).includes('ROOMTALK_TEST_SECRET'), false);
   });
 
   it('acknowledges a durable preparing turn before paged context loading completes', async () => {
@@ -3281,6 +3427,34 @@ describe('CodeAgentSessionService', () => {
     );
   });
 
+  it('classifies a lost durable lease separately from the application turn deadline', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done',
+        sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
+    ]);
+    const observability = createMemoryObservability();
+    const { sandboxService, service, store } = createService({ runner, observability: observability.recorder });
+    sandboxService.startRunner = async input => {
+      store.roomLeases.delete(input.handle.roomId);
+      return { command: input.command, stop: async () => undefined };
+    };
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const failed = observability.events.find(item => item.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'room_lease_lost');
+    assert.notEqual(failed?.errorCode, 'turn_timeout');
+  });
+
   it('rejects approval responses from members who did not start the turn', async () => {
     const runner = new BlockingRunner();
     const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]);
@@ -3430,7 +3604,8 @@ describe('CodeAgentSessionService', () => {
 
   it('keeps queued follow-up input after an explicit user interrupt', async () => {
     const runner = new ControlBlockingRunner();
-    const { service, store, sandboxService } = createService({ runner });
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({ runner, observability: observability.recorder });
     sandboxService.startRunner = async input => ({
       command: input.command,
       stdin: new Writable({
@@ -3458,6 +3633,7 @@ describe('CodeAgentSessionService', () => {
 
     assert.equal(runner.requests.length, 1);
     assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-stop-1')?.codeAgentQueuedInput?.state, 'queued');
+    assert.equal(observability.events.some(item => item.errorCode === 'turn_timeout'), false);
   });
 
   it('returns a rejected steer to queued state instead of losing it', async () => {
@@ -3694,19 +3870,73 @@ describe('CodeAgentSessionService', () => {
 
     assert.equal(result.success, false);
     const messages = store.messages.get('room-1') || [];
-    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'sandbox_status']);
-    assert.equal(messages[3].toolCallId, 'tool-1');
-    assert.equal(messages[3].toolName, 'Shell');
-    assert.equal(messages[3].status, 'error');
-    assert.equal(messages[3].isError, true);
-    assert.ok((messages[2].cost?.totalUsd || 0) > 0);
-    assert.equal(store.roomCost.totalUsd, messages[2].cost?.totalUsd);
-    assert.match(messages[3].content, /Tool interrupted before completion/);
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result', 'sandbox_status', 'ai']);
+    assert.equal(messages[2].toolCallId, 'tool-1');
+    assert.equal(messages[2].toolName, 'Shell');
+    assert.equal(messages[2].status, 'error');
+    assert.equal(messages[2].isError, true);
+    assert.ok((messages[1].cost?.totalUsd || 0) > 0);
+    assert.equal(store.roomCost.totalUsd, messages[1].cost?.totalUsd);
+    assert.match(messages[2].content, /Tool interrupted before completion/);
+    assert.match(messages[2].content, /Coco task failed/);
+    assert.doesNotMatch(messages[2].content, /E2B command wait failed/);
     assert.match(messages[3].content, /Coco task failed/);
     assert.doesNotMatch(messages[3].content, /E2B command wait failed/);
+    assert.equal(messages[4].status, 'error');
     assert.match(messages[4].content, /Coco task failed/);
-    assert.doesNotMatch(messages[4].content, /E2B command wait failed/);
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
+  });
+
+  it('preserves tool-first text and tool history while deleting every empty segment on runner error', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'The project uses RoomTalk.' },
+      cocoModelStep(2, true, ['tool-2'], { promptTokens: 8, completionTokens: 2, totalTokens: 10 }),
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-2', name: 'Shell', args: { command: 'npm test' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'runner stopped', code: 'runner_exit', retryable: false },
+    ]);
+    const { service, store } = createService({
+      runner,
+      ids: [
+        'ai-initial',
+        'turn-1',
+        'tool-result-1-message',
+        'ai-text-segment',
+        'tool-result-2-message',
+        'runner-status-message',
+        'terminal-error-message',
+      ],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const messages = store.messages.get('room-1') || [];
+    assert.equal(messages.some(item => item.id === 'ai-initial'), false);
+    assert.deepEqual(messages.map(item => item.messageType), [
+      'text',
+      'tool_call',
+      'tool_result',
+      'ai',
+      'tool_call',
+      'tool_result',
+      'sandbox_status',
+      'ai',
+    ]);
+    assert.equal(messages[3].content, 'The project uses RoomTalk.');
+    assert.equal(messages[3].status, 'complete');
+    assert.equal(messages[5].toolCallId, 'tool-2');
+    assert.equal(messages[5].status, 'error');
+    assert.equal(messages[7].id, 'terminal-error-message');
+    assert.equal(messages[7].status, 'error');
+    assert.equal(messages[7].isError, true);
+    assert.equal(messages.filter(item => item.messageType === 'ai' && item.status === 'error').length, 1);
+    assert.equal(messages.some(item => item.status === 'streaming'), false);
+    const persistedTurn = [...store.agentTurns.values()][0];
+    assert.equal(persistedTurn.status, 'error');
+    assert.equal(persistedTurn.finalMessageId, 'terminal-error-message');
   });
 
   it('closes a pending ACP approval card when the runner errors', async () => {
@@ -3736,18 +3966,19 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), [
       'text',
-      'ai',
       'tool_call',
       'tool_result',
       'sandbox_status',
+      'ai',
     ]);
-    assert.equal(messages[2].toolName, 'approval_request');
-    assert.equal(messages[3].toolCallId, 'approval-1');
-    assert.equal(messages[3].status, 'error');
+    assert.equal(messages[1].toolName, 'approval_request');
+    assert.equal(messages[2].toolCallId, 'approval-1');
+    assert.equal(messages[2].status, 'error');
+    assert.match(messages[2].content, /Coco task failed/);
+    assert.doesNotMatch(messages[2].content, /ACP connection closed/);
     assert.match(messages[3].content, /Coco task failed/);
     assert.doesNotMatch(messages[3].content, /ACP connection closed/);
-    assert.match(messages[4].content, /Coco task failed/);
-    assert.doesNotMatch(messages[4].content, /ACP connection closed/);
+    assert.equal(messages[4].status, 'error');
   });
 
   it('closes pending tool calls without fabricating an interruption when the runner finalizes normally', async () => {

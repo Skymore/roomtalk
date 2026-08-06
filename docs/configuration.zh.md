@@ -113,6 +113,8 @@ Provider key 保留在服务端，不会发给浏览器，也不会整体复制�
 | `CODE_AGENT_ARTIFACT_MODE` | 固定 production 或显式 development mode。 |
 | `CODE_AGENT_E2B_AUTO_RESUME` / `CODE_AGENT_E2B_ON_TIMEOUT` | Pause/resume lifecycle。 |
 | `CODE_AGENT_IDLE_SANDBOX_TTL_MS` / `CODE_AGENT_ACTIVE_SANDBOX_TTL_MS` | Idle 与 running-turn sandbox TTL。 |
+| `CODE_AGENT_TURN_MAX_MS` | 单个 active turn 的应用层硬截止时间；默认跟随 active sandbox TTL，并始终被限制在该 TTL 之前。 |
+| `CODE_AGENT_TURN_DEADLINE_SAFETY_MS` | active sandbox TTL 前预留的安全余量，使 RoomTalk 能先持久化 `turn_timeout`，而不是等待 E2B 终止 sandbox；默认 30 秒。 |
 | `CODE_AGENT_SANDBOX_TTL_MS` | Idle TTL 的 legacy fallback。 |
 
 Scoped capability：

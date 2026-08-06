@@ -28,6 +28,60 @@ const message = (overrides: Partial<Message>): Message => ({
 });
 
 describe("messageState", () => {
+  it("uses durable position when final timestamps would move AI text behind its tools", () => {
+    const sorted = sortMessages([
+      message({
+        id: "result",
+        messageType: "tool_result",
+        toolCallId: "tool-1",
+        position: 12,
+        timestamp: "2026-08-06T00:04:11.000Z",
+      }),
+      message({
+        id: "ai",
+        clientId: "ai_assistant",
+        messageType: "ai",
+        status: "complete",
+        position: 10,
+        timestamp: "2026-08-06T00:04:13.000Z",
+      }),
+      message({
+        id: "tool",
+        messageType: "tool_call",
+        toolCallId: "tool-1",
+        position: 11,
+        timestamp: "2026-08-06T00:04:11.000Z",
+      }),
+    ]);
+
+    expect(sorted.map(item => item.id)).toEqual(["ai", "tool", "result"]);
+  });
+
+  it("preserves rolling-deployment input order while positioned and legacy durable messages are mixed", () => {
+    const legacy = message({ id: "legacy", timestamp: "2026-08-06T00:04:20.000Z" });
+    const positioned = message({ id: "positioned", position: 99, timestamp: "2026-08-06T00:04:10.000Z" });
+
+    expect(sortMessages([legacy, positioned]).map(item => item.id)).toEqual(["legacy", "positioned"]);
+    expect(sortMessages([positioned, legacy]).map(item => item.id)).toEqual(["positioned", "legacy"]);
+  });
+
+  it("retains a known canonical position when replaying a pre-position after-image", () => {
+    const current = [
+      message({ id: "ai", position: 10, content: "streaming" }),
+      message({ id: "tool", position: 11 }),
+    ];
+
+    const replayed = upsertMessage(current, message({
+      id: "ai",
+      content: "complete",
+      status: "complete",
+      timestamp: "2026-08-06T00:05:00.000Z",
+    }));
+
+    expect(replayed.map(item => item.id)).toEqual(["ai", "tool"]);
+    expect(replayed[0].position).toBe(10);
+  });
+
   it("sorts by timestamp, puts streaming AI after same-time user messages, then by id", () => {
     const sorted = sortMessages([
       message({ id: "z", timestamp: "2026-05-03T10:00:01.000Z" }),
@@ -166,6 +220,47 @@ describe("messageState", () => {
       "server-image",
       "server-text",
     ]);
+  });
+
+  it("keeps an optimistic batch at the durable tail until every acknowledgement can converge by position", () => {
+    const durableTail = message({ id: "durable-tail", position: 20 });
+    const optimisticImage = message({
+      id: "temp-image",
+      clientMessageId: "client-image",
+      clientBatchId: "batch-1",
+      clientBatchIndex: 0,
+      deliveryStatus: "pending",
+      messageType: "media",
+    });
+    const optimisticText = message({
+      id: "temp-text",
+      clientMessageId: "client-text",
+      clientBatchId: "batch-1",
+      clientBatchIndex: 1,
+      deliveryStatus: "pending",
+    });
+    const imageAck = message({
+      id: "image",
+      clientMessageId: "client-image",
+      clientBatchId: "batch-1",
+      clientBatchIndex: 0,
+      messageType: "media",
+      position: 22,
+    });
+    const textAck = message({
+      id: "text",
+      clientMessageId: "client-text",
+      clientBatchId: "batch-1",
+      clientBatchIndex: 1,
+      position: 21,
+    });
+
+    const pending = sortMessages([optimisticText, durableTail, optimisticImage]);
+    const partiallyAcknowledged = upsertMessage(pending, imageAck);
+    const fullyAcknowledged = upsertMessage(partiallyAcknowledged, textAck);
+
+    expect(partiallyAcknowledged.map(item => item.id)).toEqual(["durable-tail", "image", "temp-text"]);
+    expect(fullyAcknowledged.map(item => item.id)).toEqual(["durable-tail", "text", "image"]);
   });
 
   it("keeps an Ask AI delivery action when the canonical message arrives before a failed ack", () => {

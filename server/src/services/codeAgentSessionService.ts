@@ -118,6 +118,10 @@ export interface CodeAgentSessionServiceOptions {
   aiStreamOwnerId?: string;
   leaseOwnerId?: string;
   roomLeaseTtlMs?: number;
+  /** Hard application deadline. Production clamps this below the active sandbox TTL. */
+  turnTimeoutMs?: number;
+  scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
+  clearTurnDeadline?: (handle: unknown) => void;
   now?: () => Date;
   createId?: () => string;
 }
@@ -185,6 +189,31 @@ const CODE_AGENT_TURN_HEARTBEAT_MS = Math.max(
   Number.parseInt(process.env.CODE_AGENT_TURN_HEARTBEAT_MS || '15000', 10) || 15_000,
 );
 const DEFAULT_CODE_AGENT_ROOM_LEASE_TTL_MS = Math.max(60_000, CODE_AGENT_TURN_HEARTBEAT_MS * 4);
+export const DEFAULT_CODE_AGENT_TURN_DEADLINE_SAFETY_MS = 30_000;
+
+export const resolveCodeAgentTurnTimeoutMs = (
+  activeSandboxTtlMs: number,
+  requestedTurnTimeoutMs?: number,
+  requestedSafetyMs = DEFAULT_CODE_AGENT_TURN_DEADLINE_SAFETY_MS,
+) => {
+  const activeTtlMs = Math.max(2, Math.floor(activeSandboxTtlMs));
+  const safetyMs = Math.max(1, Math.min(
+    Math.floor(requestedSafetyMs),
+    Math.max(1, Math.floor(activeTtlMs / 2)),
+  ));
+  const infrastructureSafeMaximumMs = Math.max(1, activeTtlMs - safetyMs);
+  const requestedMs = requestedTurnTimeoutMs === undefined
+    ? infrastructureSafeMaximumMs
+    : Math.max(1, Math.floor(requestedTurnTimeoutMs));
+  return Math.min(requestedMs, infrastructureSafeMaximumMs);
+};
+
+class CodeAgentTurnTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Code-agent turn exceeded its ${timeoutMs}ms application deadline`);
+    this.name = 'CodeAgentTurnTimeoutError';
+  }
+}
 
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
@@ -193,9 +222,11 @@ interface CodeAgentTurnStreamState {
   fullContent: string;
   segmentHasUnsealedText: boolean;
   needsNewSegment: boolean;
+  activeMessageCreatedAt: string;
   segmentIds: string[];
   nonEmptySegmentIds: Set<string>;
-  pendingToolCalls: Map<string, { name: string }>;
+  hasToolHistory: boolean;
+  pendingToolCalls: Map<string, { name: string; startedAtMs: number }>;
   modelSteps: Map<string, CocoModelStepCostRecord & {
     hasText: boolean;
     toolCallIds: string[];
@@ -214,6 +245,9 @@ export class CodeAgentSessionService {
   private readonly createId: () => string;
   private readonly leaseOwnerId: string;
   private readonly roomLeaseTtlMs: number;
+  private readonly turnTimeoutMs: number;
+  private readonly scheduleTurnDeadline: (callback: () => void, delayMs: number) => unknown;
+  private readonly clearTurnDeadline: (handle: unknown) => void;
 
   private static readonly MAX_TURN_IMAGE_BYTES = 5 * 1024 * 1024;
   private static readonly TURN_IMAGE_URL_TTL_SECONDS = 2 * 60 * 60;
@@ -239,6 +273,16 @@ export class CodeAgentSessionService {
     this.createId = options.createId || (() => uuidv4());
     this.leaseOwnerId = options.leaseOwnerId || options.aiStreamOwnerId || uuidv4();
     this.roomLeaseTtlMs = Math.max(30_000, options.roomLeaseTtlMs || DEFAULT_CODE_AGENT_ROOM_LEASE_TTL_MS);
+    this.turnTimeoutMs = Math.max(
+      1,
+      Math.floor(options.turnTimeoutMs || resolveCodeAgentTurnTimeoutMs(60 * 60 * 1000)),
+    );
+    this.scheduleTurnDeadline = options.scheduleTurnDeadline || ((callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+      return timer;
+    });
+    this.clearTurnDeadline = options.clearTurnDeadline || (handle => clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
   async startTurn(input: CodeAgentTurnInput, callback?: CodeAgentTurnAckCallback): Promise<CodeAgentTurnAck> {
@@ -317,8 +361,15 @@ export class CodeAgentSessionService {
     let checkpointStarted = false;
     let workspaceCheckpoint: CodeAgentWorkspaceCheckpointRecord | undefined;
     let leaseLost = false;
+    let turnTimedOut = false;
+    let turnDeadlineTimer: unknown;
+    let turnDeadlinePromise: Promise<never> | undefined;
+    let deadlineTermination: Promise<void> = Promise.resolve();
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
+    const assertTurnWithinDeadline = () => {
+      if (turnTimedOut) throw new CodeAgentTurnTimeoutError(this.turnTimeoutMs);
+    };
     const updateTurn = (patch: Partial<RoomAgentTurn>) => {
       turnUpdateChain = turnUpdateChain.then(async () => {
         if (!turnRecord || !turnClaim) return;
@@ -433,6 +484,38 @@ export class CodeAgentSessionService {
         pendingSteerMessageIds: new Set(),
         pendingControls: new Map(),
       });
+      turnDeadlinePromise = new Promise<never>((_resolve, reject) => {
+        const remainingMs = Math.max(0, this.turnTimeoutMs - (this.now().getTime() - turnStartedAtMs));
+        turnDeadlineTimer = this.scheduleTurnDeadline(() => {
+          const active = this.activeTurns.get(input.roomId);
+          if (active?.turnId !== turnId) return;
+          if (leaseLost) {
+            reject(new Error('Workspace agent lease was lost at the turn deadline'));
+            return;
+          }
+          if (active.interruptedByUser) {
+            reject(new Error('Agent turn remained active after user interruption'));
+            return;
+          }
+          turnTimedOut = true;
+          publicFailureMessage = `${this.displayBackendName(turnBackend)} task reached the task time limit and was stopped. Start a new task to continue.`;
+          const processAtDeadline = active.process;
+          deadlineTermination = processAtDeadline
+            ? this.terminateRunnerProcess(processAtDeadline, input.roomId).finally(() => {
+                if (runnerProcess === processAtDeadline) runnerProcess = null;
+                const current = this.activeTurns.get(input.roomId);
+                if (current?.turnId === turnId && current.process === processAtDeadline) {
+                  current.process = undefined;
+                }
+              })
+            : Promise.resolve();
+          reject(new CodeAgentTurnTimeoutError(this.turnTimeoutMs));
+        }, remainingMs);
+      });
+      // The deadline can fire during context or sandbox preparation, before the
+      // runner race is installed. Keep the rejection handled and check the
+      // absolute deadline before every subsequent phase.
+      void turnDeadlinePromise.catch(() => undefined);
       this.emitter.to(started.room.creatorId).emit('room_updated', started.room);
       this.emitter.to(started.turn.roomId).emit('agent_turn_updated', started.turn);
       heartbeatTimer = setInterval(() => {
@@ -477,6 +560,7 @@ export class CodeAgentSessionService {
         input.promptMessage,
         aiMessageId,
       );
+      assertTurnWithinDeadline();
       if (!promptContext) {
         await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
           errorMessage: 'Workspace requires a text prompt in the room history',
@@ -512,6 +596,7 @@ export class CodeAgentSessionService {
       await updatePhase('preparing_sandbox', 'Connecting to the workspace');
 
       const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
+      assertTurnWithinDeadline();
       if (!sandbox.ok) {
         const error = this.describeSandboxFailure(sandbox);
         publicFailureMessage = error;
@@ -536,6 +621,7 @@ export class CodeAgentSessionService {
         },
       });
       turnSandbox = await this.sandboxLifecycle.extendSandboxForActiveTurn(sandbox.handle);
+      assertTurnWithinDeadline();
       const activeTurn = this.activeTurns.get(input.roomId);
       if (activeTurn) {
         activeTurn.sandbox = turnSandbox;
@@ -560,6 +646,7 @@ export class CodeAgentSessionService {
         input.roomId,
         promptContext.imageMessageIds,
       );
+      assertTurnWithinDeadline();
       await updatePhase('starting_agent', 'Starting the agent');
       const runnerSessionId = sandbox.created ? null : (room!.codeAgentSessionId || null);
 
@@ -570,8 +657,10 @@ export class CodeAgentSessionService {
         fullContent: '',
         segmentHasUnsealedText: false,
         needsNewSegment: false,
+        activeMessageCreatedAt: aiMessage.timestamp,
         segmentIds: [aiMessageId],
         nonEmptySegmentIds: new Set(),
+        hasToolHistory: false,
         pendingToolCalls: new Map(),
         modelSteps: new Map(),
         modelStepIdByToolCallId: new Map(),
@@ -616,6 +705,7 @@ export class CodeAgentSessionService {
         ...(turnImages.length > 0 ? { images: turnImages } : {}),
       };
       const startRunnerProcess = async (env: Record<string, string>) => {
+        assertTurnWithinDeadline();
         if (leaseLost) {
           throw new Error('Workspace agent lease was lost before the runner started');
         }
@@ -639,7 +729,6 @@ export class CodeAgentSessionService {
           payload: {
             backend: turnBackend,
             sandboxId: turnSandbox!.id,
-            command: runnerProcess.command,
             mode: turnMode.mode,
             runnerClient: this.options.runnerClient || 'jsonl',
           },
@@ -649,6 +738,7 @@ export class CodeAgentSessionService {
       };
       const runnerHandlers = {
         onEvent: async (event: CodeAgentRunnerEvent) => {
+          if (turnTimedOut) return;
           if (event.type === 'approval_request') {
             await updatePhase('waiting_approval', event.title);
           } else if (event.type === 'tool_result' && event.name === 'approval_request') {
@@ -658,7 +748,7 @@ export class CodeAgentSessionService {
           await this.handleRunnerEvent(event, input.roomId, turnId, turnClaim, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
-      const runResult = await this.runRunnerWithConnections({
+      const runnerExecution = this.runRunnerWithConnections({
         backend: turnBackend,
         credentialOwnerClientId: room!.creatorId,
         turnId,
@@ -668,6 +758,11 @@ export class CodeAgentSessionService {
         sandbox: turnSandbox,
         startRunnerProcess,
       });
+      const runResult = await Promise.race([
+        runnerExecution,
+        turnDeadlinePromise!,
+      ]);
+      assertTurnWithinDeadline();
 
       if (runResult.errorEvent) {
         throw new Error(runResult.errorEvent.message);
@@ -694,6 +789,7 @@ export class CodeAgentSessionService {
 
       if (checkpointStarted && turnSandbox) {
         workspaceCheckpoint = await this.finalizeTurnWorkspaceCheckpoint(input.roomId, turnId, turnSandbox);
+        assertTurnWithinDeadline();
       }
 
       const activeAtFinal = this.activeTurns.get(input.roomId);
@@ -779,7 +875,8 @@ export class CodeAgentSessionService {
             id: finalActiveId,
             content: answer,
             status: 'complete',
-            timestamp: this.now().toISOString(),
+            timestamp: streamState.activeMessageCreatedAt,
+            updatedAt: this.now().toISOString(),
             aiModel: completionMetadata.aiModel,
             usage: turnUsage,
             cost: turnCost,
@@ -787,18 +884,10 @@ export class CodeAgentSessionService {
         }
       }
 
-      const deleteMessageIds: string[] = [];
-      if (!hasVisibleText) {
-        deleteMessageIds.push(aiMessageId);
-      }
-      if (hasVisibleText && finalActiveId !== aiMessageId) {
-        const firstSegmentUsed = streamState.nonEmptySegmentIds.has(aiMessageId);
-        if (!firstSegmentUsed) {
-          deleteMessageIds.push(aiMessageId);
-        }
-      }
+      const deleteMessageIds = this.buildTerminalSegmentCleanup(streamState);
 
       await updatePhase('completing', 'Saving the result');
+      assertTurnWithinDeadline();
       if (!turnClaim || !this.store.finishCodeAgentTurn) {
         throw new Error('Atomic code-agent completion is unavailable');
       }
@@ -877,6 +966,7 @@ export class CodeAgentSessionService {
       });
       return { success: true, messageId: aiMessageId };
     } catch (error) {
+      await deadlineTermination;
       const publicCodexError = error instanceof CodexConnectionError
         ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
         : undefined;
@@ -884,22 +974,50 @@ export class CodeAgentSessionService {
       const visibleFailureMessage = publicFailureMessage
         || `${this.displayBackendName(turnBackend)} task failed. Retry, or switch engines if the problem continues.`;
       const reportedError = new Error(visibleFailureMessage);
-      const errorTargetId = streamState?.activeMessageId || aiMessageId;
-      this.logger.error('Code agent turn failed', { error, roomId: input.roomId, messageId: errorTargetId, backend: turnBackend });
+      const failedSegmentId = streamState?.activeMessageId || aiMessageId;
+      const activeAtFailure = this.activeTurns.get(input.roomId);
+      const interruptedByUser = Boolean(activeAtFailure?.turnId === turnId && activeAtFailure.interruptedByUser);
+      const errorCode = leaseLost
+        ? 'room_lease_lost'
+        : interruptedByUser
+          ? 'turn_interrupted'
+          : turnTimedOut
+            ? 'turn_timeout'
+            : 'turn_failed';
+      this.logger.error('Code agent turn failed', {
+        error,
+        roomId: input.roomId,
+        messageId: failedSegmentId,
+        backend: turnBackend,
+        errorCode,
+      });
       await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
-        errorCode: 'turn_failed',
+        errorCode,
         errorMessage: error instanceof Error ? error.message : String(error),
         payload: {
           backend: turnBackend,
-          messageId: errorTargetId,
+          messageId: failedSegmentId,
           placeholderAnnounced,
           roomMarkedRunning,
+          ...(turnTimedOut ? { turnTimeoutMs: this.turnTimeoutMs } : {}),
           ...(error instanceof CodexConnectionError ? { codexConnectionErrorCode: error.code } : {}),
         },
       });
       if (placeholderAnnounced && aiMessage) {
-        if (streamState) {
-          await this.flushInterruptedToolCalls(input.roomId, turnId, turnClaim!, streamState, reportedError, aiMessage, turnBackend)
+        if (streamState && turnClaim && !leaseLost) {
+          if (streamState.segmentHasUnsealedText && streamState.segmentContent.trim()) {
+            await this.sealCurrentSegment(input.roomId, turnClaim, aiMessage, streamState);
+          }
+          await this.flushInterruptedToolCalls(
+            input.roomId,
+            turnId,
+            turnClaim,
+            streamState,
+            reportedError,
+            aiMessage,
+            turnBackend,
+            { timedOut: turnTimedOut },
+          )
             .catch(flushError => {
               this.logger.warn('Unable to persist every interrupted tool result', {
                 error: flushError,
@@ -908,17 +1026,33 @@ export class CodeAgentSessionService {
               });
             });
         }
-        const alreadyCompleted = streamState?.completedAIMessageById.get(errorTargetId);
         const content = visibleFailureMessage;
-        const errorMessage: Message | undefined = alreadyCompleted
-          ? undefined
-          : {
-              ...aiMessage,
-              id: errorTargetId,
-              content,
-              status: 'error',
-              timestamp: this.now().toISOString(),
-            };
+        const completedAt = this.now().toISOString();
+        const canFinalizeExistingSegment = !streamState || (
+          streamState.segmentIds.length === 1
+          && streamState.nonEmptySegmentIds.size === 0
+          && !streamState.hasToolHistory
+        );
+        const errorTargetId = canFinalizeExistingSegment
+          ? (streamState?.activeMessageId || aiMessageId)
+          : this.createId();
+        const terminalErrorMessage: Message = stripAIStreamRecoveryMetadata({
+          ...aiMessage,
+          id: errorTargetId,
+          content,
+          status: 'error',
+          isError: true,
+          timestamp: canFinalizeExistingSegment
+            ? (streamState?.activeMessageCreatedAt || aiMessage.timestamp)
+            : completedAt,
+          updatedAt: completedAt,
+        });
+        const deleteMessageIds = streamState
+          ? this.buildTerminalSegmentCleanup(
+              streamState,
+              canFinalizeExistingSegment ? errorTargetId : undefined,
+            )
+          : [];
         let terminal: CodeAgentTurnTerminalResult = { outcome: 'stale' };
         if (checkpointStarted && turnSandbox && !workspaceCheckpoint) {
           workspaceCheckpoint = await this.finalizeTurnWorkspaceCheckpoint(input.roomId, turnId, turnSandbox)
@@ -932,15 +1066,16 @@ export class CodeAgentSessionService {
           terminal = await this.store.finishCodeAgentTurn({
             claim: turnClaim,
             outcome: 'error',
-            completedAt: this.now().toISOString(),
-            finalMessageId: alreadyCompleted?.id || errorMessage?.id,
+            completedAt,
+            finalMessageId: errorTargetId,
             ...(workspaceCheckpoint ? { workspaceCheckpoint } : {}),
-            ...(errorMessage
+            ...(deleteMessageIds.length > 0 ? { deleteMessageIds } : {}),
+            ...(canFinalizeExistingSegment
               ? {
-                  message: errorMessage,
-                  expectedMessageOwnership: this.aiStreamOwnership(errorMessage),
+                  message: terminalErrorMessage,
+                  expectedMessageOwnership: this.aiStreamOwnership(aiMessage),
                 }
-              : {}),
+              : { appendMessage: terminalErrorMessage }),
           }).catch(saveError => {
             this.logger.error('Failed to persist atomic code-agent error state', {
               error: saveError,
@@ -974,6 +1109,7 @@ export class CodeAgentSessionService {
         error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed`,
       };
     } finally {
+      if (turnDeadlineTimer !== undefined) this.clearTurnDeadline(turnDeadlineTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       await leaseRenewalChain;
       await turnUpdateChain;
@@ -1582,6 +1718,13 @@ export class CodeAgentSessionService {
   private async stopRunnerProcess(runnerProcess: CodeAgentRunnerProcess, roomId: string) {
     await runnerProcess.stop().catch(error => {
       this.logger.warn('Failed to stop code agent runner process', { error, roomId });
+    });
+  }
+
+  private async terminateRunnerProcess(runnerProcess: CodeAgentRunnerProcess, roomId: string) {
+    const terminate = runnerProcess.terminate?.bind(runnerProcess) || runnerProcess.stop.bind(runnerProcess);
+    await terminate().catch(error => {
+      this.logger.warn('Failed to terminate code agent runner at its application deadline', { error, roomId });
     });
   }
 
@@ -2367,7 +2510,19 @@ export class CodeAgentSessionService {
     backend: CodeAgentBackend,
     codexRunSettings: CodexRunSettings
   ) {
-    await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
+    const observedAtMs = this.now().getTime();
+    const toolDurationMs = event.type === 'tool_result'
+      ? Math.max(0, observedAtMs - (state.pendingToolCalls.get(event.id)?.startedAtMs || observedAtMs))
+      : undefined;
+    await this.recordRunnerEvent(
+      event,
+      roomId,
+      turnId,
+      selectedModel,
+      backend,
+      codexRunSettings,
+      toolDurationMs,
+    );
     if (event.type === 'control_result') {
       const active = this.activeTurns.get(roomId);
       if (active?.turnId !== turnId) {
@@ -2461,6 +2616,7 @@ export class CodeAgentSessionService {
         }
         this.emitter.to(segmentResult.room.creatorId).emit('room_updated', segmentResult.room);
         state.activeMessageId = newId;
+        state.activeMessageCreatedAt = segmentMessage.timestamp;
         state.lastMessageId = newId;
         state.segmentContent = '';
         state.segmentHasUnsealedText = false;
@@ -2531,8 +2687,10 @@ export class CodeAgentSessionService {
         throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
       }
       if (event.type === 'tool_call' || event.type === 'approval_request') {
+        state.hasToolHistory = true;
         state.pendingToolCalls.set(event.id, {
           name: event.type === 'approval_request' ? 'approval_request' : event.name,
+          startedAtMs: observedAtMs,
         });
         if (event.type === 'tool_call' && backend === 'code-agent') {
           const stepId = state.modelStepIdByToolCallId.get(event.id)!;
@@ -2544,6 +2702,7 @@ export class CodeAgentSessionService {
           }
         }
       } else if (event.type === 'tool_result') {
+        state.hasToolHistory = true;
         state.pendingToolCalls.delete(event.id);
       }
       state.lastMessageId = mapped.message.id;
@@ -2603,7 +2762,8 @@ export class CodeAgentSessionService {
         id: state.activeMessageId,
         content: state.segmentContent,
         status: 'complete',
-        timestamp: this.now().toISOString(),
+        timestamp: state.activeMessageCreatedAt,
+        updatedAt: this.now().toISOString(),
         modelStepId: event.stepId,
         modelStepSequence: event.sequence,
         aiModel: step.aiModel,
@@ -2642,15 +2802,16 @@ export class CodeAgentSessionService {
     state: CodeAgentTurnStreamState,
     error: unknown,
     baseAIMessage: Message,
-    backend: CodeAgentBackend
+    backend: CodeAgentBackend,
+    classification: { timedOut?: boolean } = {},
   ) {
     if (state.pendingToolCalls.size === 0) {
       return;
     }
     const reason = error instanceof Error ? error.message : String(error);
     const pending = Array.from(state.pendingToolCalls.entries());
-    state.pendingToolCalls.clear();
     for (const [toolCallId, toolCall] of pending) {
+      const durationMs = Math.max(0, this.now().getTime() - toolCall.startedAtMs);
       const modelStepId = state.modelStepIdByToolCallId.get(toolCallId);
       const message: Message = {
         id: `tool_result_${toolCallId}_${this.createId()}`,
@@ -2671,18 +2832,18 @@ export class CodeAgentSessionService {
         isError: true,
         codeAgentMode: baseAIMessage.codeAgentMode,
       };
-      const appendResult = await this.appendFencedCodeAgentMessage(message, claim).catch(err => {
-        this.logger.warn('Failed to persist interrupted tool result', { error: err, roomId, turnId, toolCallId });
-        return { outcome: 'stale' as const };
-      });
-      if (appendResult.outcome === 'applied') {
-        this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      const appendResult = await this.appendFencedCodeAgentMessage(message, claim);
+      if (appendResult.outcome !== 'applied') {
+        throw new Error(`Unable to persist interrupted tool result ${toolCallId}`);
       }
+      state.pendingToolCalls.delete(toolCallId);
+      this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
       await this.recordObservabilityEvent({
         level: 'warn',
         event: 'code_agent.runner.tool_result',
         roomId,
         turnId,
+        durationMs,
         payload: {
           backend,
           toolCallId,
@@ -2690,6 +2851,7 @@ export class CodeAgentSessionService {
           success: false,
           exitCode: 1,
           interrupted: true,
+          ...(classification.timedOut ? { timedOut: true } : {}),
           reason,
         },
       });
@@ -2708,8 +2870,8 @@ export class CodeAgentSessionService {
       return;
     }
     const pending = Array.from(state.pendingToolCalls.entries());
-    state.pendingToolCalls.clear();
     for (const [toolCallId, toolCall] of pending) {
+      const durationMs = Math.max(0, this.now().getTime() - toolCall.startedAtMs);
       const modelStepId = state.modelStepIdByToolCallId.get(toolCallId);
       const content = 'The agent finished without reporting a terminal result for this tool.';
       const message: Message = {
@@ -2730,18 +2892,18 @@ export class CodeAgentSessionService {
         isError: false,
         codeAgentMode: baseAIMessage.codeAgentMode,
       };
-      const appendResult = await this.appendFencedCodeAgentMessage(message, claim).catch(error => {
-        this.logger.warn('Failed to persist incomplete tool result', { error, roomId, turnId, toolCallId });
-        return { outcome: 'stale' as const };
-      });
-      if (appendResult.outcome === 'applied') {
-        this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      const appendResult = await this.appendFencedCodeAgentMessage(message, claim);
+      if (appendResult.outcome !== 'applied') {
+        throw new Error(`Unable to persist incomplete tool result ${toolCallId}`);
       }
+      state.pendingToolCalls.delete(toolCallId);
+      this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
       await this.recordObservabilityEvent({
         level: 'warn',
         event: 'code_agent.runner.tool_result_missing',
         roomId,
         turnId,
+        durationMs,
         payload: {
           backend,
           toolCallId,
@@ -2765,7 +2927,8 @@ export class CodeAgentSessionService {
       id: state.activeMessageId,
       content: state.segmentContent,
       status: 'complete',
-      timestamp: this.now().toISOString(),
+      timestamp: state.activeMessageCreatedAt,
+      updatedAt: this.now().toISOString(),
     };
     const result = await this.finalizeFencedCodeAgentMessage(sealedMessage, claim);
     if (result.outcome !== 'applied') {
@@ -2777,6 +2940,16 @@ export class CodeAgentSessionService {
       content: state.segmentContent,
     });
     state.segmentHasUnsealedText = false;
+  }
+
+  private buildTerminalSegmentCleanup(
+    state: CodeAgentTurnStreamState,
+    preservedMessageId?: string,
+  ): string[] {
+    return Array.from(new Set(state.segmentIds)).filter(messageId => (
+      messageId !== preservedMessageId
+      && !state.nonEmptySegmentIds.has(messageId)
+    ));
   }
 
   private async appendFencedCodeAgentMessage(
@@ -2881,7 +3054,8 @@ export class CodeAgentSessionService {
     turnId: string,
     selectedModel: AIModelOption,
     backend: CodeAgentBackend,
-    codexRunSettings: CodexRunSettings
+    codexRunSettings: CodexRunSettings,
+    durationMs?: number,
   ) {
     if (event.type === 'text_delta') {
       return;
@@ -2895,6 +3069,7 @@ export class CodeAgentSessionService {
       turnId,
       provider: isCodexBackend(backend) ? 'codex' : selectedModel.provider,
       model: isCodexBackend(backend) ? codexRunSettings.model : selectedModel.id,
+      ...(durationMs !== undefined ? { durationMs } : {}),
       errorMessage: event.type === 'error' ? event.message : undefined,
       payload: { backend, ...payload },
     });

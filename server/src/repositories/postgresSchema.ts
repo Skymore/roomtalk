@@ -2392,4 +2392,48 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         updated_at = clock_timestamp();
     `,
   },
+  {
+    // Position is the immutable public message order. Enrich only newly
+    // captured V1 after-images; retained V1 events stay byte-for-byte intact
+    // and the application decoder keeps accepting their missing position.
+    id: '0023_room_event_message_positions',
+    sql: `
+      CREATE OR REPLACE FUNCTION attach_room_message_positions_to_event()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.schema_version = 1 AND NEW.event_type = 'messages.upserted' THEN
+          NEW.payload := jsonb_set(
+            NEW.payload,
+            '{messageRows}',
+            COALESCE(
+              (
+                SELECT jsonb_agg(
+                  CASE
+                    WHEN message_row.position IS NULL THEN element.message_row
+                    ELSE element.message_row || jsonb_build_object('position', message_row.position)
+                  END
+                  ORDER BY element.ordinality
+                )
+                FROM jsonb_array_elements(
+                  COALESCE(NEW.payload->'messageRows', '[]'::jsonb)
+                ) WITH ORDINALITY AS element(message_row, ordinality)
+                LEFT JOIN room_messages AS message_row
+                  ON message_row.room_id = NEW.room_id
+                  AND message_row.id = element.message_row->>'id'
+              ),
+              '[]'::jsonb
+            ),
+            FALSE
+          );
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS room_events_attach_message_positions ON room_events;
+      CREATE TRIGGER room_events_attach_message_positions
+        BEFORE INSERT ON room_events
+        FOR EACH ROW EXECUTE FUNCTION attach_room_message_positions_to_event();
+    `,
+  },
 ];

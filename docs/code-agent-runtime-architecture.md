@@ -148,7 +148,7 @@ Each code-agent room resolves to one E2B sandbox and `/workspace` directory. The
 - discover dev servers and resolve E2B preview URLs;
 - export/import bounded workspace archives during artifact migration.
 
-The current default idle TTL is two minutes and the default active TTL is one hour. With the default E2B policy, timeout pauses the sandbox, keeps memory, and enables provider auto-resume. RoomTalk reconnects paused sandboxes instead of treating the timeout as data loss. Production may set the same values explicitly through `CODE_AGENT_IDLE_SANDBOX_TTL_MS` and `CODE_AGENT_ACTIVE_SANDBOX_TTL_MS`.
+The current default idle TTL is two minutes and the default active TTL is one hour. A RoomTalk-owned hard turn deadline is clamped below the active TTL (30 seconds earlier by default), stops the runner, closes pending tools, and atomically records the stable `turn_timeout` terminal error before E2B can terminate the sandbox. The E2B timeout remains an infrastructure guardrail; with the default pause policy it keeps memory and enables provider auto-resume. RoomTalk reconnects paused sandboxes instead of treating the timeout as data loss. Production may configure these boundaries through `CODE_AGENT_IDLE_SANDBOX_TTL_MS`, `CODE_AGENT_ACTIVE_SANDBOX_TTL_MS`, `CODE_AGENT_TURN_MAX_MS`, and `CODE_AGENT_TURN_DEADLINE_SAFETY_MS`. Every terminal path then shortens the sandbox back to the idle TTL.
 
 ### Reusable JSONL daemon
 

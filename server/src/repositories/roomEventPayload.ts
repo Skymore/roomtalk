@@ -85,7 +85,10 @@ const MESSAGE_KEYS = [
 ] as const;
 
 const validateMessageRow = (value: unknown, path: string, roomId: string): string => {
-  const row = exactKeys(value, path, MESSAGE_KEYS);
+  // position was added to schemaVersion 1 after immutable room events were
+  // already in production. Keep it optional so retained pre-rollout events
+  // remain replayable while every newly captured message carries the key.
+  const row = exactKeys(value, path, MESSAGE_KEYS, ['position']);
   string(row.id, `${path}.id`);
   if (string(row.room_id, `${path}.room_id`) !== roomId) fail(`${path}.room_id`, `equal to ${roomId}`);
   string(row.client_id, `${path}.client_id`);
@@ -108,6 +111,12 @@ const validateMessageRow = (value: unknown, path: string, roomId: string): strin
   ['avatar', 'tool_args', 'ai_model', 'usage', 'cost', 'reply_to', 'ui_payload', 'code_agent_queued_input']
     .forEach(key => nullableRecord(row[key], `${path}.${key}`));
   nullableStringArray(row.code_agent_image_message_ids, `${path}.code_agent_image_message_ids`);
+  if (
+    row.position !== undefined
+    && (typeof row.position !== 'number' || !Number.isSafeInteger(row.position) || row.position < 0)
+  ) {
+    fail(`${path}.position`, 'a non-negative safe integer when present');
+  }
   return row.id as string;
 };
 

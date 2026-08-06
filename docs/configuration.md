@@ -119,6 +119,8 @@ Pinned artifact and E2B:
 | `CODE_AGENT_ARTIFACT_MODE` | Pinned production or explicit development mode. |
 | `CODE_AGENT_E2B_AUTO_RESUME` / `CODE_AGENT_E2B_ON_TIMEOUT` | Pause/resume lifecycle. |
 | `CODE_AGENT_IDLE_SANDBOX_TTL_MS` / `CODE_AGENT_ACTIVE_SANDBOX_TTL_MS` | Idle and running-turn sandbox TTLs. |
+| `CODE_AGENT_TURN_MAX_MS` | Hard application deadline for one active turn. Defaults to the active sandbox TTL and is always clamped below it. |
+| `CODE_AGENT_TURN_DEADLINE_SAFETY_MS` | Margin reserved before the active sandbox TTL so RoomTalk records `turn_timeout` before E2B can terminate the sandbox. Defaults to 30 seconds. |
 | `CODE_AGENT_SANDBOX_TTL_MS` | Legacy fallback for the idle TTL. |
 
 Scoped capabilities:

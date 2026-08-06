@@ -1,8 +1,13 @@
 import { ensurePersistentBrowserStorage, getBrowserCacheOwnerId, getOwnedBrowserCacheName } from './browserCacheStorage';
 import { Message, RoomAgentTurn } from './types';
 
-const DB_NAME = 'roomtalk-message-cache-v4';
-const LEGACY_DB_NAMES = ['roomtalk-message-cache', 'roomtalk-message-cache-v2', 'roomtalk-message-cache-v3'];
+const DB_NAME = 'roomtalk-message-cache-v5';
+const LEGACY_DB_NAMES = [
+  'roomtalk-message-cache',
+  'roomtalk-message-cache-v2',
+  'roomtalk-message-cache-v3',
+  'roomtalk-message-cache-v4',
+];
 const DB_VERSION = 1;
 const STORE_NAME = 'room-message-windows';
 const MAX_CACHED_MESSAGES = 100;

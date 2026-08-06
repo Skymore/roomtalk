@@ -13,6 +13,17 @@ const baseMessage: Message = {
 };
 
 describe('chat export', () => {
+  it('renders positioned messages in canonical order even when timestamps and input order disagree', () => {
+    const ai = { ...baseMessage, id: 'ai', content: 'AI explanation', clientId: 'ai_assistant', messageType: 'ai' as const, position: 10, timestamp: '2026-08-06T00:04:20.000Z' };
+    const tool = { ...baseMessage, id: 'tool', content: 'Tool call', messageType: 'tool_call' as const, position: 11, timestamp: '2026-08-06T00:04:13.000Z' };
+    const result = { ...baseMessage, id: 'result', content: 'Tool result', messageType: 'tool_result' as const, position: 12, timestamp: '2026-08-06T00:04:17.000Z' };
+
+    const html = buildTranscriptHtml({ id: 'room-1', name: 'Room' }, [result, tool, ai]);
+
+    expect(html.indexOf('AI explanation')).toBeLessThan(html.indexOf('Tool call'));
+    expect(html.indexOf('Tool call')).toBeLessThan(html.indexOf('Tool result'));
+  });
+
   it('renders quoted image, video, and audio references in transcript HTML', () => {
     const messages: Message[] = [
       {

@@ -98,6 +98,8 @@ export interface Message {
   id: string;
   clientId: string;
   content: string;
+  /** Immutable room-local order assigned when the message becomes durable. */
+  position?: number;
   timestamp: string;
   updatedAt?: string;
   roomId: string;

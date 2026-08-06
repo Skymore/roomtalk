@@ -14,7 +14,7 @@ import {
   RoomEventAvailable,
   RoomSnapshotPayload,
 } from '../utils/types';
-import { appendA2UIPayload, appendAIChunk, completeAIMessage, failAIMessage, resetStreamingAIMessage, upsertMessage } from '../utils/messageState';
+import { appendA2UIPayload, appendAIChunk, completeAIMessage, failAIMessage, resetStreamingAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
 import {
   clearCachedRoomMessageWindow,
   readCachedRoomMessageWindow,
@@ -499,10 +499,10 @@ export const useRoomMessageEvents = ({
         filterTurns(snapshot.turns || []).forEach(turn => byId.set(turn.id, turn));
         canonicalTurns = Array.from(byId.values());
         const existingIds = new Set(canonicalMessages.map(message => message.id));
-        canonicalMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents([
+        canonicalMessages = applyUnpersistedAIErrorOverlays(drainPendingAIEvents(sortMessages([
           ...filterMessages(snapshot.messages).filter(message => !existingIds.has(message.id)),
           ...canonicalMessages,
-        ]));
+        ])));
         setAgentTurns(canonicalTurns);
         updateMessages(canonicalMessages);
         setHasMore(snapshot.hasMore);
@@ -867,7 +867,7 @@ export const useRoomMessageEvents = ({
     const memoryWindow = readMemoryRoomMessageWindow(roomId);
     let cacheHydrationPromise: Promise<void>;
     if (memoryWindow) {
-      const messages = filterMessages(memoryWindow.messages);
+      const messages = sortMessages(filterMessages(memoryWindow.messages));
       const turns = filterTurns(memoryWindow.turns || []);
       const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
       canonicalMessages = messages;
@@ -898,7 +898,7 @@ export const useRoomMessageEvents = ({
       cacheHydrationPromise = readCachedRoomMessageWindow(roomId)
         .then(cachedWindow => {
           if (cancelled || !cachedWindow || hasBaseline) return;
-          const messages = filterMessages(cachedWindow.messages);
+          const messages = sortMessages(filterMessages(cachedWindow.messages));
           const turns = filterTurns(cachedWindow.turns || []);
           const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
           canonicalMessages = drainPendingAIEvents(messages);

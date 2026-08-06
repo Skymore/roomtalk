@@ -183,6 +183,15 @@ describe('PostgresStore', () => {
     assert.match(migration.sql, /turn\.status IN \('error', 'cancelled'\)/);
   });
 
+  it('adds immutable public positions to new room message after-images without rewriting retained events', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0023_room_event_message_positions');
+    assert.ok(migration);
+    assert.match(migration.sql, /BEFORE INSERT ON room_events/);
+    assert.match(migration.sql, /jsonb_build_object\('position', message_row\.position\)/);
+    assert.match(migration.sql, /NEW\.event_type = 'messages\.upserted'/);
+    assert.doesNotMatch(migration.sql, /UPDATE room_events/);
+  });
+
   it('settles one room model usage event and increments the total in the same transaction', async () => {
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
@@ -987,7 +996,15 @@ describe('PostgresStore', () => {
       { rows: [roomRow()] },
       { rows: [{ position: '2' }] },
       {
-        rowCount: 1,
+        rows: [{
+          id: 'message-1',
+          room_id: 'room-1',
+          client_id: 'client-1',
+          content: 'hello',
+          timestamp: '2026-05-04T00:00:00.000Z',
+          message_type: 'text',
+          position: '2',
+        }],
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[0], 'message-1');
@@ -1073,7 +1090,16 @@ describe('PostgresStore', () => {
       { rows: [roomRow()] },
       { rows: [{ position: '4' }] },
       {
-        rowCount: 1,
+        rows: [{
+          id: 'message-1',
+          room_id: 'room-1',
+          client_id: 'client-1',
+          content: '',
+          timestamp: '2026-05-04T00:00:00.000Z',
+          message_type: 'media',
+          mime_type: 'image/webp',
+          position: '4',
+        }],
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[0], 'message-1');
@@ -1129,6 +1155,7 @@ describe('PostgresStore', () => {
         content: '',
         messageType: 'media',
         mimeType: 'image/webp',
+        position: 4,
         mediaAsset: {
           id: 'asset-1',
           kind: 'image',
@@ -1281,6 +1308,8 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /ai_stream_owner_id IS NOT DISTINCT FROM \$3/);
           assert.match(call.sql, /ai_stream_fence = \$15/);
+          assert.doesNotMatch(call.sql, /\btimestamp\s*=/);
+          assert.match(call.sql, /updated_at = COALESCE/);
           assert.doesNotMatch(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[2], 'worker-2');
           assert.equal(call.params?.[14], 2);

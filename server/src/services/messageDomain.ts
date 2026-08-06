@@ -23,6 +23,26 @@ export function parseClientMessageBatch(id: unknown, index: unknown): ClientMess
 }
 
 export function orderMessageBatches(messages: Message[]): Message[] {
+  const positionedCount = messages.filter(message => (
+    typeof message.position === 'number'
+    && Number.isSafeInteger(message.position)
+    && message.position >= 0
+  )).length;
+  if (positionedCount === messages.length && messages.length > 0) {
+    return messages
+      .map((message, index) => ({ message, index }))
+      .sort((left, right) => (
+        left.message.position! - right.message.position! || left.index - right.index
+      ))
+      .map(item => item.message);
+  }
+  if (positionedCount > 0) {
+    // Retained V1 room events do not have position. Preserve their input order
+    // when they are temporarily mixed with new after-images; a full snapshot
+    // will replace the window with positions for every durable message.
+    return [...messages];
+  }
+
   const members = new Map<string, Message[]>();
   for (const message of messages) {
     if (!message.clientBatchId || message.clientBatchIndex === undefined) continue;

@@ -29,7 +29,7 @@ const fingerprintAccountMembershipChange = (input: AccountMembershipChangeInput)
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
 const ROOM_AI_USAGE_EVENTS_KEY = 'room_ai_usage_events';
 export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:v2:room:';
+const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:v3:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getRoomClientMessageIdsKey = (roomId: string) => `room:${roomId}:client_message_ids`;
 const getClientMessageIdField = (clientId: string, clientMessageId: string) => (
@@ -753,9 +753,14 @@ for i = 1, #existing do
       or (owner ~= nil and tostring(owner) == ARGV[4])
     local currentFence = tonumber(decoded['aiStreamFence'] or 0)
     if ownerMatches and currentFence == tonumber(ARGV[5]) then
-      updatedPayload = ARGV[3]
-      redis.call('LSET', KEYS[2], i - 1, updatedPayload)
-      found = 1
+      local updatedOk, updated = pcall(cjson.decode, ARGV[3])
+      if updatedOk then
+        updated['timestamp'] = decoded['timestamp']
+        updated['updatedAt'] = ARGV[6]
+        updatedPayload = cjson.encode(updated)
+        redis.call('LSET', KEYS[2], i - 1, updatedPayload)
+        found = 1
+      end
     end
     break
   end
@@ -1732,7 +1737,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           JSON.stringify(publicMessage),
           expectedOwnership.ownerId || '',
           String(expectedOwnership.fence),
-          message.timestamp,
+          message.updatedAt || message.timestamp,
         ],
       });
       const found = Array.isArray(result) && Number(result[1]) === 1;
@@ -4351,7 +4356,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
             ...message,
             status: 'error' as const,
             content,
-            timestamp: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            isError: true,
           };
         });
 

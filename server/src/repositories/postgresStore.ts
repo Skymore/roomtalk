@@ -155,7 +155,7 @@ type MessageRow = {
   code_agent_mode?: string | null;
   code_agent_queued_input?: unknown;
   code_agent_image_message_ids?: unknown;
-  position?: number | string;
+  position?: number | string | null;
 };
 
 type RoomMemberRow = {
@@ -370,7 +370,7 @@ type AccountEntitlementRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -853,6 +853,8 @@ const mapMessage = (row: MessageRow): Message => {
     messageType: row.message_type,
   };
 
+  const position = toOptionalNumber(row.position ?? null);
+  if (position !== undefined) message.position = position;
   if (row.client_message_id) message.clientMessageId = row.client_message_id;
   if (row.client_batch_id) message.clientBatchId = row.client_batch_id;
   const clientBatchIndex = toOptionalNumber(row.client_batch_index ?? null);
@@ -1302,7 +1304,13 @@ export class PostgresStore implements DurableRoomStore {
           [message.roomId]
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(UPSERT_MESSAGE_SQL, messageParams(message, position));
+        const inserted = await client.query<MessageRow>(
+          `${UPSERT_MESSAGE_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+          messageParams(message, position),
+        );
+        if (!inserted.rows[0]) {
+          throw new Error(`Failed to append message ${message.id}`);
+        }
 
         const updatedRoom = await client.query<RoomRow>(
           `UPDATE rooms
@@ -1314,7 +1322,7 @@ export class PostgresStore implements DurableRoomStore {
         );
         this.logger.debug('Message appended to PostgreSQL', { roomId: message.roomId, messageId: message.id });
         return updatedRoom.rows[0]
-          ? { room: mapRoom(updatedRoom.rows[0]), message, inserted: true }
+          ? { room: mapRoom(updatedRoom.rows[0]), message: mapMessage(inserted.rows[0]), inserted: true }
           : null;
       });
     } catch (error) {
@@ -1354,7 +1362,13 @@ export class PostgresStore implements DurableRoomStore {
           [mediaMessage.roomId]
         );
         const position = Number(nextPosition.rows[0]?.position || 0);
-        await client.query(UPSERT_MESSAGE_SQL, messageParams(mediaMessage, position));
+        const inserted = await client.query<MessageRow>(
+          `${UPSERT_MESSAGE_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+          messageParams(mediaMessage, position),
+        );
+        if (!inserted.rows[0]) {
+          throw new Error(`Failed to append media message ${mediaMessage.id}`);
+        }
 
         const savedAsset = await this.saveMediaAssetWithClient(client, mediaAsset);
         if (!savedAsset) {
@@ -1374,7 +1388,7 @@ export class PostgresStore implements DurableRoomStore {
           throw new Error('Failed to update room after media message append');
         }
 
-        const savedMessage = this.attachMediaAssetsFromAssets([mediaMessage], [savedAsset])[0];
+        const savedMessage = this.attachMediaAssetsFromAssets([mapMessage(inserted.rows[0])], [savedAsset])[0];
         this.logger.debug('Media message and asset appended to PostgreSQL', { roomId: mediaMessage.roomId, messageId: mediaMessage.id, assetId: savedAsset.id, kind: savedAsset.kind });
         return { room: roomResult, message: savedMessage, asset: savedAsset };
       });
@@ -1469,7 +1483,6 @@ export class PostgresStore implements DurableRoomStore {
       const updated = await client.query<MessageRow>(
         `UPDATE room_messages
         SET content = $4,
-          timestamp = $5::timestamptz,
           updated_at = COALESCE($6::timestamptz, $5::timestamptz),
           status = $7,
           is_error = $8,
@@ -1514,7 +1527,7 @@ export class PostgresStore implements DurableRoomStore {
           updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
-        [message.roomId, message.timestamp],
+        [message.roomId, message.updatedAt || message.timestamp],
       );
       if (!room.rows[0]) {
         throw new Error(`AI terminal transition lost room ${message.roomId}`);
@@ -2648,7 +2661,7 @@ export class PostgresStore implements DurableRoomStore {
           updated_at = clock_timestamp()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
-        [message.roomId, message.timestamp],
+        [message.roomId, message.updatedAt || message.timestamp],
       );
       if (!updatedRoom.rows[0]) throw new Error(`Code-agent finalization lost room ${message.roomId}`);
       return {
@@ -2671,6 +2684,18 @@ export class PostgresStore implements DurableRoomStore {
         || input.message.turnId !== claim.turnId
         || (input.message.status !== 'complete' && input.message.status !== 'error')
         || !input.expectedMessageOwnership
+      ))
+      || (input.appendMessage && (
+        input.message !== undefined
+        || input.outcome !== 'error'
+        || input.appendMessage.roomId !== claim.roomId
+        || input.appendMessage.turnId !== claim.turnId
+        || input.appendMessage.clientId !== 'ai_assistant'
+        || input.appendMessage.messageType !== 'ai'
+        || input.appendMessage.status !== 'error'
+        || input.appendMessage.isError !== true
+        || !input.appendMessage.content.trim()
+        || input.deleteMessageIds?.includes(input.appendMessage.id)
       ))
     ) {
       throw new Error('Invalid atomic code-agent terminal transition');
@@ -2698,18 +2723,72 @@ export class PostgresStore implements DurableRoomStore {
         } else {
           savedMessage = mapMessage(updated);
         }
+      } else if (input.appendMessage) {
+        const nextPosition = await client.query<{ position: number | string }>(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+          [claim.roomId],
+        );
+        const inserted = await client.query<MessageRow>(
+          `${INSERT_MESSAGE_ROW_SQL} RETURNING ${MESSAGE_COLUMNS}`,
+          messageParams(input.appendMessage, Number(nextPosition.rows[0]?.position || 0)),
+        );
+        if (!inserted.rows[0]) {
+          throw new Error(`Failed to append terminal code-agent message ${input.appendMessage.id}`);
+        }
+        savedMessage = mapMessage(inserted.rows[0]);
       }
 
       const deleteMessageIds = Array.from(new Set(input.deleteMessageIds || []))
         .filter(messageId => messageId && messageId !== savedMessage?.id);
       if (deleteMessageIds.length > 0) {
-        await client.query(
+        const deleted = await client.query<{ id: string }>(
           `DELETE FROM room_messages
           WHERE room_id = $1
             AND turn_id = $2
-            AND id = ANY($3::text[])`,
+            AND id = ANY($3::text[])
+            AND status = 'streaming'
+            AND content = ''
+          RETURNING id`,
           [claim.roomId, claim.turnId, deleteMessageIds],
         );
+        if ((deleted.rowCount || 0) !== deleteMessageIds.length) {
+          throw new Error(`Refused unsafe code-agent segment cleanup for turn ${claim.turnId}`);
+        }
+      }
+
+      const remainingStreaming = await client.query<{ id: string }>(
+        `SELECT id
+        FROM room_messages
+        WHERE room_id = $1
+          AND turn_id = $2
+          AND status = 'streaming'
+        FOR UPDATE`,
+        [claim.roomId, claim.turnId],
+      );
+      if (remainingStreaming.rows.length > 0) {
+        throw new Error(`Code-agent terminal transition left streaming messages for turn ${claim.turnId}`);
+      }
+
+      const danglingToolCalls = await client.query<{ id: string }>(
+        `SELECT tool_call.id
+        FROM room_messages AS tool_call
+        WHERE tool_call.room_id = $1
+          AND tool_call.turn_id = $2
+          AND tool_call.message_type = 'tool_call'
+          AND tool_call.tool_call_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM room_messages AS tool_result
+            WHERE tool_result.room_id = tool_call.room_id
+              AND tool_result.turn_id = tool_call.turn_id
+              AND tool_result.message_type = 'tool_result'
+              AND tool_result.tool_call_id = tool_call.tool_call_id
+          )
+        FOR UPDATE OF tool_call`,
+        [claim.roomId, claim.turnId],
+      );
+      if (danglingToolCalls.rows.length > 0) {
+        throw new Error(`Code-agent terminal transition left pending tools for turn ${claim.turnId}`);
       }
 
       const shouldSettleCost = actualOutcome === 'complete';
@@ -4317,7 +4396,6 @@ export class PostgresStore implements DurableRoomStore {
       const updatedMessage = await client.query<MessageRow>(
         `UPDATE room_messages
         SET content = $3,
-          timestamp = $4::timestamptz,
           updated_at = COALESCE($5::timestamptz, $4::timestamptz),
           status = $6,
           is_error = $7,
@@ -4489,7 +4567,7 @@ export class PostgresStore implements DurableRoomStore {
           updated_at = clock_timestamp()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
-        [message.roomId, message.timestamp],
+        [message.roomId, message.updatedAt || message.timestamp],
       );
       if (!room.rows[0]) throw new Error(`Assistant run projection lost room ${message.roomId}`);
 
@@ -6858,7 +6936,8 @@ export class PostgresStore implements DurableRoomStore {
         `UPDATE room_messages
         SET status = 'error',
           content = $1,
-          timestamp = NOW()
+          updated_at = NOW(),
+          is_error = TRUE
         WHERE status = 'streaming'
           AND ($2::text IS NULL OR ai_stream_owner_id = $2)`,
         [content, options.aiStreamOwnerId || null]
@@ -6903,7 +6982,6 @@ export class PostgresStore implements DurableRoomStore {
       UPDATE room_messages AS message
       SET status = 'error',
         content = $1,
-        timestamp = recovery_clock.now,
         updated_at = recovery_clock.now,
         is_error = TRUE,
         ai_stream_owner_id = NULL
@@ -6989,7 +7067,6 @@ export class PostgresStore implements DurableRoomStore {
     const updated = await client.query<MessageRow>(
       `UPDATE room_messages
       SET content = $4,
-        timestamp = $5::timestamptz,
         updated_at = COALESCE($6::timestamptz, $5::timestamptz),
         status = $7,
         is_error = $8,
@@ -7248,7 +7325,7 @@ export class PostgresStore implements DurableRoomStore {
       );
       const pageStartPosition = Number(start.rows[0]?.position);
       const page = await queryable.query<MessageRow>(
-        `SELECT ${MESSAGE_COLUMNS}, position
+        `SELECT ${MESSAGE_COLUMNS}
         FROM room_messages
         WHERE room_id = $1 AND position >= $2 AND ($3::bigint IS NULL OR position < $3)
         ORDER BY position ASC, timestamp ASC`,

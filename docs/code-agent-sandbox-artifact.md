@@ -114,9 +114,17 @@ CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-08-03-acp-cost-accounting-v
 CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 CODE_AGENT_IDLE_SANDBOX_TTL_MS=120000
 CODE_AGENT_ACTIVE_SANDBOX_TTL_MS=3600000
+CODE_AGENT_TURN_MAX_MS=3600000
+CODE_AGENT_TURN_DEADLINE_SAFETY_MS=30000
 # Optional, only for custom image layouts:
 # CODE_AGENT_RUNNER_PYTHONPATH=/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner
 ```
+
+RoomTalk clamps the application turn deadline below the active sandbox TTL by
+the configured safety margin. With the values above, a turn is stopped and
+atomically recorded as `turn_timeout` after 3,570,000 ms; E2B's one-hour TTL is
+an infrastructure guardrail rather than normal timeout control flow. Finishing
+a turn still shortens the sandbox to the two-minute idle TTL.
 
 RoomTalk validates these values at startup. If production E2B JSONL/daemon mode is enabled without `CODE_AGENT_ARTIFACT_VERSION` and `CODE_AGENT_SOURCE_REF`, or if it tries to use `CODE_AGENT_SOURCE_DIR`, startup fails. The template ID, artifact version, Dockerfile metadata, lock, and production source ref must describe the same artifact.
 

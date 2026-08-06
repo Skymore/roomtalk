@@ -127,6 +127,8 @@ export interface Message {
   clientId: string;
   content: string;
   roomId: string;
+  /** Immutable room-local order assigned when the message becomes durable. */
+  position?: number;
   timestamp: string;
   updatedAt?: string;
   messageType: MessageType;

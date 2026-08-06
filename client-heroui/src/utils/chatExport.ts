@@ -1,5 +1,6 @@
 import { Message, Room } from './types';
 import { buildMediaFilename } from './mediaDownload';
+import { sortMessages } from './messageState';
 
 export type ExportMediaResolver = (message: Message) => Promise<string | null>;
 type TranscriptRoom = Pick<Room, 'id' | 'name'>;
@@ -333,7 +334,7 @@ export const buildTranscriptHtml = (
     <main>
       <h1>${escapeHtml(room.name)}</h1>
       <div class="summary">Room ID: ${escapeHtml(room.id)} &middot; Exported: ${escapeHtml(new Date().toLocaleString())} &middot; Messages: ${messages.length}</div>
-      ${messages.map(message => messageToHtml(message, mediaByAssetId)).join('')}
+      ${sortMessages(messages).map(message => messageToHtml(message, mediaByAssetId)).join('')}
     </main>
   </body>
 </html>

@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react';
 import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { Message, RoomAgentTurn, RoomAgentTurnPhase } from '../utils/types';
+import { sortMessages } from '../utils/messageState';
 import { AgentBackendAvatar } from './AgentBackendAvatar';
 
 type CheckpointBoundary = 'before' | 'after';
@@ -53,7 +54,8 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
   const [isRestoreDialogOpen, setIsRestoreDialogOpen] = React.useState(false);
   const [restoringBoundary, setRestoringBoundary] = React.useState<CheckpointBoundary | null>(null);
   const [restoreNotice, setRestoreNotice] = React.useState<{ message: string; tone: 'success' | 'error' } | null>(null);
-  const ownMessages = React.useMemo(() => messages.filter(message => message.turnId === turn.id), [messages, turn.id]);
+  const orderedMessages = React.useMemo(() => sortMessages(messages), [messages]);
+  const ownMessages = React.useMemo(() => orderedMessages.filter(message => message.turnId === turn.id), [orderedMessages, turn.id]);
   const lastAIMessageId = [...ownMessages].reverse().find(message => message.messageType === 'ai')?.id;
   const fallbackFinalId = [...ownMessages].reverse().find(message => message.messageType !== 'tool_result')?.id || ownMessages.at(-1)?.id;
   const finalMessageId = ownMessages.some(message => message.id === turn.finalMessageId)
@@ -188,7 +190,7 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
       )}
 
       <div className="mt-1 flex flex-col space-y-2">
-        {messages.map(message => {
+        {orderedMessages.map(message => {
           if (message.turnId !== turn.id) return renderStandaloneMessage(message);
           if (turn.status === 'running') return renderOwnMessage(message);
           if (message.id === finalMessageId) return renderOwnMessage(message);

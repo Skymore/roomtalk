@@ -165,6 +165,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const snapshot = await store.readRoomSnapshot(roomId);
     assert.equal(snapshot.room.id, roomId);
     assert.deepEqual(snapshot.messages.map(item => item.id), ['message-1']);
+    assert.deepEqual(snapshot.messages.map(item => item.position), [0]);
     assert.equal(snapshot.snapshotSeq, 3);
 
     const page = await store.readRoomEvents(roomId, { afterSeq: 0, limit: 100 });
@@ -174,6 +175,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       [3, 'messages.upserted'],
     ]);
     assert.equal(page.events[2].payload.messages?.[0]?.content, 'message-1');
+    assert.equal(page.events[2].payload.messages?.[0]?.position, 0);
     assert.ok(page.events.every(event => event.schemaVersion === 1));
 
     const columns = await pool.query<{ column_name: string }>(
@@ -886,6 +888,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       sessionId: 'thread-after',
       backendTurnId: 'codex-turn-after',
       workspaceCheckpoint: checkpoint,
+      deleteMessageIds: [placeholder.id],
     });
     assert.equal(terminal.outcome, 'applied');
     const stored = await store.readCodeAgentWorkspaceCheckpoint(roomId, turnId);
@@ -1254,6 +1257,154 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(finalized.outcome, 'applied');
   });
 
+  it('orders finalized AI before later tools and atomically removes empty terminal segments', async () => {
+    const roomId = 'terminal-segment-cleanup-room';
+    const turnId = 'terminal-segment-cleanup-turn';
+    const startedAt = '2026-08-06T00:04:10.000Z';
+    const leaseNow = new Date().toISOString();
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+    }));
+    const runningTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', startedAt),
+      id: turnId,
+      startedAt: leaseNow,
+      updatedAt: leaseNow,
+    };
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, 'unused-placeholder', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      content: '',
+      status: 'streaming',
+      turnId,
+      timestamp: startedAt,
+    }), 'terminal-stream-owner');
+    const started = await store.beginCodeAgentTurn({
+      roomId,
+      turn: runningTurn,
+      placeholder,
+      ownerId: 'terminal-instance',
+      now: leaseNow,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(started.outcome, 'started');
+    if (started.outcome !== 'started') return;
+    const claim = {
+      roomId,
+      turnId,
+      ownerId: started.lease.ownerId,
+      fence: started.lease.fence,
+    };
+
+    const segmentCreatedAt = '2026-08-06T00:04:11.000Z';
+    const textSegment = {
+      ...started.placeholder,
+      id: 'durable-ai-segment',
+      content: '',
+      status: 'streaming' as const,
+      timestamp: segmentCreatedAt,
+    };
+    assert.equal((await store.appendCodeAgentMessage(textSegment, claim)).outcome, 'applied');
+    const finalized = await store.finalizeCodeAgentMessage({
+      ...textSegment,
+      content: 'I will inspect the files first.',
+      status: 'complete',
+      // Deliberately later than the following tool events. The durable row must
+      // retain segmentCreatedAt and use updatedAt for completion metadata.
+      timestamp: '2026-08-06T00:04:20.000Z',
+      updatedAt: '2026-08-06T00:04:20.000Z',
+    }, {
+      ownerId: 'terminal-stream-owner',
+      fence: getAIStreamFence(textSegment),
+    }, claim);
+    assert.equal(finalized.outcome, 'applied');
+    if (finalized.outcome !== 'applied') return;
+    assert.equal(finalized.message.timestamp, segmentCreatedAt);
+    assert.equal(finalized.message.updatedAt, '2026-08-06T00:04:20.000Z');
+
+    const toolCallMessage = message(roomId, 'tool-call', {
+      clientMessageId: undefined,
+      clientId: 'code_agent_runner',
+      messageType: 'tool_call',
+      turnId,
+      toolCallId: 'tool-1',
+      toolName: 'Shell',
+      timestamp: '2026-08-06T00:04:13.000Z',
+    });
+    const toolResultMessage = message(roomId, 'tool-result', {
+      clientMessageId: undefined,
+      clientId: 'code_agent_runner',
+      messageType: 'tool_result',
+      turnId,
+      toolCallId: 'tool-1',
+      toolName: 'Shell',
+      timestamp: '2026-08-06T00:04:17.000Z',
+    });
+    assert.equal((await store.appendCodeAgentMessage(toolCallMessage, claim)).outcome, 'applied');
+
+    const completedAt = new Date().toISOString();
+    const terminalErrorMessage = message(roomId, 'terminal-error', {
+      clientMessageId: undefined,
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      turnId,
+      status: 'error',
+      isError: true,
+      content: 'Coco task reached the task time limit and was stopped.',
+      timestamp: completedAt,
+      updatedAt: completedAt,
+    });
+    const terminalInput = {
+      claim,
+      outcome: 'error' as const,
+      completedAt,
+      finalMessageId: 'terminal-error',
+      appendMessage: terminalErrorMessage,
+      deleteMessageIds: [placeholder.id],
+    };
+    const headWithDanglingTool = await store.readRoomEventHead(roomId);
+    await assert.rejects(store.finishCodeAgentTurn(terminalInput), /left pending tools/);
+    assert.equal(await store.readRoomEventHead(roomId), headWithDanglingTool);
+    assert.equal((await store.readRoomAgentTurns(roomId, [turnId]))[0]?.status, 'running');
+    assert.equal((await store.readMessagesByRoom(roomId)).some(item => item.id === 'terminal-error'), false);
+
+    assert.equal((await store.appendCodeAgentMessage(toolResultMessage, claim)).outcome, 'applied');
+    const eventHeadBeforeTerminal = await store.readRoomEventHead(roomId);
+    const terminal = await store.finishCodeAgentTurn(terminalInput);
+    assert.equal(terminal.outcome, 'applied');
+    if (terminal.outcome !== 'applied') return;
+    assert.equal(terminal.message?.id, 'terminal-error');
+    assert.equal(terminal.turn.status, 'error');
+    assert.equal(terminal.turn.finalMessageId, 'terminal-error');
+
+    const durableMessages = await store.readMessagesByRoom(roomId);
+    assert.deepEqual(durableMessages.map(item => item.id), [
+      'durable-ai-segment',
+      'tool-call',
+      'tool-result',
+      'terminal-error',
+    ]);
+    assert.deepEqual(durableMessages.map(item => item.position), [1, 2, 3, 4]);
+    assert.equal(durableMessages[0].timestamp, segmentCreatedAt);
+    assert.equal(durableMessages.some(item => item.status === 'streaming'), false);
+
+    const snapshot = await store.readRoomSnapshot(roomId);
+    assert.deepEqual(snapshot.messages.map(item => item.id), durableMessages.map(item => item.id));
+    assert.equal(snapshot.messages.some(item => item.status === 'streaming'), false);
+    const terminalEvents = await store.readRoomEvents(roomId, { afterSeq: eventHeadBeforeTerminal, limit: 100 });
+    const deletedEvent = terminalEvents.events.find(item => item.type === 'messages.deleted');
+    const appendedEvent = terminalEvents.events.find(item => (
+      item.type === 'messages.upserted'
+      && item.payload.messageIds?.includes('terminal-error')
+    ));
+    assert.deepEqual(deletedEvent?.payload.messageIds, [placeholder.id]);
+    assert.equal(appendedEvent?.payload.messages?.[0]?.position, 4);
+  });
+
   it('rolls back the whole code-agent terminal projection when any terminal write fails', async () => {
     const roomId = 'atomic-code-agent-terminal-room';
     const now = new Date().toISOString();
@@ -1315,6 +1466,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         outcome: 'complete',
         completedAt: new Date().toISOString(),
         finalMessageId: 'missing-final-message',
+        deleteMessageIds: [placeholder.id],
         cost: completedMessage.cost,
       }),
       /foreign key|violates/i,

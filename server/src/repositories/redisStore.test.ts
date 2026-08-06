@@ -295,6 +295,7 @@ class MemoryRedis {
       if (!roomJson) return [0, 0, '', ''];
       const list = this.lists.get(messagesKey) || [];
       let found = 0;
+      let updatedPayload = '';
       for (let index = 0; index < list.length; index++) {
         const current = JSON.parse(list[index]);
         if (current.id !== messageId || current.status !== 'streaming') continue;
@@ -302,7 +303,11 @@ class MemoryRedis {
           ? current.aiStreamOwnerId === undefined
           : current.aiStreamOwnerId === ownerId;
         if (ownerMatches && Number(current.aiStreamFence || 0) === Number(fenceRaw)) {
-          list[index] = payload;
+          const updated = JSON.parse(payload);
+          updated.timestamp = current.timestamp;
+          updated.updatedAt = timestamp;
+          updatedPayload = JSON.stringify(updated);
+          list[index] = updatedPayload;
           found = 1;
         }
         break;
@@ -317,7 +322,7 @@ class MemoryRedis {
         roomJson = JSON.stringify(currentRoom);
         this.hash(roomsKey).set(roomId, roomJson);
       }
-      return [1, found, roomJson, found === 1 ? payload : ''];
+      return [1, found, roomJson, updatedPayload];
     }
 
     if (script.includes('DELETE_MESSAGE_BY_ID')) {
@@ -1450,6 +1455,8 @@ describe('RedisStore', () => {
       ...placeholder,
       content: 'complete answer',
       status: 'complete',
+      timestamp: '2026-05-03T00:00:05.000Z',
+      updatedAt: '2026-05-03T00:00:05.000Z',
     });
     assert.deepEqual(
       await store.finalizeAIMessage(completed, { ownerId: 'worker-1', fence: 1 }),
@@ -1458,6 +1465,7 @@ describe('RedisStore', () => {
     assert.equal((await store.finalizeAIMessage(completed, { ownerId: 'worker-2', fence: 2 })).outcome, 'applied');
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [{
       ...completed,
+      timestamp: placeholder.timestamp,
       aiStreamOwnerId: undefined,
       aiStreamFence: undefined,
     }].map(item => {
@@ -1791,16 +1799,18 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getRoomById('room-1'), roomBeforeRecovery);
 
     const recoveredMessages = await store.readMessagesByRoom('room-1');
-    assert.notEqual(recoveredMessages[0].timestamp, streamingMessage.timestamp);
     assert.deepEqual(recoveredMessages, [
       {
         ...streamingMessage,
         status: 'error',
         content: 'Response interrupted.',
-        timestamp: recoveredMessages[0].timestamp,
+        timestamp: streamingMessage.timestamp,
+        updatedAt: recoveredMessages[0].updatedAt,
+        isError: true,
       },
       completeMessage,
     ]);
+    assert.equal(typeof recoveredMessages[0].updatedAt, 'string');
   });
 
   it('only recovers interrupted streaming messages for the requested owner', async () => {
