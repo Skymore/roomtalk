@@ -365,6 +365,110 @@ def test_event_bridge_preserves_structured_tool_failure_with_warning_suffix():
     assert emitted[-1]["output"].endswith("[Tool loop warning: retrying]")
 
 
+def test_opencode_completed_tool_maps_strict_user_abort_metadata_to_failure():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-abort",
+            title="Run command",
+            kind="execute",
+            status="completed",
+            raw_input={"command": "sleep 300"},
+            raw_output={
+                "output": "",
+                "metadata": {
+                    "exit": None,
+                    "output": "<shell_metadata>\nUser aborted the command\n</shell_metadata>",
+                    "truncated": False,
+                },
+            },
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    result = events(output)[-1]
+    assert result["success"] is False
+    assert "exitCode" not in result
+
+
+def test_opencode_completed_tool_preserves_metadata_exit_zero():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-success",
+            title="Run command",
+            kind="execute",
+            status="completed",
+            raw_input={"command": "pwd"},
+            raw_output={
+                "output": "/workspace",
+                "metadata": {
+                    "exit": 0,
+                    "output": "/workspace",
+                    "truncated": False,
+                },
+            },
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    result = events(output)[-1]
+    assert result["success"] is True
+    assert result["exitCode"] == 0
+
+
+def test_opencode_output_containing_aborted_is_not_an_abort_sentinel():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-text",
+            title="Run command",
+            kind="execute",
+            status="completed",
+            raw_input={"command": "printf aborted"},
+            raw_output={
+                "output": "aborted is ordinary command output",
+                "metadata": {
+                    "output": "aborted is ordinary command output",
+                    "truncated": False,
+                },
+            },
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    result = events(output)[-1]
+    assert result["success"] is True
+    assert "exitCode" not in result
+
+
 def test_hermes_event_bridge_recovers_exact_parallel_tool_results_before_answer_text(tmp_path: Path):
     state_db = tmp_path / "state.db"
     with sqlite3.connect(state_db) as connection:

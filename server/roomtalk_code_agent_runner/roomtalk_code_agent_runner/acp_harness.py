@@ -39,6 +39,7 @@ MAX_ACP_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_ACP_FRAME_BYTES = 8 * 1024 * 1024
 HARNESS_STATE_ROOT = Path("/tmp/roomtalk-harnesses")
 HERMES_ROOMTALK_PROVIDER = "roomtalk"
+OPENCODE_SHELL_ABORT_SENTINEL = "<shell_metadata>\nUser aborted the command\n</shell_metadata>"
 
 
 @dataclass(frozen=True)
@@ -457,7 +458,10 @@ class ACPEventBridge:
         success = status == "completed"
         exit_code: int | None = None
         if success:
-            success, exit_code = self._hermes_tool_success(output_text)
+            if self.backend == "opencode":
+                success, exit_code = self._opencode_tool_success(output_text)
+            else:
+                success, exit_code = self._hermes_tool_success(output_text)
         self._emit_tool_result(
             tool_call_id,
             success=success,
@@ -630,6 +634,28 @@ class ACPEventBridge:
             or (normalized_exit_code is not None and normalized_exit_code != 0)
         )
         return not failed, normalized_exit_code
+
+    @staticmethod
+    def _opencode_tool_success(output: str) -> tuple[bool, int | None]:
+        try:
+            value = json.loads(output)
+        except (TypeError, json.JSONDecodeError):
+            return True, None
+        if not isinstance(value, dict):
+            return True, None
+        metadata = value.get("metadata")
+        if not isinstance(metadata, dict):
+            return True, None
+        metadata_output = metadata.get("output")
+        if (
+            isinstance(metadata_output, str)
+            and metadata_output.strip() == OPENCODE_SHELL_ABORT_SENTINEL
+        ):
+            return False, None
+        exit_code = metadata.get("exit")
+        if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+            return exit_code == 0, exit_code
+        return True, None
 
     async def _flush_hermes_tool_results(self, session_id: str) -> None:
         if self.backend != "hermes-agent" or self.hermes_state_db is None:
