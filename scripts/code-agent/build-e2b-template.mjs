@@ -26,7 +26,7 @@ const options = {
     'hermes acp --check >/dev/null',
     '/opt/hermes-agent/.venv/bin/python -c "import anthropic"',
     'bwrap --version >/dev/null',
-    `{ probe="/workspace/.roomtalk-bwrap-ready-$$"; marker="/tmp/.roomtalk-bwrap-ready-$$"; rm -f "$probe" "$marker"; bwrap --die-with-parent --bind / / --ro-bind /workspace /workspace --chdir /workspace -- sh -c 'printf ready > "$1"; if touch "$2"; then exit 41; fi' sh "$marker" "$probe"; test "$(cat "$marker")" = ready; test ! -e "$probe"; rm -f "$marker"; }`,
+    `{ probe="/workspace/.roomtalk-bwrap-ready-$$"; marker="/tmp/.roomtalk-bwrap-ready-$$"; rm -f "$probe" "$marker"; bwrap --die-with-parent --bind / / --dev /dev --ro-bind /workspace /workspace --chdir /workspace -- sh -c 'printf ready >/dev/null; python -c "open(\\"/dev/null\\", \\"w\\").close()"; printf ready > "$1"; if touch "$2"; then exit 41; fi' sh "$marker" "$probe"; test "$(cat "$marker")" = ready; test ! -e "$probe"; rm -f "$marker"; }`,
     'playwright --version >/dev/null',
     'node -e "const { chromium } = require(\\"playwright\\"); const fs = require(\\"fs\\"); const executable = chromium.executablePath(); if (!fs.existsSync(executable)) { console.error(`missing Chromium executable: ${executable}`); process.exit(1); }"',
     'curl --version >/dev/null',

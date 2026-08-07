@@ -98,6 +98,7 @@ interface RoomSettingsModalProps {
   codeAgentAvailableModes?: CodeAgentMode[];
   codeAgentDefaultMode?: CodeAgentMode;
   codeAgentAvailableBackends?: CodeAgentBackend[];
+  codeAgentDefaultBackend?: CodeAgentBackend;
   onRoomUpdated?: (room: Room) => void;
 }
 
@@ -113,6 +114,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   codeAgentAvailableModes = ['plan'],
   codeAgentDefaultMode = 'plan',
   codeAgentAvailableBackends = ['code-agent'],
+  codeAgentDefaultBackend = 'code-agent',
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -741,9 +743,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               <div className="flex flex-wrap gap-1.5">
                 {getVisibleCodeAgentBackendOptions(
                   codeAgentAvailableBackends,
-                  getCodeAgentBackend(room),
+                  getCodeAgentBackend(room, codeAgentDefaultBackend),
                 ).map(backend => {
-                  const current = getCodeAgentBackend(room) || 'code-agent';
+                  const current = getCodeAgentBackend(room, codeAgentDefaultBackend) || codeAgentDefaultBackend;
                   const selected = current === backend;
                   const labelKey = getCodeAgentBackendLabelKey(backend);
                   return (

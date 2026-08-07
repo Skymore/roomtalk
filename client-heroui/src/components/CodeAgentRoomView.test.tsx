@@ -296,6 +296,7 @@ const renderCodeAgentRoom = (
     username="User"
     clientId="client-1"
     backend={room.codeAgentBackend || (room.type === 'codeAgent' ? 'code-agent' : 'codex')}
+    defaultBackend="code-agent"
     availableBackends={['code-agent', 'codex', 'codex-app-server', 'opencode', 'hermes-agent']}
     availableModes={availableModes}
     defaultMode={defaultMode}

@@ -25,6 +25,7 @@ export interface SocketHandlerDeps {
   codeAgentSessionService?: CodeAgentSessionService;
   codeAgentAccess?: CodeAgentAccessControl;
   codeAgentAvailableBackends: CodeAgentBackend[];
+  codeAgentDefaultBackend: CodeAgentBackend;
   codeAgentSandboxLifecycle?: Pick<CodeAgentSandboxLifecycleService, 'ensureReadySandbox'>;
   codeAgentSandboxService?: CodeAgentSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;

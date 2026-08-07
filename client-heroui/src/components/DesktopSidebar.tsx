@@ -21,7 +21,7 @@ import { formatDate } from '../utils/formatters';
 import { getLanguageOption, languageOptions } from '../utils/languages';
 import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils/roomState';
 import { createRoom } from '../utils/socket';
-import { Room, RoomRenameHandler, RoomType } from '../utils/types';
+import { CodeAgentBackend, Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
@@ -57,6 +57,7 @@ interface DesktopSidebarProps {
   onUnsaveRoom: (roomId: string) => void;
   onRenameRoom: RoomRenameHandler;
   isCodeAgentEnabled: boolean;
+  codeAgentDefaultBackend?: CodeAgentBackend;
   onModalTaskStart?: () => void;
 }
 
@@ -431,6 +432,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   onUnsaveRoom,
   onRenameRoom,
   isCodeAgentEnabled,
+  codeAgentDefaultBackend = 'code-agent',
   onModalTaskStart,
 }) => {
   const { t } = useTranslation();
@@ -601,6 +603,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         password: options.password,
         postingSchedule: options.postingSchedule,
         type: isCodeAgentEnabled ? (options.type || newRoomType) : 'chat',
+        codeAgentBackend: isCodeAgentEnabled && (options.type || newRoomType) === 'codeAgent'
+          ? codeAgentDefaultBackend
+          : undefined,
       });
       setNewRoomName('');
       setNewRoomDescription('');

@@ -177,6 +177,7 @@ interface ActiveCodeAgentTurn {
   sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
   interruptedByUser: boolean;
+  terminationReason?: 'user_interrupt' | 'lease_lost' | 'timeout';
   pendingSteerMessageIds: Set<string>;
   pendingControls: Map<string, {
     resolve: (result: CodeAgentControlAck) => void;
@@ -214,6 +215,16 @@ class CodeAgentTurnTimeoutError extends Error {
     this.name = 'CodeAgentTurnTimeoutError';
   }
 }
+
+class CodeAgentTurnInterruptedError extends Error {
+  constructor() {
+    super('Code-agent turn was interrupted by the user');
+    this.name = 'CodeAgentTurnInterruptedError';
+  }
+}
+
+const CODE_AGENT_INTERRUPT_CONTROL_TIMEOUT_MS = 2_000;
+const CODE_AGENT_INTERRUPT_GRACE_TIMEOUT_MS = 2_000;
 
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
@@ -367,8 +378,27 @@ export class CodeAgentSessionService {
     let deadlineTermination: Promise<void> = Promise.resolve();
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
+    const markLeaseLost = () => {
+      leaseLost = true;
+      const active = this.activeTurns.get(input.roomId);
+      if (active?.turnId === turnId) {
+        active.terminationReason = 'lease_lost';
+      }
+    };
     const assertTurnWithinDeadline = () => {
-      if (turnTimedOut) throw new CodeAgentTurnTimeoutError(this.turnTimeoutMs);
+      const active = this.activeTurns.get(input.roomId);
+      if (leaseLost || active?.terminationReason === 'lease_lost') {
+        throw new Error('Workspace agent lease was lost before the next turn phase');
+      }
+      if (turnTimedOut || active?.terminationReason === 'timeout') {
+        throw new CodeAgentTurnTimeoutError(this.turnTimeoutMs);
+      }
+      if (
+        active?.turnId === turnId
+        && (active.terminationReason === 'user_interrupt' || (active.interruptedByUser && !leaseLost && !turnTimedOut))
+      ) {
+        throw new CodeAgentTurnInterruptedError();
+      }
     };
     const updateTurn = (patch: Partial<RoomAgentTurn>) => {
       turnUpdateChain = turnUpdateChain.then(async () => {
@@ -384,7 +414,7 @@ export class CodeAgentSessionService {
         }
         const persisted = await this.store.updateCodeAgentTurn?.(nextTurn, turnClaim);
         if (!persisted) {
-          leaseLost = true;
+          markLeaseLost();
           throw new Error('Workspace agent lease was lost before the turn update');
         }
         turnRecord = persisted;
@@ -481,6 +511,7 @@ export class CodeAgentSessionService {
         backend: turnBackend,
         leaseFence: started.lease.fence,
         interruptedByUser: false,
+        terminationReason: undefined,
         pendingSteerMessageIds: new Set(),
         pendingControls: new Map(),
       });
@@ -490,14 +521,16 @@ export class CodeAgentSessionService {
           const active = this.activeTurns.get(input.roomId);
           if (active?.turnId !== turnId) return;
           if (leaseLost) {
+            active.terminationReason = 'lease_lost';
             reject(new Error('Workspace agent lease was lost at the turn deadline'));
             return;
           }
-          if (active.interruptedByUser) {
-            reject(new Error('Agent turn remained active after user interruption'));
+          if (active.terminationReason === 'user_interrupt') {
+            reject(new CodeAgentTurnInterruptedError());
             return;
           }
           turnTimedOut = true;
+          active.terminationReason = 'timeout';
           publicFailureMessage = `${this.displayBackendName(turnBackend)} task reached the task time limit and was stopped. Start a new task to continue.`;
           const processAtDeadline = active.process;
           deadlineTermination = processAtDeadline
@@ -533,7 +566,7 @@ export class CodeAgentSessionService {
             await updateTurn({ lastHeartbeatAt: this.now().toISOString() });
             return;
           }
-          leaseLost = true;
+          markLeaseLost();
           publicFailureMessage = 'Workspace agent lease was lost';
           this.logger.error('Code-agent room lease was lost during an active turn', {
             roomId: input.roomId,
@@ -594,6 +627,7 @@ export class CodeAgentSessionService {
       });
 
       await updatePhase('preparing_sandbox', 'Connecting to the workspace');
+      assertTurnWithinDeadline();
 
       const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
       assertTurnWithinDeadline();
@@ -648,6 +682,7 @@ export class CodeAgentSessionService {
       );
       assertTurnWithinDeadline();
       await updatePhase('starting_agent', 'Starting the agent');
+      assertTurnWithinDeadline();
       const runnerSessionId = sandbox.created ? null : (room!.codeAgentSessionId || null);
 
       streamState = {
@@ -721,20 +756,57 @@ export class CodeAgentSessionService {
           });
         }
         const active = this.activeTurns.get(input.roomId);
-        if (active?.turnId === turnId) {
-          active.process = runnerProcess;
-          active.sandbox = turnSandbox!;
+        const leaseIsActive = this.store.hasActiveCodeAgentRoomLease
+          ? await this.store.hasActiveCodeAgentRoomLease(input.roomId, this.now().toISOString(), turnId)
+          : true;
+        if (leaseLost || !leaseIsActive) {
+          markLeaseLost();
+          if (runnerProcess) {
+            await this.terminateRunnerProcess(runnerProcess, input.roomId);
+            runnerProcess = null;
+          }
+          throw new Error('Workspace agent lease was lost before the runner started');
         }
-        await this.recordTurnEvent('info', 'code_agent.runner.started', input, turnId, turnStartedAtMs, {
-          payload: {
-            backend: turnBackend,
-            sandboxId: turnSandbox!.id,
-            mode: turnMode.mode,
-            runnerClient: this.options.runnerClient || 'jsonl',
-          },
-        });
-        await updatePhase('running', 'Agent is working');
-        return runnerProcess;
+        if (
+          !runnerProcess
+          || !active
+          || active.turnId !== turnId
+          || active.terminationReason === 'user_interrupt'
+          || (active.interruptedByUser && !leaseLost && !turnTimedOut)
+        ) {
+          if (runnerProcess) {
+            await this.terminateRunnerProcess(runnerProcess, input.roomId);
+            runnerProcess = null;
+          }
+          throw new CodeAgentTurnInterruptedError();
+        }
+        active.process = runnerProcess;
+        active.sandbox = turnSandbox!;
+        const startedProcess = runnerProcess;
+        try {
+          assertTurnWithinDeadline();
+          await this.recordTurnEvent('info', 'code_agent.runner.started', input, turnId, turnStartedAtMs, {
+            payload: {
+              backend: turnBackend,
+              sandboxId: turnSandbox!.id,
+              mode: turnMode.mode,
+              runnerClient: this.options.runnerClient || 'jsonl',
+            },
+          });
+          assertTurnWithinDeadline();
+          await updatePhase('running', 'Agent is working');
+          assertTurnWithinDeadline();
+          return startedProcess;
+        } catch (error) {
+          if (error instanceof CodeAgentTurnInterruptedError || error instanceof CodeAgentTurnTimeoutError || leaseLost) {
+            if (active.process === startedProcess) {
+              active.process = undefined;
+            }
+            await this.terminateRunnerProcess(startedProcess, input.roomId);
+            runnerProcess = null;
+          }
+          throw error;
+        }
       };
       const runnerHandlers = {
         onEvent: async (event: CodeAgentRunnerEvent) => {
@@ -813,6 +885,7 @@ export class CodeAgentSessionService {
           turnBackend,
         );
       }
+      assertTurnWithinDeadline();
 
       const answer = streamState.segmentContent || streamState.fullContent;
       const usage = runResult.finalEvent.usage;
@@ -971,16 +1044,26 @@ export class CodeAgentSessionService {
         ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
         : undefined;
       if (publicCodexError) publicFailureMessage = publicCodexError;
-      const visibleFailureMessage = publicFailureMessage
-        || `${this.displayBackendName(turnBackend)} task failed. Retry, or switch engines if the problem continues.`;
-      const reportedError = new Error(visibleFailureMessage);
       const failedSegmentId = streamState?.activeMessageId || aiMessageId;
       const activeAtFailure = this.activeTurns.get(input.roomId);
       const interruptedByUser = Boolean(activeAtFailure?.turnId === turnId && activeAtFailure.interruptedByUser);
-      const errorCode = leaseLost
-        ? 'room_lease_lost'
-        : interruptedByUser
-          ? 'turn_interrupted'
+      const terminationReason = activeAtFailure?.turnId === turnId
+        ? activeAtFailure.terminationReason
+        : undefined;
+      const userInterrupted = terminationReason
+        ? terminationReason === 'user_interrupt'
+        : interruptedByUser && !leaseLost && !turnTimedOut;
+      if (userInterrupted) {
+        publicFailureMessage = 'Agent task was interrupted by the user. Start a new task to continue.';
+      }
+      const visibleFailureMessage = publicFailureMessage
+        || `${this.displayBackendName(turnBackend)} task failed. Retry, or switch engines if the problem continues.`;
+      const reportedError = new Error(visibleFailureMessage);
+      const terminalOutcome = userInterrupted ? 'cancelled' as const : 'error' as const;
+      const errorCode = userInterrupted
+        ? 'turn_interrupted'
+        : leaseLost
+          ? 'room_lease_lost'
           : turnTimedOut
             ? 'turn_timeout'
             : 'turn_failed';
@@ -1065,7 +1148,7 @@ export class CodeAgentSessionService {
         if (turnClaim && turnRecord && this.store.finishCodeAgentTurn) {
           terminal = await this.store.finishCodeAgentTurn({
             claim: turnClaim,
-            outcome: 'error',
+            outcome: terminalOutcome,
             completedAt,
             finalMessageId: errorTargetId,
             ...(workspaceCheckpoint ? { workspaceCheckpoint } : {}),
@@ -1272,27 +1355,37 @@ export class CodeAgentSessionService {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
     if (codeAgentBackendSupportsInterrupt(active.backend)) {
+      if (active.terminationReason === 'lease_lost' || active.terminationReason === 'timeout') {
+        return { success: true };
+      }
+      active.interruptedByUser = true;
+      if (!active.terminationReason) active.terminationReason = 'user_interrupt';
       const response = await this.writeActiveControl(roomId, {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'interrupt',
         turnId: active.turnId,
         ...(reason ? { reason } : {}),
-      });
+      }, { timeoutMs: CODE_AGENT_INTERRUPT_CONTROL_TIMEOUT_MS });
       if (response.success) {
-        const current = this.activeTurns.get(roomId);
-        if (current?.turnId === active.turnId) {
-          current.interruptedByUser = true;
+        if (active.process) {
+          void this.ensureInterruptedRunnerStops(active, roomId, active.process);
         }
+        return response;
       }
-      return response;
+      await this.terminateActiveRunner(active, roomId);
+      return { success: true };
     }
     if (active.backend === 'codex') {
+      if (active.terminationReason === 'lease_lost' || active.terminationReason === 'timeout') {
+        return { success: true };
+      }
+      active.interruptedByUser = true;
+      if (!active.terminationReason) active.terminationReason = 'user_interrupt';
       if (active.process) {
-        active.interruptedByUser = true;
         await this.stopRunnerProcess(active.process, roomId);
         return { success: true };
       }
-      return { success: false, error: 'The current engine does not support interactive interrupt yet' };
+      return { success: true };
     }
     return { success: false, error: 'The current engine does not support interactive interrupt yet' };
   }
@@ -1728,9 +1821,43 @@ export class CodeAgentSessionService {
     });
   }
 
+  private async terminateActiveRunner(active: ActiveCodeAgentTurn, roomId: string): Promise<boolean> {
+    const runnerProcess = active.process;
+    if (!runnerProcess) {
+      return false;
+    }
+    active.process = undefined;
+    await this.terminateRunnerProcess(runnerProcess, roomId);
+    return true;
+  }
+
+  private async ensureInterruptedRunnerStops(
+    active: ActiveCodeAgentTurn,
+    roomId: string,
+    runnerProcess: CodeAgentRunnerProcess,
+  ): Promise<void> {
+    const completed = runnerProcess.completed
+      ? runnerProcess.completed.then(() => undefined, () => undefined)
+      : undefined;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<void>(resolve => {
+      graceTimer = setTimeout(resolve, CODE_AGENT_INTERRUPT_GRACE_TIMEOUT_MS);
+      graceTimer.unref?.();
+    });
+    try {
+      await Promise.race(completed ? [completed, grace] : [grace]);
+    } finally {
+      if (graceTimer) clearTimeout(graceTimer);
+    }
+    if (this.activeTurns.get(roomId) === active && active.process === runnerProcess && active.interruptedByUser) {
+      await this.terminateActiveRunner(active, roomId);
+    }
+  }
+
   private async writeActiveControl(
     roomId: string,
-    request: CodeAgentRunnerControlRequest
+    request: CodeAgentRunnerControlRequest,
+    options: { timeoutMs?: number } = {},
   ): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     const stdin = active?.process?.stdin;
@@ -1738,16 +1865,21 @@ export class CodeAgentSessionService {
       return { success: false, error: 'The running agent is not ready for control input' };
     }
     const controlId = this.createId();
+    const timeoutMs = options.timeoutMs ?? 10_000;
     const result = new Promise<CodeAgentControlAck>(resolve => {
       const timeout = setTimeout(() => {
         active.pendingControls.delete(controlId);
         resolve({ success: false, error: 'Timed out waiting for the running agent to accept control input' });
-      }, 10_000);
+      }, timeoutMs);
       active.pendingControls.set(controlId, { resolve, timeout });
     });
     try {
-      await writeCodeAgentRunnerRequest(stdin, { ...request, controlId });
-      return await result;
+      const write = writeCodeAgentRunnerRequest(stdin, { ...request, controlId });
+      const response = await Promise.race([
+        write.then(() => undefined),
+        result,
+      ]);
+      return response || await result;
     } catch (error) {
       const pending = active.pendingControls.get(controlId);
       if (pending) {

@@ -45,10 +45,15 @@ const storedCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend
   room?.codeAgentBackend && CODE_AGENT_BACKENDS.has(room.codeAgentBackend) ? room.codeAgentBackend : null
 );
 
-export const getCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend | null => {
+export const getCodeAgentBackend = (
+  room: Room | null | undefined,
+  defaultBackend: CodeAgentBackend = 'code-agent',
+): CodeAgentBackend | null => {
   const roomType = runtimeRoomType(room);
   if (roomType === 'codeAgent') {
-    return storedCodeAgentBackend(room) || 'code-agent';
+    return storedCodeAgentBackend(room) || (
+      CODE_AGENT_BACKENDS.has(defaultBackend) ? defaultBackend : 'code-agent'
+    );
   }
   if (roomType === 'codex') {
     return storedCodeAgentBackend(room) || 'codex-app-server';
@@ -114,6 +119,9 @@ export const getCodeAgentBackendLabelKey = (backend: CodeAgentBackend): string =
   }
 };
 
-export const getCodeAgentStatus = (room: Room | null | undefined): RoomCodeAgentStatus | undefined => (
-  getCodeAgentBackend(room) !== null ? (room?.codeAgentStatus || 'idle') : undefined
+export const getCodeAgentStatus = (
+  room: Room | null | undefined,
+  defaultBackend?: CodeAgentBackend,
+): RoomCodeAgentStatus | undefined => (
+  getCodeAgentBackend(room, defaultBackend) !== null ? (room?.codeAgentStatus || 'idle') : undefined
 );

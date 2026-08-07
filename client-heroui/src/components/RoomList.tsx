@@ -6,7 +6,7 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Room, RoomRenameHandler, RoomType } from '../utils/types';
+import { CodeAgentBackend, Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { buildRoomShareUrl, validateRoomName } from '../utils/roomState';
 import { RoomCard } from './RoomCard';
@@ -25,10 +25,11 @@ interface RoomListProps {
   clientId: string;
   username: string;
   isCodeAgentEnabled: boolean;
+  codeAgentDefaultBackend?: CodeAgentBackend;
   onModalTaskStart?: () => void;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCodeAgentEnabled, onModalTaskStart }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCodeAgentEnabled, codeAgentDefaultBackend = 'code-agent', onModalTaskStart }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -91,6 +92,9 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
         password: options.password,
         postingSchedule: options.postingSchedule,
         type: isCodeAgentEnabled ? (options.type || newRoomType) : 'chat',
+        codeAgentBackend: isCodeAgentEnabled && (options.type || newRoomType) === 'codeAgent'
+          ? codeAgentDefaultBackend
+          : undefined,
       });
       setNewRoomName('');
       setNewRoomDescription('');
@@ -273,6 +277,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
             onCopyRoomLink={handleCopyRoomLink}
             onRename={openRenameModal}
             onDelete={openDeleteModal}
+            codeAgentDefaultBackend={codeAgentDefaultBackend}
           />
         ))}
       </div>

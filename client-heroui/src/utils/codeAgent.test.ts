@@ -13,7 +13,7 @@ import {
   isCodeAgentRoom,
   isSupportedCodeAgentBackend,
 } from './codeAgent';
-import { Room } from './types';
+import { CodeAgentBackend, Room } from './types';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -76,6 +76,7 @@ describe('codeAgent room adapters', () => {
         availableModes: ['plan', 'acceptEdits'],
         defaultMode: 'plan',
         availableBackends: ['code-agent', 'opencode'],
+        defaultBackend: 'opencode',
       },
       codex: {
         connections: {
@@ -122,5 +123,12 @@ describe('codeAgent room adapters', () => {
         availableBackends: ['code-agent', 'codex', 'codex-app-server'],
       },
     })).toEqual(['code-agent', 'codex', 'codex-app-server']);
+  });
+
+  it('uses the feature default for legacy rooms without a persisted backend', () => {
+    const legacyRoom = room({ type: 'codeAgent' });
+
+    expect(getCodeAgentBackend(legacyRoom, 'codex-app-server')).toBe('codex-app-server');
+    expect(getCodeAgentBackend(legacyRoom, 'not-a-backend' as CodeAgentBackend)).toBe('code-agent');
   });
 });

@@ -3,7 +3,7 @@
 [English](code-agent-sandbox-artifact.md)
 
 状态：当前 release 合约
-已按 `master` 和生产非 secret runtime pin 核对：2026-08-02
+已按 `master` 和生产非 secret runtime pin 核对：2026-08-06
 
 ## 用途
 
@@ -23,9 +23,9 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4
+artifactVersion: roomtalk-code-agent-2026-08-06-acp-reliability-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.44
+roomtalk-code-agent-runner: 0.1.45
 openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
 opencode-ai: 1.18.10
@@ -84,5 +84,6 @@ CODE_AGENT_SOURCE_REF=<engine sourceRef>
 - image input、room context、model gateway、static publish 和 approval/interrupt/steer 的受影响边界；
 - workspace Git/file/PTY/preview 基础能力；
 - artifact metadata 与 production pin 完全匹配。
+- E2B ready probe 必须用带 `--dev /dev` 的 ACP plan wrapper，并同时验证 shell redirect 与 Python 写入 `/dev/null`。
 
 完成标准不是“Docker build 成功”，而是新 E2B template 已发布、被生产引用并通过真实边界验证。

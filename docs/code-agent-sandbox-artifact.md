@@ -3,7 +3,7 @@
 [中文](code-agent-sandbox-artifact.zh.md)
 
 Status: Current release contract
-Verified against `master` and the production non-secret runtime pins: 2026-08-02
+Verified against `master` and the production non-secret runtime pins: 2026-08-06
 
 ## Purpose
 
@@ -29,11 +29,11 @@ ops/code-agent-sandbox/artifact.lock.json
 Pinned values:
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4
+artifactVersion: roomtalk-code-agent-2026-08-06-acp-reliability-v1
 codeAgentEngineSourceRepo: https://github.com/Venti0325/Coco.git
 codeAgentEngineSourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
 codeAgentEnginePackageVersion: 0.1.3a0
-runnerPackageVersion: 0.1.44
+runnerPackageVersion: 0.1.45
 codexCliVersion: 0.145.0-alpha.4
 codexPythonSdkVersion: 0.1.0b3
 openCodeVersion: 1.18.10
@@ -78,7 +78,7 @@ roomtalk_code_agent_runner/
 Build the container image from that context:
 
 ```bash
-docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4 /tmp/roomtalk-code-agent-sandbox-context
+docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-08-06-acp-reliability-v1 /tmp/roomtalk-code-agent-sandbox-context
 ```
 
 Publish that image as the E2B template named by `CODE_AGENT_E2B_TEMPLATE_ID`.
@@ -88,7 +88,7 @@ Use the helper so the build context, E2B create command, readiness checks, and o
 ```bash
 node scripts/code-agent/build-e2b-template.mjs \
   --clean \
-  --template roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4 \
+  --template roomtalk-code-agent-2026-08-06-acp-reliability-v1 \
   --publish
 ```
 
@@ -107,10 +107,10 @@ CODE_AGENT_RUNNER_CLIENT=daemon
 CODE_AGENT_BACKEND=codex-app-server
 CODE_AGENT_ALLOWED_RUN_MODES=plan,edit,approveForMe,fullAccess
 CODE_AGENT_DEFAULT_MODE=plan
-CODE_AGENT_E2B_TEMPLATE_ID=roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4
+CODE_AGENT_E2B_TEMPLATE_ID=roomtalk-code-agent-2026-08-06-acp-reliability-v1
 E2B_API_KEY=...
 CODE_AGENT_ARTIFACT_MODE=production
-CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-08-03-acp-cost-accounting-v4
+CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-08-06-acp-reliability-v1
 CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 CODE_AGENT_IDLE_SANDBOX_TTL_MS=120000
 CODE_AGENT_ACTIVE_SANDBOX_TTL_MS=3600000
@@ -153,6 +153,7 @@ This is intentionally not accepted as production config.
 - `server/roomtalk_code_agent_runner` has package metadata and is loaded from a fixed source tree in the artifact.
 - Production E2B JSONL/daemon startup requires pinned artifact metadata.
 - E2B JSONL/daemon startup requires either `E2B_API_KEY` or `E2B_ACCESS_TOKEN`.
+- The E2B readiness probe runs the ACP plan wrapper with `--dev /dev` and verifies both shell redirection and Python writes to `/dev/null`.
 - Development mode is the only mode allowed to use the local Code Agent source path.
 - Real sandbox smoke is available through `cd server && npm run smoke:code-agent:e2b`; the script loads `server/.env`, skips unless `RUN_CODE_AGENT_E2B_SMOKE=true`, and then requires E2B/model credentials.
 - To run the real smoke with credentials already stored in `server/.env`, use `cd server && RUN_CODE_AGENT_E2B_SMOKE=true npm run smoke:code-agent:e2b`.

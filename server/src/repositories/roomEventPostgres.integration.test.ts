@@ -1405,6 +1405,147 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(appendedEvent?.payload.messages?.[0]?.position, 4);
   });
 
+  it('commits intentional cancellation and preserves ownership-obsolete semantics', async () => {
+    const roomId = 'intentional-code-agent-cancel-room';
+    const now = new Date().toISOString();
+    assert.ok(await store.saveRoom({
+      ...room(roomId),
+      type: 'codeAgent',
+      codeAgentStatus: 'idle',
+      sandboxStatus: 'ready',
+    }));
+
+    const runningTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', now),
+      id: 'intentional-cancel-turn',
+      startedAt: now,
+      updatedAt: now,
+    };
+    const placeholder = withAIStreamRecoveryMetadata(message(roomId, 'cancel-placeholder', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId: runningTurn.id,
+    }), 'cancel-stream-owner');
+    const started = await store.beginCodeAgentTurn({
+      roomId,
+      turn: runningTurn,
+      placeholder,
+      ownerId: 'cancel-instance',
+      now,
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(started.outcome, 'started');
+    if (started.outcome !== 'started') return;
+    const claim = {
+      roomId,
+      turnId: runningTurn.id,
+      ownerId: started.lease.ownerId,
+      fence: started.lease.fence,
+    };
+    const toolCall = message(roomId, 'cancel-tool-call', {
+      clientId: 'code_agent_runner',
+      clientMessageId: undefined,
+      messageType: 'tool_call',
+      turnId: runningTurn.id,
+      toolCallId: 'cancel-tool',
+      toolName: 'Terminal',
+    });
+    const toolResult = message(roomId, 'cancel-tool-result', {
+      clientId: 'code_agent_runner',
+      clientMessageId: undefined,
+      messageType: 'tool_result',
+      turnId: runningTurn.id,
+      toolCallId: 'cancel-tool',
+      toolName: 'Terminal',
+      status: 'complete',
+      isError: true,
+    });
+    assert.equal((await store.appendCodeAgentMessage(toolCall, claim)).outcome, 'applied');
+    assert.equal((await store.appendCodeAgentMessage(toolResult, claim)).outcome, 'applied');
+
+    const completedAt = new Date().toISOString();
+    const terminalErrorMessage = message(roomId, 'cancel-terminal-error', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      turnId: runningTurn.id,
+      status: 'error',
+      isError: true,
+      content: 'Agent task was interrupted by the user.',
+      timestamp: completedAt,
+      updatedAt: completedAt,
+    });
+    const eventHeadBeforeCancel = await store.readRoomEventHead(roomId);
+    const terminal = await store.finishCodeAgentTurn({
+      claim,
+      outcome: 'cancelled',
+      completedAt,
+      finalMessageId: terminalErrorMessage.id,
+      appendMessage: terminalErrorMessage,
+      deleteMessageIds: [placeholder.id],
+    });
+    assert.equal(terminal.outcome, 'applied');
+    if (terminal.outcome !== 'applied') return;
+    assert.equal(terminal.turn.status, 'cancelled');
+    assert.equal(terminal.turn.finalMessageId, undefined);
+    assert.equal(terminal.room.codeAgentStatus, 'idle');
+    const messages = await store.readMessagesByRoom(roomId);
+    assert.equal(messages.some(item => item.status === 'streaming'), false);
+    assert.equal(messages.some(item => item.messageType === 'tool_call' && !messages.some(result => result.messageType === 'tool_result' && result.toolCallId === item.toolCallId)), false);
+    const cancelEvents = await store.readRoomEvents(roomId, { afterSeq: eventHeadBeforeCancel, limit: 100 });
+    assert.deepEqual(cancelEvents.events.find(item => item.type === 'messages.deleted')?.payload.messageIds, [placeholder.id]);
+    assert.equal(cancelEvents.events.some(item => item.type === 'messages.upserted' && item.payload.messageIds?.includes(terminalErrorMessage.id)), true);
+
+    const obsoleteTurn: RoomAgentTurn = {
+      ...turn(roomId, 'running', new Date().toISOString()),
+      id: 'ownership-obsolete-cancel-turn',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const obsoletePlaceholder = message(roomId, 'obsolete-placeholder', {
+      clientId: 'ai_assistant',
+      clientMessageId: undefined,
+      messageType: 'ai',
+      status: 'streaming',
+      content: '',
+      turnId: obsoleteTurn.id,
+    });
+    const obsoleteStarted = await store.beginCodeAgentTurn({
+      roomId,
+      turn: obsoleteTurn,
+      placeholder: obsoletePlaceholder,
+      ownerId: 'obsolete-instance',
+      now: new Date().toISOString(),
+      leaseTtlMs: 60_000,
+    });
+    assert.equal(obsoleteStarted.outcome, 'started');
+    if (obsoleteStarted.outcome !== 'started') return;
+    const obsolete = await store.finishCodeAgentTurn({
+      claim: {
+        roomId,
+        turnId: obsoleteTurn.id,
+        ownerId: obsoleteStarted.lease.ownerId,
+        fence: obsoleteStarted.lease.fence,
+      },
+      outcome: 'complete',
+      completedAt: new Date().toISOString(),
+      message: {
+        ...obsoletePlaceholder,
+        content: 'stale completion',
+        status: 'complete',
+        updatedAt: new Date().toISOString(),
+      },
+      expectedMessageOwnership: { ownerId: 'wrong-owner', fence: 1 },
+      finalMessageId: obsoletePlaceholder.id,
+      deleteMessageIds: [obsoletePlaceholder.id],
+    });
+    assert.equal(obsolete.outcome, 'obsolete');
+    assert.equal((await store.readRoomAgentTurns(roomId, [obsoleteTurn.id]))[0]?.status, 'cancelled');
+  });
+
   it('rolls back the whole code-agent terminal projection when any terminal write fails', async () => {
     const roomId = 'atomic-code-agent-terminal-room';
     const now = new Date().toISOString();

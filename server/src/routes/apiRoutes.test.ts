@@ -842,7 +842,7 @@ describe('API routes', () => {
       rooms: number;
       dependencies: Record<string, string>;
       features: {
-        codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string; availableBackends: string[] };
+        codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string; availableBackends: string[]; defaultBackend: string };
         codex: { connections: { enabled: boolean } };
         github: { connections: { enabled: boolean } };
       };
@@ -866,6 +866,7 @@ describe('API routes', () => {
       availableModes: ['plan', 'edit'],
       defaultMode: 'plan',
       availableBackends: ['code-agent', 'opencode', 'hermes-agent'],
+      defaultBackend: 'code-agent',
     });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
     assert.deepEqual(status.features.github, { connections: { enabled: false } });
@@ -880,6 +881,7 @@ describe('API routes', () => {
         availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
         availableBackends: ['code-agent', 'opencode', 'hermes-agent'],
+        defaultBackend: 'code-agent',
       },
       codex: {
         connections: {

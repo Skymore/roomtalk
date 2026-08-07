@@ -117,6 +117,7 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
 
 type HarnessOptions = {
   codeAgentAvailableBackends?: CodeAgentBackend[];
+  codeAgentDefaultBackend?: CodeAgentBackend;
   publishedStaticSiteService?: {
     deleteSitesForRoom(roomId: string): Promise<{ slugCount: number; objectCount: number }>;
   };
@@ -376,6 +377,7 @@ const createHarness = (
     socketLogger: logger as any,
     codeAgentAccess,
     codeAgentAvailableBackends: options.codeAgentAvailableBackends,
+    codeAgentDefaultBackend: options.codeAgentDefaultBackend,
     publishedStaticSiteService: options.publishedStaticSiteService as any,
     resolveClientId: () => store.getClientId(),
   } as any);
@@ -921,6 +923,29 @@ describe('room socket handlers', () => {
     });
     assert.deepEqual(notAllowedResult, { success: false, error: 'Workspace is not enabled for this user' });
     assert.equal(notAllowed.store.savedRooms.length, 0);
+  });
+
+  it('persists the configured default backend and rejects unavailable client selections', async () => {
+    const valid = createHarness(
+      'client-1',
+      createCodeAgentAccessControl({ enabled: true }),
+      {
+        codeAgentAvailableBackends: ['code-agent', 'codex-app-server'],
+        codeAgentDefaultBackend: 'codex-app-server',
+      },
+    );
+
+    await valid.socket.invoke('create_room', { name: 'Codex default', type: 'codeAgent' });
+    assert.equal(valid.store.savedRooms[0].codeAgentBackend, 'codex-app-server');
+
+    await valid.socket.invoke('create_room', {
+      name: 'Bad backend',
+      type: 'codeAgent',
+      codeAgentBackend: 'opencode',
+    }, (result: { success: boolean; error?: string }) => {
+      assert.deepEqual(result, { success: false, error: 'Selected Workspace backend is not enabled' });
+    });
+    assert.equal(valid.store.savedRooms.length, 1);
   });
 
   it('joins existing rooms and leaves previous rooms without sending message history', async () => {

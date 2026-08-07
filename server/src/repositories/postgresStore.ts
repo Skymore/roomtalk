@@ -2687,7 +2687,7 @@ export class PostgresStore implements DurableRoomStore {
       ))
       || (input.appendMessage && (
         input.message !== undefined
-        || input.outcome !== 'error'
+        || (input.outcome !== 'error' && input.outcome !== 'cancelled')
         || input.appendMessage.roomId !== claim.roomId
         || input.appendMessage.turnId !== claim.turnId
         || input.appendMessage.clientId !== 'ai_assistant'
@@ -2712,6 +2712,7 @@ export class PostgresStore implements DurableRoomStore {
 
       let savedMessage: Message | undefined;
       let actualOutcome = input.outcome;
+      let finalizationObsoleted = false;
       if (input.message && input.expectedMessageOwnership) {
         const updated = await this.finalizeAIMessageWithClient(
           client,
@@ -2720,6 +2721,7 @@ export class PostgresStore implements DurableRoomStore {
         );
         if (!updated) {
           actualOutcome = 'cancelled';
+          finalizationObsoleted = true;
         } else {
           savedMessage = mapMessage(updated);
         }
@@ -2914,7 +2916,7 @@ export class PostgresStore implements DurableRoomStore {
       );
 
       return {
-        outcome: actualOutcome === 'cancelled' ? 'obsolete' as const : 'applied' as const,
+        outcome: finalizationObsoleted ? 'obsolete' as const : 'applied' as const,
         room: mapRoom(room.rows[0]),
         turn: mapRoomAgentTurn(turn.rows[0]),
         ...(savedMessage ? { message: savedMessage } : {}),

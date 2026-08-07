@@ -54,6 +54,19 @@ describe('message domain', () => {
     assert.equal(room.codeAgentStatus, 'idle');
   });
 
+  it('persists the canonical backend when creating a code-agent room', () => {
+    const room = createRoomRecord({
+      roomId: 'code-agent-2',
+      name: 'Codex room',
+      creatorId: 'client-1',
+      type: 'codeAgent',
+      codeAgentBackend: 'codex-app-server',
+      now: at,
+    });
+
+    assert.equal(room.codeAgentBackend, 'codex-app-server');
+  });
+
   it('validates room names consistently for create and rename flows', () => {
     assert.deepEqual(validateRoomNameInput('  General  '), { ok: true, name: 'General' });
     assert.deepEqual(validateRoomNameInput(''), { ok: false, error: 'Room name is required' });

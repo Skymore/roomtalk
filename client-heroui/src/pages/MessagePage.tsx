@@ -1314,6 +1314,7 @@ export const MessagePage: React.FC = () => {
               clientId={clientId}
               username={username}
               isCodeAgentEnabled={featureFlags.codeAgent.enabled}
+              codeAgentDefaultBackend={featureFlags.codeAgent.defaultBackend}
               onModalTaskStart={clearStatusForTask}
             />
           </div>
@@ -1352,7 +1353,7 @@ export const MessagePage: React.FC = () => {
           return <WelcomeView onEnterRooms={() => handleViewChange("rooms")} />;
         }
 
-        const codeAgentBackend = getCodeAgentBackend(currentRoom);
+        const codeAgentBackend = getCodeAgentBackend(currentRoom, featureFlags.codeAgent.defaultBackend);
         if (codeAgentBackend) {
           return (
             <CodeAgentRoomView
@@ -1369,6 +1370,7 @@ export const MessagePage: React.FC = () => {
               username={username}
               clientId={clientId}
               backend={codeAgentBackend}
+              defaultBackend={featureFlags.codeAgent.defaultBackend}
               availableBackends={getCodeAgentAvailableBackends(featureFlags)}
               availableModes={getCodeAgentAvailableModes(featureFlags)}
               defaultMode={getCodeAgentDefaultMode(featureFlags)}
@@ -1450,6 +1452,7 @@ export const MessagePage: React.FC = () => {
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}
           isCodeAgentEnabled={featureFlags.codeAgent.enabled}
+          codeAgentDefaultBackend={featureFlags.codeAgent.defaultBackend}
           onModalTaskStart={clearStatusForTask}
         />
 

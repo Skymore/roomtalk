@@ -14,6 +14,7 @@ describe('feature flags', () => {
         availableModes: ['plan'],
         defaultMode: 'plan',
         availableBackends: ['code-agent'],
+        defaultBackend: 'code-agent',
         rollout: 'disabled',
       },
       codex: { connections: { enabled: false } },
@@ -31,6 +32,7 @@ describe('feature flags', () => {
           availableModes: ['plan', 'acceptEdits'],
           defaultMode: 'plan',
           availableBackends: ['code-agent', 'codex-app-server', 'opencode', 'hermes-agent'],
+          defaultBackend: 'codex-app-server',
           rollout: 'allowlist',
         },
         codex: {
@@ -53,6 +55,7 @@ describe('feature flags', () => {
         availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
         availableBackends: ['code-agent', 'codex-app-server', 'opencode', 'hermes-agent'],
+        defaultBackend: 'codex-app-server',
         rollout: 'allowlist',
         reason: undefined,
       },

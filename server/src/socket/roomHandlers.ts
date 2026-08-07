@@ -5,7 +5,7 @@ import { createRoomMemberEvent, createRoomRecord } from '../services/messageDoma
 import { isClientRequestAuthorized } from '../services/clientAuth';
 import { normalizeCodeAgentMode } from '../services/codeAgentModes';
 import { CodeAgentBackend, Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
-import { CODE_AGENT_BACKENDS } from '../services/codeAgentBackends';
+import { CODE_AGENT_BACKENDS, isCodeAgentBackend } from '../services/codeAgentBackends';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
 import { clearCodeAgentWorkspaceRuntimeState } from './codeAgentWorkspaceHandlers';
@@ -95,6 +95,7 @@ type CreateRoomPayload = {
   password?: string;
   postingSchedule?: RoomPostingSchedule;
   type?: unknown;
+  codeAgentBackend?: unknown;
 };
 
 const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
@@ -269,6 +270,7 @@ export function registerRoomHandlers({
   resolveClientId,
   codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
   codeAgentAvailableBackends = ['code-agent'],
+  codeAgentDefaultBackend = 'code-agent',
   codeAgentSandboxService,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
@@ -497,6 +499,14 @@ export function registerRoomHandlers({
     }
 
     if (roomData?.type === 'codeAgent') {
+      const requestedBackend = roomData.codeAgentBackend;
+      const codeAgentBackend = requestedBackend === undefined
+        ? codeAgentDefaultBackend
+        : (isCodeAgentBackend(requestedBackend) ? requestedBackend : null);
+      if (!codeAgentBackend || !codeAgentAvailableBackends.includes(codeAgentBackend)) {
+        callback?.({ success: false, error: 'Selected Workspace backend is not enabled' });
+        return;
+      }
       const access = codeAgentAccess.canUse(clientId);
       if (!access.allowed) {
         socketLogger.warn('Code-agent room creation rejected by rollout controls', {
@@ -516,6 +526,11 @@ export function registerRoomHandlers({
       description: roomData.description,
       creatorId: clientId,
       type: normalizeRoomType(roomData.type),
+      ...(roomData.type === 'codeAgent'
+        ? { codeAgentBackend: roomData.codeAgentBackend === undefined
+          ? codeAgentDefaultBackend
+          : roomData.codeAgentBackend as CodeAgentBackend }
+        : {}),
     });
 
     socketLogger.info('Room creation requested', {

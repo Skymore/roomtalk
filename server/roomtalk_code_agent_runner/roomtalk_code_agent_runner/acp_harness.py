@@ -246,6 +246,7 @@ def _launch_command(
     return bwrap, (
         "--die-with-parent",
         "--bind", "/", "/",
+        "--dev", "/dev",
         "--ro-bind", workspace, workspace,
         "--chdir", workspace,
         "--",
@@ -453,11 +454,16 @@ class ACPEventBridge:
             and self.hermes_prompt_message_id is not None
         ):
             return
+        success = status == "completed"
+        exit_code: int | None = None
+        if success:
+            success, exit_code = self._hermes_tool_success(output_text)
         self._emit_tool_result(
             tool_call_id,
-            success=status == "completed",
+            success=success,
             output=output_text,
             fallback_name=str(getattr(update, "title", "") or "tool"),
+            exit_code=exit_code,
         )
 
     def _emit_tool_result(
@@ -610,7 +616,7 @@ class ACPEventBridge:
     @staticmethod
     def _hermes_tool_success(output: str) -> tuple[bool, int | None]:
         try:
-            value = json.loads(output)
+            value, _ = json.JSONDecoder().raw_decode(output.lstrip())
         except (TypeError, json.JSONDecodeError):
             return True, None
         if not isinstance(value, dict):

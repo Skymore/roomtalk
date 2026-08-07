@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from roomtalk_code_agent_runner.acp_harness import (
+    ACPHarnessSpec,
     ACPEventBridge,
     MAX_ACP_FRAME_BYTES,
     _configure_session,
@@ -23,6 +24,7 @@ from roomtalk_code_agent_runner.acp_harness import (
     build_harness_env,
     hermes_config,
     opencode_config,
+    _launch_command,
 )
 from roomtalk_code_agent_runner.runner import EventEmitter, RunnerError, RunnerRequest
 
@@ -119,6 +121,29 @@ def test_opencode_config_uses_anthropic_transport_for_anthropic_models():
     )
 
     assert config["provider"]["roomtalk"]["npm"] == "@ai-sdk/anthropic"
+
+
+def test_plan_wrapper_mounts_a_writable_dev_namespace_for_runner_processes(monkeypatch: Any):
+    monkeypatch.setattr(
+        "roomtalk_code_agent_runner.acp_harness.shutil.which",
+        lambda _name, path=None: "/usr/bin/bwrap",
+    )
+    command, args = _launch_command(
+        ACPHarnessSpec(
+            backend="probe",
+            display_name="Probe",
+            command="runner-probe",
+            args=("--acp",),
+        ),
+        runner_request(mode="plan", workspace=Path("/workspace")),
+        {"PATH": "/usr/bin"},
+    )
+
+    assert command == "/usr/bin/bwrap"
+    assert args[0:3] == ("--die-with-parent", "--bind", "/")
+    assert args[3:5] == ("/", "--dev")
+    assert args[5:7] == ("/dev", "--ro-bind")
+    assert args[-2:] == ("runner-probe", "--acp")
 
 
 def test_hermes_config_uses_an_isolated_custom_openai_compatible_provider():
@@ -310,6 +335,36 @@ def test_event_bridge_maps_a_terminal_tool_call_start_without_waiting_for_an_upd
     assert emitted[1]["output"] == "contents from terminal start"
 
 
+def test_event_bridge_preserves_structured_tool_failure_with_warning_suffix():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-fail",
+            title="Run command",
+            kind="execute",
+            status="completed",
+            raw_input={"command": "pwd"},
+            raw_output='{"output":"","exit_code":-1,"error":"PermissionError"}\n\n[Tool loop warning: retrying]',
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    emitted = events(output)
+    assert emitted[-1]["type"] == "tool_result"
+    assert emitted[-1]["success"] is False
+    assert emitted[-1]["exitCode"] == -1
+    assert emitted[-1]["output"].endswith("[Tool loop warning: retrying]")
+
+
 def test_hermes_event_bridge_recovers_exact_parallel_tool_results_before_answer_text(tmp_path: Path):
     state_db = tmp_path / "state.db"
     with sqlite3.connect(state_db) as connection:
@@ -446,6 +501,54 @@ def test_hermes_event_bridge_marks_recovered_tool_failures(tmp_path: Path):
     assert emitted[-1]["type"] == "tool_result"
     assert emitted[-1]["success"] is False
     assert emitted[-1]["exitCode"] == 7
+
+
+def test_hermes_event_bridge_marks_leading_json_failure_with_warning_suffix(tmp_path: Path):
+    state_db = tmp_path / "state.db"
+    with sqlite3.connect(state_db) as connection:
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT)"
+        )
+
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+        hermes_state_db=state_db,
+    )
+
+    async def run() -> None:
+        await bridge.begin_prompt("session-1")
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-fail",
+                title="Run command",
+                kind="execute",
+                raw_input={"command": "pwd"},
+                locations=[],
+                content=[],
+            ),
+        )
+        with sqlite3.connect(state_db) as connection:
+            connection.execute(
+                "INSERT INTO messages (session_id, role, content, tool_name) VALUES (?, 'tool', ?, ?)",
+                (
+                    "session-1",
+                    '{"output":"","exit_code":-1,"error":"PermissionError"}\n\n[Tool loop warning: retrying]',
+                    "terminal",
+                ),
+            )
+        await bridge.flush_tools_at_final("session-1")
+
+    asyncio.run(run())
+
+    emitted = events(output)
+    assert emitted[-1]["type"] == "tool_result"
+    assert emitted[-1]["success"] is False
+    assert emitted[-1]["exitCode"] == -1
 
 
 def test_event_bridge_closes_missing_terminal_tool_updates_before_final():

@@ -26,6 +26,7 @@ import {
 import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCredential } from '../services/googleAuth';
 import { getStickerCatalog } from '../stickers/catalog';
 import { CodeAgentAccessControl, createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
+import { isCodeAgentBackend } from '../services/codeAgentBackends';
 import { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import { normalizeCodeAgentMode, normalizeCodeAgentModeSet } from '../services/codeAgentModes';
 import { CodexConnectionService } from '../services/codexConnection';
@@ -64,6 +65,7 @@ interface ApiRouteOptions {
   codeAgentAvailableModes?: CodeAgentRunnerMode[];
   codeAgentDefaultMode?: CodeAgentRunnerMode;
   codeAgentAvailableBackends?: CodeAgentBackend[];
+  codeAgentDefaultBackend?: CodeAgentBackend;
   codexConnections?: {
     enabled: boolean;
     service?: CodexConnectionService;
@@ -324,6 +326,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const codeAgentDefaultMode = normalizedCodeAgentDefaultMode && codeAgentAvailableModes.includes(normalizedCodeAgentDefaultMode)
     ? normalizedCodeAgentDefaultMode
     : 'plan';
+  const codeAgentAvailableBackends = options.codeAgentAvailableBackends || ['code-agent'];
+  const codeAgentDefaultBackend = options.codeAgentDefaultBackend || 'code-agent';
   const mediaUploadCleanup = options.mediaUploadCleanup || {};
   const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());
   const pendingUploadTtlMs = mediaUploadCleanup.pendingUploadTtlMs ?? MEDIA_PENDING_UPLOAD_TTL_MS;
@@ -1325,7 +1329,15 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const roomType = roomData.type === 'codeAgent' ? 'codeAgent' : undefined;
+    let codeAgentBackend: CodeAgentBackend | undefined;
     if (roomType === 'codeAgent') {
+      const requestedBackend = roomData.codeAgentBackend === undefined
+        ? codeAgentDefaultBackend
+        : (isCodeAgentBackend(roomData.codeAgentBackend) ? roomData.codeAgentBackend : null);
+      if (!requestedBackend || !codeAgentAvailableBackends.includes(requestedBackend)) {
+        return res.status(400).json({ error: 'Selected Workspace backend is not enabled' });
+      }
+      codeAgentBackend = requestedBackend;
       const access = codeAgentAccess.canUse(clientId);
       if (!access.allowed) {
         routeLogger.warn('Code agent room creation rejected by rollout controls', {
@@ -1345,6 +1357,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       description: roomData.description,
       creatorId: clientId,
       type: roomType,
+      ...(codeAgentBackend ? { codeAgentBackend } : {}),
     });
 
     routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: room.name, roomType: room.type || 'chat', ip: req.ip });
@@ -1789,7 +1802,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         mode: codeAgentMode,
         availableModes: codeAgentAvailableModes,
         defaultMode: codeAgentDefaultMode,
-        availableBackends: options.codeAgentAvailableBackends,
+        availableBackends: codeAgentAvailableBackends,
+        defaultBackend: codeAgentDefaultBackend,
       },
       codex: {
         connections: {
@@ -2017,7 +2031,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           mode: codeAgentMode,
           availableModes: codeAgentAvailableModes,
           defaultMode: codeAgentDefaultMode,
-          availableBackends: options.codeAgentAvailableBackends,
+          availableBackends: codeAgentAvailableBackends,
+          defaultBackend: codeAgentDefaultBackend,
         },
         codex: {
           connections: {

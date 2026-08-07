@@ -17,6 +17,12 @@ const normalizeCodeAgentBackends = (value: unknown): CodeAgentBackend[] => {
   return normalized.length ? normalized : ['code-agent'];
 };
 
+const normalizeCodeAgentBackend = (value: unknown): CodeAgentBackend => (
+  typeof value === 'string' && CODE_AGENT_BACKENDS.has(value as CodeAgentBackend)
+    ? value as CodeAgentBackend
+    : 'code-agent'
+);
+
 export interface FeatureFlags {
   codeAgent: {
     enabled: boolean;
@@ -24,6 +30,7 @@ export interface FeatureFlags {
     availableModes: CodeAgentMode[];
     defaultMode: CodeAgentMode;
     availableBackends: CodeAgentBackend[];
+    defaultBackend: CodeAgentBackend;
     rollout?: 'disabled' | 'allowlist' | 'all';
     reason?: string;
   };
@@ -46,6 +53,7 @@ export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
     availableModes: ['plan'],
     defaultMode: 'plan',
     availableBackends: ['code-agent'],
+    defaultBackend: 'code-agent',
     rollout: 'disabled',
   },
   codex: { connections: { enabled: false } },
@@ -79,6 +87,11 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
     Array.isArray(data.codeAgent.availableModes) ? data.codeAgent.availableModes : [codeAgentMode]
   );
   const defaultMode = normalizeCodeAgentMode(data.codeAgent.defaultMode);
+  const availableBackends = normalizeCodeAgentBackends(data.codeAgent.availableBackends);
+  const requestedDefaultBackend = normalizeCodeAgentBackend(data.codeAgent.defaultBackend);
+  const defaultBackend = availableBackends.includes(requestedDefaultBackend)
+    ? requestedDefaultBackend
+    : availableBackends[0];
 
   return {
     codeAgent: {
@@ -86,7 +99,8 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
       mode: codeAgentMode,
       availableModes: normalizedAvailableModes,
       defaultMode: normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan',
-      availableBackends: normalizeCodeAgentBackends(data.codeAgent.availableBackends),
+      availableBackends,
+      defaultBackend,
       rollout: data.codeAgent.rollout,
       reason: data.codeAgent.reason,
     },

@@ -49,6 +49,7 @@ interface ChatHeaderProps {
   codeAgentAvailableModes?: CodeAgentMode[];
   codeAgentDefaultMode?: CodeAgentMode;
   codeAgentAvailableBackends?: CodeAgentBackend[];
+  codeAgentDefaultBackend?: CodeAgentBackend;
   onRoomUpdated: (room: Room) => void;
 }
 
@@ -76,6 +77,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   codeAgentAvailableModes,
   codeAgentDefaultMode,
   codeAgentAvailableBackends,
+  codeAgentDefaultBackend = 'code-agent',
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -90,7 +92,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const membersRequestGenerationRef = useRef(0);
   const canManageRoom = Boolean(roomPermissions?.canManageRoom);
   const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
-  const codeAgentBackend = getCodeAgentBackend(currentRoom);
+  const codeAgentBackend = getCodeAgentBackend(currentRoom, codeAgentDefaultBackend);
   const isCodeAgent = codeAgentBackend !== null;
 
   useEffect(() => () => {
@@ -340,6 +342,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       codeAgentAvailableModes={codeAgentAvailableModes}
       codeAgentDefaultMode={codeAgentDefaultMode}
       codeAgentAvailableBackends={codeAgentAvailableBackends}
+      codeAgentDefaultBackend={codeAgentDefaultBackend}
       onRoomUpdated={onRoomUpdated}
     />
     <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">

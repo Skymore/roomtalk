@@ -11,6 +11,7 @@ import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunner
 import { CodeAgentRunnerClient, CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCodeAgentSandboxService } from './fakeCodeAgentSandboxService';
+import type { CodeAgentRunnerProcess } from './codeAgentSandboxService';
 import {
   DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
@@ -308,10 +309,12 @@ class MemoryCodeAgentStore {
     if (!this.hasTurnClaim(input.claim)) return { outcome: 'stale' as const };
     let message: Message | undefined;
     let actualOutcome = input.outcome;
+    let finalizationObsoleted = false;
     if (input.message) {
       const result = await this.finalizeAIMessage(input.message, input.expectedMessageOwnership);
       if (result.outcome !== 'applied') {
         actualOutcome = 'cancelled';
+        finalizationObsoleted = true;
       } else {
         message = result.message;
       }
@@ -416,7 +419,7 @@ class MemoryCodeAgentStore {
       input.claim.fence,
     );
     return {
-      outcome: actualOutcome === 'cancelled' ? 'obsolete' as const : 'applied' as const,
+      outcome: finalizationObsoleted ? 'obsolete' as const : 'applied' as const,
       room: updatedRoom,
       turn,
       ...(message ? { message } : {}),
@@ -464,9 +467,13 @@ class MemoryCodeAgentStore {
     return turn;
   }
 
-  async hasActiveCodeAgentRoomLease(roomId: string, now: string) {
+  async hasActiveCodeAgentRoomLease(roomId: string, now: string, turnId?: string) {
     const lease = this.roomLeases.get(roomId);
-    return Boolean(lease && Date.parse(lease.expiresAt) > Date.parse(now));
+    return Boolean(
+      lease
+      && Date.parse(lease.expiresAt) > Date.parse(now)
+      && (!turnId || lease.turnId === turnId),
+    );
   }
 
   async readCodeAgentWorkspaceCheckpoint(roomId: string, turnId: string) {
@@ -985,6 +992,88 @@ class ControlBlockingRunner implements CodeAgentRunnerClient {
     return { events: [textEvent, stepEvent, finalEvent], finalEvent };
   }
 }
+
+class InterruptibleRunner implements CodeAgentRunnerClient {
+  requests: CodeAgentRunnerRunRequest[] = [];
+  private handlers?: CodeAgentRunnerHandlers;
+  private releaseRun!: () => void;
+  private readonly blocked = new Promise<void>(resolve => {
+    this.releaseRun = resolve;
+  });
+  private markStarted!: () => void;
+  readonly started = new Promise<void>(resolve => {
+    this.markStarted = resolve;
+  });
+
+  constructor(
+    private readonly acknowledgeInterrupt = false,
+    private readonly emitPendingTool = false,
+  ) {}
+
+  async receiveControl(control: any) {
+    if (!this.acknowledgeInterrupt) return;
+    await this.handlers?.onEvent({
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'control_result',
+      turnId: control.turnId,
+      controlId: control.controlId,
+      controlType: control.type,
+      accepted: true,
+    });
+  }
+
+  release() {
+    this.releaseRun();
+  }
+
+  async run(request: CodeAgentRunnerRunRequest, handlers: CodeAgentRunnerHandlers): Promise<CodeAgentRunnerRunResult> {
+    this.requests.push(request);
+    this.handlers = handlers;
+    if (this.emitPendingTool) {
+      await handlers.onEvent(cocoModelStep(1, false, ['tool-interrupt'], {
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+      }));
+      await handlers.onEvent({
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'tool_call',
+        id: 'tool-interrupt',
+        name: 'Shell',
+        args: { command: 'sleep 999' },
+      });
+    }
+    this.markStarted();
+    await this.blocked;
+    return { events: [] };
+  }
+}
+
+const createInterruptibleProcess = (
+  input: { command: string },
+  runner: InterruptibleRunner,
+  acknowledgeControl: boolean,
+) => {
+  const state = { terminateCount: 0 };
+  const process: CodeAgentRunnerProcess = {
+    command: input.command,
+    stdin: new Writable({
+      write(chunk, _encoding, callback) {
+        if (!acknowledgeControl) {
+          callback();
+          return;
+        }
+        void runner.receiveControl(JSON.parse(String(chunk))).then(() => callback(), callback);
+      },
+    }),
+    stop: async () => undefined,
+    terminate: async () => {
+      state.terminateCount += 1;
+      runner.release();
+    },
+  };
+  return { process, state };
+};
 
 const logger = {
   debug() {},
@@ -1884,6 +1973,8 @@ describe('CodeAgentSessionService', () => {
 
     currentMs += 5_000;
     deadline.fire();
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    assert.equal((service as any).activeTurns.get('room-1')?.interruptedByUser, false);
     const result = await active;
 
     assert.equal(result.success, false);
@@ -3600,6 +3691,168 @@ describe('CodeAgentSessionService', () => {
 
     runner.release(0);
     await runner.waitForCompletions(1);
+  });
+
+  it('force-terminates after interrupt control times out and closes pending tools as cancelled', async () => {
+    const runner = new InterruptibleRunner(false, true);
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({
+      runner,
+      observability: observability.recorder,
+    });
+    let processState!: { terminateCount: number };
+    sandboxService.startRunner = async input => {
+      const created = createInterruptibleProcess(input, runner, false);
+      processState = created.state;
+      return created.process;
+    };
+
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    const result = await active;
+
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /interrupted by the user/);
+    assert.equal(processState.terminateCount, 1);
+    assert.equal(store.rooms.get('room-1')?.codeAgentStatus, 'idle');
+    const turn = [...store.agentTurns.values()][0];
+    assert.equal(turn.status, 'cancelled');
+    assert.equal(turn.finalMessageId, undefined);
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result', 'ai']);
+    assert.equal(messages.some(message => message.status === 'streaming'), false);
+    assert.match(messages.find(message => message.messageType === 'tool_result')?.content || '', /Tool interrupted before completion/);
+    assert.equal(observability.events.find(event => event.event === 'code_agent.turn.failed')?.errorCode, 'turn_interrupted');
+  });
+
+  it('force-terminates when interrupt is acknowledged but the runner does not exit', async () => {
+    const runner = new InterruptibleRunner(true);
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({
+      runner,
+      observability: observability.recorder,
+    });
+    let processState!: { terminateCount: number };
+    sandboxService.startRunner = async input => {
+      const created = createInterruptibleProcess(input, runner, true);
+      processState = created.state;
+      return created.process;
+    };
+
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    const result = await active;
+
+    assert.equal(result.success, false);
+    assert.equal(processState.terminateCount, 1);
+    assert.equal(store.rooms.get('room-1')?.codeAgentStatus, 'idle');
+    assert.equal([...store.agentTurns.values()][0].status, 'cancelled');
+    assert.equal((store.messages.get('room-1') || []).some(message => message.status === 'streaming'), false);
+    assert.equal(observability.events.find(event => event.event === 'code_agent.turn.failed')?.errorCode, 'turn_interrupted');
+  });
+
+  it('cancels a turn when Stop arrives while startRunner is still awaiting a process', async () => {
+    const runner = new InterruptibleRunner();
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({
+      runner,
+      observability: observability.recorder,
+    });
+    let markStartEntered!: () => void;
+    const startEntered = new Promise<void>(resolve => {
+      markStartEntered = resolve;
+    });
+    let resolveProcess!: (process: CodeAgentRunnerProcess) => void;
+    const processReady = new Promise<CodeAgentRunnerProcess>(resolve => {
+      resolveProcess = resolve;
+    });
+    let terminateCount = 0;
+    sandboxService.startRunner = async input => {
+      markStartEntered();
+      return processReady;
+    };
+
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await startEntered;
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    resolveProcess({
+      command: 'delayed-runner',
+      stop: async () => undefined,
+      terminate: async () => {
+        terminateCount += 1;
+      },
+    });
+
+    const result = await active;
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /interrupted by the user/);
+    assert.equal(terminateCount, 1);
+    assert.equal(runner.requests.length, 0);
+    assert.equal(store.rooms.get('room-1')?.codeAgentStatus, 'idle');
+    assert.equal([...store.agentTurns.values()][0].status, 'cancelled');
+    assert.equal((store.messages.get('room-1') || []).some(message => message.status === 'streaming'), false);
+    assert.equal(observability.events.find(event => event.event === 'code_agent.turn.failed')?.errorCode, 'turn_interrupted');
+  });
+
+  it('keeps lease loss as an error when Stop is marked during runner startup', async () => {
+    const runner = new InterruptibleRunner();
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({
+      runner,
+      observability: observability.recorder,
+    });
+    let terminateCount = 0;
+    sandboxService.startRunner = async input => {
+      store.roomLeases.delete(input.handle.roomId);
+      assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+      return {
+        command: input.command,
+        stop: async () => undefined,
+        terminate: async () => {
+          terminateCount += 1;
+        },
+      };
+    };
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    assert.equal(terminateCount, 1);
+    assert.notEqual(store.rooms.get('room-1')?.codeAgentStatus, 'idle');
+    assert.notEqual([...store.agentTurns.values()][0].status, 'cancelled');
+    const failed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'room_lease_lost');
+    assert.notEqual(failed?.errorCode, 'turn_interrupted');
+  });
+
+  it('preserves a first-cause user interrupt when the application deadline fires next', async () => {
+    const runner = new InterruptibleRunner(true);
+    const deadline = new ControlledTurnDeadline();
+    const observability = createMemoryObservability();
+    const { service, store, sandboxService } = createService({
+      runner,
+      observability: observability.recorder,
+      scheduleTurnDeadline: deadline.schedule,
+      clearTurnDeadline: deadline.clear,
+    });
+    sandboxService.startRunner = async input => createInterruptibleProcess(input, runner, true).process;
+
+    const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    deadline.fire();
+
+    const result = await active;
+    assert.equal(result.success, false);
+    assert.equal(store.rooms.get('room-1')?.codeAgentStatus, 'idle');
+    assert.equal([...store.agentTurns.values()][0].status, 'cancelled');
+    const failed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'turn_interrupted');
+    assert.equal(observability.events.some(event => event.errorCode === 'turn_timeout'), false);
   });
 
   it('keeps queued follow-up input after an explicit user interrupt', async () => {

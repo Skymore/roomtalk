@@ -821,6 +821,7 @@ registerSocketHandlers({
   codeAgentSessionService,
   codeAgentAccess,
   codeAgentAvailableBackends,
+  codeAgentDefaultBackend: codeAgentRuntimeConfig.backend,
   codeAgentSandboxLifecycle,
   codeAgentSandboxService,
   codeWorkspaceAssetAccess,
@@ -864,6 +865,7 @@ registerApiRoutes(app, {
   codeAgentAvailableModes: codeAgentRuntimeConfig.availableModes,
   codeAgentDefaultMode: codeAgentRuntimeConfig.defaultMode,
   codeAgentAvailableBackends,
+  codeAgentDefaultBackend: codeAgentRuntimeConfig.backend,
   codexConnections: {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,

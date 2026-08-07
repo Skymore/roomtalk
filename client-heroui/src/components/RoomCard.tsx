@@ -9,7 +9,7 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Room } from '../utils/types';
+import { CodeAgentBackend, Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
 import { getRoomActivityAt } from '../utils/roomState';
 import { getCodeAgentBackend } from '../utils/codeAgent';
@@ -24,6 +24,7 @@ interface RoomCardProps {
   onCopyRoomLink: (roomId: string) => void;
   onRename: (room: Room) => void;
   onDelete: (room: Room) => void;
+  codeAgentDefaultBackend?: CodeAgentBackend;
 }
 
 export const RoomCard: React.FC<RoomCardProps> = ({
@@ -36,10 +37,11 @@ export const RoomCard: React.FC<RoomCardProps> = ({
   onCopyRoomLink,
   onRename,
   onDelete,
+  codeAgentDefaultBackend = 'code-agent',
 }) => {
   const { t, i18n } = useTranslation();
   const activityAt = getRoomActivityAt(room);
-  const codeAgentBackend = getCodeAgentBackend(room);
+  const codeAgentBackend = getCodeAgentBackend(room, codeAgentDefaultBackend);
   const isCodeAgent = codeAgentBackend !== null;
 
   return (

@@ -58,6 +58,7 @@ interface CodeAgentRoomViewProps {
   username: string;
   clientId: string;
   backend: CodeAgentBackend;
+  defaultBackend: CodeAgentBackend;
   availableBackends: CodeAgentBackend[];
   availableModes: CodeAgentMode[];
   defaultMode: CodeAgentMode;
@@ -129,6 +130,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   username,
   clientId,
   backend,
+  defaultBackend,
   availableBackends,
   availableModes,
   defaultMode,
@@ -471,6 +473,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       codeAgentAvailableModes={normalizedAvailableModes}
       codeAgentDefaultMode={effectiveDefaultMode}
       codeAgentAvailableBackends={availableBackends}
+      codeAgentDefaultBackend={defaultBackend}
       onRoomUpdated={onRoomUpdated}
     />
   );
@@ -658,7 +661,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               canPost={canUseComposer}
               postingRestrictionReason={composerRestrictionReason}
               postingSchedule={currentRoom.postingSchedule}
-              isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
+              isRoomAIProcessing={getCodeAgentStatus(currentRoom, defaultBackend) === 'running'}
               isCodeAgentRoom
               codeAgentBackend={backend}
               codeAgentMode={selectedMode}

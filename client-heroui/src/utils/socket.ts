@@ -6,6 +6,7 @@ import { apiPath } from './apiBase';
 import {
   A2UIActionEvent,
   AudioTranscription,
+  CodeAgentBackend,
   CodeAgentMode,
   MediaKind,
   Message,
@@ -96,6 +97,7 @@ export type CreateRoomOptions = {
   password?: string;
   postingSchedule?: RoomPostingSchedule | null;
   type?: RoomType;
+  codeAgentBackend?: CodeAgentBackend;
 };
 
 type SendMessageAckResponse = SocketAckResponse & {
@@ -593,6 +595,7 @@ export const createRoom = (
       password: options.password,
       postingSchedule: options.postingSchedule,
       type: options.type || 'chat',
+      codeAgentBackend: options.codeAgentBackend,
     }, (response: string | CreateRoomAckResponse) => {
       if (settled) return;
       settled = true;

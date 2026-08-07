@@ -1,4 +1,4 @@
-import { AIModelOption, MediaKind, Message, MessageReplyReference, Room, RoomMemberEvent, RoomType } from '../types';
+import { AIModelOption, CodeAgentBackend, MediaKind, Message, MessageReplyReference, Room, RoomMemberEvent, RoomType } from '../types';
 import { getMessageAIModel } from './aiModels';
 
 const MAX_DISPLAY_NAME_LENGTH = 48;
@@ -131,6 +131,7 @@ export function createRoomRecord(input: {
   description?: string;
   creatorId: string;
   type?: RoomType;
+  codeAgentBackend?: CodeAgentBackend;
   now?: Date;
 }): Room {
   const timestamp = (input.now || new Date()).toISOString();
@@ -147,6 +148,9 @@ export function createRoomRecord(input: {
     room.sandboxStatus = 'none';
     room.sandboxUpdatedAt = timestamp;
     room.codeAgentStatus = 'idle';
+    if (input.codeAgentBackend) {
+      room.codeAgentBackend = input.codeAgentBackend;
+    }
   }
   return room;
 }
