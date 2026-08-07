@@ -95,6 +95,14 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 0.1, cachedInputPerMillion: 0.01, outputPerMillion: 0.6 },
   },
   {
+    id: 'gpt-5.6-luna-pro',
+    apiModel: 'openai/gpt-5.6-luna-pro',
+    provider: 'openrouter',
+    label: 'GPT-5.6 Luna Pro',
+    description: 'OpenAI high-throughput pro model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.1, cachedInputPerMillion: 0.01, outputPerMillion: 0.6 },
+  },
+  {
     id: 'claude-sonnet-5',
     apiModel: 'claude-sonnet-5',
     provider: 'anthropic',

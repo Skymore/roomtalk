@@ -40,6 +40,12 @@ describe('AI model registry', () => {
     assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash-lite')?.isPremium, false);
     assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3')?.pricing?.outputPerMillion, 0.528);
     assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.6-luna')?.pricing?.outputPerMillion, 0.6);
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'gpt-5.6-luna-pro')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 0.1,
+      cachedInputPerMillion: 0.01,
+      outputPerMillion: 0.6,
+    });
     assert.equal(registry.modelOptions.find(model => model.id === 'qwen/qwen3.7-plus')?.pricing?.outputPerMillion, 1.28);
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'cohere/north-mini-code:free')?.pricing, {
       currency: 'USD',

@@ -42,6 +42,12 @@ describe("aiModels", () => {
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash-lite")!)).toBe(false);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3")?.pricing?.outputPerMillion).toBe(0.528);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna")?.pricing?.outputPerMillion).toBe(0.6);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna-pro")?.pricing).toEqual({
+      currency: "USD",
+      inputPerMillion: 0.1,
+      cachedInputPerMillion: 0.01,
+      outputPerMillion: 0.6,
+    });
     expect(FALLBACK_AI_MODELS.find(model => model.id === "qwen/qwen3.7-plus")?.pricing?.outputPerMillion).toBe(1.28);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "cohere/north-mini-code:free")?.pricing).toEqual({
       currency: "USD",
