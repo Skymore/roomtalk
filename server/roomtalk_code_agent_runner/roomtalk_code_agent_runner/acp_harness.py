@@ -646,15 +646,23 @@ class ACPEventBridge:
         metadata = value.get("metadata")
         if not isinstance(metadata, dict):
             return True, None
-        metadata_output = metadata.get("output")
-        if (
-            isinstance(metadata_output, str)
-            and metadata_output.strip() == OPENCODE_SHELL_ABORT_SENTINEL
-        ):
-            return False, None
         exit_code = metadata.get("exit")
         if isinstance(exit_code, int) and not isinstance(exit_code, bool):
             return exit_code == 0, exit_code
+        if exit_code is not None:
+            return True, None
+        metadata_output = metadata.get("output")
+        abort_prefix = (
+            metadata_output[: -len(OPENCODE_SHELL_ABORT_SENTINEL)]
+            if isinstance(metadata_output, str)
+            and metadata_output.endswith(OPENCODE_SHELL_ABORT_SENTINEL)
+            else None
+        )
+        if (
+            abort_prefix is not None
+            and (not abort_prefix or abort_prefix.endswith("\n\n"))
+        ):
+            return False, None
         return True, None
 
     async def _flush_hermes_tool_results(self, session_id: str) -> None:
