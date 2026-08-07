@@ -19,6 +19,8 @@ describe('AI model registry', () => {
     assert.equal(registry.normalizeAIModel('openai/gpt-5.6-sol').id, 'gpt-5.6-sol');
     assert.equal(registry.normalizeAIModel('deepseek-v4-flash').provider, 'deepseek');
     assert.equal(registry.normalizeAIModel('deepseek/deepseek-v4-flash').id, 'deepseek-v4-flash-openrouter');
+    assert.equal(registry.normalizeAIModel('cohere/north-mini-code:free').provider, 'openrouter');
+    assert.equal(registry.normalizeAIModel('poolside/laguna-s-2.1:free').provider, 'openrouter');
     assert.equal(registry.normalizeAIModel('xiaomi/mimo-v2.5').id, 'mimo-v2.5');
     assert.equal(registry.normalizeAIModel('not-allowed').id, 'gpt-5.6-sol');
   });
@@ -39,6 +41,16 @@ describe('AI model registry', () => {
     assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3')?.pricing?.outputPerMillion, 0.528);
     assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.6-luna')?.pricing?.outputPerMillion, 0.6);
     assert.equal(registry.modelOptions.find(model => model.id === 'qwen/qwen3.7-plus')?.pricing?.outputPerMillion, 1.28);
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'cohere/north-mini-code:free')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 0,
+      outputPerMillion: 0,
+    });
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'poolside/laguna-s-2.1:free')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 0,
+      outputPerMillion: 0,
+    });
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'deepseek-v4-flash'), {
       id: 'deepseek-v4-flash',
       apiModel: 'deepseek-v4-flash',

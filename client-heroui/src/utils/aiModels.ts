@@ -47,6 +47,22 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 0.14, cachedInputPerMillion: 0.028, outputPerMillion: 0.28 },
   },
   {
+    id: 'cohere/north-mini-code:free',
+    apiModel: 'cohere/north-mini-code:free',
+    provider: 'openrouter',
+    label: 'North Mini Code (Free)',
+    description: 'Cohere North Mini Code free endpoint via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0, outputPerMillion: 0 },
+  },
+  {
+    id: 'poolside/laguna-s-2.1:free',
+    apiModel: 'poolside/laguna-s-2.1:free',
+    provider: 'openrouter',
+    label: 'Laguna S 2.1 (Free)',
+    description: 'Poolside Laguna S 2.1 free endpoint via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0, outputPerMillion: 0 },
+  },
+  {
     id: 'mimo-v2.5',
     apiModel: 'xiaomi/mimo-v2.5',
     provider: 'openrouter',

@@ -43,6 +43,16 @@ describe("aiModels", () => {
     expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3")?.pricing?.outputPerMillion).toBe(0.528);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna")?.pricing?.outputPerMillion).toBe(0.6);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "qwen/qwen3.7-plus")?.pricing?.outputPerMillion).toBe(1.28);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "cohere/north-mini-code:free")?.pricing).toEqual({
+      currency: "USD",
+      inputPerMillion: 0,
+      outputPerMillion: 0,
+    });
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "poolside/laguna-s-2.1:free")?.pricing).toEqual({
+      currency: "USD",
+      inputPerMillion: 0,
+      outputPerMillion: 0,
+    });
     expect(FALLBACK_AI_MODELS.find(model => model.id === "deepseek-v4-flash")).toMatchObject({
       id: "deepseek-v4-flash",
       apiModel: "deepseek-v4-flash",
