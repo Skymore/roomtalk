@@ -60,6 +60,37 @@ describe('RoomEventBroadcaster', () => {
     assert.equal(emitted[0].events?.[0].seq, 42);
   });
 
+  it('does not log tool names that may contain raw commands or secrets', async () => {
+    const emitted: RoomEventBroadcast[] = [];
+    const infoLogs: unknown[] = [];
+    const secret = 'ROOMTALK_TEST_SECRET=must-not-be-logged';
+    const event = roomEvent(42);
+    event.payload.messages![0] = {
+      ...event.payload.messages![0],
+      messageType: 'tool_call',
+      turnId: 'turn-1',
+      toolCallId: 'call-1',
+      toolName: `terminal: ${secret} sleep 999`,
+    };
+    const logger = {
+      info: (_message: string, meta?: unknown) => infoLogs.push(meta),
+      warn: () => undefined,
+    } as unknown as Logger;
+    const broadcaster = new RoomEventBroadcaster({
+      store: { readRoomEvent: async () => event } as unknown as RoomStore,
+      logger,
+      maxPayloadBytes: 256 * 1024,
+      emit: broadcast => emitted.push(broadcast),
+    });
+
+    broadcaster.handle({ roomId: 'room-1', headSeq: 42 });
+    await waitUntil(() => emitted.length === 1);
+
+    assert.equal(infoLogs.length, 1);
+    assert.equal(JSON.stringify(infoLogs).includes(secret), false);
+    assert.equal(emitted[0].events?.[0].payload.messages?.[0].toolName, `terminal: ${secret} sleep 999`);
+  });
+
   it('falls back to a head-only hint when the immutable payload is too large', async () => {
     const emitted: RoomEventBroadcast[] = [];
     const store = {

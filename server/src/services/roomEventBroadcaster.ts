@@ -198,7 +198,6 @@ export class RoomEventBroadcaster {
           id: message.id,
           messageType: message.messageType,
           toolCallId: message.toolCallId || null,
-          toolName: message.toolName || null,
           turnId: message.turnId || null,
         })),
       });

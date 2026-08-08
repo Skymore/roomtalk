@@ -33,7 +33,7 @@ describe('code agent runner event mapper', () => {
 
     assert.equal(mapped.kind, 'message');
     if (mapped.kind !== 'message') return;
-    assert.equal(mapped.message.id, 'tool-1');
+    assert.equal(mapped.message.id, 'tool-1:turn-1');
     assert.equal(mapped.message.messageType, 'tool_call');
     assert.equal(mapped.message.username, 'Coco');
     assert.equal(mapped.message.toolCallId, 'tool-1');
@@ -73,7 +73,7 @@ describe('code agent runner event mapper', () => {
 
     assert.equal(mapped.kind, 'message');
     if (mapped.kind !== 'message') return;
-    assert.equal(mapped.message.id, 'tool_result_tool-1_id');
+    assert.equal(mapped.message.id, 'tool_result_tool-1_id:turn-1');
     assert.equal(mapped.message.messageType, 'tool_result');
     assert.equal(mapped.message.status, 'error');
     assert.equal(mapped.message.isError, true);
@@ -157,6 +157,27 @@ describe('code agent runner event mapper', () => {
     assert.equal(mapped.message.isError, false);
     assert.equal(mapped.message.content, 'ok');
     assert.equal(mapped.message.toolOutputPreview, 'ok');
+  });
+
+  it('scopes reused backend message IDs to the durable turn', () => {
+    const event = {
+      schemaVersion: 1 as const,
+      type: 'tool_call' as const,
+      id: 'reused-tool-call',
+      name: 'bash',
+      args: { kind: 'execute' },
+      messageId: 'acp_tool_call_reused-tool-call',
+    };
+    const first = mapCodeAgentRunnerEvent(event, context);
+    const second = mapCodeAgentRunnerEvent(event, { ...context, turnId: 'turn-2' });
+
+    assert.equal(first.kind, 'message');
+    assert.equal(second.kind, 'message');
+    if (first.kind !== 'message' || second.kind !== 'message') return;
+    assert.equal(first.message.id, 'acp_tool_call_reused-tool-call:turn-1');
+    assert.equal(second.message.id, 'acp_tool_call_reused-tool-call:turn-2');
+    assert.equal(first.message.toolCallId, second.message.toolCallId);
+    assert.notEqual(first.message.id, second.message.id);
   });
 
   it('maps final events and runner errors', () => {

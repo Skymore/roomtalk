@@ -73,6 +73,33 @@ const isCodexBackend = (backend: CodeAgentBackend) => (
   isCodexCodeAgentBackend(backend)
 );
 
+const SAFE_OBSERVABILITY_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+const observabilityToolName = (
+  event: Extract<CodeAgentRunnerEvent, { type: 'tool_call' | 'tool_result' }>,
+): string => {
+  const rawName = event.name.trim();
+  if (SAFE_OBSERVABILITY_TOOL_NAME.test(rawName)) {
+    return rawName;
+  }
+  const kind = event.type === 'tool_call' && typeof event.args.kind === 'string'
+    ? event.args.kind.trim().toLowerCase()
+    : '';
+  if (kind === 'execute' || /^(?:bash|shell|terminal)\s*:/i.test(rawName)) {
+    return 'terminal';
+  }
+  if (kind === 'read' || /^read\s*:/i.test(rawName)) {
+    return 'read';
+  }
+  if (kind === 'edit' || kind === 'write' || /^(?:edit|write|replace)\s*:/i.test(rawName)) {
+    return 'write';
+  }
+  if (kind === 'search' || /^(?:grep|glob|search)\s*:/i.test(rawName)) {
+    return 'search';
+  }
+  return kind && SAFE_OBSERVABILITY_TOOL_NAME.test(kind) ? kind : 'tool';
+};
+
 const githubGitConfig = () => [
   '[credential "https://github.com"]',
   '  helper =',
@@ -2821,7 +2848,7 @@ export class CodeAgentSessionService {
       if (event.type === 'tool_call' || event.type === 'approval_request') {
         state.hasToolHistory = true;
         state.pendingToolCalls.set(event.id, {
-          name: event.type === 'approval_request' ? 'approval_request' : event.name,
+          name: event.type === 'approval_request' ? 'approval_request' : observabilityToolName(event),
           startedAtMs: observedAtMs,
         });
         if (event.type === 'tool_call' && backend === 'code-agent') {
@@ -3231,13 +3258,13 @@ export class CodeAgentSessionService {
       case 'tool_call':
         return {
           toolCallId: event.id,
-          toolName: event.name,
+          toolName: observabilityToolName(event),
           argsLength: JSON.stringify(event.args || {}).length,
         };
       case 'tool_result':
         return {
           toolCallId: event.id,
-          toolName: event.name,
+          toolName: observabilityToolName(event),
           success: event.success,
           exitCode: event.exitCode,
           outputLength: event.output.length,

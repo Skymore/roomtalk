@@ -54,6 +54,9 @@ const defaultCreateMessageId = (prefix: string) => `${prefix}_${Date.now()}`;
 const timestampFor = (context: CodeAgentEventMapperContext) => (context.now || new Date()).toISOString();
 const clientIdFor = (context: CodeAgentEventMapperContext) => context.clientId || 'code_agent_runner';
 const usernameFor = (context: CodeAgentEventMapperContext) => context.username || 'Coco';
+const durableMessageIdFor = (messageId: string, context: CodeAgentEventMapperContext) => (
+  `${messageId}:${context.turnId}`
+);
 
 const stringifyArgs = (args: Record<string, unknown>) => {
   try {
@@ -82,7 +85,7 @@ const mapToolCall = (event: CodeAgentRunnerToolCallEvent, context: CodeAgentEven
   return {
     kind: 'message',
     message: {
-      id: event.messageId || event.id,
+      id: durableMessageIdFor(event.messageId || event.id, context),
       clientId: clientIdFor(context),
       content,
       roomId: context.roomId,
@@ -104,7 +107,7 @@ const mapToolResult = (event: CodeAgentRunnerToolResultEvent, context: CodeAgent
   return {
     kind: 'message',
     message: {
-      id: event.messageId || createMessageId(`tool_result_${event.id}`),
+      id: durableMessageIdFor(event.messageId || createMessageId(`tool_result_${event.id}`), context),
       clientId: clientIdFor(context),
       content: event.output,
       roomId: context.roomId,
@@ -127,7 +130,7 @@ const mapApprovalRequest = (event: CodeAgentRunnerApprovalRequestEvent, context:
   return {
     kind: 'message',
     message: {
-      id: event.messageId || event.id,
+      id: durableMessageIdFor(event.messageId || event.id, context),
       clientId: clientIdFor(context),
       content,
       roomId: context.roomId,

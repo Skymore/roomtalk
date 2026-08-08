@@ -828,8 +828,8 @@ class PendingToolBlockingRunner implements CodeAgentRunnerClient {
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'tool_call',
       id: 'tool-timeout',
-      name: 'Shell',
-      args: { command: 'ROOMTALK_TEST_SECRET=must-not-be-logged sleep 999' },
+      name: 'terminal: ROOMTALK_TEST_SECRET=must-not-be-logged sleep 999',
+      args: { kind: 'execute' },
     });
     this.markStarted();
     return new Promise<CodeAgentRunnerRunResult>(() => undefined);
@@ -2000,7 +2000,7 @@ describe('CodeAgentSessionService', () => {
     ));
     assert.equal(syntheticResult?.durationMs, 5_000);
     assert.equal((syntheticResult?.payload as any)?.toolCallId, 'tool-timeout');
-    assert.equal((syntheticResult?.payload as any)?.toolName, 'Shell');
+    assert.equal((syntheticResult?.payload as any)?.toolName, 'terminal');
     assert.equal(JSON.stringify(observability.events).includes('ROOMTALK_TEST_SECRET'), false);
   });
 
@@ -2403,6 +2403,69 @@ describe('CodeAgentSessionService', () => {
       provider: 'openai',
       label: 'GPT-5.5 Extra High',
     });
+  });
+
+  it('persists reused OpenCode tool message IDs independently across sequential turns', async () => {
+    let runCount = 0;
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+        runCount += 1;
+        const toolCall = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'tool_call' as const,
+          id: 'reused-tool-call',
+          name: 'bash',
+          args: { kind: 'execute', cwd: '/workspace' },
+          messageId: 'acp_tool_call_reused-tool-call',
+        };
+        const toolResult = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'tool_result' as const,
+          id: toolCall.id,
+          name: toolCall.name,
+          success: true,
+          output: 'clean',
+          messageId: 'acp_tool_result_reused-tool-call',
+        };
+        const finalEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final' as const,
+          messageId: `runner-final-${runCount}`,
+          answer: `Done ${runCount}`,
+          sessionId: 'acp:opencode:continued-session',
+        };
+        for (const event of [toolCall, toolResult, finalEvent]) {
+          await handlers.onEvent(event);
+        }
+        return { events: [toolCall, toolResult, finalEvent], finalEvent };
+      },
+    };
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'opencode',
+      codeAgentSessionId: 'acp:opencode:continued-session',
+    }), [userMessage()]);
+    const { service } = createService({
+      store,
+      runner,
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+    });
+
+    assert.equal((await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel })).success, true);
+    assert.equal((await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel })).success, true);
+
+    const toolMessages = (store.messages.get('room-1') || []).filter(message => (
+      message.messageType === 'tool_call' || message.messageType === 'tool_result'
+    ));
+    assert.deepEqual(toolMessages.map(message => message.id), [
+      'acp_tool_call_reused-tool-call:turn-1',
+      'acp_tool_result_reused-tool-call:turn-1',
+      'acp_tool_call_reused-tool-call:turn-2',
+      'acp_tool_result_reused-tool-call:turn-2',
+    ]);
+    assert.deepEqual(toolMessages.map(message => message.toolCallId), Array(4).fill('reused-tool-call'));
+    assert.equal(new Set(toolMessages.map(message => message.id)).size, 4);
   });
 
   for (const harness of [
