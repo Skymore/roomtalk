@@ -3,7 +3,7 @@
    ------------------------------------------------------------------ */
 
 import React, { memo, useState, useEffect, useRef, ReactNode } from "react";
-import Markdown, { RuleType, type MarkdownToJSX } from "markdown-to-jsx";
+import Markdown from "markdown-to-jsx";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Image, Tooltip } from "@heroui/react";
@@ -75,6 +75,69 @@ const CODE_FENCE_TITLE_ATTRIBUTE_NAME = 'title';
 const BARE_URL_PATTERN = /https?:\/\/[^\s<]+/g;
 const TRAILING_URL_PUNCTUATION_PATTERN = /[.,;:!?"'\u2019\u201d\u3001\u3002\uff0c\uff1b\uff1a\uff01\uff1f]+$/;
 
+type MarkdownSourceRange = { start: number; end: number };
+
+function addMarkdownSourceRange(ranges: MarkdownSourceRange[], start: number, end: number): void {
+  if (end > start) ranges.push({ start, end });
+}
+
+function isSourceOffsetProtected(ranges: MarkdownSourceRange[], offset: number): boolean {
+  return ranges.some((range) => offset >= range.start && offset < range.end);
+}
+
+function collectMarkdownSourceRanges(content: string): MarkdownSourceRange[] {
+  const ranges: MarkdownSourceRange[] = [];
+  const fencePattern = /^( {0,3})(`{3,}|~{3,})[^\n]*(?:\n|$)/gm;
+  let opening: RegExpExecArray | null;
+
+  while ((opening = fencePattern.exec(content)) !== null) {
+    if (isSourceOffsetProtected(ranges, opening.index)) continue;
+    const delimiter = opening[2];
+    const closingPattern = new RegExp(`^ {0,3}${delimiter[0]}{${delimiter.length},}[^\\n]*(?:\\n|$)`, 'gm');
+    closingPattern.lastIndex = fencePattern.lastIndex;
+    const closing = closingPattern.exec(content);
+    const end = closing ? closingPattern.lastIndex : content.length;
+    addMarkdownSourceRange(ranges, opening.index, end);
+    fencePattern.lastIndex = end;
+  }
+
+  for (let index = 0; index < content.length;) {
+    if (content[index] !== '`' || isSourceOffsetProtected(ranges, index)) {
+      index += 1;
+      continue;
+    }
+    let delimiterLength = 1;
+    while (content[index + delimiterLength] === '`') delimiterLength += 1;
+    const delimiter = '`'.repeat(delimiterLength);
+    let closingIndex = content.indexOf(delimiter, index + delimiterLength);
+    while (
+      closingIndex >= 0 &&
+      (content[closingIndex - 1] === '`' || content[closingIndex + delimiterLength] === '`')
+    ) {
+      closingIndex = content.indexOf(delimiter, closingIndex + delimiterLength);
+    }
+    if (closingIndex < 0) {
+      index += delimiterLength;
+      continue;
+    }
+    const end = closingIndex + delimiterLength;
+    addMarkdownSourceRange(ranges, index, end);
+    index = end;
+  }
+
+  for (const match of content.matchAll(MARKDOWN_LINK_HREF_PATTERN)) {
+    addMarkdownSourceRange(ranges, match.index ?? 0, (match.index ?? 0) + match[0].length);
+  }
+  for (const match of content.matchAll(/<[^>]*>/g)) {
+    addMarkdownSourceRange(ranges, match.index ?? 0, (match.index ?? 0) + match[0].length);
+  }
+  for (const match of content.matchAll(/^ {0,3}\[[^\]]+]:[^\n]*(?:\n|$)/gm)) {
+    addMarkdownSourceRange(ranges, match.index ?? 0, (match.index ?? 0) + match[0].length);
+  }
+
+  return ranges;
+}
+
 function trimBareUrlCandidate(candidate: string): string {
   let url = candidate.replace(TRAILING_URL_PUNCTUATION_PATTERN, '');
   for (const [opening, closing] of [['(', ')'], ['[', ']'], ['{', '}']] as const) {
@@ -88,30 +151,23 @@ function trimBareUrlCandidate(candidate: string): string {
   return url;
 }
 
-function renderTextWithBareUrlLinks(text: string, stateKey: React.Key | undefined): ReactNode {
-  const parts: ReactNode[] = [];
+function linkifyBareUrlsBeforeMarkdownParsing(content: string): string {
+  const protectedRanges = collectMarkdownSourceRanges(content);
+  let result = '';
   let cursor = 0;
 
-  for (const match of text.matchAll(BARE_URL_PATTERN)) {
+  for (const match of content.matchAll(BARE_URL_PATTERN)) {
     const start = match.index ?? 0;
+    if (isSourceOffsetProtected(protectedRanges, start)) continue;
     const url = trimBareUrlCandidate(match[0]);
     if (!url) continue;
-    if (start > cursor) {
-      parts.push(text.slice(cursor, start));
-    }
-    parts.push(
-      <a key={`${String(stateKey)}-url-${start}`} href={url}>
-        {url}
-      </a>,
-    );
+    const label = url.replace(/[\\\[\]]/g, '\\$&');
+    const destination = url.replace(/[\\()]/g, '\\$&');
+    result += `${content.slice(cursor, start)}[${label}](${destination})`;
     cursor = start + url.length;
   }
 
-  if (parts.length === 0) return text;
-  if (cursor < text.length) {
-    parts.push(text.slice(cursor));
-  }
-  return parts;
+  return cursor === 0 ? content : result + content.slice(cursor);
 }
 
 function readResolvedTheme() {
@@ -538,7 +594,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
     ? CODE_AGENT_DEFAULT_WORKSPACE_ROOT
     : workspaceRoot || undefined;
   const processed = React.useMemo(() => {
-    const text = escapeRawHtmlTags(preprocessMarkdown(content));
+    const text = escapeRawHtmlTags(linkifyBareUrlsBeforeMarkdownParsing(preprocessMarkdown(content)));
     return parseMath(text);
   }, [content]);
   const canOpenWorkspaceLinks = Boolean(onOpenWorkspaceFile || onOpenWorkspaceFileInBrowserPreview);
@@ -563,32 +619,15 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
   }, [markdownFileLinkMetaByHref]);
   const taskMarkerOffsets = React.useMemo(() => markdownTaskMarkerOffsets(content), [content]);
   let taskInputIndex = 0;
-  let markdownLinkRenderDepth = 0;
 
   const mdOptions = {
     forceBlock: true,
+    // Bare URLs are converted to explicit links before parsing so Markdown
+    // punctuation cannot split a destination and protected source stays untouched.
+    disableAutoLink: true,
     // User-authored raw HTML is escaped before this point. Raw parsing remains
     // enabled only so our internal MathInline/MathBlock bridge can render.
     disableParsingRawHTML: false,
-    renderRule(
-      next: () => React.ReactNode,
-      node: MarkdownToJSX.ParserResult,
-      _renderChildren: MarkdownToJSX.RuleOutput,
-      state: MarkdownToJSX.State,
-    ) {
-      if (node.type === RuleType.link || node.type === RuleType.refLink) {
-        markdownLinkRenderDepth += 1;
-        try {
-          return next();
-        } finally {
-          markdownLinkRenderDepth -= 1;
-        }
-      }
-      if (node.type === RuleType.text && markdownLinkRenderDepth === 0) {
-        return renderTextWithBareUrlLinks(node.text, state.key);
-      }
-      return next();
-    },
     overrides: {
       p: { component: ({ children }: { children: ReactNode }) => <div>{children}</div> },
       MathBlock: { component: ({ children }: any) => <Math inline={false}>{children}</Math> },

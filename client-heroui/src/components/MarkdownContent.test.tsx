@@ -207,16 +207,31 @@ describe('MarkdownContent math rendering', () => {
     expect(link?.textContent).toBe(url);
   });
 
-  it('does not auto-link URLs inside inline code or existing markdown links', () => {
+  it('keeps hyphenated bare URLs intact when markdown parsing splits text nodes', () => {
+    const url = 'https://github.com/Skymore/bay-area-coffee-map';
+    const { container } = render(
+      <MarkdownContent content={`现在 ${url} 首页就能看到完整项目介绍了。`} />,
+    );
+
+    const links = container.querySelectorAll('a');
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute('href')).toBe(url);
+    expect(links[0]?.textContent).toBe(url);
+  });
+
+  it('does not auto-link URLs inside code or existing markdown links', () => {
+    const codeUrl = 'https://example.com/code-with-hyphens';
     const { container, getByText } = render(
       <MarkdownContent
-        content={'[docs](https://example.com/docs) and `https://example.com/code`'}
+        content={`[docs](https://example.com/docs) and \`${codeUrl}\`\n\n\`\`\`text\n${codeUrl}\n\`\`\``}
       />,
     );
 
     expect(container.querySelectorAll('a')).toHaveLength(1);
     expect(getByText('docs').closest('a')?.getAttribute('href')).toBe('https://example.com/docs');
-    expect(getByText('https://example.com/code').closest('code')).toBeTruthy();
-    expect(getByText('https://example.com/code').closest('a')).toBeNull();
+    const codeElements = Array.from(container.querySelectorAll('code'));
+    expect(codeElements).toHaveLength(2);
+    expect(codeElements.every((element) => element.textContent?.includes(codeUrl))).toBe(true);
+    expect(codeElements.every((element) => element.closest('a') === null)).toBe(true);
   });
 });
