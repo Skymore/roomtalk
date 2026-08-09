@@ -620,6 +620,47 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(socketMock.requestEvents).toHaveBeenCalledTimes(1);
   });
 
+  it('records tool correlation diagnostics without retaining a durable raw tool name', async () => {
+    const rawToolName = 'terminal: ROOMTALK_PRIVATE_TOKEN=fake-diagnostic-secret';
+    const toolResult = message({
+      id: 'tool-result-2',
+      clientId: 'code_agent_runner',
+      messageType: 'tool_result',
+      turnId: 'turn-1',
+      toolCallId: 'call-1',
+      toolName: rawToolName,
+      status: 'error',
+      isError: true,
+    });
+    cacheMock.memory = {
+      roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),
+    };
+    render(<Harness />);
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+
+    act(() => socketMock.trigger('room_event_available', {
+      roomId: 'room-1',
+      headSeq: 2,
+      events: [event(2, {
+        payload: { messageIds: [toolResult.id], messages: [toolResult] },
+      })],
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('2'));
+    expect(diagnosticMock.log).toHaveBeenCalledWith('event-page-applied', expect.objectContaining({
+      toolMessages: [{
+        id: 'tool-result-2',
+        messageType: 'tool_result',
+        toolCallId: 'call-1',
+        toolNameLength: rawToolName.length,
+        turnId: 'turn-1',
+      }],
+    }));
+    const serializedDiagnostics = JSON.stringify(diagnosticMock.log.mock.calls);
+    expect(serializedDiagnostics).not.toContain(rawToolName);
+    expect(serializedDiagnostics).not.toContain('ROOMTALK_PRIVATE_TOKEN');
+  });
+
   it('replays from the durable cursor when a Socket payload has a sequence gap', async () => {
     cacheMock.memory = {
       roomId: 'room-1', messages: [], lastAppliedSeq: 1, hasMore: false, cachedAt: Date.now(),

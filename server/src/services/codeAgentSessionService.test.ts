@@ -4832,6 +4832,100 @@ describe('CodeAgentSessionService', () => {
     });
   }
 
+  it('sanitizes status, approval, and control diagnostics before observability persistence', async () => {
+    const fakeSecret = 'ROOMTALK_PRIVATE_TOKEN=fake-diagnostic-secret';
+    const statusDetail = `runner status detail ${fakeSecret}`;
+    const approvalTitle = `terminal: ${fakeSecret}`;
+    const controlDetail = `control detail ${fakeSecret}`;
+    const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'status',
+        turnId: 'turn-1',
+        status: 'error',
+        message: statusDetail,
+      },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'approval_request',
+        turnId: 'turn-1',
+        id: 'approval-1',
+        approvalType: 'command',
+        title: approvalTitle,
+        args: { kind: 'execute' },
+      },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'control_result',
+        turnId: 'turn-1',
+        controlId: 'control-1',
+        controlType: 'approval_response',
+        accepted: false,
+        message: controlDetail,
+      },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: '',
+        sessionId: 'session-1',
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, source: 'reported' },
+      },
+    ]);
+    const observability = createMemoryObservability();
+    const logRecords: unknown[] = [];
+    const capturingLogger = {
+      debug(message: string, metadata?: unknown) { logRecords.push({ level: 'debug', message, metadata }); },
+      error(message: string, metadata?: unknown) { logRecords.push({ level: 'error', message, metadata }); },
+      info(message: string, metadata?: unknown) { logRecords.push({ level: 'info', message, metadata }); },
+      warn(message: string, metadata?: unknown) { logRecords.push({ level: 'warn', message, metadata }); },
+    } as unknown as Logger;
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      logger: capturingLogger,
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    assert.equal([...store.agentTurns.values()][0].status, 'complete');
+    const statusEvent = observability.events.find(event => event.event === 'code_agent.runner.status');
+    assert.deepEqual(statusEvent?.payload, {
+      backend: 'opencode',
+      status: 'error',
+      message: 'OpenCode task failed. Retry, or switch engines if the problem continues.',
+    });
+    const approvalEvent = observability.events.find(event => event.event === 'code_agent.runner.approval_request');
+    assert.deepEqual(approvalEvent?.payload, {
+      backend: 'opencode',
+      approvalId: 'approval-1',
+      approvalType: 'command',
+      titleLength: approvalTitle.length,
+    });
+    const controlEvent = observability.events.find(event => event.event === 'code_agent.runner.control_result');
+    assert.deepEqual(controlEvent?.payload, {
+      backend: 'opencode',
+      controlId: 'control-1',
+      controlType: 'approval_response',
+      accepted: false,
+      messageLength: controlDetail.length,
+    });
+    const statusMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'sandbox_status');
+    assert.equal(statusMessage?.content, 'OpenCode task failed. Retry, or switch engines if the problem continues.');
+    const serializedDiagnostics = JSON.stringify({ observability: observability.events, logs: logRecords });
+    assert.equal(serializedDiagnostics.includes(fakeSecret), false);
+    assert.equal(serializedDiagnostics.includes(statusDetail), false);
+    assert.equal(serializedDiagnostics.includes(approvalTitle), false);
+    assert.equal(serializedDiagnostics.includes(controlDetail), false);
+  });
+
   it('closes pending tool calls with failed results when the runner errors', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
@@ -4968,7 +5062,11 @@ describe('CodeAgentSessionService', () => {
         usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
       },
     ]);
-    const { emitter, service, store } = createService({ runner });
+    const observability = createMemoryObservability();
+    const { emitter, service, store } = createService({
+      runner,
+      observability: observability.recorder,
+    });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
@@ -4976,9 +5074,24 @@ describe('CodeAgentSessionService', () => {
     assert.equal(result.success, true);
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result']);
     assert.equal(messages[2].toolCallId, 'tool-1');
-    assert.equal(messages[2].status, 'complete');
-    assert.equal(messages[2].isError, false);
+    assert.equal(messages[2].status, 'error');
+    assert.equal(messages[2].isError, true);
+    assert.equal(messages[2].exitCode, 1);
     assert.match(messages[2].content, /without reporting a terminal result/);
+    assert.equal([...store.agentTurns.values()][0].status, 'complete');
+    assert.deepEqual(observability.events.find(event => event.event === 'code_agent.runner.tool_result_missing'), {
+      level: 'warn',
+      event: 'code_agent.runner.tool_result_missing',
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      durationMs: 0,
+      payload: {
+        backend: 'code-agent',
+        toolCallId: 'tool-1',
+        toolName: 'Shell',
+        terminalTurnEvent: 'final',
+      },
+    });
     assert.equal(emitter.roomEmits.some(event => event.event === 'new_message'), false);
   });
 });

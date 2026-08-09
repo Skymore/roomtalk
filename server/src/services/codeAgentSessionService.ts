@@ -2825,11 +2825,15 @@ export class CodeAgentSessionService {
     codexRunSettings: CodexRunSettings
   ): Promise<typeof OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE | undefined> {
     const observedAtMs = this.now().getTime();
+    const publicRunnerFailureMessage = `${this.displayBackendName(backend)} task failed. Retry, or switch engines if the problem continues.`;
+    const observableEvent: CodeAgentRunnerEvent = event.type === 'status' && event.status === 'error'
+      ? { ...event, message: publicRunnerFailureMessage }
+      : event;
     const toolDurationMs = event.type === 'tool_result'
       ? Math.max(0, observedAtMs - (state.pendingToolCalls.get(event.id)?.startedAtMs || observedAtMs))
       : undefined;
     await this.recordRunnerEvent(
-      event,
+      observableEvent,
       roomId,
       turnId,
       selectedModel,
@@ -2893,7 +2897,6 @@ export class CodeAgentSessionService {
       await this.handleCocoModelStep(event, roomId, turnId, claim, baseAIMessage, selectedModel, state);
       return;
     }
-    const publicRunnerFailureMessage = `${this.displayBackendName(backend)} task failed. Retry, or switch engines if the problem continues.`;
     if (event.type === 'error') {
       await this.flushInterruptedToolCalls(
         roomId,
@@ -3237,14 +3240,15 @@ export class CodeAgentSessionService {
         timestamp: this.now().toISOString(),
         messageType: 'tool_result',
         username: this.displayBackendName(backend),
-        status: 'complete',
+        status: 'error',
         turnId,
         modelStepId,
         modelStepSequence: modelStepId ? state.modelSteps.get(modelStepId)?.sequence : undefined,
         toolCallId,
         toolName: toolCall.name,
         toolOutputPreview: content,
-        isError: false,
+        exitCode: 1,
+        isError: true,
         codeAgentMode: baseAIMessage.codeAgentMode,
       };
       const appendResult = await this.appendFencedCodeAgentMessage(message, claim);
@@ -3445,7 +3449,7 @@ export class CodeAgentSessionService {
           controlId: event.controlId,
           controlType: event.controlType,
           accepted: event.accepted,
-          message: event.message,
+          messageLength: event.message?.length,
         };
       case 'user_input_inserted':
         return { messageId: event.messageId };
@@ -3494,7 +3498,7 @@ export class CodeAgentSessionService {
         return {
           approvalId: event.id,
           approvalType: event.approvalType,
-          title: event.title,
+          titleLength: event.title.length,
         };
       case 'thread_list_result':
         return {

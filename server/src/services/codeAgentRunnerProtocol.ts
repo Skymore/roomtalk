@@ -499,12 +499,16 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
       if (failureCode !== undefined && failureCode !== 'invalid_tool') {
         throw new CodeAgentRunnerProtocolError('Invalid tool result failureCode.');
       }
+      const success = readRequiredBoolean(raw, 'success');
+      if (failureCode && success) {
+        throw new CodeAgentRunnerProtocolError('Tool result failureCode requires success=false.');
+      }
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         id: readRequiredString(raw, 'id'),
         name: readRequiredString(raw, 'name'),
-        success: readRequiredBoolean(raw, 'success'),
+        success,
         output: readString(raw, 'output'),
         messageId: readOptionalString(raw, 'messageId'),
         exitCode: readOptionalNumber(raw, 'exitCode'),

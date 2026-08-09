@@ -8,12 +8,13 @@ describe('room diagnostics', () => {
   });
 
   it('keeps correlation fields in session storage without message content', () => {
+    const rawToolName = 'terminal: ROOMTALK_PRIVATE_TOKEN=fake-diagnostic-secret';
     logRoomMessageDiagnostic('event-page-applied', {
       roomId: 'room-1',
       deliveryId: 'delivery-1',
       cursorBefore: 20,
       cursorAfter: 21,
-      toolMessages: [{ id: 'result-1', toolCallId: 'call-1', toolName: 'file_change' }],
+      toolMessages: [{ id: 'result-1', toolCallId: 'call-1', toolName: rawToolName }],
     });
 
     expect(readRoomDiagnostics()).toEqual([
@@ -24,12 +25,22 @@ describe('room diagnostics', () => {
         deliveryId: 'delivery-1',
         cursorBefore: 20,
         cursorAfter: 21,
+        toolMessages: [{
+          id: 'result-1',
+          toolCallId: 'call-1',
+          toolNameLength: rawToolName.length,
+        }],
       }),
     ]);
-    expect(sessionStorage.getItem('roomtalk-room-diagnostics-v1')).not.toContain('message content');
+    const persisted = sessionStorage.getItem('roomtalk-room-diagnostics-v1') || '';
+    expect(persisted).not.toContain('message content');
+    expect(persisted).not.toContain(rawToolName);
+    expect(persisted).not.toContain('ROOMTALK_PRIVATE_TOKEN');
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining(
       '[room-messages] event-page-applied {"roomId":"room-1"',
     ));
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(rawToolName);
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('ROOMTALK_PRIVATE_TOKEN');
   });
 
   it('keeps only the latest bounded diagnostic window', () => {

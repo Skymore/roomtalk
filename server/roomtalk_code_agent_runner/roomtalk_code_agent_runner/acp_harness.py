@@ -42,6 +42,9 @@ HERMES_ROOMTALK_PROVIDER = "roomtalk"
 OPENCODE_SHELL_ABORT_SENTINEL = "<shell_metadata>\nUser aborted the command\n</shell_metadata>"
 OPENCODE_INVALID_TOOL_OUTPUT_PREFIX = "The arguments provided to the tool are invalid: "
 OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT = "OpenCode rejected an invalid tool request."
+ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT = (
+    "The ACP harness finished without reporting a terminal result for this tool."
+)
 
 
 @dataclass(frozen=True)
@@ -620,6 +623,22 @@ class ACPEventBridge:
         """Pair persisted Hermes results with ACP calls without trusting thread order."""
         if len(rows) < len(self.tool_ids):
             return []
+        if len(rows) > len(self.tool_ids):
+            unused = list(range(len(rows)))
+            aligned: list[tuple[str, str]] = []
+            for tool_call_id in self.tool_ids:
+                title = self.tool_names.get(tool_call_id, "")
+                exact = [
+                    index
+                    for index in unused
+                    if self._hermes_title_matches_tool(title, rows[index][0])
+                ]
+                if len(exact) != 1:
+                    return []
+                index = exact[0]
+                unused.remove(index)
+                aligned.append(rows[index])
+            return aligned
         unused = list(range(len(rows)))
         aligned: list[tuple[str, str]] = []
         for tool_call_id in self.tool_ids:
@@ -737,12 +756,14 @@ class ACPEventBridge:
             if tool_call_id in self.completed_tools:
                 continue
             status = self.tool_statuses.get(tool_call_id)
+            has_terminal_status = status in {"completed", "failed"}
             self._emit_tool_result(
                 tool_call_id,
-                success=status != "failed",
-                output=self.tool_outputs.get(
-                    tool_call_id,
-                    "The ACP harness finished without reporting a terminal tool status.",
+                success=status == "completed",
+                output=(
+                    self.tool_outputs.get(tool_call_id, "")
+                    if has_terminal_status
+                    else ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT
                 ),
                 fallback_name=name,
             )
@@ -1243,10 +1264,12 @@ async def _configure_session(
     )
     try:
         await connection.set_session_model(session_id=session_id, model_id=desired_model)
-    except Exception:
-        # Both harnesses also receive the model through their isolated runtime
-        # configuration, so an older ACP implementation may omit this unstable method.
-        pass
+    except Exception as exc:
+        raise RunnerError(
+            "ACP session model update failed",
+            code="acp_session_model_update_failed",
+            turn_id=request.turn_id,
+        ) from exc
 
     if backend == "opencode":
         desired_mode = "plan" if request.mode == "plan" else "build"
@@ -1297,8 +1320,20 @@ async def _configure_session(
         "fullAccess": ("dont_ask", "accept_edits", "default"),
     }[request.mode]
     desired_mode = next((candidate for candidate in candidates if candidate in available_modes), None)
-    if desired_mode:
+    if not desired_mode:
+        raise RunnerError(
+            "Hermes Agent ACP session did not advertise the requested mode",
+            code="acp_session_mode_unavailable",
+            turn_id=request.turn_id,
+        )
+    try:
         await connection.set_session_mode(session_id=session_id, mode_id=desired_mode)
+    except Exception as exc:
+        raise RunnerError(
+            "Hermes Agent ACP session mode update failed",
+            code="acp_session_mode_update_failed",
+            turn_id=request.turn_id,
+        ) from exc
 
 
 async def _drain_stderr(stream: Any, tail: list[str]) -> None:

@@ -722,7 +722,7 @@ export const useRoomMessageEvents = ({
           id: message.id,
           messageType: message.messageType,
           toolCallId: message.toolCallId || null,
-          toolName: message.toolName || null,
+          toolNameLength: message.toolName?.length || 0,
           turnId: message.turnId || null,
         })),
       });

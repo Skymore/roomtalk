@@ -13,6 +13,7 @@ from typing import Any
 from roomtalk_code_agent_runner.acp_harness import (
     ACPHarnessSpec,
     ACPEventBridge,
+    ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT,
     MAX_ACP_FRAME_BYTES,
     OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
     OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT,
@@ -276,6 +277,89 @@ def test_hermes_session_model_stays_on_the_roomtalk_custom_provider():
         }),
         ("mode", {"session_id": "session-1", "mode_id": "dont_ask"}),
     ]
+
+
+def test_acp_session_model_update_failures_are_safe_and_fail_closed():
+    fake_secret = "ROOMTALK_PRIVATE_TOKEN=fake-model-update-secret"
+
+    class Connection:
+        async def set_session_model(self, **_kwargs: str) -> None:
+            raise RuntimeError(fake_secret)
+
+    for backend, session_response in (
+        ("opencode", SimpleNamespace(
+            session_id="session-1",
+            config_options=opencode_config_options("build"),
+        )),
+        ("hermes-agent", SimpleNamespace(
+            session_id="session-1",
+            modes=SimpleNamespace(available_modes=[SimpleNamespace(id="default")]),
+        )),
+    ):
+        try:
+            asyncio.run(_configure_session(
+                backend=backend,
+                request=runner_request(mode="plan"),
+                connection=Connection(),
+                session_id="session-1",
+                session_response=session_response,
+            ))
+        except RunnerError as error:
+            assert error.code == "acp_session_model_update_failed"
+            assert str(error) == "ACP session model update failed"
+            assert fake_secret not in str(error)
+        else:
+            raise AssertionError(f"{backend} must reject a failed session model update")
+
+
+def test_hermes_fails_closed_when_session_mode_is_unavailable_or_update_fails():
+    fake_secret = "ROOMTALK_PRIVATE_TOKEN=fake-mode-update-secret"
+
+    class MissingModeConnection:
+        async def set_session_model(self, **_kwargs: str) -> None:
+            return None
+
+        async def set_session_mode(self, **_kwargs: str) -> None:
+            raise AssertionError("unadvertised modes must not be selected")
+
+    try:
+        asyncio.run(_configure_session(
+            backend="hermes-agent",
+            request=runner_request(mode="plan"),
+            connection=MissingModeConnection(),
+            session_id="session-1",
+            session_response=SimpleNamespace(session_id="session-1"),
+        ))
+    except RunnerError as error:
+        assert error.code == "acp_session_mode_unavailable"
+        assert str(error) == "Hermes Agent ACP session did not advertise the requested mode"
+    else:
+        raise AssertionError("Hermes Agent must reject an unavailable session mode")
+
+    class FailingModeConnection:
+        async def set_session_model(self, **_kwargs: str) -> None:
+            return None
+
+        async def set_session_mode(self, **_kwargs: str) -> None:
+            raise RuntimeError(fake_secret)
+
+    try:
+        asyncio.run(_configure_session(
+            backend="hermes-agent",
+            request=runner_request(mode="fullAccess"),
+            connection=FailingModeConnection(),
+            session_id="session-1",
+            session_response=SimpleNamespace(
+                session_id="session-1",
+                modes=SimpleNamespace(available_modes=[SimpleNamespace(id="dont_ask")]),
+            ),
+        ))
+    except RunnerError as error:
+        assert error.code == "acp_session_mode_update_failed"
+        assert str(error) == "Hermes Agent ACP session mode update failed"
+        assert fake_secret not in str(error)
+    else:
+        raise AssertionError("Hermes Agent must reject a failed session mode update")
 
 
 def test_mode_ids_supports_legacy_modes_and_config_options_without_flattening_other_selects():
@@ -962,6 +1046,102 @@ def test_hermes_event_bridge_recovers_exact_parallel_tool_results_before_answer_
     assert emitted[4]["delta"] == "done"
 
 
+def test_hermes_extra_ambiguous_state_rows_fail_closed_without_exposing_blocked_output(tmp_path: Path):
+    fake_blocked_output = "ROOMTALK_PRIVATE_TOKEN=fake-blocked-tool-output"
+    state_db = tmp_path / "state.db"
+    with sqlite3.connect(state_db) as connection:
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT)"
+        )
+
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+        hermes_state_db=state_db,
+    )
+
+    async def run() -> None:
+        await bridge.begin_prompt("session-1")
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="visible-read",
+                title="read_file",
+                kind="read",
+                raw_input={"path": "README.md"},
+                locations=[],
+                content=[],
+            ),
+        )
+        with sqlite3.connect(state_db) as connection:
+            connection.executemany(
+                "INSERT INTO messages (session_id, role, content, tool_name) VALUES (?, 'tool', ?, ?)",
+                [
+                    ("session-1", fake_blocked_output, "read_file"),
+                    ("session-1", '{"content":"visible result"}', "read_file"),
+                ],
+            )
+        await bridge.flush_tools_at_final("session-1")
+
+    asyncio.run(run())
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
+    assert emitted[1]["success"] is False
+    assert emitted[1]["output"] == ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT
+    assert fake_blocked_output not in json.dumps(emitted)
+
+
+def test_hermes_extra_distinct_state_row_allows_unique_exact_visible_match(tmp_path: Path):
+    state_db = tmp_path / "state.db"
+    with sqlite3.connect(state_db) as connection:
+        connection.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT)"
+        )
+
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="hermes-agent",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+        hermes_state_db=state_db,
+    )
+
+    async def run() -> None:
+        await bridge.begin_prompt("session-1")
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="visible-read",
+                title="read_file",
+                kind="read",
+                raw_input={"path": "README.md"},
+                locations=[],
+                content=[],
+            ),
+        )
+        with sqlite3.connect(state_db) as connection:
+            connection.executemany(
+                "INSERT INTO messages (session_id, role, content, tool_name) VALUES (?, 'tool', ?, ?)",
+                [
+                    ("session-1", '{"output":"unrelated","exit_code":0}', "terminal"),
+                    ("session-1", '{"content":"visible result"}', "read_file"),
+                ],
+            )
+        await bridge.flush_tools_at_final("session-1")
+
+    asyncio.run(run())
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
+    assert emitted[1]["success"] is True
+    assert emitted[1]["output"] == '{"content":"visible result"}'
+
+
 def test_hermes_event_bridge_marks_recovered_tool_failures(tmp_path: Path):
     state_db = tmp_path / "state.db"
     with sqlite3.connect(state_db) as connection:
@@ -1078,6 +1258,18 @@ def test_event_bridge_closes_missing_terminal_tool_updates_before_final():
         await bridge.session_update(
             "session-1",
             SimpleNamespace(
+                session_update="tool_call",
+                tool_call_id="tool-2",
+                title="Second read",
+                kind="read",
+                raw_input={"path": "SECOND.md"},
+                locations=[],
+                content=[],
+            ),
+        )
+        await bridge.session_update(
+            "session-1",
+            SimpleNamespace(
                 session_update="tool_call_update",
                 tool_call_id="tool-1",
                 title="Read file",
@@ -1095,9 +1287,63 @@ def test_event_bridge_closes_missing_terminal_tool_updates_before_final():
     bridge.close_tools_at_final()
 
     emitted = events(output)
-    assert [event["type"] for event in emitted] == ["tool_call", "tool_result"]
-    assert emitted[1]["success"] is True
-    assert emitted[1]["output"] == "partial contents"
+    assert [event["type"] for event in emitted] == [
+        "tool_call",
+        "tool_call",
+        "tool_result",
+        "tool_result",
+    ]
+    assert [event["success"] for event in emitted[2:]] == [False, False]
+    assert [event["output"] for event in emitted[2:]] == [
+        ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT,
+        ACP_MISSING_TERMINAL_TOOL_RESULT_OUTPUT,
+    ]
+    assert "partial contents" not in json.dumps(emitted[2:])
+
+
+def test_event_bridge_preserves_explicit_terminal_tool_results_without_duplicates():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+
+    async def run() -> None:
+        for tool_call_id, status, raw_output in (
+            ("tool-complete", "completed", "complete output"),
+            ("tool-failed", "failed", "failed output"),
+        ):
+            await bridge.session_update(
+                "session-1",
+                SimpleNamespace(
+                    session_update="tool_call",
+                    tool_call_id=tool_call_id,
+                    title="Tool",
+                    kind="read",
+                    status=status,
+                    raw_input=None,
+                    raw_output=raw_output,
+                    locations=[],
+                    content=[],
+                ),
+            )
+
+    asyncio.run(run())
+    bridge.close_tools_at_final()
+    bridge.close_tools_at_final()
+
+    emitted = events(output)
+    assert [event["type"] for event in emitted] == [
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+    ]
+    assert [(event["success"], event["output"]) for event in emitted if event["type"] == "tool_result"] == [
+        (True, "complete output"),
+        (False, "failed output"),
+    ]
 
 
 def test_loading_a_session_suppresses_replayed_updates_before_the_new_turn():

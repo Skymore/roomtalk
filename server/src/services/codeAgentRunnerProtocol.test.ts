@@ -280,6 +280,15 @@ describe('code agent runner protocol', () => {
     })), /Invalid tool result failureCode/);
     assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
+      type: 'tool_result',
+      id: 'tool-1',
+      name: 'Shell',
+      success: true,
+      output: '',
+      failureCode: 'invalid_tool',
+    })), /failureCode requires success=false/);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
       name: 'Read',

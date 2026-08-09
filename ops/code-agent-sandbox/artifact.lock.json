@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-08-09-missing-tool-result-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.49",
+    "packageVersion": "0.1.50",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
