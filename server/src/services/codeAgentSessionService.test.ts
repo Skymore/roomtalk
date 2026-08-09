@@ -1111,6 +1111,49 @@ const userMessage = (content = 'inspect the project'): Message => ({
   messageType: 'text',
 });
 
+const invalidToolPair = (
+  id: string,
+  options: { name?: string; kind?: string; success?: boolean; secret?: string } = {},
+): CodeAgentRunnerEvent[] => {
+  const name = options.name ?? 'invalid';
+  return [
+    {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'tool_call',
+      id,
+      messageId: `call-${id}`,
+      name,
+      args: {
+        kind: options.kind ?? 'other',
+        ...(options.secret ? { opaqueInput: options.secret } : {}),
+      },
+    },
+    {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'tool_result',
+      id,
+      messageId: `result-${id}`,
+      name,
+      success: options.success ?? false,
+      output: options.secret || (options.success ? 'recovered' : 'invalid tool request'),
+    },
+  ];
+};
+
+const acpFinalEvent = (backend: CodeAgentBackend, answer = 'Recovered normally.'): CodeAgentRunnerEvent => ({
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  type: 'final',
+  messageId: `${backend}-final-message`,
+  answer,
+  sessionId: `acp:${backend}:session-1`,
+});
+
+const createTestModelGateway = () => new CodeAgentModelGateway({
+  publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+  tokenSecret: 'gateway-secret',
+  providerApiKeys: { deepseek: 'deepseek-provider-key' },
+});
+
 const createService = (options: {
   store?: MemoryCodeAgentStore;
   runner?: CodeAgentRunnerClient;
@@ -2468,6 +2511,349 @@ describe('CodeAgentSessionService', () => {
     ]);
     assert.deepEqual(toolMessages.map(message => message.toolCallId), Array(4).fill('reused-tool-call'));
     assert.equal(new Set(toolMessages.map(message => message.id)).size, 4);
+  });
+
+  it('stops OpenCode after three paired invalid-tool failures and preserves a clean terminal transcript', async () => {
+    const secret = 'must-not-appear-in-observability';
+    const scriptedEvents = [
+      ...invalidToolPair('invalid-1', { secret }),
+      ...invalidToolPair('invalid-2', { secret }),
+      ...invalidToolPair('invalid-3', { secret }),
+    ];
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+        for (const event of scriptedEvents) {
+          await handlers.onEvent(event);
+        }
+        return new Promise<CodeAgentRunnerRunResult>(() => undefined);
+      },
+    };
+    const logRecords: Array<{ level: string; message: string; metadata: unknown[] }> = [];
+    const captureLogger = {
+      debug(message: string, ...metadata: unknown[]) { logRecords.push({ level: 'debug', message, metadata }); },
+      error(message: string, ...metadata: unknown[]) { logRecords.push({ level: 'error', message, metadata }); },
+      info(message: string, ...metadata: unknown[]) { logRecords.push({ level: 'info', message, metadata }); },
+      warn(message: string, ...metadata: unknown[]) { logRecords.push({ level: 'warn', message, metadata }); },
+    } as unknown as Logger;
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    const { emitter, sandboxService, service } = createService({
+      store,
+      runner,
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      logger: captureLogger,
+      ids: ['ai-1', 'turn-1', 'terminal-error-1'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(result, {
+      success: false,
+      error: 'OpenCode repeatedly returned an invalid tool request. Retry the task, or switch models if the problem continues.',
+    });
+    assert.deepEqual(sandboxService.stoppedRunnerCommands, [DEFAULT_OPENCODE_RUNNER_COMMAND]);
+    const turn = store.agentTurns.get('turn-1');
+    assert.equal(turn?.status, 'error');
+    assert.equal(turn?.finalMessageId, 'terminal-error-1');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
+
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), [
+      'text',
+      'tool_call', 'tool_result',
+      'tool_call', 'tool_result',
+      'tool_call', 'tool_result',
+      'ai',
+    ]);
+    assert.equal(messages.some(message => message.status === 'streaming'), false);
+    assert.deepEqual(
+      messages.filter(message => message.messageType === 'tool_call').map(message => message.toolCallId),
+      ['invalid-1', 'invalid-2', 'invalid-3'],
+    );
+    assert.deepEqual(
+      messages.filter(message => message.messageType === 'tool_result').map(message => message.toolCallId),
+      ['invalid-1', 'invalid-2', 'invalid-3'],
+    );
+    assert.equal(messages.at(-1)?.status, 'error');
+    assert.equal(messages.at(-1)?.isError, true);
+
+    const loopEventIndex = observability.events.findIndex(event => event.event === 'code_agent.opencode.invalid_tool_loop');
+    const thirdResultIndex = observability.events.findIndex(event => (
+      event.event === 'code_agent.runner.tool_result' && (event.payload as any)?.toolCallId === 'invalid-3'
+    ));
+    assert.ok(loopEventIndex > thirdResultIndex);
+    assert.deepEqual(observability.events[loopEventIndex], {
+      level: 'error',
+      event: 'code_agent.opencode.invalid_tool_loop',
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      provider: selectedModel.provider,
+      model: selectedModel.id,
+      errorCode: 'opencode_invalid_tool_loop',
+      errorMessage: 'OpenCode repeatedly returned an invalid tool request. Retry the task, or switch models if the problem continues.',
+      payload: { backend: 'opencode', count: 3, threshold: 3 },
+    });
+    const failedEvent = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failedEvent?.errorCode, 'opencode_invalid_tool_loop');
+    assert.equal((failedEvent?.payload as any)?.invalidToolLoopCount, 3);
+    assert.equal((failedEvent?.payload as any)?.invalidToolLoopThreshold, 3);
+    assert.equal(emitter.roomEmits.some(event => (
+      event.event === 'ai_stream_error'
+      && (event.args[0] as any).persisted === true
+    )), true);
+
+    const diagnosticOutput = JSON.stringify({ logRecords, events: observability.events });
+    assert.equal(diagnosticOutput.includes(secret), false);
+    assert.equal(diagnosticOutput.includes('opaqueInput'), false);
+    const loopWarning = logRecords.find(record => record.message === 'OpenCode invalid tool loop threshold reached');
+    assert.deepEqual(loopWarning, {
+      level: 'warn',
+      message: 'OpenCode invalid tool loop threshold reached',
+      metadata: [{ roomId: 'room-1', turnId: 'turn-1', backend: 'opencode', count: 3, threshold: 3 }],
+    });
+  });
+
+  it('resets the OpenCode invalid-tool counter after text, a normal tool call, or a successful result', async () => {
+    const resetCases: Array<{ name: string; events: CodeAgentRunnerEvent[] }> = [
+      {
+        name: 'non-empty text',
+        events: [{
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: 'reset-text',
+          delta: 'I will try a different approach.',
+        }],
+      },
+      {
+        name: 'normal failed tool',
+        events: invalidToolPair('normal-reset', { name: 'read', kind: 'read' }),
+      },
+      {
+        name: 'successful result',
+        events: invalidToolPair('successful-reset', { success: true }),
+      },
+    ];
+
+    for (const resetCase of resetCases) {
+      const observability = createMemoryObservability();
+      const events: CodeAgentRunnerEvent[] = [
+        ...invalidToolPair(`${resetCase.name}-before-1`),
+        ...invalidToolPair(`${resetCase.name}-before-2`),
+        ...resetCase.events,
+        ...invalidToolPair(`${resetCase.name}-after-1`),
+        ...invalidToolPair(`${resetCase.name}-after-2`),
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: `${resetCase.name}-answer`,
+          delta: 'Recovered normally.',
+        },
+        acpFinalEvent('opencode'),
+      ];
+      const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+      const { service } = createService({
+        store,
+        runner: new FakeCodeAgentRunnerClient(events),
+        backend: 'code-agent',
+        availableBackends: ['opencode'],
+        runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+        modelGateway: createTestModelGateway(),
+        observability: observability.recorder,
+        ids: ['ai-1', 'turn-1', 'segment-1', 'segment-2', 'segment-3'],
+      });
+
+      const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.equal(result.success, true, resetCase.name);
+      assert.equal(store.agentTurns.get('turn-1')?.status, 'complete', resetCase.name);
+      assert.equal(observability.events.some(event => event.event === 'code_agent.opencode.invalid_tool_loop'), false, resetCase.name);
+    }
+  });
+
+  it('does not apply the invalid-tool breaker to Hermes or non-sentinel OpenCode tools', async () => {
+    const cases: Array<{ name: string; backend: 'opencode' | 'hermes-agent'; pair: (id: string) => CodeAgentRunnerEvent[] }> = [
+      { name: 'Hermes sentinel', backend: 'hermes-agent', pair: id => invalidToolPair(id) },
+      { name: 'OpenCode invalid with a non-other kind', backend: 'opencode', pair: id => invalidToolPair(id, { kind: 'execute' }) },
+      { name: 'OpenCode other-kind normal tool', backend: 'opencode', pair: id => invalidToolPair(id, { name: 'read', kind: 'other' }) },
+      { name: 'OpenCode unpaired failed result', backend: 'opencode', pair: id => invalidToolPair(id).slice(1) },
+    ];
+
+    for (const testCase of cases) {
+      const observability = createMemoryObservability();
+      const events = [
+        ...testCase.pair(`${testCase.name}-1`),
+        ...testCase.pair(`${testCase.name}-2`),
+        ...testCase.pair(`${testCase.name}-3`),
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: `${testCase.name}-answer`,
+          delta: 'Completed without the breaker.',
+        } as CodeAgentRunnerEvent,
+        acpFinalEvent(testCase.backend, 'Completed without the breaker.'),
+      ];
+      const store = new MemoryCodeAgentStore(room({ codeAgentBackend: testCase.backend }), [userMessage()]);
+      const { service } = createService({
+        store,
+        runner: new FakeCodeAgentRunnerClient(events),
+        backend: 'code-agent',
+        availableBackends: [testCase.backend],
+        runnerCommandByBackend: {
+          [testCase.backend]: testCase.backend === 'opencode'
+            ? DEFAULT_OPENCODE_RUNNER_COMMAND
+            : DEFAULT_HERMES_AGENT_RUNNER_COMMAND,
+        },
+        modelGateway: createTestModelGateway(),
+        observability: observability.recorder,
+        ids: ['ai-1', 'turn-1', 'segment-1'],
+      });
+
+      const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.equal(result.success, true, testCase.name);
+      assert.equal(observability.events.some(event => event.event === 'code_agent.opencode.invalid_tool_loop'), false, testCase.name);
+    }
+  });
+
+  it('keeps an OpenCode invalid-tool loop as first cause when the deadline fires afterward', async () => {
+    const deadline = new ControlledTurnDeadline();
+    const observability = createMemoryObservability();
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+        for (const event of [
+          ...invalidToolPair('loop-first-1'),
+          ...invalidToolPair('loop-first-2'),
+          ...invalidToolPair('loop-first-3'),
+        ]) {
+          await handlers.onEvent(event);
+        }
+        deadline.fire();
+        return new Promise<CodeAgentRunnerRunResult>(() => undefined);
+      },
+    };
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      scheduleTurnDeadline: deadline.schedule,
+      clearTurnDeadline: deadline.clear,
+      ids: ['ai-1', 'turn-1', 'terminal-error-1'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.match(result.error || '', /invalid tool request/);
+    const failed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'opencode_invalid_tool_loop');
+    assert.equal(observability.events.some(event => event.errorCode === 'turn_timeout'), false);
+  });
+
+  it('does not replace an earlier timeout or user interrupt with the OpenCode invalid-tool breaker', async () => {
+    for (const firstCause of ['timeout', 'user_interrupt'] as const) {
+      const deadline = new ControlledTurnDeadline();
+      const observability = createMemoryObservability();
+      let markReady!: () => void;
+      let releaseThird!: () => void;
+      const ready = new Promise<void>(resolve => { markReady = resolve; });
+      const thirdReleased = new Promise<void>(resolve => { releaseThird = resolve; });
+      const runner: CodeAgentRunnerClient = {
+        async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+          for (const event of [
+            ...invalidToolPair(`${firstCause}-1`),
+            ...invalidToolPair(`${firstCause}-2`),
+          ]) {
+            await handlers.onEvent(event);
+          }
+          markReady();
+          await thirdReleased;
+          for (const event of invalidToolPair(`${firstCause}-3`)) {
+            await handlers.onEvent(event);
+          }
+          const finalEvent = acpFinalEvent('opencode');
+          await handlers.onEvent(finalEvent);
+          return { events: [], finalEvent: finalEvent as any };
+        },
+      };
+      const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+      const { service } = createService({
+        store,
+        runner,
+        backend: 'code-agent',
+        availableBackends: ['opencode'],
+        runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+        modelGateway: createTestModelGateway(),
+        observability: observability.recorder,
+        scheduleTurnDeadline: deadline.schedule,
+        clearTurnDeadline: deadline.clear,
+        ids: ['ai-1', 'turn-1', 'terminal-error-1'],
+      });
+
+      const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await ready;
+      if (firstCause === 'timeout') {
+        deadline.fire();
+      } else {
+        assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+      }
+      releaseThird();
+      const result = await active;
+
+      assert.equal(result.success, false, firstCause);
+      const failed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+      assert.equal(failed?.errorCode, firstCause === 'timeout' ? 'turn_timeout' : 'turn_interrupted', firstCause);
+      assert.equal(observability.events.some(event => event.event === 'code_agent.opencode.invalid_tool_loop'), false, firstCause);
+    }
+  });
+
+  it('keeps an earlier lease loss ahead of a later OpenCode invalid-tool attempt', async () => {
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    let service!: CodeAgentSessionService;
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+        for (const event of [
+          ...invalidToolPair('lease-first-1'),
+          ...invalidToolPair('lease-first-2'),
+        ]) {
+          await handlers.onEvent(event);
+        }
+        const active = (service as any).activeTurns.get('room-1');
+        active.terminationReason = 'lease_lost';
+        store.roomLeases.delete('room-1');
+        for (const event of invalidToolPair('lease-first-3')) {
+          await handlers.onEvent(event);
+        }
+        return new Promise<CodeAgentRunnerRunResult>(() => undefined);
+      },
+    };
+    ({ service } = createService({
+      store,
+      runner,
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      ids: ['ai-1', 'turn-1', 'terminal-error-1'],
+    }));
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const failed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failed?.errorCode, 'room_lease_lost');
+    assert.equal(observability.events.some(event => event.event === 'code_agent.opencode.invalid_tool_loop'), false);
+    assert.equal(store.agentTurns.get('turn-1')?.status, 'running');
+    assert.equal(store.rooms.get('room-1')?.codeAgentStatus, 'running');
   });
 
   for (const harness of [

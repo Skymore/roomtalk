@@ -78,6 +78,13 @@ const isCodexBackend = (backend: CodeAgentBackend) => (
 );
 
 const SAFE_OBSERVABILITY_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const OPENCODE_INVALID_TOOL_LOOP_THRESHOLD = 3;
+const OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE = 'opencode_invalid_tool_loop';
+const OPENCODE_INVALID_TOOL_LOOP_MESSAGE = 'OpenCode repeatedly returned an invalid tool request. Retry the task, or switch models if the problem continues.';
+
+const isOpenCodeInvalidToolSentinel = (
+  event: Extract<CodeAgentRunnerEvent, { type: 'tool_call' }>,
+) => event.name.trim().toLowerCase() === 'invalid' && event.args.kind === 'other';
 
 const observabilityToolName = (
   event: Extract<CodeAgentRunnerEvent, { type: 'tool_call' | 'tool_result' }>,
@@ -208,7 +215,7 @@ interface ActiveCodeAgentTurn {
   sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
   interruptedByUser: boolean;
-  terminationReason?: 'user_interrupt' | 'lease_lost' | 'timeout';
+  terminationReason?: 'user_interrupt' | 'lease_lost' | 'timeout' | 'invalid_tool_loop';
   pendingSteerMessageIds: Set<string>;
   pendingControls: Map<string, {
     resolve: (result: CodeAgentControlAck) => void;
@@ -254,6 +261,17 @@ class CodeAgentTurnInterruptedError extends Error {
   }
 }
 
+class OpenCodeInvalidToolLoopError extends Error {
+  readonly code = OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE;
+  readonly count = OPENCODE_INVALID_TOOL_LOOP_THRESHOLD;
+  readonly threshold = OPENCODE_INVALID_TOOL_LOOP_THRESHOLD;
+
+  constructor() {
+    super(OPENCODE_INVALID_TOOL_LOOP_MESSAGE);
+    this.name = 'OpenCodeInvalidToolLoopError';
+  }
+}
+
 const CODE_AGENT_INTERRUPT_CONTROL_TIMEOUT_MS = 2_000;
 const CODE_AGENT_INTERRUPT_GRACE_TIMEOUT_MS = 2_000;
 
@@ -269,6 +287,8 @@ interface CodeAgentTurnStreamState {
   nonEmptySegmentIds: Set<string>;
   hasToolHistory: boolean;
   pendingToolCalls: Map<string, { name: string; startedAtMs: number }>;
+  opencodeInvalidToolCallIds: Set<string>;
+  opencodeInvalidToolLoopCount: number;
   modelSteps: Map<string, CocoModelStepCostRecord & {
     hasText: boolean;
     toolCallIds: string[];
@@ -406,6 +426,11 @@ export class CodeAgentSessionService {
     let turnTimedOut = false;
     let turnDeadlineTimer: unknown;
     let turnDeadlinePromise: Promise<never> | undefined;
+    let rejectOpenCodeInvalidToolLoop: ((error: OpenCodeInvalidToolLoopError) => void) | undefined;
+    const openCodeInvalidToolLoopPromise = new Promise<never>((_resolve, reject) => {
+      rejectOpenCodeInvalidToolLoop = reject;
+    });
+    void openCodeInvalidToolLoopPromise.catch(() => undefined);
     let deadlineTermination: Promise<void> = Promise.resolve();
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
@@ -414,12 +439,17 @@ export class CodeAgentSessionService {
       leaseLost = true;
       const active = this.activeTurns.get(input.roomId);
       if (active?.turnId === turnId) {
-        active.terminationReason = 'lease_lost';
+        if (active.terminationReason !== 'invalid_tool_loop') {
+          active.terminationReason = 'lease_lost';
+        }
       }
     };
     const assertTurnWithinDeadline = () => {
       const active = this.activeTurns.get(input.roomId);
-      if (leaseLost || active?.terminationReason === 'lease_lost') {
+      if (active?.terminationReason === 'invalid_tool_loop') {
+        throw new OpenCodeInvalidToolLoopError();
+      }
+      if (active?.terminationReason === 'lease_lost' || (leaseLost && !active?.terminationReason)) {
         throw new Error('Workspace agent lease was lost before the next turn phase');
       }
       if (turnTimedOut || active?.terminationReason === 'timeout') {
@@ -552,8 +582,12 @@ export class CodeAgentSessionService {
         turnDeadlineTimer = this.scheduleTurnDeadline(() => {
           const active = this.activeTurns.get(input.roomId);
           if (active?.turnId !== turnId) return;
-          if (leaseLost) {
-            active.terminationReason = 'lease_lost';
+          if (active.terminationReason === 'invalid_tool_loop') {
+            reject(new OpenCodeInvalidToolLoopError());
+            return;
+          }
+          if (leaseLost || active.terminationReason === 'lease_lost') {
+            if (!active.terminationReason) active.terminationReason = 'lease_lost';
             reject(new Error('Workspace agent lease was lost at the turn deadline'));
             return;
           }
@@ -561,8 +595,9 @@ export class CodeAgentSessionService {
             reject(new CodeAgentTurnInterruptedError());
             return;
           }
+          if (!active.terminationReason) active.terminationReason = 'timeout';
+          if (active.terminationReason !== 'timeout') return;
           turnTimedOut = true;
-          active.terminationReason = 'timeout';
           publicFailureMessage = `${this.displayBackendName(turnBackend)} task reached the task time limit and was stopped. Start a new task to continue.`;
           const processAtDeadline = active.process;
           deadlineTermination = processAtDeadline
@@ -729,6 +764,8 @@ export class CodeAgentSessionService {
         nonEmptySegmentIds: new Set(),
         hasToolHistory: false,
         pendingToolCalls: new Map(),
+        opencodeInvalidToolCallIds: new Set(),
+        opencodeInvalidToolLoopCount: 0,
         modelSteps: new Map(),
         modelStepIdByToolCallId: new Map(),
         completedAIMessageById: new Map(),
@@ -843,6 +880,7 @@ export class CodeAgentSessionService {
       const runnerHandlers = {
         onEvent: async (event: CodeAgentRunnerEvent) => {
           if (turnTimedOut) return;
+          if (this.activeTurns.get(input.roomId)?.terminationReason === 'invalid_tool_loop') return;
           if (event.type === 'error') {
             lastRunnerErrorSummary = summarizeCodeAgentRunnerError(event);
           }
@@ -852,7 +890,65 @@ export class CodeAgentSessionService {
             await updatePhase('running', 'Agent is working');
           }
           if (!turnClaim) throw new Error('Code-agent turn claim is unavailable');
-          await this.handleRunnerEvent(event, input.roomId, turnId, turnClaim, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
+          const disposition = await this.handleRunnerEvent(
+            event,
+            input.roomId,
+            turnId,
+            turnClaim,
+            aiMessage!,
+            input.selectedModel,
+            streamState!,
+            turnBackend,
+            codexRunSettings,
+          );
+          if (disposition !== OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE) return;
+
+          const loopError = new OpenCodeInvalidToolLoopError();
+          const active = this.activeTurns.get(input.roomId);
+          if (
+            active?.turnId !== turnId
+            || (active.terminationReason && active.terminationReason !== 'invalid_tool_loop')
+          ) {
+            return;
+          }
+          active.terminationReason = 'invalid_tool_loop';
+          publicFailureMessage = loopError.message;
+          const processAtLoop = active.process;
+          const count = streamState!.opencodeInvalidToolLoopCount;
+          this.logger.warn('OpenCode invalid tool loop threshold reached', {
+            roomId: input.roomId,
+            turnId,
+            backend: turnBackend,
+            count,
+            threshold: OPENCODE_INVALID_TOOL_LOOP_THRESHOLD,
+          });
+          rejectOpenCodeInvalidToolLoop?.(loopError);
+          const termination = processAtLoop
+            ? this.terminateRunnerProcess(processAtLoop, input.roomId).finally(() => {
+                if (runnerProcess === processAtLoop) runnerProcess = null;
+                const current = this.activeTurns.get(input.roomId);
+                if (current?.turnId === turnId && current.process === processAtLoop) {
+                  current.process = undefined;
+                }
+              })
+            : Promise.resolve();
+          const observation = this.recordObservabilityEvent({
+            level: 'error',
+            event: 'code_agent.opencode.invalid_tool_loop',
+            roomId: input.roomId,
+            turnId,
+            provider: input.selectedModel.provider,
+            model: input.selectedModel.id,
+            errorCode: OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE,
+            errorMessage: OPENCODE_INVALID_TOOL_LOOP_MESSAGE,
+            payload: {
+              backend: turnBackend,
+              count,
+              threshold: OPENCODE_INVALID_TOOL_LOOP_THRESHOLD,
+            },
+          });
+          deadlineTermination = Promise.all([termination, observation]).then(() => undefined);
+          await deadlineTermination;
         },
       };
       const runnerExecution = this.runRunnerWithConnections({
@@ -868,6 +964,7 @@ export class CodeAgentSessionService {
       const runResult = await Promise.race([
         runnerExecution,
         turnDeadlinePromise!,
+        openCodeInvalidToolLoopPromise,
       ]);
       assertTurnWithinDeadline();
 
@@ -1076,16 +1173,20 @@ export class CodeAgentSessionService {
       return { success: true, messageId: aiMessageId };
     } catch (error) {
       await deadlineTermination;
+      const activeAtFailure = this.activeTurns.get(input.roomId);
+      const terminationReason = activeAtFailure?.turnId === turnId
+        ? activeAtFailure.terminationReason
+        : undefined;
+      const openCodeInvalidToolLoop = error instanceof OpenCodeInvalidToolLoopError
+        ? error
+        : (terminationReason === 'invalid_tool_loop' ? new OpenCodeInvalidToolLoopError() : undefined);
+      if (openCodeInvalidToolLoop) publicFailureMessage = openCodeInvalidToolLoop.message;
       const publicCodexError = error instanceof CodexConnectionError
         ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
         : undefined;
       if (publicCodexError) publicFailureMessage = publicCodexError;
       const failedSegmentId = streamState?.activeMessageId || aiMessageId;
-      const activeAtFailure = this.activeTurns.get(input.roomId);
       const interruptedByUser = Boolean(activeAtFailure?.turnId === turnId && activeAtFailure.interruptedByUser);
-      const terminationReason = activeAtFailure?.turnId === turnId
-        ? activeAtFailure.terminationReason
-        : undefined;
       const userInterrupted = terminationReason
         ? terminationReason === 'user_interrupt'
         : interruptedByUser && !leaseLost && !turnTimedOut;
@@ -1098,13 +1199,14 @@ export class CodeAgentSessionService {
       const terminalOutcome = userInterrupted ? 'cancelled' as const : 'error' as const;
       const errorCode = userInterrupted
         ? 'turn_interrupted'
-        : leaseLost
+        : terminationReason === 'lease_lost' || (!terminationReason && leaseLost)
           ? 'room_lease_lost'
-          : turnTimedOut
+          : terminationReason === 'timeout' || (!terminationReason && turnTimedOut)
             ? 'turn_timeout'
-            : 'turn_failed';
-      const failureDetailLength = lastRunnerErrorSummary?.detailLength
-        ?? (error instanceof Error
+            : openCodeInvalidToolLoop?.code || 'turn_failed';
+      const failureDetailLength = openCodeInvalidToolLoop
+        ? openCodeInvalidToolLoop.message.length
+        : lastRunnerErrorSummary?.detailLength ?? (error instanceof Error
           ? error.message.length
           : (typeof error === 'string' ? error.length : 0));
       this.logger.error('Code agent turn failed', {
@@ -1112,15 +1214,19 @@ export class CodeAgentSessionService {
         messageId: failedSegmentId,
         backend: turnBackend,
         errorCode,
-        failureKind: lastRunnerErrorSummary
-          ? 'runner'
-          : (error instanceof CodexConnectionError ? 'codex_connection' : 'application'),
+        failureKind: openCodeInvalidToolLoop
+          ? 'opencode_invalid_tool_loop'
+          : (lastRunnerErrorSummary
+              ? 'runner'
+              : (error instanceof CodexConnectionError ? 'codex_connection' : 'application')),
         failureDetailLength,
         ...(lastRunnerErrorSummary ? { runnerErrorCode: lastRunnerErrorSummary.code } : {}),
       });
       await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode,
-        errorMessage: lastRunnerErrorSummary?.message || visibleFailureMessage,
+        errorMessage: openCodeInvalidToolLoop
+          ? visibleFailureMessage
+          : (lastRunnerErrorSummary?.message || visibleFailureMessage),
         payload: {
           backend: turnBackend,
           messageId: failedSegmentId,
@@ -1131,6 +1237,10 @@ export class CodeAgentSessionService {
             runnerErrorDetailLength: lastRunnerErrorSummary.detailLength,
           } : {}),
           ...(turnTimedOut ? { turnTimeoutMs: this.turnTimeoutMs } : {}),
+          ...(openCodeInvalidToolLoop ? {
+            invalidToolLoopCount: openCodeInvalidToolLoop.count,
+            invalidToolLoopThreshold: openCodeInvalidToolLoop.threshold,
+          } : {}),
           ...(error instanceof CodexConnectionError ? { codexConnectionErrorCode: error.code } : {}),
         },
       });
@@ -1403,7 +1513,11 @@ export class CodeAgentSessionService {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
     if (codeAgentBackendSupportsInterrupt(active.backend)) {
-      if (active.terminationReason === 'lease_lost' || active.terminationReason === 'timeout') {
+      if (
+        active.terminationReason === 'lease_lost'
+        || active.terminationReason === 'timeout'
+        || active.terminationReason === 'invalid_tool_loop'
+      ) {
         return { success: true };
       }
       active.interruptedByUser = true;
@@ -1424,7 +1538,11 @@ export class CodeAgentSessionService {
       return { success: true };
     }
     if (active.backend === 'codex') {
-      if (active.terminationReason === 'lease_lost' || active.terminationReason === 'timeout') {
+      if (
+        active.terminationReason === 'lease_lost'
+        || active.terminationReason === 'timeout'
+        || active.terminationReason === 'invalid_tool_loop'
+      ) {
         return { success: true };
       }
       active.interruptedByUser = true;
@@ -2689,7 +2807,7 @@ export class CodeAgentSessionService {
     state: CodeAgentTurnStreamState,
     backend: CodeAgentBackend,
     codexRunSettings: CodexRunSettings
-  ) {
+  ): Promise<typeof OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE | undefined> {
     const observedAtMs = this.now().getTime();
     const toolDurationMs = event.type === 'tool_result'
       ? Math.max(0, observedAtMs - (state.pendingToolCalls.get(event.id)?.startedAtMs || observedAtMs))
@@ -2735,6 +2853,10 @@ export class CodeAgentSessionService {
         this.logger.warn('Unable to materialize inserted steer input', { roomId, turnId, messageId: event.messageId });
         return;
       }
+      if (backend === 'opencode') {
+        state.opencodeInvalidToolLoopCount = 0;
+        state.opencodeInvalidToolCallIds.clear();
+      }
       active.pendingSteerMessageIds.delete(event.messageId);
       this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
       return;
@@ -2779,6 +2901,10 @@ export class CodeAgentSessionService {
     });
 
     if (mapped.kind === 'ai_delta') {
+      if (backend === 'opencode' && mapped.delta.trim()) {
+        state.opencodeInvalidToolLoopCount = 0;
+        state.opencodeInvalidToolCallIds.clear();
+      }
       if (state.needsNewSegment) {
         await this.sealCurrentSegment(roomId, claim, baseAIMessage, state);
         const newId = this.createId();
@@ -2866,6 +2992,7 @@ export class CodeAgentSessionService {
       if (appendResult.outcome !== 'applied') {
         throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
       }
+      let openCodeInvalidToolLoopDetected = false;
       if (event.type === 'tool_call' || event.type === 'approval_request') {
         state.hasToolHistory = true;
         state.pendingToolCalls.set(event.id, {
@@ -2881,13 +3008,37 @@ export class CodeAgentSessionService {
             this.emitter.to(roomId).emit('ai_cost_total', appendResult.roomCostTotal);
           }
         }
+        if (event.type === 'tool_call' && backend === 'opencode') {
+          if (isOpenCodeInvalidToolSentinel(event)) {
+            state.opencodeInvalidToolCallIds.add(event.id);
+          } else {
+            state.opencodeInvalidToolLoopCount = 0;
+            state.opencodeInvalidToolCallIds.clear();
+          }
+        }
       } else if (event.type === 'tool_result') {
         state.hasToolHistory = true;
         state.pendingToolCalls.delete(event.id);
+        if (backend === 'opencode') {
+          const matchedInvalidToolCall = state.opencodeInvalidToolCallIds.delete(event.id);
+          if (event.success) {
+            state.opencodeInvalidToolLoopCount = 0;
+            state.opencodeInvalidToolCallIds.clear();
+          } else if (matchedInvalidToolCall) {
+            state.opencodeInvalidToolLoopCount += 1;
+            openCodeInvalidToolLoopDetected = (
+              state.opencodeInvalidToolLoopCount >= OPENCODE_INVALID_TOOL_LOOP_THRESHOLD
+            );
+          }
+        }
       }
       state.lastMessageId = mapped.message.id;
       this.emitter.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      if (openCodeInvalidToolLoopDetected) {
+        return OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE;
+      }
     }
+    return undefined;
   }
 
   private async handleCocoModelStep(
