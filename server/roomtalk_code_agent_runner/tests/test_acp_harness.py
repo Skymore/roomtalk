@@ -172,6 +172,12 @@ def test_hermes_config_uses_an_isolated_custom_openai_compatible_provider():
         },
     }
     assert config["terminal"]["cwd"] == "/workspace"
+    assert config["auxiliary"] == {
+        "title_generation": {
+            "enabled": False,
+        },
+    }
+    assert config["mcp_servers"] == {}
 
 
 def test_build_harness_env_isolates_hermes_state_and_uses_turn_token(tmp_path: Path):
@@ -189,10 +195,12 @@ def test_build_harness_env_isolates_hermes_state_and_uses_turn_token(tmp_path: P
     assert env["OPENAI_BASE_URL"].endswith("/v1")
     assert env["HERMES_SESSION_SOURCE"] == "roomtalk"
     config_path = Path(env["HERMES_HOME"]) / "config.yaml"
-    model = json.loads(config_path.read_text(encoding="utf-8"))["model"]
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    model = config["model"]
     assert model["provider"] == "custom:roomtalk"
     assert model["api_key"] == "turn-token"
     assert model["api_mode"] == "chat_completions"
+    assert config["auxiliary"]["title_generation"]["enabled"] is False
     assert stat.S_IMODE(Path(env["HERMES_HOME"]).stat().st_mode) == 0o700
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 

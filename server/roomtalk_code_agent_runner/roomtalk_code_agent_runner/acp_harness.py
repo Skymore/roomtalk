@@ -167,6 +167,13 @@ def hermes_config(request: RunnerRequest, base_url: str, token: str) -> dict[str
             "cwd": str(request.workspace),
             "env_type": "local",
         },
+        # RoomTalk owns room labels; Hermes' daemon-thread auto title can issue
+        # another model request after ACP has already returned the turn result.
+        "auxiliary": {
+            "title_generation": {
+                "enabled": False,
+            },
+        },
         "mcp_servers": {},
     }
 

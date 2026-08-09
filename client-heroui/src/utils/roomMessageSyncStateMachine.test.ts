@@ -75,4 +75,15 @@ describe('RoomMessageSyncStateMachine', () => {
     expect(state.desiredHeadSeq).toBe(9);
     expect(state.needsReplay).toBe(true);
   });
+
+  it('drops a stale desired head after an empty page confirms the cursor is caught up', () => {
+    const state = new RoomMessageSyncStateMachine();
+    state.applyCursor(20);
+    state.notifyHead(30);
+
+    state.reconcileCaughtUpHead(20);
+
+    expect(state.desiredHeadSeq).toBe(20);
+    expect(state.needsReplay).toBe(false);
+  });
 });

@@ -95,6 +95,12 @@ export class RoomMessageSyncStateMachine {
     this.desiredHeadSeq = Math.max(this.desiredHeadSeq, headSeq);
   }
 
+  reconcileCaughtUpHead(headSeq: number): void {
+    if (headSeq <= this.lastAppliedSeq) {
+      this.desiredHeadSeq = this.lastAppliedSeq;
+    }
+  }
+
   applyCursor(seq: number): void {
     this.lastAppliedSeq = seq;
   }

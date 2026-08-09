@@ -48,6 +48,10 @@ import { GitHubConnectionService } from './githubConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
 import { JsonlCodeAgentDaemonRunnerClient } from './jsonlCodeAgentDaemonRunner';
+import {
+  CodeAgentRunnerErrorSummary,
+  summarizeCodeAgentRunnerError,
+} from './codeAgentRunnerErrorSummary';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 import {
   codeAgentModeAllowsShell,
@@ -405,6 +409,7 @@ export class CodeAgentSessionService {
     let deadlineTermination: Promise<void> = Promise.resolve();
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
+    let lastRunnerErrorSummary: CodeAgentRunnerErrorSummary | undefined;
     const markLeaseLost = () => {
       leaseLost = true;
       const active = this.activeTurns.get(input.roomId);
@@ -838,6 +843,9 @@ export class CodeAgentSessionService {
       const runnerHandlers = {
         onEvent: async (event: CodeAgentRunnerEvent) => {
           if (turnTimedOut) return;
+          if (event.type === 'error') {
+            lastRunnerErrorSummary = summarizeCodeAgentRunnerError(event);
+          }
           if (event.type === 'approval_request') {
             await updatePhase('waiting_approval', event.title);
           } else if (event.type === 'tool_result' && event.name === 'approval_request') {
@@ -864,7 +872,8 @@ export class CodeAgentSessionService {
       assertTurnWithinDeadline();
 
       if (runResult.errorEvent) {
-        throw new Error(runResult.errorEvent.message);
+        lastRunnerErrorSummary ||= summarizeCodeAgentRunnerError(runResult.errorEvent);
+        throw new Error(lastRunnerErrorSummary.message);
       }
       if (!runResult.finalEvent) {
         throw new Error('code agent runner exited without a final event');
@@ -1094,21 +1103,33 @@ export class CodeAgentSessionService {
           : turnTimedOut
             ? 'turn_timeout'
             : 'turn_failed';
+      const failureDetailLength = lastRunnerErrorSummary?.detailLength
+        ?? (error instanceof Error
+          ? error.message.length
+          : (typeof error === 'string' ? error.length : 0));
       this.logger.error('Code agent turn failed', {
-        error,
         roomId: input.roomId,
         messageId: failedSegmentId,
         backend: turnBackend,
         errorCode,
+        failureKind: lastRunnerErrorSummary
+          ? 'runner'
+          : (error instanceof CodexConnectionError ? 'codex_connection' : 'application'),
+        failureDetailLength,
+        ...(lastRunnerErrorSummary ? { runnerErrorCode: lastRunnerErrorSummary.code } : {}),
       });
       await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: lastRunnerErrorSummary?.message || visibleFailureMessage,
         payload: {
           backend: turnBackend,
           messageId: failedSegmentId,
           placeholderAnnounced,
           roomMarkedRunning,
+          ...(lastRunnerErrorSummary ? {
+            runnerErrorCode: lastRunnerErrorSummary.code,
+            runnerErrorDetailLength: lastRunnerErrorSummary.detailLength,
+          } : {}),
           ...(turnTimedOut ? { turnTimeoutMs: this.turnTimeoutMs } : {}),
           ...(error instanceof CodexConnectionError ? { codexConnectionErrorCode: error.code } : {}),
         },
@@ -3221,6 +3242,9 @@ export class CodeAgentSessionService {
     }
 
     const payload = this.summarizeRunnerEvent(event);
+    const errorSummary = event.type === 'error'
+      ? summarizeCodeAgentRunnerError(event)
+      : undefined;
     await this.recordObservabilityEvent({
       level: event.type === 'error' ? 'error' : 'info',
       event: `code_agent.runner.${event.type}`,
@@ -3229,7 +3253,10 @@ export class CodeAgentSessionService {
       provider: isCodexBackend(backend) ? 'codex' : selectedModel.provider,
       model: isCodexBackend(backend) ? codexRunSettings.model : selectedModel.id,
       ...(durationMs !== undefined ? { durationMs } : {}),
-      errorMessage: event.type === 'error' ? event.message : undefined,
+      ...(errorSummary ? {
+        errorCode: errorSummary.code,
+        errorMessage: errorSummary.message,
+      } : {}),
       payload: { backend, ...payload },
     });
   }
@@ -3279,12 +3306,15 @@ export class CodeAgentSessionService {
         };
       case 'usage':
         return { usage: event.usage };
-      case 'error':
+      case 'error': {
+        const summary = summarizeCodeAgentRunnerError(event);
         return {
-          message: event.message,
-          code: event.code,
-          retryable: event.retryable,
+          code: summary.code,
+          message: summary.message,
+          detailLength: summary.detailLength,
+          retryable: summary.retryable,
         };
+      }
       case 'approval_request':
         return {
           approvalId: event.id,

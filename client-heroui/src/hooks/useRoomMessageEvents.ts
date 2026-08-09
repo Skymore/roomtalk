@@ -306,6 +306,7 @@ export const useRoomMessageEvents = ({
     let oldestMessageId: string | undefined;
     let canonicalMessages: Message[] = [];
     let canonicalTurns: RoomAgentTurn[] = [];
+    let cacheBaselineNeedsRevalidation = false;
     const pendingAIEvents = new PendingAIEventBuffer();
     const transientStreamGate = new AITransientStreamGate();
     const unpersistedAIErrorByMessageId = new Map<string, string>();
@@ -491,7 +492,7 @@ export const useRoomMessageEvents = ({
       return nextMessages;
     };
 
-    const applySnapshot = (snapshot: RoomSnapshotPayload) => {
+    const applySnapshot = (snapshot: RoomSnapshotPayload, background = false) => {
       onRoomUpdated?.(snapshot.room);
       clearResolvedUnpersistedAIErrors(snapshot.messages);
       if (snapshot.mode === 'prepend') {
@@ -528,11 +529,18 @@ export const useRoomMessageEvents = ({
       setAgentTurns(nextTurns);
       cacheWindow(nextMessages, nextTurns, snapshot.snapshotSeq, snapshot.hasMore, snapshot.oldestMessageId);
       setIsLoading(false);
-      setShowScrollButton(false);
-      scheduleScroll('auto', 0);
+      if (!background) {
+        setShowScrollButton(false);
+        scheduleScroll('auto', 0);
+      }
     };
 
-    const loadSnapshot = async (options: { beforeMessageId?: string; limit?: number; reason?: string } = {}) => {
+    const loadSnapshot = async (options: {
+      beforeMessageId?: string;
+      limit?: number;
+      reason?: string;
+      background?: boolean;
+    } = {}) => {
       const mode = options.beforeMessageId ? 'prepend' : 'replace';
       const snapshotToken = syncState.beginSnapshot(mode);
       if (!snapshotToken) return false;
@@ -540,7 +548,7 @@ export const useRoomMessageEvents = ({
         setIsLoadingMore(true);
       } else {
         setIsLoadingMore(false);
-        setIsLoading(true);
+        if (!options.background) setIsLoading(true);
       }
       const requestId = `${Date.now()}-${++requestSequence}`;
       logRoomMessageDiagnostic('snapshot-request', {
@@ -561,7 +569,7 @@ export const useRoomMessageEvents = ({
         });
         if (cancelled || !syncState.isSnapshotCurrent(snapshotToken)) return false;
         clearReplayRetry();
-        applySnapshot(snapshot);
+        applySnapshot(snapshot, options.background);
         return true;
       } catch (error) {
         if (error instanceof SocketRequestError && error.code === 'PAGINATION_BOUNDARY_EXPIRED') {
@@ -746,6 +754,14 @@ export const useRoomMessageEvents = ({
       if (cancelled || !sessionReadyRef.current || !syncState.requestReplay()) return;
       try {
         while (syncState.consumeReplayRequest() && !cancelled && sessionReadyRef.current) {
+          if (cacheBaselineNeedsRevalidation) {
+            const loaded = await loadSnapshot({
+              reason: 'cached-baseline-revalidation',
+              background: true,
+            });
+            if (!loaded) break;
+            cacheBaselineNeedsRevalidation = false;
+          }
           if (!hasBaseline) {
             const loaded = await loadSnapshot({ reason: 'initial-snapshot' });
             if (!loaded) break;
@@ -771,6 +787,9 @@ export const useRoomMessageEvents = ({
               });
               clearReplayRetry();
               syncState.notifyHead(page.headSeq);
+              if (page.events.length === 0) {
+                syncState.reconcileCaughtUpHead(page.headSeq);
+              }
               const hasTerminalDeletion = page.events.some(event => (
                 event.type === 'room.deleted' && event.seq === page.headSeq
               ));
@@ -867,12 +886,16 @@ export const useRoomMessageEvents = ({
     const memoryWindow = readMemoryRoomMessageWindow(roomId);
     let cacheHydrationPromise: Promise<void>;
     if (memoryWindow) {
-      const messages = sortMessages(filterMessages(memoryWindow.messages));
+      const messages = mergeSnapshotWithOptimisticMessages(
+        sortMessages(filterMessages(memoryWindow.messages)),
+        filterMessages(getCurrentMessages()),
+      );
       const turns = filterTurns(memoryWindow.turns || []);
       const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
       canonicalMessages = messages;
       canonicalTurns = turns;
       hasBaseline = !cacheHasTerminalToolGap;
+      cacheBaselineNeedsRevalidation = hasBaseline;
       syncState.applyCursor(memoryWindow.lastAppliedSeq);
       hasMoreMessages = memoryWindow.hasMore;
       oldestMessageId = memoryWindow.oldestMessageId;
@@ -901,9 +924,13 @@ export const useRoomMessageEvents = ({
           const messages = sortMessages(filterMessages(cachedWindow.messages));
           const turns = filterTurns(cachedWindow.turns || []);
           const cacheHasTerminalToolGap = hasTerminalTurnToolResultGap(messages, turns);
-          canonicalMessages = drainPendingAIEvents(messages);
+          canonicalMessages = drainPendingAIEvents(mergeSnapshotWithOptimisticMessages(
+            messages,
+            filterMessages(getCurrentMessages()),
+          ));
           canonicalTurns = turns;
           hasBaseline = !cacheHasTerminalToolGap;
+          cacheBaselineNeedsRevalidation = hasBaseline;
           syncState.applyCursor(cachedWindow.lastAppliedSeq);
           hasMoreMessages = cachedWindow.hasMore;
           oldestMessageId = cachedWindow.oldestMessageId;

@@ -239,9 +239,19 @@ const Harness = ({
 };
 
 const installDefaultProtocolMocks = () => {
-  socketMock.requestSnapshot.mockImplementation(async (request: { requestId: string }) => (
-    snapshot({ requestId: request.requestId })
-  ));
+  socketMock.requestSnapshot.mockImplementation(async (request: { requestId: string; roomId: string }) => {
+    const cachedWindow = cacheMock.memory || cacheMock.persistent;
+    return snapshot({
+      requestId: request.requestId,
+      roomId: request.roomId,
+      room: room({ id: request.roomId }),
+      messages: cachedWindow?.messages || [],
+      turns: cachedWindow?.turns || [],
+      snapshotSeq: cachedWindow?.lastAppliedSeq || 0,
+      hasMore: cachedWindow?.hasMore || false,
+      oldestMessageId: cachedWindow?.oldestMessageId,
+    });
+  });
   socketMock.requestEvents.mockImplementation(async (request: { requestId: string; afterSeq: number }) => (
     eventPage(request.requestId, request.afterSeq)
   ));
@@ -253,6 +263,9 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    socketMock.requestSnapshot.mockReset();
+    socketMock.requestEvents.mockReset();
+    socketMock.requestCost.mockReset();
     socketMock.listeners.clear();
     cacheMock.memory = null;
     cacheMock.persistent = null;
@@ -338,7 +351,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.messages).toBe('older,ai,tool,result');
   });
 
-  it('renders a cached baseline immediately and only requests missing events', async () => {
+  it('renders a cached baseline immediately, revalidates it, and requests missing events', async () => {
     cacheMock.memory = {
       roomId: 'room-1',
       messages: [message({ id: 'cached-message' })],
@@ -356,7 +369,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
     expect(screen.getByTestId('state').dataset.messages).toContain('cached-message');
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('6'));
-    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByTestId('state').dataset.cost).toBe('1.25'));
     expect(socketMock.requestCost).toHaveBeenCalledWith('room-1');
     expect(screen.getByTestId('state').dataset.messages).toBe('cached-message,message-6');
@@ -382,9 +395,155 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       render(<Harness />);
 
       await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('ai,tool,result'));
-      expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+      expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each(['memory', 'persistent'] as const)(
+    'revalidates a cursor-current %s cache and restores a silently missing durable message',
+    async cacheSource => {
+      const first = message({ id: 'first', position: 10 });
+      const missing = message({ id: 'missing', position: 11 });
+      const last = message({ id: 'last', position: 12 });
+      cacheMock[cacheSource] = {
+        roomId: 'room-1',
+        messages: [first, last],
+        turns: [],
+        lastAppliedSeq: 12,
+        hasMore: false,
+        cachedAt: Date.now(),
+      };
+      let resolveSnapshot!: (value: RoomSnapshotPayload) => void;
+      socketMock.requestSnapshot.mockImplementationOnce(() => new Promise(resolve => {
+        resolveSnapshot = resolve;
+      }));
+
+      render(<Harness />);
+
+      await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('first,last'));
+      expect(screen.getByTestId('state').dataset.loading).toBe('false');
+      expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+      expect(socketMock.requestEvents).not.toHaveBeenCalled();
+
+      act(() => resolveSnapshot(snapshot({
+        messages: [last, first, missing],
+        snapshotSeq: 12,
+      })));
+
+      await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('first,missing,last'));
+      expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        afterSeq: 12,
+      })));
+    },
+  );
+
+  it('preserves a pending optimistic message while revalidating a cached baseline', async () => {
+    const durable = message({ id: 'durable', position: 10 });
+    const pending = message({
+      id: 'temp-pending',
+      content: 'pending',
+      deliveryStatus: 'pending',
+    });
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [durable],
+      turns: [],
+      lastAppliedSeq: 10,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [durable],
+      snapshotSeq: 10,
+    }));
+
+    render(<Harness initialMessages={[pending]} />);
+
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('durable,temp-pending'));
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a complete cached window in canonical order after background revalidation', async () => {
+    const first = message({ id: 'first', position: 20 });
+    const second = message({ id: 'second', position: 21 });
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [second, first],
+      turns: [],
+      lastAppliedSeq: 21,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    let resolveSnapshot!: (value: RoomSnapshotPayload) => void;
+    socketMock.requestSnapshot.mockImplementationOnce(() => new Promise(resolve => {
+      resolveSnapshot = resolve;
+    }));
+
+    render(<Harness />);
+
+    expect(screen.getByTestId('state').dataset.messages).toBe('first,second');
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    act(() => resolveSnapshot(snapshot({
+      messages: [second, first],
+      snapshotSeq: 21,
+    })));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
+    expect(screen.getByTestId('state').dataset.messages).toBe('first,second');
+  });
+
+  it('does not apply a late cache-revalidation snapshot after switching rooms', async () => {
+    cacheMock.memory = {
+      roomId: 'room-1',
+      messages: [message({ id: 'room-1-cached' })],
+      turns: [],
+      lastAppliedSeq: 1,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    let resolveRoomOne!: (value: RoomSnapshotPayload) => void;
+    socketMock.requestSnapshot.mockImplementation(request => {
+      if (request.roomId === 'room-1') {
+        return new Promise(resolve => {
+          resolveRoomOne = resolve;
+        });
+      }
+      return Promise.resolve(snapshot({
+        requestId: request.requestId,
+        roomId: 'room-2',
+        room: room({ id: 'room-2' }),
+        messages: [message({ id: 'room-2-current', roomId: 'room-2' })],
+        snapshotSeq: 2,
+      }));
+    });
+
+    const rendered = render(<Harness roomId="room-1" />);
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+    })));
+
+    cacheMock.memory = {
+      roomId: 'room-2',
+      messages: [message({ id: 'room-2-cached', roomId: 'room-2' })],
+      turns: [],
+      lastAppliedSeq: 2,
+      hasMore: false,
+      cachedAt: Date.now(),
+    };
+    rendered.rerender(<Harness roomId="room-2" />);
+    await waitFor(() => expect(screen.getByTestId('state').dataset.messages).toBe('room-2-current'));
+
+    act(() => resolveRoomOne(snapshot({
+      messages: [message({ id: 'room-1-late' })],
+      snapshotSeq: 3,
+    })));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(screen.getByTestId('state').dataset.messages).toBe('room-2-current');
+    expect(screen.getByTestId('state').dataset.seq).toBe('2');
+  });
 
   it('automatically retries replay after transient socket registration loss', async () => {
     cacheMock.memory = {
@@ -600,6 +759,11 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       headSeq: 1000,
     }));
     socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'cached' })],
+        snapshotSeq: 1,
+      }))
       .mockRejectedValueOnce(new Error('temporary snapshot failure'))
       .mockImplementationOnce(async request => snapshot({
         requestId: request.requestId,
@@ -607,14 +771,11 @@ describe('useRoomMessageEvents event-log synchronization', () => {
         snapshotSeq: 1000,
       }));
     render(<Harness />);
-    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2));
 
     act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 1000 }));
-    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
-    act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 1000 }));
-
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1000'));
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId('state').dataset.messages).toBe('snapshot-current');
   });
 
@@ -625,17 +786,23 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     socketMock.requestEvents
       .mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_EXPIRED', 'expired'))
       .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'fresh' })],
-      snapshotSeq: 10,
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'stale' })],
+        snapshotSeq: 2,
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'fresh' })],
+        snapshotSeq: 10,
+      }));
 
     render(<Harness />);
 
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('10'));
     expect(screen.getByTestId('state').dataset.messages).toBe('fresh');
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('resets from a snapshot when one event exceeds the replay byte budget', async () => {
@@ -645,17 +812,23 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     socketMock.requestEvents
       .mockRejectedValueOnce(new socketMock.SocketRequestError('EVENT_TOO_LARGE', 'too large'))
       .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'fresh' })],
-      snapshotSeq: 10,
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'stale' })],
+        snapshotSeq: 2,
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'fresh' })],
+        snapshotSeq: 10,
+      }));
 
     render(<Harness />);
 
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('10'));
     expect(screen.getByTestId('state').dataset.messages).toBe('fresh');
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('resets from a snapshot when a database restore moves the stream head behind the cached cursor', async () => {
@@ -665,17 +838,23 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     socketMock.requestEvents
       .mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_AHEAD', 'ahead'))
       .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'restored' })],
-      snapshotSeq: 8,
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'future' })],
+        snapshotSeq: 20,
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'restored' })],
+        snapshotSeq: 8,
+      }));
 
     render(<Harness />);
 
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
     expect(screen.getByTestId('state').dataset.messages).toBe('restored');
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('drops a stale desired head after CURSOR_AHEAD while preserving notifications received during the snapshot', async () => {
@@ -697,14 +876,20 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       }
       return eventPage(request.requestId, request.afterSeq, { headSeq: 9 });
     });
-    socketMock.requestSnapshot.mockImplementationOnce(async () => restoredSnapshot);
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'future' })],
+        snapshotSeq: 20,
+      }))
+      .mockImplementationOnce(async () => restoredSnapshot);
 
     render(<Harness />);
     await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
 
     act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 30 }));
     act(() => rejectInitialRequest(new socketMock.SocketRequestError('CURSOR_AHEAD', 'ahead')));
-    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2));
 
     act(() => socketMock.trigger('room_event_available', { roomId: 'room-1', headSeq: 9 }));
     act(() => resolveSnapshot(snapshot({
@@ -726,11 +911,17 @@ describe('useRoomMessageEvents event-log synchronization', () => {
         events: [event(3)], headSeq: 3,
       }))
       .mockImplementation(async request => eventPage(request.requestId, request.afterSeq));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'canonical' })],
-      snapshotSeq: 3,
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'baseline' })],
+        snapshotSeq: 1,
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'canonical' })],
+        snapshotSeq: 3,
+      }));
 
     render(<Harness />);
 
@@ -749,21 +940,30 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       cachedAt: Date.now(),
     };
     socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'current' })],
+        snapshotSeq: 3,
+        hasMore: true,
+        oldestMessageId: 'current',
+      }))
       .mockRejectedValueOnce(new socketMock.SocketRequestError('PAGINATION_BOUNDARY_EXPIRED', 'expired'))
       .mockImplementationOnce(async request => snapshot({
         requestId: request.requestId,
         messages: [message({ id: 'replacement' })],
         snapshotSeq: 4,
-      }));
+    }));
     render(<Harness requestHistoryRef={requestHistoryRef} />);
     await waitFor(() => expect(requestHistoryRef.current).not.toBeNull());
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       await requestHistoryRef.current?.({ beforeMessageId: 'current' });
     });
 
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
-    expect(socketMock.requestSnapshot.mock.calls[1][0].beforeMessageId).toBeUndefined();
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(3);
+    expect(socketMock.requestSnapshot.mock.calls[2][0].beforeMessageId).toBeUndefined();
     expect(screen.getByTestId('state').dataset.messages).toBe('replacement');
     expect(screen.getByTestId('state').dataset.seq).toBe('4');
   });
@@ -779,17 +979,32 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       cachedAt: Date.now(),
     };
     let resolvePrepend!: (value: RoomSnapshotPayload) => void;
-    socketMock.requestSnapshot.mockImplementationOnce(() => new Promise(resolve => {
-      resolvePrepend = resolve;
+    let resolveInitialReplay!: () => void;
+    socketMock.requestEvents.mockImplementationOnce(request => new Promise(resolve => {
+      resolveInitialReplay = () => resolve(eventPage(request.requestId, request.afterSeq));
     }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'delete-me' }), message({ id: 'survivor' })],
+        snapshotSeq: 1,
+        hasMore: true,
+        oldestMessageId: 'delete-me',
+      }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolvePrepend = resolve;
+      }));
     render(<Harness requestHistoryRef={requestHistoryRef} />);
     await waitFor(() => expect(requestHistoryRef.current).not.toBeNull());
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
+    await act(async () => resolveInitialReplay());
 
     let prependRequest!: Promise<void>;
     act(() => {
       prependRequest = requestHistoryRef.current!({ beforeMessageId: 'delete-me' });
     });
-    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2));
 
     act(() => socketMock.trigger('room_event_available', {
       roomId: 'room-1',
@@ -966,7 +1181,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     render(<Harness />);
 
     await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
-    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
     expect(cacheMock.clearCachedRoomMessageWindow).not.toHaveBeenCalled();
   });
 
@@ -995,16 +1210,25 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     cacheMock.memory = {
       roomId: 'room-1', messages: [message({ id: 'newest' })], lastAppliedSeq: 8, hasMore: true, oldestMessageId: 'newest', cachedAt: Date.now(),
     };
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'older', timestamp: '2026-07-19T00:00:00.000Z' })],
-      snapshotSeq: 12,
-      hasMore: false,
-      oldestMessageId: 'older',
-      mode: 'prepend',
-    }));
+    socketMock.requestSnapshot.mockImplementation(async request => request.beforeMessageId
+      ? snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'older', timestamp: '2026-07-19T00:00:00.000Z' })],
+        snapshotSeq: 12,
+        hasMore: false,
+        oldestMessageId: 'older',
+        mode: 'prepend',
+      })
+      : snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'newest' })],
+        snapshotSeq: 8,
+        hasMore: true,
+        oldestMessageId: 'newest',
+      }));
     render(<Harness requestHistoryRef={requestHistoryRef} />);
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
+    await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       await requestHistoryRef.current?.({ beforeMessageId: 'newest', limit: 80 });
@@ -1021,17 +1245,25 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     };
     let resolveRecovery!: (value: RoomSnapshotPayload) => void;
     socketMock.requestEvents.mockRejectedValueOnce(new socketMock.SocketRequestError('CURSOR_EXPIRED', 'expired'));
-    socketMock.requestSnapshot.mockImplementationOnce(async () => new Promise(resolve => {
-      resolveRecovery = resolve;
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'stale' })],
+        snapshotSeq: 8,
+        hasMore: true,
+        oldestMessageId: 'stale',
+      }))
+      .mockImplementationOnce(async () => new Promise(resolve => {
+        resolveRecovery = resolve;
+      }));
 
     render(<Harness requestHistoryRef={requestHistoryRef} />);
-    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2));
 
     await act(async () => {
       await requestHistoryRef.current?.({ beforeMessageId: 'stale', reason: 'scroll' });
     });
-    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2);
 
     act(() => resolveRecovery(snapshot({
       messages: [message({ id: 'recovered' })],
@@ -1057,13 +1289,21 @@ describe('useRoomMessageEvents event-log synchronization', () => {
         payload: { messageIds: ['visible'], deletedAt: '2026-07-20T00:00:01.000Z' },
       })],
     }));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'older' })],
-      snapshotSeq: 2,
-      hasMore: false,
-      oldestMessageId: 'older',
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'visible' })],
+        snapshotSeq: 1,
+        hasMore: true,
+        oldestMessageId: 'visible',
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'older' })],
+        snapshotSeq: 2,
+        hasMore: false,
+        oldestMessageId: 'older',
+      }));
 
     render(<Harness />);
 
@@ -1201,7 +1441,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('8'));
     expect(screen.getByTestId('state').dataset.messages).toBe('');
-    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
     expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
   });
 
@@ -1223,7 +1463,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
 
     await waitFor(() => expect(screen.getByTestId('state').dataset.seq).toBe('1000'));
     expect(screen.getByTestId('state').dataset.messages).toBe('');
-    expect(socketMock.requestSnapshot).not.toHaveBeenCalled();
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('keeps transient AI chunks outside the durable cursor and settles them on stream end', async () => {
@@ -1504,7 +1744,7 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(screen.getByTestId('state').dataset.contents).toBe('partial');
 
     act(() => socketMock.trigger('message_history_invalidated', { roomId: 'room-1' }));
-    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId('state').dataset.statuses).toBe('error');
   });
 
@@ -1554,11 +1794,17 @@ describe('useRoomMessageEvents event-log synchronization', () => {
       'EVENT_PAYLOAD_INVALID',
       'invalid event payload',
     ));
-    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
-      requestId: request.requestId,
-      messages: [message({ id: 'canonical' })],
-      snapshotSeq: 7,
-    }));
+    socketMock.requestSnapshot
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'stale' })],
+        snapshotSeq: 5,
+      }))
+      .mockImplementationOnce(async request => snapshot({
+        requestId: request.requestId,
+        messages: [message({ id: 'canonical' })],
+        snapshotSeq: 7,
+      }));
 
     render(<Harness />);
 

@@ -1145,12 +1145,14 @@ const createService = (options: {
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
   now?: () => Date;
+  logger?: Logger;
 } = {}) => {
   const store = options.store || new MemoryCodeAgentStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
   const now = options.now || (() => new Date('2026-05-03T00:00:00.000Z'));
+  const serviceLogger = options.logger || logger;
   const sandboxService = new FakeCodeAgentSandboxService(now);
-  const lifecycle = new CodeAgentSandboxLifecycleService(store as any, sandboxService, logger, {
+  const lifecycle = new CodeAgentSandboxLifecycleService(store as any, sandboxService, serviceLogger, {
     sandboxTtlMs: 60 * 60 * 1000,
     activeSandboxTtlMs: options.activeSandboxTtlMs ?? 60 * 60 * 1000,
     idleSandboxTtlMs: options.idleSandboxTtlMs ?? 2 * 60 * 1000,
@@ -1165,7 +1167,7 @@ const createService = (options: {
     lifecycle,
     sandboxService,
     new CodeAgentRunnerAdapter(options.runner || new FakeCodeAgentRunnerClient([]), options.backend || 'code-agent'),
-    logger,
+    serviceLogger,
     {
       enabled: options.enabled ?? true,
       allowedClientIds: options.allowedClientIds,
@@ -4170,9 +4172,84 @@ describe('CodeAgentSessionService', () => {
     assert.equal(Object.prototype.hasOwnProperty.call((streamError.args[0] as any).message, 'aiStreamOwnerId'), false);
     assert.equal(
       observability.events.find(event => event.event === 'code_agent.turn.failed')?.errorMessage,
-      'runner crashed',
+      'Code agent runner process failed.',
     );
   });
+
+  for (const runnerFailure of [
+    {
+      label: 'daemon client',
+      code: 'daemon_process_error',
+      expectedCode: 'runner_daemon_failure',
+      expectedMessage: 'Code agent runner daemon failed.',
+    },
+    {
+      label: 'one-shot JSONL client',
+      code: 'runner_process_error',
+      expectedCode: 'runner_process_failure',
+      expectedMessage: 'Code agent runner process failed.',
+    },
+  ]) {
+    it(`suppresses raw ${runnerFailure.label} errors at observability and logger boundaries`, async () => {
+      const secret = 'ROOMTALK_PRIVATE_TOKEN=must-not-leak';
+      const rawError = `sandbox stderr Authorization: Bearer ${secret}; command=${secret}${'x'.repeat(8_000)}`;
+      const runner = new FakeCodeAgentRunnerClient([{
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'error',
+        message: rawError,
+        code: runnerFailure.code,
+        retryable: false,
+      }]);
+      const observability = createMemoryObservability();
+      const errorLogs: Array<{ message: string; meta?: unknown }> = [];
+      const capturingLogger = {
+        debug() {},
+        error(message: string, meta?: unknown) {
+          errorLogs.push({ message, meta });
+        },
+        info() {},
+        warn() {},
+      } as unknown as Logger;
+      const { service } = createService({
+        runner,
+        observability: observability.recorder,
+        logger: capturingLogger,
+      });
+
+      const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.equal(result.success, false);
+      const runnerEvent = observability.events.find(event => event.event === 'code_agent.runner.error');
+      assert.equal(runnerEvent?.errorCode, runnerFailure.expectedCode);
+      assert.equal(runnerEvent?.errorMessage, runnerFailure.expectedMessage);
+      assert.deepEqual(runnerEvent?.payload, {
+        backend: 'code-agent',
+        code: runnerFailure.expectedCode,
+        message: runnerFailure.expectedMessage,
+        detailLength: rawError.length,
+        retryable: false,
+      });
+      const turnFailed = observability.events.find(event => event.event === 'code_agent.turn.failed');
+      assert.equal(turnFailed?.errorMessage, runnerFailure.expectedMessage);
+      assert.equal((turnFailed?.payload as any)?.runnerErrorCode, runnerFailure.expectedCode);
+      assert.equal((turnFailed?.payload as any)?.runnerErrorDetailLength, rawError.length);
+      const turnFailureLog = errorLogs.find(log => log.message === 'Code agent turn failed');
+      assert.deepEqual(turnFailureLog?.meta, {
+        roomId: 'room-1',
+        messageId: 'ai-1',
+        backend: 'code-agent',
+        errorCode: 'turn_failed',
+        failureKind: 'runner',
+        failureDetailLength: rawError.length,
+        runnerErrorCode: runnerFailure.expectedCode,
+      });
+      const serialized = JSON.stringify({ observability: observability.events, logs: errorLogs });
+      assert.equal(serialized.includes(secret), false);
+      assert.equal(serialized.includes('ROOMTALK_PRIVATE_TOKEN'), false);
+      assert.equal(serialized.includes('Authorization: Bearer'), false);
+      assert.equal(serialized.length < rawError.length, true);
+    });
+  }
 
   it('closes pending tool calls with failed results when the runner errors', async () => {
     const runner = new FakeCodeAgentRunnerClient([
