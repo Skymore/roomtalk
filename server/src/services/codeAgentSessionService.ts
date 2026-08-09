@@ -1399,7 +1399,7 @@ export class CodeAgentSessionService {
       ...(input.codexRunSettings?.reasoningEffort ? { codexReasoningEffort: input.codexRunSettings.reasoningEffort } : {}),
       ...(input.codexRunSettings?.permissionMode ? { codexPermissionMode: input.codexRunSettings.permissionMode } : {}),
       ...(input.codexRunSettings?.serviceTier ? { codexServiceTier: input.codexRunSettings.serviceTier } : {}),
-      ...(input.maxContextMessages ? { maxContextMessages: input.maxContextMessages } : {}),
+      ...(input.maxContextMessages !== undefined ? { maxContextMessages: input.maxContextMessages } : {}),
       ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
       ...(input.clientOrigin ? { clientOrigin: input.clientOrigin } : {}),
       ...(input.serverOrigin ? { serverOrigin: input.serverOrigin } : {}),

@@ -4074,6 +4074,67 @@ describe('CodeAgentSessionService', () => {
     await runner.waitForCompletions(2);
   });
 
+  it('preserves zero and undefined max-context settings through queued turn claim and start', async () => {
+    for (const maxContextMessages of [0, undefined]) {
+      const runner = new FakeCodeAgentRunnerClient([
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: 'queued-answer',
+          delta: 'Done',
+        },
+        cocoModelStep(1, true, [], {
+          promptTokens: 10,
+          completionTokens: 2,
+          totalTokens: 12,
+        }),
+        {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final',
+          messageId: 'queued-answer',
+          answer: 'Done',
+          sessionId: 'queued-session',
+          usage: {
+            promptTokens: 10,
+            completionTokens: 2,
+            totalTokens: 12,
+            source: 'reported',
+          },
+        },
+      ]);
+      const store = new MemoryCodeAgentStore(room(), [userMessage('older prompt')]);
+      const { service } = createService({
+        store,
+        runner,
+        ids: ['ai-1', 'turn-1'],
+      });
+      const queued = await service.queueTurn({
+        roomId: 'room-1',
+        clientId: 'client-1',
+        selectedModel,
+        ...(maxContextMessages !== undefined ? { maxContextMessages } : {}),
+      }, {
+        ...userMessage('queued prompt'),
+        id: `queued-${maxContextMessages ?? 'default'}`,
+        timestamp: '2026-05-03T00:00:01.000Z',
+      });
+
+      assert.equal(queued.message?.codeAgentQueuedInput?.maxContextMessages, maxContextMessages);
+      const requestDeadline = Date.now() + 1_000;
+      while (runner.requests.length === 0 && Date.now() < requestDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.equal(runner.requests.length, 1);
+      assert.equal(runner.requests[0].prompt, 'queued prompt');
+      assert.deepEqual(
+        runner.requests[0].priorMessages,
+        maxContextMessages === 0
+          ? []
+          : [{ role: 'user', content: 'older prompt' }],
+      );
+    }
+  });
+
   it('returns only the canonical queued message for an idempotent retry and leaves durable fan-out to room_events', async () => {
     const runner = new BlockingRunner();
     const { emitter, service, store } = createService({

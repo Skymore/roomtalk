@@ -16,6 +16,7 @@ from roomtalk_code_agent_runner.acp_harness import (
     MAX_ACP_FRAME_BYTES,
     _configure_session,
     _control_loop,
+    _mode_ids,
     _open_session,
     _prompt_session,
     _run_request_async,
@@ -54,6 +55,20 @@ def runner_request(**overrides: Any) -> RunnerRequest:
 
 def events(buffer: io.StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in buffer.getvalue().splitlines()]
+
+
+def opencode_config_options(current_value: str) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            id="mode",
+            category="mode",
+            current_value=current_value,
+            options=[
+                SimpleNamespace(value="plan"),
+                SimpleNamespace(value="build"),
+            ],
+        ),
+    ]
 
 
 def test_acp_process_transport_accepts_bounded_frames_larger_than_asyncio_default(tmp_path: Path):
@@ -259,6 +274,234 @@ def test_hermes_session_model_stays_on_the_roomtalk_custom_provider():
         }),
         ("mode", {"session_id": "session-1", "mode_id": "dont_ask"}),
     ]
+
+
+def test_mode_ids_supports_legacy_modes_and_config_options_without_flattening_other_selects():
+    response = {
+        "modes": {
+            "availableModes": [
+                {"id": "default"},
+                {"id": "dont_ask"},
+            ],
+        },
+        "configOptions": [
+            {
+                "id": "mode",
+                "category": "mode",
+                "currentValue": "plan",
+                "options": [{
+                    "group": "primary",
+                    "options": [{"value": "plan"}, {"value": "build"}],
+                }],
+            },
+            {
+                "id": "theme",
+                "category": "display",
+                "options": [{"value": "build"}, {"value": "dark"}],
+            },
+        ],
+    }
+
+    assert _mode_ids(response) == {"default", "dont_ask", "plan", "build"}
+
+
+def test_opencode_config_options_switch_restored_sessions_between_plan_and_build():
+    for request_mode, prior_mode, expected_mode in [
+        ("fullAccess", "plan", "build"),
+        ("plan", "build", "plan"),
+    ]:
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        class Connection:
+            async def set_session_model(self, **kwargs: str) -> None:
+                calls.append(("model", kwargs))
+
+            async def set_config_option(self, **kwargs: str) -> None:
+                calls.append(("config", kwargs))
+
+            async def set_session_mode(self, **_kwargs: str) -> None:
+                raise AssertionError("configOptions must use set_config_option")
+
+        asyncio.run(_configure_session(
+            backend="opencode",
+            request=runner_request(
+                mode=request_mode,
+                session_id="acp:opencode:restored-session",
+            ),
+            connection=Connection(),
+            session_id="restored-session",
+            session_response=SimpleNamespace(
+                session_id="restored-session",
+                config_options=opencode_config_options(prior_mode),
+            ),
+        ))
+
+        assert calls[-1] == (
+            "config",
+            {
+                "session_id": "restored-session",
+                "config_id": "mode",
+                "value": expected_mode,
+            },
+        )
+
+
+def test_opencode_new_and_loaded_session_config_options_reach_mode_configuration():
+    for restored, request_mode, expected_mode in [
+        (False, "fullAccess", "build"),
+        (True, "plan", "plan"),
+    ]:
+        output = io.StringIO()
+        request = runner_request(
+            mode=request_mode,
+            session_id="acp:opencode:session-1" if restored else None,
+        )
+        bridge = ACPEventBridge(
+            backend="opencode",
+            request=request,
+            emitter=EventEmitter(output),
+        )
+        configured_modes: list[str] = []
+        session_response = SimpleNamespace(
+            session_id="session-1",
+            config_options=opencode_config_options("plan" if expected_mode == "build" else "build"),
+        )
+
+        class Connection:
+            async def load_session(self, **_kwargs: Any) -> Any:
+                if not restored:
+                    raise AssertionError("new sessions must not load")
+                return session_response
+
+            async def new_session(self, **_kwargs: Any) -> Any:
+                if restored:
+                    raise AssertionError("loaded sessions must not create")
+                return session_response
+
+            async def set_session_model(self, **_kwargs: str) -> None:
+                return None
+
+            async def set_config_option(self, **kwargs: str) -> None:
+                configured_modes.append(kwargs["value"])
+
+        async def run() -> bool:
+            response, session_id, was_restored = await _open_session(
+                backend="opencode",
+                request=request,
+                connection=Connection(),
+                capabilities=SimpleNamespace(load_session=True),
+                bridge=bridge,
+            )
+            await _configure_session(
+                backend="opencode",
+                request=request,
+                connection=Connection(),
+                session_id=session_id,
+                session_response=response,
+            )
+            return was_restored
+
+        assert asyncio.run(run()) is restored
+        assert configured_modes == [expected_mode]
+
+
+def test_opencode_legacy_modes_still_update_explicitly_without_config_options():
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class Connection:
+        async def set_session_model(self, **kwargs: str) -> None:
+            calls.append(("model", kwargs))
+
+        async def set_session_mode(self, **kwargs: str) -> None:
+            calls.append(("mode", kwargs))
+
+        async def set_config_option(self, **_kwargs: str) -> None:
+            raise AssertionError("legacy modes must use set_session_mode")
+
+    asyncio.run(_configure_session(
+        backend="opencode",
+        request=runner_request(mode="fullAccess"),
+        connection=Connection(),
+        session_id="session-1",
+        session_response=SimpleNamespace(
+            modes=SimpleNamespace(
+                available_modes=[
+                    SimpleNamespace(id="plan"),
+                    SimpleNamespace(id="build"),
+                ],
+            ),
+        ),
+    ))
+
+    assert calls[-1] == (
+        "mode",
+        {"session_id": "session-1", "mode_id": "build"},
+    )
+
+
+def test_opencode_fails_closed_when_the_requested_mode_is_not_advertised():
+    class Connection:
+        async def set_session_model(self, **_kwargs: str) -> None:
+            return None
+
+        async def set_config_option(self, **_kwargs: str) -> None:
+            raise AssertionError("unadvertised modes must not be selected")
+
+        async def set_session_mode(self, **_kwargs: str) -> None:
+            raise AssertionError("unadvertised modes must not be selected")
+
+    for session_response in [
+        SimpleNamespace(session_id="session-1"),
+        SimpleNamespace(
+            session_id="session-1",
+            config_options=[SimpleNamespace(
+                id="mode",
+                category="mode",
+                current_value="plan",
+                options=[SimpleNamespace(value="plan")],
+            )],
+        ),
+    ]:
+        try:
+            asyncio.run(_configure_session(
+                backend="opencode",
+                request=runner_request(mode="fullAccess"),
+                connection=Connection(),
+                session_id="session-1",
+                session_response=session_response,
+            ))
+        except RunnerError as error:
+            assert error.code == "acp_session_mode_unavailable"
+            assert str(error) == "OpenCode ACP session did not advertise the requested mode"
+        else:
+            raise AssertionError("OpenCode must reject an unavailable session mode")
+
+
+def test_opencode_fails_closed_when_config_option_update_fails():
+    class Connection:
+        async def set_session_model(self, **_kwargs: str) -> None:
+            return None
+
+        async def set_config_option(self, **_kwargs: str) -> None:
+            raise RuntimeError("raw ACP detail must not escape")
+
+    try:
+        asyncio.run(_configure_session(
+            backend="opencode",
+            request=runner_request(mode="plan"),
+            connection=Connection(),
+            session_id="session-1",
+            session_response=SimpleNamespace(
+                session_id="session-1",
+                config_options=opencode_config_options("build"),
+            ),
+        ))
+    except RunnerError as error:
+        assert error.code == "acp_session_mode_update_failed"
+        assert str(error) == "OpenCode ACP session mode update failed"
+        assert "raw ACP detail" not in str(error)
+    else:
+        raise AssertionError("OpenCode must reject a failed session mode update")
 
 
 def test_event_bridge_maps_text_and_tool_lifecycle_to_roomtalk_jsonl():

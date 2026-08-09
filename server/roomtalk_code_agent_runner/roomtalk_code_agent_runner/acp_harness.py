@@ -1093,14 +1093,79 @@ async def _prompt_session(
         return None
 
 
-def _mode_ids(session_response: Any) -> set[str]:
-    modes = getattr(session_response, "modes", None)
-    available = getattr(modes, "available_modes", None) or []
+def _schema_field(value: Any, *names: str) -> Any:
+    if isinstance(value, Mapping):
+        for name in names:
+            if name in value:
+                return value[name]
+        return None
+    for name in names:
+        try:
+            field = getattr(value, name, None)
+        except Exception:
+            continue
+        if field is not None:
+            return field
+    return None
+
+
+def _legacy_mode_ids(session_response: Any) -> set[str]:
+    modes = _schema_field(session_response, "modes")
+    available = _schema_field(modes, "available_modes", "availableModes")
+    if not isinstance(available, (list, tuple)):
+        return set()
     return {
-        str(getattr(mode, "id", "") or "")
+        mode_id
         for mode in available
-        if getattr(mode, "id", None)
+        if (mode_id := str(_schema_field(mode, "id") or "").strip())
     }
+
+
+def _select_option_values(options: Any) -> set[str]:
+    if not isinstance(options, (list, tuple)):
+        return set()
+    values: set[str] = set()
+    pending: list[list[Any] | tuple[Any, ...]] = [options]
+    seen: set[int] = set()
+    visited_options = 0
+    while pending and visited_options < 256:
+        group = pending.pop()
+        if id(group) in seen:
+            continue
+        seen.add(id(group))
+        for option in group:
+            visited_options += 1
+            if visited_options > 256:
+                break
+            value = str(_schema_field(option, "value") or "").strip()
+            if value:
+                values.add(value)
+            nested = _schema_field(option, "options")
+            if isinstance(nested, (list, tuple)):
+                pending.append(nested)
+    return values
+
+
+def _config_mode_ids(session_response: Any) -> tuple[bool, set[str]]:
+    config_options = _schema_field(session_response, "config_options", "configOptions")
+    if not isinstance(config_options, (list, tuple)):
+        return False, set()
+    found_mode_option = False
+    mode_ids: set[str] = set()
+    for config_option in config_options:
+        config_id = str(_schema_field(config_option, "id") or "").strip().lower()
+        category = str(_schema_field(config_option, "category") or "").strip().lower()
+        if config_id != "mode" and category != "mode":
+            continue
+        found_mode_option = True
+        options = _schema_field(config_option, "options")
+        mode_ids.update(_select_option_values(options))
+    return found_mode_option, mode_ids
+
+
+def _mode_ids(session_response: Any) -> set[str]:
+    _, config_modes = _config_mode_ids(session_response)
+    return _legacy_mode_ids(session_response) | config_modes
 
 
 async def _open_session(
@@ -1156,18 +1221,54 @@ async def _configure_session(
         # configuration, so an older ACP implementation may omit this unstable method.
         pass
 
-    available_modes = _mode_ids(session_response)
-    desired_mode: str | None = None
     if backend == "opencode":
-        candidates = ("plan",) if request.mode == "plan" else ("build", "default")
-    else:
-        candidates = {
-            "plan": ("default",),
-            "edit": ("default",),
-            "acceptEdits": ("accept_edits", "default"),
-            "approveForMe": ("dont_ask", "accept_edits", "default"),
-            "fullAccess": ("dont_ask", "accept_edits", "default"),
-        }[request.mode]
+        desired_mode = "plan" if request.mode == "plan" else "build"
+        has_config_mode, config_modes = _config_mode_ids(session_response)
+        legacy_modes = _legacy_mode_ids(session_response)
+        if has_config_mode:
+            available_modes = config_modes
+        elif legacy_modes:
+            available_modes = legacy_modes
+        else:
+            raise RunnerError(
+                "OpenCode ACP session did not advertise the requested mode",
+                code="acp_session_mode_unavailable",
+                turn_id=request.turn_id,
+            )
+        if desired_mode not in available_modes:
+            raise RunnerError(
+                "OpenCode ACP session did not advertise the requested mode",
+                code="acp_session_mode_unavailable",
+                turn_id=request.turn_id,
+            )
+        try:
+            if has_config_mode:
+                await connection.set_config_option(
+                    session_id=session_id,
+                    config_id="mode",
+                    value=desired_mode,
+                )
+            else:
+                await connection.set_session_mode(
+                    session_id=session_id,
+                    mode_id=desired_mode,
+                )
+        except Exception as exc:
+            raise RunnerError(
+                "OpenCode ACP session mode update failed",
+                code="acp_session_mode_update_failed",
+                turn_id=request.turn_id,
+            ) from exc
+        return
+
+    available_modes = _mode_ids(session_response)
+    candidates = {
+        "plan": ("default",),
+        "edit": ("default",),
+        "acceptEdits": ("accept_edits", "default"),
+        "approveForMe": ("dont_ask", "accept_edits", "default"),
+        "fullAccess": ("dont_ask", "accept_edits", "default"),
+    }[request.mode]
     desired_mode = next((candidate for candidate in candidates if candidate in available_modes), None)
     if desired_mode:
         await connection.set_session_mode(session_id=session_id, mode_id=desired_mode)

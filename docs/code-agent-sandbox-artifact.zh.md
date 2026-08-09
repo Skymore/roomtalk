@@ -3,7 +3,7 @@
 [English](code-agent-sandbox-artifact.md)
 
 状态：当前 release 合约
-已按 `master` 和生产非 secret runtime pin 核对：2026-08-08
+已按 `master` 和生产非 secret runtime pin 核对：2026-08-09
 
 ## 用途
 
@@ -16,6 +16,7 @@ Artifact 包含：
 - hash-verified Python dependency；
 - 固定 Codex CLI/app-server 和 Python SDK；
 - 固定 OpenCode npm package、Hermes Agent commit 和 ACP Python SDK；同时预装锁定版本的 Hermes Anthropic extra，Anthropic turn 不会在运行时修改环境；
+- ACP 在每次 prompt 前按 OpenCode advertise 的配置显式切换 `plan` 或 `build`，恢复旧 session 时同样执行；目标 mode 不可用或更新失败时 fail closed；
 - Chromium/Playwright、常见 toolchain、`gh`、Git LFS、`roomtalk` CLI 和 PTY shell environment。
 
 ## 当前 Lock
@@ -23,9 +24,9 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-08-hermes-title-v1
+artifactVersion: roomtalk-code-agent-2026-08-09-opencode-mode-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.47
+roomtalk-code-agent-runner: 0.1.48
 openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
 opencode-ai: 1.18.10
