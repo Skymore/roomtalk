@@ -14,6 +14,8 @@ from roomtalk_code_agent_runner.acp_harness import (
     ACPHarnessSpec,
     ACPEventBridge,
     MAX_ACP_FRAME_BYTES,
+    OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+    OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT,
     _configure_session,
     _control_loop,
     _mode_ids,
@@ -684,6 +686,118 @@ def test_opencode_completed_tool_preserves_metadata_exit_zero():
     result = events(output)[-1]
     assert result["success"] is True
     assert result["exitCode"] == 0
+    assert "failureCode" not in result
+
+
+def _completed_opencode_result(*, kind: str, metadata: dict[str, Any], outer_output: str) -> dict[str, Any]:
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-outcome",
+            title="Tool",
+            kind=kind,
+            status="completed",
+            raw_input=None,
+            raw_output={"output": outer_output, "metadata": metadata},
+            locations=[],
+            content=[],
+        ),
+    ))
+    return events(output)[-1]
+
+
+def test_opencode_completed_execute_classifies_invalid_tool_without_exposing_details():
+    fake_private_detail = "fake-private-detail-must-not-escape"
+    result = _completed_opencode_result(
+        kind="execute",
+        metadata={"truncated": False},
+        outer_output=f"{OPENCODE_INVALID_TOOL_OUTPUT_PREFIX}{fake_private_detail}",
+    )
+
+    assert result["success"] is False
+    assert result["failureCode"] == "invalid_tool"
+    assert "exitCode" not in result
+    assert result["output"] == OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT
+    assert OPENCODE_INVALID_TOOL_OUTPUT_PREFIX not in result["output"]
+    assert fake_private_detail not in json.dumps(result)
+
+
+def test_opencode_invalid_tool_classifier_requires_execute_and_absent_exit_key():
+    non_execute = _completed_opencode_result(
+        kind="read",
+        metadata={"truncated": False},
+        outer_output=OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+    )
+    null_exit = _completed_opencode_result(
+        kind="execute",
+        metadata={"exit": None, "truncated": False},
+        outer_output=OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+    )
+    ordinary = _completed_opencode_result(
+        kind="execute",
+        metadata={"truncated": False},
+        outer_output="ordinary output",
+    )
+
+    for result in (non_execute, null_exit, ordinary):
+        assert result["success"] is True
+        assert "failureCode" not in result
+        assert "exitCode" not in result
+
+
+def test_opencode_metadata_exit_remains_authoritative_over_invalid_tool_prefix():
+    success = _completed_opencode_result(
+        kind="execute",
+        metadata={"exit": 0, "truncated": False},
+        outer_output=OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+    )
+    failure = _completed_opencode_result(
+        kind="execute",
+        metadata={"exit": 2, "truncated": False},
+        outer_output=OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+    )
+
+    assert (success["success"], success["exitCode"]) == (True, 0)
+    assert (failure["success"], failure["exitCode"]) == (False, 2)
+    assert "failureCode" not in success
+    assert "failureCode" not in failure
+
+
+def test_opencode_failed_status_does_not_reclassify_as_invalid_tool():
+    output = io.StringIO()
+    bridge = ACPEventBridge(
+        backend="opencode",
+        request=runner_request(),
+        emitter=EventEmitter(output),
+    )
+    asyncio.run(bridge.session_update(
+        "session-1",
+        SimpleNamespace(
+            session_update="tool_call_update",
+            tool_call_id="tool-failed",
+            title="Tool",
+            kind="execute",
+            status="failed",
+            raw_input=None,
+            raw_output={
+                "output": OPENCODE_INVALID_TOOL_OUTPUT_PREFIX,
+                "metadata": {"truncated": False},
+            },
+            locations=[],
+            content=[],
+        ),
+    ))
+
+    result = events(output)[-1]
+    assert result["success"] is False
+    assert "failureCode" not in result
 
 
 def test_opencode_non_terminal_abort_metadata_is_not_an_abort_sentinel():

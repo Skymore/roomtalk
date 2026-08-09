@@ -17,6 +17,7 @@ This artifact contains:
 - pinned Codex CLI/app-server and Python SDK dependencies
 - pinned OpenCode npm package plus pinned Hermes Agent source/lock, connected through ACP 0.9.0; the locked Hermes Anthropic extra is preinstalled so Anthropic turns never mutate the runtime environment
 - ACP session-mode reconciliation that applies OpenCode's advertised `plan` or `build` mode before every prompt, including restored sessions, and fails closed if the mode cannot be selected
+- strict OpenCode InvalidTool outcome classification that preserves real exit and abort semantics while exposing only a stable failed tool result
 - Chromium/Playwright, common build toolchains, `gh`, Git LFS, the `roomtalk` CLI, and the PTY shell environment
 
 ## Locked Version
@@ -30,11 +31,11 @@ ops/code-agent-sandbox/artifact.lock.json
 Pinned values:
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-09-opencode-mode-v1
+artifactVersion: roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1
 codeAgentEngineSourceRepo: https://github.com/Venti0325/Coco.git
 codeAgentEngineSourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
 codeAgentEnginePackageVersion: 0.1.3a0
-runnerPackageVersion: 0.1.48
+runnerPackageVersion: 0.1.49
 codexCliVersion: 0.145.0-alpha.4
 codexPythonSdkVersion: 0.1.0b3
 openCodeVersion: 1.18.10
@@ -79,7 +80,7 @@ roomtalk_code_agent_runner/
 Build the container image from that context:
 
 ```bash
-docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-08-09-opencode-mode-v1 /tmp/roomtalk-code-agent-sandbox-context
+docker build -t roomtalk-code-agent:roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1 /tmp/roomtalk-code-agent-sandbox-context
 ```
 
 Publish that image as the E2B template named by `CODE_AGENT_E2B_TEMPLATE_ID`.
@@ -89,7 +90,7 @@ Use the helper so the build context, E2B create command, readiness checks, and o
 ```bash
 node scripts/code-agent/build-e2b-template.mjs \
   --clean \
-  --template roomtalk-code-agent-2026-08-09-opencode-mode-v1 \
+  --template roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1 \
   --publish
 ```
 
@@ -108,10 +109,10 @@ CODE_AGENT_RUNNER_CLIENT=daemon
 CODE_AGENT_BACKEND=codex-app-server
 CODE_AGENT_ALLOWED_RUN_MODES=plan,edit,approveForMe,fullAccess
 CODE_AGENT_DEFAULT_MODE=plan
-CODE_AGENT_E2B_TEMPLATE_ID=roomtalk-code-agent-2026-08-09-opencode-mode-v1
+CODE_AGENT_E2B_TEMPLATE_ID=roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1
 E2B_API_KEY=...
 CODE_AGENT_ARTIFACT_MODE=production
-CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-08-09-opencode-mode-v1
+CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-08-09-opencode-invalid-result-v1
 CODE_AGENT_SOURCE_REF=0b5e44eb29ad1bec89b2143737f6917aafa79359
 CODE_AGENT_IDLE_SANDBOX_TTL_MS=120000
 CODE_AGENT_ACTIVE_SANDBOX_TTL_MS=3600000

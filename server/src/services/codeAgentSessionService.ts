@@ -82,9 +82,23 @@ const OPENCODE_INVALID_TOOL_LOOP_THRESHOLD = 3;
 const OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE = 'opencode_invalid_tool_loop';
 const OPENCODE_INVALID_TOOL_LOOP_MESSAGE = 'OpenCode repeatedly returned an invalid tool request. Retry the task, or switch models if the problem continues.';
 
-const isOpenCodeInvalidToolSentinel = (
+interface OpenCodeToolCandidate {
+  kind: string;
+  signature: string;
+  legacySentinel: boolean;
+}
+
+const openCodeToolCandidate = (
   event: Extract<CodeAgentRunnerEvent, { type: 'tool_call' }>,
-) => event.name.trim().toLowerCase() === 'invalid' && event.args.kind === 'other';
+): OpenCodeToolCandidate => {
+  const normalizedName = event.name.trim().toLowerCase();
+  const kind = typeof event.args.kind === 'string' ? event.args.kind : '';
+  return {
+    kind,
+    signature: `${normalizedName}\u0000${kind.trim().toLowerCase()}`,
+    legacySentinel: normalizedName === 'invalid' && kind === 'other',
+  };
+};
 
 const observabilityToolName = (
   event: Extract<CodeAgentRunnerEvent, { type: 'tool_call' | 'tool_result' }>,
@@ -287,7 +301,8 @@ interface CodeAgentTurnStreamState {
   nonEmptySegmentIds: Set<string>;
   hasToolHistory: boolean;
   pendingToolCalls: Map<string, { name: string; startedAtMs: number }>;
-  opencodeInvalidToolCallIds: Set<string>;
+  opencodeToolCandidates: Map<string, OpenCodeToolCandidate>;
+  opencodeInvalidToolLoopSignature?: string;
   opencodeInvalidToolLoopCount: number;
   modelSteps: Map<string, CocoModelStepCostRecord & {
     hasText: boolean;
@@ -764,7 +779,8 @@ export class CodeAgentSessionService {
         nonEmptySegmentIds: new Set(),
         hasToolHistory: false,
         pendingToolCalls: new Map(),
-        opencodeInvalidToolCallIds: new Set(),
+        opencodeToolCandidates: new Map(),
+        opencodeInvalidToolLoopSignature: undefined,
         opencodeInvalidToolLoopCount: 0,
         modelSteps: new Map(),
         modelStepIdByToolCallId: new Map(),
@@ -2855,7 +2871,8 @@ export class CodeAgentSessionService {
       }
       if (backend === 'opencode') {
         state.opencodeInvalidToolLoopCount = 0;
-        state.opencodeInvalidToolCallIds.clear();
+        state.opencodeInvalidToolLoopSignature = undefined;
+        state.opencodeToolCandidates.clear();
       }
       active.pendingSteerMessageIds.delete(event.messageId);
       this.emitter.to(materialized.room.creatorId).emit('room_updated', materialized.room);
@@ -2903,7 +2920,8 @@ export class CodeAgentSessionService {
     if (mapped.kind === 'ai_delta') {
       if (backend === 'opencode' && mapped.delta.trim()) {
         state.opencodeInvalidToolLoopCount = 0;
-        state.opencodeInvalidToolCallIds.clear();
+        state.opencodeInvalidToolLoopSignature = undefined;
+        state.opencodeToolCandidates.clear();
       }
       if (state.needsNewSegment) {
         await this.sealCurrentSegment(roomId, claim, baseAIMessage, state);
@@ -3009,23 +3027,29 @@ export class CodeAgentSessionService {
           }
         }
         if (event.type === 'tool_call' && backend === 'opencode') {
-          if (isOpenCodeInvalidToolSentinel(event)) {
-            state.opencodeInvalidToolCallIds.add(event.id);
-          } else {
-            state.opencodeInvalidToolLoopCount = 0;
-            state.opencodeInvalidToolCallIds.clear();
-          }
+          state.opencodeToolCandidates.set(event.id, openCodeToolCandidate(event));
         }
       } else if (event.type === 'tool_result') {
         state.hasToolHistory = true;
         state.pendingToolCalls.delete(event.id);
         if (backend === 'opencode') {
-          const matchedInvalidToolCall = state.opencodeInvalidToolCallIds.delete(event.id);
-          if (event.success) {
+          const candidate = state.opencodeToolCandidates.get(event.id);
+          state.opencodeToolCandidates.delete(event.id);
+          const isInvalidToolFailure = !event.success && candidate && (
+            candidate.legacySentinel
+            || (event.failureCode === 'invalid_tool' && candidate.kind === 'execute')
+          );
+          if (!isInvalidToolFailure) {
             state.opencodeInvalidToolLoopCount = 0;
-            state.opencodeInvalidToolCallIds.clear();
-          } else if (matchedInvalidToolCall) {
-            state.opencodeInvalidToolLoopCount += 1;
+            state.opencodeInvalidToolLoopSignature = undefined;
+            state.opencodeToolCandidates.clear();
+          } else {
+            if (state.opencodeInvalidToolLoopSignature === candidate.signature) {
+              state.opencodeInvalidToolLoopCount += 1;
+            } else {
+              state.opencodeInvalidToolLoopSignature = candidate.signature;
+              state.opencodeInvalidToolLoopCount = 1;
+            }
             openCodeInvalidToolLoopDetected = (
               state.opencodeInvalidToolLoopCount >= OPENCODE_INVALID_TOOL_LOOP_THRESHOLD
             );

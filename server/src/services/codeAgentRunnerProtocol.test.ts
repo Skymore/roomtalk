@@ -176,6 +176,28 @@ describe('code agent runner protocol', () => {
 
     assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
+      type: 'tool_result',
+      id: 'tool-invalid',
+      name: 'bash',
+      success: false,
+      output: 'OpenCode rejected an invalid tool request.',
+      failureCode: 'invalid_tool',
+    })), {
+      schemaVersion: 1,
+      type: 'tool_result',
+      id: 'tool-invalid',
+      name: 'bash',
+      success: false,
+      output: 'OpenCode rejected an invalid tool request.',
+      messageId: undefined,
+      exitCode: undefined,
+      elapsedMs: undefined,
+      truncated: undefined,
+      failureCode: 'invalid_tool',
+    });
+
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
       type: 'final',
       messageId: 'ai-1',
       answer: 'done',
@@ -247,6 +269,15 @@ describe('code agent runner protocol', () => {
       success: 'true',
       output: '',
     })), /Expected boolean field "success"/);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'tool_result',
+      id: 'tool-1',
+      name: 'Shell',
+      success: false,
+      output: '',
+      failureCode: 'permission_denied',
+    })), /Invalid tool result failureCode/);
     assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_call',

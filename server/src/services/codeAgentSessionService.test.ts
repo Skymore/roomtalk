@@ -25,6 +25,7 @@ import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 import { ObservabilityEventInput } from './observabilityEvents';
 import { CodeAgentRoomContextService } from './codeAgentRoomContext';
+import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
 import { CodexConnectionError } from './codexConnection';
 import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentCheckpointBoundary, CodeAgentCheckpointRestorePlan, CodeAgentWorkspaceRevisionRecord } from '../repositories/store';
@@ -1113,7 +1114,13 @@ const userMessage = (content = 'inspect the project'): Message => ({
 
 const invalidToolPair = (
   id: string,
-  options: { name?: string; kind?: string; success?: boolean; secret?: string } = {},
+  options: {
+    name?: string;
+    kind?: string;
+    success?: boolean;
+    secret?: string;
+    failureCode?: 'invalid_tool';
+  } = {},
 ): CodeAgentRunnerEvent[] => {
   const name = options.name ?? 'invalid';
   return [
@@ -1135,7 +1142,12 @@ const invalidToolPair = (
       messageId: `result-${id}`,
       name,
       success: options.success ?? false,
-      output: options.secret || (options.success ? 'recovered' : 'invalid tool request'),
+      output: options.secret || (options.success
+        ? 'recovered'
+        : options.failureCode
+          ? 'OpenCode rejected an invalid tool request.'
+          : 'invalid tool request'),
+      ...(options.failureCode ? { failureCode: options.failureCode } : {}),
     },
   ];
 };
@@ -2617,6 +2629,79 @@ describe('CodeAgentSessionService', () => {
     });
   });
 
+  it('counts completed OpenCode InvalidTool results by paired tool signature after durable persistence', async () => {
+    const first = invalidToolPair('invalid-result-1', {
+      name: 'bash',
+      kind: 'execute',
+      failureCode: 'invalid_tool',
+    });
+    const second = invalidToolPair('invalid-result-2', {
+      name: 'bash',
+      kind: 'execute',
+      failureCode: 'invalid_tool',
+    });
+    const third = invalidToolPair('invalid-result-3', {
+      name: 'bash',
+      kind: 'execute',
+      failureCode: 'invalid_tool',
+    });
+    const unrelatedCall = invalidToolPair('pending-read', { name: 'read', kind: 'read' })[0];
+    const scriptedEvents = [
+      ...first,
+      second[0],
+      unrelatedCall,
+      second[1],
+      ...third,
+    ];
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
+        for (const event of scriptedEvents) {
+          await handlers.onEvent(event);
+        }
+        return new Promise<CodeAgentRunnerRunResult>(() => undefined);
+      },
+    };
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    const { service } = createService({
+      store,
+      runner,
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      ids: ['ai-1', 'turn-1', 'terminal-error-1', 'pending-read-result'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /invalid tool request/);
+    const messages = store.messages.get('room-1') || [];
+    const invalidResults = messages.filter(message => (
+      message.messageType === 'tool_result' && message.toolCallId?.startsWith('invalid-result-')
+    ));
+    assert.equal(invalidResults.length, 3);
+    assert.equal(invalidResults.every(message => message.status === 'error' && message.isError === true), true);
+    assert.equal(invalidResults.every(message => !('failureCode' in message)), true);
+    assert.equal(messages.some(message => message.status === 'streaming'), false);
+    const priorBlocks = buildCodeAgentPriorMessages(messages).flatMap(message => (
+      Array.isArray(message.content) ? message.content : []
+    ));
+    const priorInvalidResults = priorBlocks.filter(block => (
+      block.type === 'tool_result' && block.content === 'OpenCode rejected an invalid tool request.'
+    ));
+    assert.equal(priorInvalidResults.length, 3);
+    assert.equal(priorInvalidResults.every(block => block.type === 'tool_result' && block.is_error === true), true);
+    const thirdResultEvent = observability.events.findIndex(event => (
+      event.event === 'code_agent.runner.tool_result'
+      && (event.payload as any)?.toolCallId === 'invalid-result-3'
+    ));
+    const loopEvent = observability.events.findIndex(event => event.event === 'code_agent.opencode.invalid_tool_loop');
+    assert.ok(loopEvent > thirdResultEvent);
+  });
+
   it('resets the OpenCode invalid-tool counter after text, a normal tool call, or a successful result', async () => {
     const resetCases: Array<{ name: string; events: CodeAgentRunnerEvent[] }> = [
       {
@@ -2631,6 +2716,10 @@ describe('CodeAgentSessionService', () => {
       {
         name: 'normal failed tool',
         events: invalidToolPair('normal-reset', { name: 'read', kind: 'read' }),
+      },
+      {
+        name: 'failed execute without invalid-tool code',
+        events: invalidToolPair('failed-execute-reset', { name: 'bash', kind: 'execute' }),
       },
       {
         name: 'successful result',
@@ -2674,11 +2763,56 @@ describe('CodeAgentSessionService', () => {
     }
   });
 
+  it('requires three consecutive completed InvalidTool results with the same OpenCode signature', async () => {
+    const events: CodeAgentRunnerEvent[] = [
+      ...invalidToolPair('bash-1', { name: 'bash', kind: 'execute', failureCode: 'invalid_tool' }),
+      ...invalidToolPair('bash-2', { name: 'bash', kind: 'execute', failureCode: 'invalid_tool' }),
+      ...invalidToolPair('shell-1', { name: 'shell', kind: 'execute', failureCode: 'invalid_tool' }),
+      ...invalidToolPair('bash-3', { name: 'bash', kind: 'execute', failureCode: 'invalid_tool' }),
+      ...invalidToolPair('bash-4', { name: 'bash', kind: 'execute', failureCode: 'invalid_tool' }),
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'text_delta',
+        messageId: 'answer',
+        delta: 'Recovered normally.',
+      },
+      acpFinalEvent('opencode'),
+    ];
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room({ codeAgentBackend: 'opencode' }), [userMessage()]);
+    const { service } = createService({
+      store,
+      runner: new FakeCodeAgentRunnerClient(events),
+      backend: 'code-agent',
+      availableBackends: ['opencode'],
+      runnerCommandByBackend: { opencode: DEFAULT_OPENCODE_RUNNER_COMMAND },
+      modelGateway: createTestModelGateway(),
+      observability: observability.recorder,
+      ids: ['ai-1', 'turn-1', 'segment-1'],
+    });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    assert.equal(store.agentTurns.get('turn-1')?.status, 'complete');
+    assert.equal(observability.events.some(event => event.event === 'code_agent.opencode.invalid_tool_loop'), false);
+  });
+
   it('does not apply the invalid-tool breaker to Hermes or non-sentinel OpenCode tools', async () => {
     const cases: Array<{ name: string; backend: 'opencode' | 'hermes-agent'; pair: (id: string) => CodeAgentRunnerEvent[] }> = [
       { name: 'Hermes sentinel', backend: 'hermes-agent', pair: id => invalidToolPair(id) },
       { name: 'OpenCode invalid with a non-other kind', backend: 'opencode', pair: id => invalidToolPair(id, { kind: 'execute' }) },
       { name: 'OpenCode other-kind normal tool', backend: 'opencode', pair: id => invalidToolPair(id, { name: 'read', kind: 'other' }) },
+      {
+        name: 'OpenCode non-execute invalid result code',
+        backend: 'opencode',
+        pair: id => invalidToolPair(id, { name: 'read', kind: 'read', failureCode: 'invalid_tool' }),
+      },
+      {
+        name: 'Hermes invalid result code',
+        backend: 'hermes-agent',
+        pair: id => invalidToolPair(id, { name: 'bash', kind: 'execute', failureCode: 'invalid_tool' }),
+      },
       { name: 'OpenCode unpaired failed result', backend: 'opencode', pair: id => invalidToolPair(id).slice(1) },
     ];
 

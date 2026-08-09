@@ -163,6 +163,8 @@ export interface CodeAgentRunnerToolCallEvent {
   messageId?: string;
 }
 
+export type CodeAgentRunnerToolFailureCode = 'invalid_tool';
+
 export interface CodeAgentRunnerToolResultEvent {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'tool_result';
@@ -174,6 +176,7 @@ export interface CodeAgentRunnerToolResultEvent {
   exitCode?: number;
   elapsedMs?: number;
   truncated?: boolean;
+  failureCode?: CodeAgentRunnerToolFailureCode;
 }
 
 export interface CodeAgentRunnerFinalEvent {
@@ -491,7 +494,11 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         args: readRecord(raw, 'args'),
         messageId: readOptionalString(raw, 'messageId'),
       };
-    case 'tool_result':
+    case 'tool_result': {
+      const failureCode = readOptionalString(raw, 'failureCode');
+      if (failureCode !== undefined && failureCode !== 'invalid_tool') {
+        throw new CodeAgentRunnerProtocolError('Invalid tool result failureCode.');
+      }
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
@@ -503,7 +510,9 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         exitCode: readOptionalNumber(raw, 'exitCode'),
         elapsedMs: readOptionalNumber(raw, 'elapsedMs'),
         truncated: readOptionalBoolean(raw, 'truncated'),
+        ...(failureCode ? { failureCode } : {}),
       };
+    }
     case 'final': {
       const backendTurnId = readOptionalString(raw, 'backendTurnId');
       return {

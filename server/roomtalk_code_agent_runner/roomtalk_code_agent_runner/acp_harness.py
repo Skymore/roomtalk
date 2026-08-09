@@ -40,6 +40,8 @@ MAX_ACP_FRAME_BYTES = 8 * 1024 * 1024
 HARNESS_STATE_ROOT = Path("/tmp/roomtalk-harnesses")
 HERMES_ROOMTALK_PROVIDER = "roomtalk"
 OPENCODE_SHELL_ABORT_SENTINEL = "<shell_metadata>\nUser aborted the command\n</shell_metadata>"
+OPENCODE_INVALID_TOOL_OUTPUT_PREFIX = "The arguments provided to the tool are invalid: "
+OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT = "OpenCode rejected an invalid tool request."
 
 
 @dataclass(frozen=True)
@@ -464,17 +466,28 @@ class ACPEventBridge:
             return
         success = status == "completed"
         exit_code: int | None = None
+        failure_code: str | None = None
         if success:
             if self.backend == "opencode":
-                success, exit_code = self._opencode_tool_success(output_text)
+                success, exit_code, failure_code = self._opencode_tool_outcome(
+                    output_text,
+                    self.tool_kinds.get(tool_call_id, ""),
+                )
+                if failure_code == "invalid_tool":
+                    self.tool_outputs[tool_call_id] = OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT
             else:
                 success, exit_code = self._hermes_tool_success(output_text)
         self._emit_tool_result(
             tool_call_id,
             success=success,
-            output=output_text,
+            output=(
+                OPENCODE_INVALID_TOOL_PUBLIC_OUTPUT
+                if failure_code == "invalid_tool"
+                else output_text
+            ),
             fallback_name=str(getattr(update, "title", "") or "tool"),
             exit_code=exit_code,
+            failure_code=failure_code,
         )
 
     def _emit_tool_result(
@@ -485,6 +498,7 @@ class ACPEventBridge:
         output: str,
         fallback_name: str = "tool",
         exit_code: int | None = None,
+        failure_code: str | None = None,
     ) -> None:
         if tool_call_id in self.completed_tools:
             return
@@ -501,6 +515,8 @@ class ACPEventBridge:
         }
         if exit_code is not None:
             event["exitCode"] = exit_code
+        if failure_code is not None:
+            event["failureCode"] = failure_code
         self.emitter.emit(event)
 
     async def begin_prompt(self, session_id: str) -> None:
@@ -643,21 +659,32 @@ class ACPEventBridge:
         return not failed, normalized_exit_code
 
     @staticmethod
-    def _opencode_tool_success(output: str) -> tuple[bool, int | None]:
+    def _opencode_tool_outcome(
+        output: str,
+        tool_kind: str,
+    ) -> tuple[bool, int | None, str | None]:
         try:
             value = json.loads(output)
         except (TypeError, json.JSONDecodeError):
-            return True, None
+            return True, None, None
         if not isinstance(value, dict):
-            return True, None
+            return True, None, None
         metadata = value.get("metadata")
         if not isinstance(metadata, dict):
-            return True, None
+            return True, None, None
         exit_code = metadata.get("exit")
         if isinstance(exit_code, int) and not isinstance(exit_code, bool):
-            return exit_code == 0, exit_code
-        if exit_code is not None:
-            return True, None
+            return exit_code == 0, exit_code, None
+        if "exit" not in metadata:
+            outer_output = value.get("output")
+            if (
+                tool_kind == "execute"
+                and isinstance(outer_output, str)
+                and outer_output.startswith(OPENCODE_INVALID_TOOL_OUTPUT_PREFIX)
+            ):
+                return False, None, "invalid_tool"
+        elif exit_code is not None:
+            return True, None, None
         metadata_output = metadata.get("output")
         abort_prefix = (
             metadata_output[: -len(OPENCODE_SHELL_ABORT_SENTINEL)]
@@ -669,8 +696,8 @@ class ACPEventBridge:
             abort_prefix is not None
             and (not abort_prefix or abort_prefix.endswith("\n\n"))
         ):
-            return False, None
-        return True, None
+            return False, None, None
+        return True, None, None
 
     async def _flush_hermes_tool_results(self, session_id: str) -> None:
         if self.backend != "hermes-agent" or self.hermes_state_db is None:

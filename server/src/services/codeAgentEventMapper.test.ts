@@ -84,6 +84,25 @@ describe('code agent runner event mapper', () => {
     assert.equal((mapped.message.toolOutputPreview || '').length < 5000, true);
   });
 
+  it('maps the internal invalid-tool code to an ordinary durable error message', () => {
+    const mapped = mapCodeAgentRunnerEvent({
+      schemaVersion: 1,
+      type: 'tool_result',
+      id: 'tool-invalid',
+      name: 'bash',
+      success: false,
+      output: 'OpenCode rejected an invalid tool request.',
+      failureCode: 'invalid_tool',
+    }, context);
+
+    assert.equal(mapped.kind, 'message');
+    if (mapped.kind !== 'message') return;
+    assert.equal(mapped.message.status, 'error');
+    assert.equal(mapped.message.isError, true);
+    assert.equal(mapped.message.content, 'OpenCode rejected an invalid tool request.');
+    assert.equal('failureCode' in mapped.message, false);
+  });
+
   it('ignores non-error status events and maps error status messages', () => {
     const starting = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
