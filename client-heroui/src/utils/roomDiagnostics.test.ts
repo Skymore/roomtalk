@@ -53,4 +53,45 @@ describe('room diagnostics', () => {
     expect(records[0].index).toBe(10);
     expect(records[249].index).toBe(259);
   });
+
+  it('sanitizes and rewrites legacy diagnostic records before reading or appending', () => {
+    const legacyToolName = 'terminal: ROOMTALK_PRIVATE_TOKEN=fake-legacy-diagnostic-secret';
+    sessionStorage.setItem('roomtalk-room-diagnostics-v1', JSON.stringify([{
+      scope: 'room-messages',
+      event: 'event-page-applied',
+      timestamp: '2026-08-09T00:00:00.000Z',
+      nested: {
+        toolMessages: [{
+          id: 'legacy-result',
+          toolCallId: 'legacy-call',
+          toolName: legacyToolName,
+        }],
+      },
+    }]));
+
+    const legacyRecords = readRoomDiagnostics();
+
+    expect(legacyRecords).toEqual([expect.objectContaining({
+      nested: {
+        toolMessages: [{
+          id: 'legacy-result',
+          toolCallId: 'legacy-call',
+          toolNameLength: legacyToolName.length,
+        }],
+      },
+    })]);
+    const afterRead = sessionStorage.getItem('roomtalk-room-diagnostics-v1') || '';
+    expect(afterRead).not.toContain(legacyToolName);
+    expect(afterRead).not.toContain('ROOMTALK_PRIVATE_TOKEN');
+
+    logRoomMessageDiagnostic('event-notification-received', { roomId: 'room-1' });
+
+    const afterAppend = sessionStorage.getItem('roomtalk-room-diagnostics-v1') || '';
+    expect(readRoomDiagnostics()).toHaveLength(2);
+    expect(afterAppend).not.toContain(legacyToolName);
+    expect(afterAppend).not.toContain('ROOMTALK_PRIVATE_TOKEN');
+    const serializedConsole = JSON.stringify(vi.mocked(console.info).mock.calls);
+    expect(serializedConsole).not.toContain(legacyToolName);
+    expect(serializedConsole).not.toContain('ROOMTALK_PRIVATE_TOKEN');
+  });
 });

@@ -16,19 +16,29 @@ const sanitizeRoomDiagnosticValue = (value: unknown): unknown => {
   if (!value || typeof value !== 'object') {
     return value;
   }
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => (
-    key === 'toolName'
-      ? ['toolNameLength', typeof item === 'string' ? item.length : 0]
-      : [key, sanitizeRoomDiagnosticValue(item)]
-  )));
+  const source = value as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(source)) {
+    if (key === 'toolName') {
+      sanitized.toolNameLength = typeof item === 'string' ? item.length : 0;
+    } else if (key !== 'toolNameLength' || !Object.prototype.hasOwnProperty.call(source, 'toolName')) {
+      sanitized[key] = sanitizeRoomDiagnosticValue(item);
+    }
+  }
+  return sanitized;
+};
+
+const normalizeStoredRoomDiagnostics = (value: unknown): RoomDiagnosticRecord[] => {
+  if (!Array.isArray(value)) return [];
+  return (sanitizeRoomDiagnosticValue(value) as RoomDiagnosticRecord[]).slice(-MAX_ROOM_DIAGNOSTIC_RECORDS);
 };
 
 const persistRoomDiagnostic = (record: RoomDiagnosticRecord) => {
   try {
     if (typeof sessionStorage === 'undefined') return;
     const parsed = JSON.parse(sessionStorage.getItem(ROOM_DIAGNOSTIC_SESSION_KEY) || '[]');
-    const records = Array.isArray(parsed) ? parsed : [];
-    records.push(record);
+    const records = normalizeStoredRoomDiagnostics(parsed);
+    records.push(sanitizeRoomDiagnosticValue(record) as RoomDiagnosticRecord);
     sessionStorage.setItem(
       ROOM_DIAGNOSTIC_SESSION_KEY,
       JSON.stringify(records.slice(-MAX_ROOM_DIAGNOSTIC_RECORDS)),
@@ -42,7 +52,9 @@ export const readRoomDiagnostics = (): RoomDiagnosticRecord[] => {
   try {
     if (typeof sessionStorage === 'undefined') return [];
     const parsed = JSON.parse(sessionStorage.getItem(ROOM_DIAGNOSTIC_SESSION_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed as RoomDiagnosticRecord[] : [];
+    const records = normalizeStoredRoomDiagnostics(parsed);
+    sessionStorage.setItem(ROOM_DIAGNOSTIC_SESSION_KEY, JSON.stringify(records));
+    return records;
   } catch {
     return [];
   }

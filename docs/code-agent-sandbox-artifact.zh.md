@@ -17,8 +17,10 @@ Artifact 包含：
 - 固定 Codex CLI/app-server 和 Python SDK；
 - 固定 OpenCode npm package、Hermes Agent commit 和 ACP Python SDK；同时预装锁定版本的 Hermes Anthropic extra，Anthropic turn 不会在运行时修改环境；
 - ACP 在每次 prompt 前重新应用所选 model，并按各 backend advertise 的配置显式切换 mode，恢复旧 session 时同样执行；model/mode 不可用或更新失败时 fail closed；
+- Hermes 恢复旧 session 时，仅在 `load_session` 返回精确空的 missing-session response 后创建新 session；
 - OpenCode InvalidTool 使用严格结果分类，保留真实 exit/abort 语义，并只对外输出稳定的失败工具结果；
 - ACP final 遇到缺失或非 terminal 的工具更新时 fail closed，补成对、稳定的失败结果；
+- Hermes state row 仅在唯一、精确且成功匹配时恢复；歧义、失败、隐藏或替换 row 会 fail closed，不会错配输出；
 - Chromium/Playwright、常见 toolchain、`gh`、Git LFS、`roomtalk` CLI 和 PTY shell environment。
 
 ## 当前 Lock
@@ -26,9 +28,9 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-09-missing-tool-result-v1
+artifactVersion: roomtalk-code-agent-2026-08-09-hermes-row-alignment-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.50
+roomtalk-code-agent-runner: 0.1.51
 openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
 opencode-ai: 1.18.10

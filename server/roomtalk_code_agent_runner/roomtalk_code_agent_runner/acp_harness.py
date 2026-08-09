@@ -571,36 +571,6 @@ class ACPEventBridge:
         ]
 
     @staticmethod
-    def _hermes_tool_kind(tool_name: str) -> str:
-        return {
-            "read_file": "read",
-            "skill_view": "read",
-            "skills_list": "read",
-            "browser_snapshot": "read",
-            "browser_vision": "read",
-            "browser_get_images": "read",
-            "vision_analyze": "read",
-            "write_file": "edit",
-            "patch": "edit",
-            "skill_manage": "edit",
-            "search_files": "search",
-            "terminal": "execute",
-            "process": "execute",
-            "execute_code": "execute",
-            "delegate_task": "execute",
-            "browser_click": "execute",
-            "browser_type": "execute",
-            "browser_scroll": "execute",
-            "browser_press": "execute",
-            "browser_back": "execute",
-            "image_generate": "execute",
-            "text_to_speech": "execute",
-            "web_search": "fetch",
-            "web_extract": "fetch",
-            "browser_navigate": "fetch",
-        }.get(tool_name, "other")
-
-    @staticmethod
     def _hermes_title_matches_tool(title: str, tool_name: str) -> bool:
         normalized = title.strip().lower()
         if normalized == tool_name.lower():
@@ -623,38 +593,24 @@ class ACPEventBridge:
         """Pair persisted Hermes results with ACP calls without trusting thread order."""
         if len(rows) < len(self.tool_ids):
             return []
-        if len(rows) > len(self.tool_ids):
-            unused = list(range(len(rows)))
-            aligned: list[tuple[str, str]] = []
-            for tool_call_id in self.tool_ids:
-                title = self.tool_names.get(tool_call_id, "")
-                exact = [
-                    index
-                    for index in unused
-                    if self._hermes_title_matches_tool(title, rows[index][0])
-                ]
-                if len(exact) != 1:
-                    return []
-                index = exact[0]
-                unused.remove(index)
-                aligned.append(rows[index])
-            return aligned
-        unused = list(range(len(rows)))
+        unused = [
+            index
+            for index, (_, output) in enumerate(rows)
+            if self._hermes_tool_success(output)[0]
+        ]
+        if len(unused) < len(self.tool_ids):
+            return []
         aligned: list[tuple[str, str]] = []
         for tool_call_id in self.tool_ids:
             title = self.tool_names.get(tool_call_id, "")
-            kind = self.tool_kinds.get(tool_call_id, "")
             exact = [
                 index
                 for index in unused
                 if self._hermes_title_matches_tool(title, rows[index][0])
             ]
-            same_kind = [
-                index
-                for index in unused
-                if kind and self._hermes_tool_kind(rows[index][0]) == kind
-            ]
-            index = (exact or same_kind or unused)[0]
+            if len(exact) != 1:
+                return []
+            index = exact[0]
             unused.remove(index)
             aligned.append(rows[index])
         return aligned
@@ -1216,6 +1172,28 @@ def _mode_ids(session_response: Any) -> set[str]:
     return _legacy_mode_ids(session_response) | config_modes
 
 
+def _is_exact_empty_session_response(session_response: Any) -> bool:
+    if session_response is None:
+        return False
+    if isinstance(session_response, Mapping):
+        return not session_response
+    model_dump = getattr(session_response, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return not model_dump(by_alias=True, exclude_none=True)
+        except Exception:
+            return False
+    try:
+        fields = vars(session_response)
+    except TypeError:
+        return False
+    return not any(
+        value is not None
+        for name, value in fields.items()
+        if not name.startswith("_")
+    )
+
+
 async def _open_session(
     *,
     backend: str,
@@ -1236,6 +1214,12 @@ async def _open_session(
                 mcp_servers=[],
             )
             restored_session = session_response is not None
+            if (
+                backend == "hermes-agent"
+                and _is_exact_empty_session_response(session_response)
+            ):
+                native_session_id = None
+                restored_session = False
         except Exception:
             native_session_id = None
         finally:

@@ -1796,7 +1796,8 @@ describe('CodeAgentSessionService', () => {
       'code_agent.runner.final',
       'code_agent.turn.completed',
     ]);
-    assert.equal((observability.events[3].payload as any)?.message, 'starting');
+    assert.equal((observability.events[3].payload as any)?.messageLength, 'starting'.length);
+    assert.equal('message' in (observability.events[3].payload as any), false);
     assert.equal((observability.events[6].payload as any)?.outputLength, '# RoomTalk'.length);
     assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
   });
@@ -4834,10 +4835,19 @@ describe('CodeAgentSessionService', () => {
 
   it('sanitizes status, approval, and control diagnostics before observability persistence', async () => {
     const fakeSecret = 'ROOMTALK_PRIVATE_TOKEN=fake-diagnostic-secret';
+    const runningStatusDetail = `Authorization: Bearer fake-access-token ${fakeSecret}`;
     const statusDetail = `runner status detail ${fakeSecret}`;
+    const publicStatusMessage = 'OpenCode task failed. Retry, or switch engines if the problem continues.';
     const approvalTitle = `terminal: ${fakeSecret}`;
     const controlDetail = `control detail ${fakeSecret}`;
     const runner = new FakeCodeAgentRunnerClient([
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'status',
+        turnId: 'turn-1',
+        status: 'running',
+        message: runningStatusDetail,
+      },
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'status',
@@ -4896,12 +4906,19 @@ describe('CodeAgentSessionService', () => {
 
     assert.equal(result.success, true);
     assert.equal([...store.agentTurns.values()][0].status, 'complete');
-    const statusEvent = observability.events.find(event => event.event === 'code_agent.runner.status');
-    assert.deepEqual(statusEvent?.payload, {
-      backend: 'opencode',
-      status: 'error',
-      message: 'OpenCode task failed. Retry, or switch engines if the problem continues.',
-    });
+    const statusEvents = observability.events.filter(event => event.event === 'code_agent.runner.status');
+    assert.deepEqual(statusEvents.map(event => event.payload), [
+      {
+        backend: 'opencode',
+        status: 'running',
+        messageLength: runningStatusDetail.length,
+      },
+      {
+        backend: 'opencode',
+        status: 'error',
+        messageLength: publicStatusMessage.length,
+      },
+    ]);
     const approvalEvent = observability.events.find(event => event.event === 'code_agent.runner.approval_request');
     assert.deepEqual(approvalEvent?.payload, {
       backend: 'opencode',
@@ -4918,9 +4935,11 @@ describe('CodeAgentSessionService', () => {
       messageLength: controlDetail.length,
     });
     const statusMessage = (store.messages.get('room-1') || []).find(message => message.messageType === 'sandbox_status');
-    assert.equal(statusMessage?.content, 'OpenCode task failed. Retry, or switch engines if the problem continues.');
+    assert.equal(statusMessage?.content, publicStatusMessage);
     const serializedDiagnostics = JSON.stringify({ observability: observability.events, logs: logRecords });
     assert.equal(serializedDiagnostics.includes(fakeSecret), false);
+    assert.equal(serializedDiagnostics.includes(runningStatusDetail), false);
+    assert.equal(serializedDiagnostics.includes('Authorization: Bearer'), false);
     assert.equal(serializedDiagnostics.includes(statusDetail), false);
     assert.equal(serializedDiagnostics.includes(approvalTitle), false);
     assert.equal(serializedDiagnostics.includes(controlDetail), false);

@@ -3443,7 +3443,7 @@ export class CodeAgentSessionService {
   private summarizeRunnerEvent(event: CodeAgentRunnerEvent): Record<string, unknown> {
     switch (event.type) {
       case 'status':
-        return { status: event.status, message: event.message };
+        return { status: event.status, messageLength: event.message?.length };
       case 'control_result':
         return {
           controlId: event.controlId,
