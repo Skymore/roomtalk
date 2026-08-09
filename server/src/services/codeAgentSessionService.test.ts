@@ -413,12 +413,6 @@ class MemoryCodeAgentStore {
       internal.workspaceRevisionId = revisionId;
       this.roomRevisionHeads.set(turn.roomId, revisionId);
     }
-    await this.releaseCodeAgentRoomLease(
-      input.claim.roomId,
-      input.claim.turnId,
-      input.claim.ownerId,
-      input.claim.fence,
-    );
     return {
       outcome: finalizationObsoleted ? 'obsolete' as const : 'applied' as const,
       room: updatedRoom,
@@ -1196,6 +1190,7 @@ const createService = (options: {
   aiStreamOwnerId?: string;
   activeSandboxTtlMs?: number;
   idleSandboxTtlMs?: number;
+  roomLeaseTtlMs?: number;
   turnTimeoutMs?: number;
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
@@ -1250,6 +1245,7 @@ const createService = (options: {
       observability: options.observability,
       mediaObjectStorage: options.mediaObjectStorage,
       aiStreamOwnerId: options.aiStreamOwnerId,
+      roomLeaseTtlMs: options.roomLeaseTtlMs,
       turnTimeoutMs: options.turnTimeoutMs,
       scheduleTurnDeadline: options.scheduleTurnDeadline,
       clearTurnDeadline: options.clearTurnDeadline,
@@ -2005,6 +2001,769 @@ describe('CodeAgentSessionService', () => {
     assert.equal(turnTimeoutMs, 3_570_000);
     assert.equal(deadline.delayMs, turnTimeoutMs);
     assert.equal(deadline.cleared, true);
+  });
+
+  it('drains an already queued heartbeat update before terminal persistence and prevents later running updates', async () => {
+    const originalSetInterval = global.setInterval;
+    const originalClearInterval = global.clearInterval;
+    let heartbeatCallback: (() => void) | undefined;
+    let heartbeatCleared = false;
+    (global as any).setInterval = (callback: () => void) => {
+      heartbeatCallback = callback;
+      return { unref() {} };
+    };
+    (global as any).clearInterval = () => {
+      heartbeatCleared = true;
+    };
+    try {
+      const runner = new SequencedBlockingRunner();
+      const deadline = new ControlledTurnDeadline();
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const originalRenew = store.renewCodeAgentRoomLease.bind(store);
+      const originalUpdate = store.updateCodeAgentTurn.bind(store);
+      const originalFinish = store.finishCodeAgentTurn.bind(store);
+      let renewCalls = 0;
+      let markRenewStarted!: () => void;
+      const renewStarted = new Promise<void>(resolve => {
+        markRenewStarted = resolve;
+      });
+      let releaseRenew!: () => void;
+      const renewBlocked = new Promise<void>(resolve => {
+        releaseRenew = resolve;
+      });
+      let terminalPersisted = false;
+      let updatesAfterTerminal = 0;
+      store.renewCodeAgentRoomLease = async (...args) => {
+        renewCalls += 1;
+        if (renewCalls === 1) {
+          markRenewStarted();
+          await renewBlocked;
+        }
+        return originalRenew(...args);
+      };
+      store.updateCodeAgentTurn = async (...args) => {
+        if (terminalPersisted) updatesAfterTerminal += 1;
+        return originalUpdate(...args);
+      };
+      store.finishCodeAgentTurn = async input => {
+        assert.equal(deadline.cleared, true);
+        const terminal = await originalFinish(input);
+        if (terminal.outcome !== 'stale') terminalPersisted = true;
+        return terminal;
+      };
+      const { service } = createService({
+        store,
+        runner,
+        ids: ['ai-1', 'turn-1'],
+        scheduleTurnDeadline: deadline.schedule,
+        clearTurnDeadline: deadline.clear,
+      });
+      const active = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await runner.waitForRuns(1);
+
+      heartbeatCallback?.();
+      await renewStarted;
+      runner.release(0);
+      await Promise.resolve();
+      assert.equal(store.agentTurns.get('turn-1')?.status, 'running');
+
+      releaseRenew();
+      assert.deepEqual(await active, { success: true, messageId: 'ai-1' });
+      assert.equal(heartbeatCleared, true);
+      assert.equal(terminalPersisted, true);
+      assert.equal(updatesAfterTerminal, 0);
+      assert.equal(renewCalls, 5);
+    } finally {
+      (global as any).setInterval = originalSetInterval;
+      (global as any).clearInterval = originalClearInterval;
+    }
+  });
+
+  it('keeps renewing through blocked error cleanup, then stops heartbeat before terminal persistence', async () => {
+    const originalSetInterval = global.setInterval;
+    const originalClearInterval = global.clearInterval;
+    let heartbeatCallback: (() => void) | undefined;
+    (global as any).setInterval = (callback: () => void) => {
+      heartbeatCallback = callback;
+      return { unref() {} };
+    };
+    (global as any).clearInterval = () => undefined;
+    try {
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const originalRenew = store.renewCodeAgentRoomLease.bind(store);
+      const originalUpdate = store.updateCodeAgentTurn.bind(store);
+      const originalFinish = store.finishCodeAgentTurn.bind(store);
+      let renewCalls = 0;
+      let terminalPersisted = false;
+      let updatesAfterTerminal = 0;
+      store.renewCodeAgentRoomLease = async (...args) => {
+        renewCalls += 1;
+        return originalRenew(...args);
+      };
+      store.updateCodeAgentTurn = async (...args) => {
+        if (terminalPersisted) updatesAfterTerminal += 1;
+        return originalUpdate(...args);
+      };
+      store.finishCodeAgentTurn = async input => {
+        const terminal = await originalFinish(input);
+        if (terminal.outcome !== 'stale') terminalPersisted = true;
+        return terminal;
+      };
+      const setup = createService({
+        store,
+        runner: new FakeCodeAgentRunnerClient([{
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'error',
+          message: 'runner failed safely',
+          code: 'runner_process_error',
+          retryable: false,
+        }]),
+        ids: ['ai-1', 'turn-1'],
+      });
+      let markCleanupStarted!: () => void;
+      const cleanupStarted = new Promise<void>(resolve => {
+        markCleanupStarted = resolve;
+      });
+      let releaseCleanup!: () => void;
+      const cleanupBlocked = new Promise<void>(resolve => {
+        releaseCleanup = resolve;
+      });
+      (setup.service as any).flushInterruptedToolCalls = async () => {
+        markCleanupStarted();
+        await cleanupBlocked;
+      };
+
+      const active = setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await cleanupStarted;
+      heartbeatCallback?.();
+      while (renewCalls === 0) await Promise.resolve();
+      assert.equal(store.agentTurns.get('turn-1')?.status, 'running');
+
+      releaseCleanup();
+      const result = await active;
+      assert.equal(result.success, false);
+      assert.equal(terminalPersisted, true);
+      assert.equal(renewCalls, 5);
+      assert.equal(updatesAfterTerminal, 0);
+    } finally {
+      (global as any).setInterval = originalSetInterval;
+      (global as any).clearInterval = originalClearInterval;
+    }
+  });
+
+  it('publishes a complete turn only after runtime cleanup so an immediate next turn can start', async () => {
+    let runCount = 0;
+    const runner: CodeAgentRunnerClient = {
+      async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
+        runCount += 1;
+        const textEvent: CodeAgentRunnerEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta',
+          messageId: request.turnId,
+          delta: `Done ${runCount}`,
+        };
+        const stepEvent: CodeAgentRunnerEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'model_step',
+          turnId: request.turnId,
+          stepId: `${request.turnId}:step:1`,
+          sequence: 1,
+          hasText: true,
+          toolCallIds: [],
+          usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+        };
+        const finalEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final' as const,
+          messageId: request.turnId,
+          answer: `Done ${runCount}`,
+          sessionId: `session-${runCount}`,
+          usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
+        };
+        for (const event of [textEvent, stepEvent, finalEvent]) {
+          await handlers.onEvent(event);
+        }
+        return { events: [textEvent, stepEvent, finalEvent], finalEvent };
+      },
+    };
+    const deadline = new ControlledTurnDeadline();
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+    const originalReleaseLease = store.releaseCodeAgentRoomLease.bind(store);
+    let releaseLeaseCalls = 0;
+    store.releaseCodeAgentRoomLease = async (...args) => {
+      releaseLeaseCalls += 1;
+      return originalReleaseLease(...args);
+    };
+    const setup = createService({
+      store,
+      runner,
+      ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+      activeSandboxTtlMs: 60 * 60 * 1000,
+      idleSandboxTtlMs: 2 * 60 * 1000,
+      scheduleTurnDeadline: deadline.schedule,
+      clearTurnDeadline: deadline.clear,
+      observability: observability.recorder,
+    });
+    const cleanupOrder: string[] = [];
+    const originalShorten = setup.lifecycle.shortenSandboxAfterTurn.bind(setup.lifecycle);
+    setup.lifecycle.shortenSandboxAfterTurn = async handle => {
+      const shortened = await originalShorten(handle);
+      cleanupOrder.push('sandbox-shortened');
+      return shortened;
+    };
+    const wrappedReleaseLease = store.releaseCodeAgentRoomLease.bind(store);
+    store.releaseCodeAgentRoomLease = async (...args) => {
+      const released = await wrappedReleaseLease(...args);
+      cleanupOrder.push('lease-released');
+      return released;
+    };
+
+    let nextTurn: Promise<unknown> | undefined;
+    let firstTerminalSeen = false;
+    setup.emitter.onEmit = event => {
+      const turn = event.event === 'agent_turn_updated'
+        ? event.args[0] as RoomAgentTurn
+        : undefined;
+      const streamPayload = event.args[0] as any;
+      const isFirstTerminalTurn = turn?.id === 'turn-1' && turn.status === 'complete';
+      if (isFirstTerminalTurn) firstTerminalSeen = true;
+      const isFirstTerminalRoom = event.event === 'room_updated'
+        && streamPayload?.codeAgentStatus === 'idle'
+        && firstTerminalSeen
+        && runCount === 1;
+      const isFirstReadiness = (
+        isFirstTerminalTurn
+        || (event.event === 'ai_stream_end' && streamPayload?.messageId === 'ai-1')
+        || (event.event === 'ai_cost_total' && firstTerminalSeen && runCount === 1)
+        || isFirstTerminalRoom
+      );
+      if (isFirstReadiness) {
+        assert.equal((setup.service as any).activeTurns.has('room-1'), false);
+        assert.equal(store.roomLeases.has('room-1'), false);
+        assert.equal(setup.sandboxService.sandboxTimeoutUpdates.at(-1)?.ttlMs, 2 * 60 * 1000);
+      }
+      if (event.event === 'ai_stream_end' && streamPayload?.messageId === 'ai-1') cleanupOrder.push('stream-end');
+      if (event.event === 'ai_cost_total' && firstTerminalSeen && runCount === 1) cleanupOrder.push('cost-emitted');
+      if (isFirstTerminalRoom) cleanupOrder.push('room-emitted');
+      if (turn?.id !== 'turn-1' || turn.status !== 'complete') return;
+      cleanupOrder.push('terminal-emitted');
+      assert.equal(releaseLeaseCalls, 1);
+      nextTurn = setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    };
+
+    assert.deepEqual(
+      await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+      { success: true, messageId: 'ai-1' },
+    );
+    assert.ok(nextTurn);
+    assert.deepEqual(await nextTurn, { success: true, messageId: 'ai-2' });
+    assert.equal(runCount, 2);
+    assert.equal(
+      observability.events.some(event => (
+        event.event === 'code_agent.turn.rejected'
+        && (event.payload as any)?.reason === 'room_already_running'
+      )),
+      false,
+    );
+    const terminalIndex = cleanupOrder.indexOf('terminal-emitted');
+    const shortenIndex = cleanupOrder.lastIndexOf('sandbox-shortened', terminalIndex);
+    const releaseIndex = cleanupOrder.lastIndexOf('lease-released', terminalIndex);
+    assert.ok(shortenIndex >= 0 && shortenIndex < terminalIndex);
+    assert.ok(releaseIndex >= 0 && releaseIndex < terminalIndex);
+    assert.deepEqual(cleanupOrder.slice(terminalIndex, terminalIndex + 4), [
+      'terminal-emitted',
+      'stream-end',
+      'cost-emitted',
+      'room-emitted',
+    ]);
+  });
+
+  it('waits for terminal cleanup when a durable room event starts the next turn before socket readiness', async () => {
+    const runner = new SequencedBlockingRunner();
+    const observability = createMemoryObservability();
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+    const originalFinish = store.finishCodeAgentTurn.bind(store);
+    let service!: CodeAgentSessionService;
+    let nextTurn: Promise<unknown> | undefined;
+    let nextTurnSettled = false;
+    store.finishCodeAgentTurn = async input => {
+      const terminal = await originalFinish(input);
+      if (input.claim.turnId === 'turn-1' && terminal.outcome === 'applied') {
+        nextTurn = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+        void nextTurn.finally(() => {
+          nextTurnSettled = true;
+        });
+      }
+      return terminal;
+    };
+    const setup = createService({
+      store,
+      runner,
+      ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+      observability: observability.recorder,
+    });
+    service = setup.service;
+    let markShortenStarted!: () => void;
+    const shortenStarted = new Promise<void>(resolve => {
+      markShortenStarted = resolve;
+    });
+    let releaseShorten!: () => void;
+    const shortenBlocked = new Promise<void>(resolve => {
+      releaseShorten = resolve;
+    });
+    const originalShorten = setup.lifecycle.shortenSandboxAfterTurn.bind(setup.lifecycle);
+    setup.lifecycle.shortenSandboxAfterTurn = async handle => {
+      markShortenStarted();
+      await shortenBlocked;
+      return originalShorten(handle);
+    };
+
+    const firstTurn = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.waitForRuns(1);
+    runner.release(0);
+    await shortenStarted;
+    assert.ok(nextTurn);
+    await Promise.resolve();
+    assert.equal(nextTurnSettled, false);
+    assert.equal((service as any).activeTurns.get('room-1')?.terminalClosing?.promise instanceof Promise, true);
+
+    releaseShorten();
+    assert.deepEqual(await firstTurn, { success: true, messageId: 'ai-1' });
+    await runner.waitForRuns(2);
+    runner.release(1);
+    assert.deepEqual(await nextTurn, { success: true, messageId: 'ai-2' });
+    assert.equal(observability.events.some(event => (
+      event.event === 'code_agent.turn.rejected'
+      && (event.payload as any)?.reason === 'room_already_running'
+    )), false);
+  });
+
+  it('retains the fenced room lease across sandbox cleanup so another service cannot start early', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done',
+        sessionId: 'session-1',
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+      },
+    ]);
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+    const first = createService({ store, runner, ids: ['ai-1', 'turn-1'] });
+    const second = createService({
+      store,
+      runner: new FakeCodeAgentRunnerClient([]),
+      ids: ['other-ai', 'other-turn'],
+    });
+    let markShortenStarted!: () => void;
+    const shortenStarted = new Promise<void>(resolve => {
+      markShortenStarted = resolve;
+    });
+    let releaseShorten!: () => void;
+    const shortenBlocked = new Promise<void>(resolve => {
+      releaseShorten = resolve;
+    });
+    const originalShorten = first.lifecycle.shortenSandboxAfterTurn.bind(first.lifecycle);
+    first.lifecycle.shortenSandboxAfterTurn = async handle => {
+      markShortenStarted();
+      await shortenBlocked;
+      return originalShorten(handle);
+    };
+
+    const active = first.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await shortenStarted;
+    assert.equal(store.roomLeases.get('room-1')?.turnId, 'turn-1');
+    assert.equal(first.emitter.roomEmits.some(event => (
+      event.event === 'agent_turn_updated'
+      && (event.args[0] as RoomAgentTurn).status === 'complete'
+    )), false);
+    assert.deepEqual(
+      await second.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+      { success: false, error: 'An agent task is already running in this workspace' },
+    );
+
+    releaseShorten();
+    assert.deepEqual(await active, { success: true, messageId: 'ai-1' });
+    assert.equal(store.roomLeases.has('room-1'), false);
+  });
+
+  it('heartbeats the fenced lease throughout cleanup that spans multiple lease TTLs', async () => {
+    const originalSetInterval = global.setInterval;
+    const originalClearInterval = global.clearInterval;
+    const intervals = new Map<object, () => void>();
+    let intervalId = 0;
+    (global as any).setInterval = (callback: () => void) => {
+      const handle = { id: ++intervalId, unref() {} };
+      intervals.set(handle, callback);
+      return handle;
+    };
+    (global as any).clearInterval = (handle: object) => {
+      intervals.delete(handle);
+    };
+    try {
+      let nowMs = Date.parse('2026-05-03T00:00:00.000Z');
+      const now = () => new Date(nowMs);
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const first = createService({
+        store,
+        now,
+        roomLeaseTtlMs: 30_000,
+        ids: ['ai-1', 'turn-1'],
+        runner: new FakeCodeAgentRunnerClient([
+          { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+          cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+          {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'final',
+            messageId: 'ai-1',
+            answer: 'Done',
+            sessionId: 'session-1',
+            usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+          },
+        ]),
+      });
+      const secondRunner = new SequencedBlockingRunner();
+      const second = createService({
+        store,
+        now,
+        roomLeaseTtlMs: 30_000,
+        runner: secondRunner,
+        ids: [
+          'other-ai-1', 'other-turn-1',
+          'other-ai-2', 'other-turn-2',
+          'other-ai-3', 'other-turn-3',
+          'other-ai-4', 'other-turn-4',
+        ],
+      });
+      let markShortenStarted!: () => void;
+      const shortenStarted = new Promise<void>(resolve => {
+        markShortenStarted = resolve;
+      });
+      let releaseShorten!: () => void;
+      const shortenBlocked = new Promise<void>(resolve => {
+        releaseShorten = resolve;
+      });
+      const originalShorten = first.lifecycle.shortenSandboxAfterTurn.bind(first.lifecycle);
+      first.lifecycle.shortenSandboxAfterTurn = async handle => {
+        markShortenStarted();
+        await shortenBlocked;
+        return originalShorten(handle);
+      };
+
+      const firstTurn = first.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await shortenStarted;
+      assert.equal(intervals.size, 1);
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        nowMs += 20_000;
+        for (const callback of [...intervals.values()]) callback();
+        const expectedExpiry = new Date(nowMs + 30_000).toISOString();
+        for (let attempt = 0; attempt < 20 && store.roomLeases.get('room-1')?.expiresAt !== expectedExpiry; attempt += 1) {
+          await Promise.resolve();
+        }
+        assert.equal(store.roomLeases.get('room-1')?.expiresAt, expectedExpiry);
+        assert.deepEqual(
+          await second.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+          { success: false, error: 'An agent task is already running in this workspace' },
+        );
+      }
+
+      releaseShorten();
+      assert.deepEqual(await firstTurn, { success: true, messageId: 'ai-1' });
+      assert.equal(store.roomLeases.has('room-1'), false);
+
+      const secondTurn = second.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await secondRunner.waitForRuns(1);
+      secondRunner.release(0);
+      assert.deepEqual(await secondTurn, { success: true, messageId: 'other-ai-4' });
+    } finally {
+      (global as any).setInterval = originalSetInterval;
+      (global as any).clearInterval = originalClearInterval;
+    }
+  });
+
+  it('aborts an in-flight idle timeout when cleanup loses its fence before a new owner extends the sandbox', async () => {
+    const originalSetInterval = global.setInterval;
+    const originalClearInterval = global.clearInterval;
+    const intervals = new Map<object, () => void>();
+    (global as any).setInterval = (callback: () => void) => {
+      const handle = { unref() {} };
+      intervals.set(handle, callback);
+      return handle;
+    };
+    (global as any).clearInterval = (handle: object) => {
+      intervals.delete(handle);
+    };
+    try {
+      let nowMs = Date.parse('2026-05-03T00:00:00.000Z');
+      const now = () => new Date(nowMs);
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const first = createService({
+        store,
+        now,
+        roomLeaseTtlMs: 30_000,
+        ids: ['ai-1', 'turn-1'],
+        runner: new FakeCodeAgentRunnerClient([
+          { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+          cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
+          {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'final',
+            messageId: 'ai-1',
+            answer: 'Done',
+            sessionId: 'session-1',
+            usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+          },
+        ]),
+      });
+      const secondRunner = new SequencedBlockingRunner();
+      const second = createService({
+        store,
+        now,
+        roomLeaseTtlMs: 30_000,
+        runner: secondRunner,
+        ids: ['other-ai', 'other-turn'],
+      });
+      const mutationOrder: string[] = [];
+      const originalSecondExtend = second.lifecycle.extendSandboxForActiveTurn.bind(second.lifecycle);
+      second.lifecycle.extendSandboxForActiveTurn = async handle => {
+        const extended = await originalSecondExtend(handle);
+        mutationOrder.push('new-active');
+        return extended;
+      };
+      let markOldShortenStarted!: () => void;
+      const oldShortenStarted = new Promise<void>(resolve => {
+        markOldShortenStarted = resolve;
+      });
+      let releaseOldShorten!: () => void;
+      const oldShortenBlocked = new Promise<void>(resolve => {
+        releaseOldShorten = resolve;
+      });
+      let cleanupOptions: {
+        requestTimeoutMs?: number;
+        signal?: AbortSignal;
+        failClosed?: boolean;
+      } | undefined;
+      const originalFirstShorten = first.lifecycle.shortenSandboxAfterTurn.bind(first.lifecycle);
+      first.lifecycle.shortenSandboxAfterTurn = async (handle, options) => {
+        cleanupOptions = options;
+        markOldShortenStarted();
+        await oldShortenBlocked;
+        if (options?.signal?.aborted) {
+          mutationOrder.push('old-idle-aborted');
+          const abortError = new Error('idle timeout update aborted');
+          abortError.name = 'AbortError';
+          throw abortError;
+        }
+        mutationOrder.push('old-idle');
+        return originalFirstShorten(handle, options);
+      };
+
+      const firstTurn = first.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await oldShortenStarted;
+      assert.equal(cleanupOptions?.requestTimeoutMs, 10_000);
+      assert.equal(cleanupOptions?.failClosed, true);
+      assert.equal(cleanupOptions?.signal?.aborted, false);
+      assert.equal(intervals.size, 1);
+
+      const originalRenew = store.renewCodeAgentRoomLease.bind(store);
+      store.renewCodeAgentRoomLease = async () => null;
+      for (const callback of [...intervals.values()]) callback();
+      for (let attempt = 0; attempt < 20 && !cleanupOptions?.signal?.aborted; attempt += 1) {
+        await Promise.resolve();
+      }
+      assert.equal(cleanupOptions?.signal?.aborted, true);
+      store.renewCodeAgentRoomLease = originalRenew;
+
+      nowMs += 31_000;
+      const secondTurn = second.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      await secondRunner.waitForRuns(1);
+      assert.deepEqual(mutationOrder, ['new-active']);
+      assert.equal(store.roomLeases.get('room-1')?.turnId, 'other-turn');
+
+      releaseOldShorten();
+      assert.deepEqual(await firstTurn, { success: true, messageId: 'ai-1' });
+      assert.deepEqual(mutationOrder, ['new-active', 'old-idle-aborted']);
+      assert.equal(first.emitter.roomEmits.some(event => (
+        event.event === 'agent_turn_updated'
+        && (event.args[0] as RoomAgentTurn).status === 'complete'
+      )), false);
+      assert.equal(store.roomLeases.get('room-1')?.turnId, 'other-turn');
+
+      secondRunner.release(0);
+      assert.deepEqual(await secondTurn, { success: true, messageId: 'other-ai' });
+    } finally {
+      (global as any).setInterval = originalSetInterval;
+      (global as any).clearInterval = originalClearInterval;
+    }
+  });
+
+  it('clears local activity but suppresses readiness when cleanup lease verification or release fails', async () => {
+    for (const failure of [
+      'renew-throws',
+      'renew-insufficient-window',
+      'release-false',
+      'release-throws',
+      'shorten-throws',
+      'requeue-throws',
+    ] as const) {
+      const runner: CodeAgentRunnerClient = {
+        async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
+          const textEvent: CodeAgentRunnerEvent = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'text_delta',
+            messageId: request.turnId,
+            delta: 'Done',
+          };
+          const stepEvent: CodeAgentRunnerEvent = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'model_step',
+            turnId: request.turnId,
+            stepId: `${request.turnId}:step:1`,
+            sequence: 1,
+            hasText: true,
+            toolCallIds: [],
+            usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+          };
+          const finalEvent = {
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'final' as const,
+            messageId: request.turnId,
+            answer: 'Done',
+            sessionId: 'session-1',
+            usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
+          };
+          for (const event of [textEvent, stepEvent, finalEvent]) {
+            await handlers.onEvent(event);
+          }
+          return { events: [textEvent, stepEvent, finalEvent], finalEvent };
+        },
+      };
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const originalRenew = store.renewCodeAgentRoomLease.bind(store);
+      const originalRelease = store.releaseCodeAgentRoomLease.bind(store);
+      if (failure === 'renew-throws') {
+        store.renewCodeAgentRoomLease = async () => {
+          throw new Error('fake renew failure');
+        };
+      } else if (failure === 'renew-insufficient-window') {
+        store.renewCodeAgentRoomLease = async (...args) => {
+          const renewed = await originalRenew(...args);
+          return renewed ? {
+            ...renewed,
+            expiresAt: new Date(Date.parse(renewed.expiresAt) - 40_000).toISOString(),
+          } : null;
+        };
+      } else {
+        store.renewCodeAgentRoomLease = originalRenew;
+      }
+      if (failure === 'release-false') {
+        store.releaseCodeAgentRoomLease = async (...args) => {
+          await originalRelease(...args);
+          return false;
+        };
+      } else if (failure === 'release-throws') {
+        store.releaseCodeAgentRoomLease = async (...args) => {
+          await originalRelease(...args);
+          throw new Error('fake release failure');
+        };
+      }
+      const setup = createService({
+        store,
+        runner,
+        ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+      });
+      if (failure === 'shorten-throws') {
+        setup.lifecycle.shortenSandboxAfterTurn = async () => {
+          throw new Error('fake shorten failure');
+        };
+      }
+      if (failure === 'requeue-throws') {
+        (setup.service as any).requeuePendingSteers = async () => {
+          throw new Error('fake requeue failure');
+        };
+      }
+
+      assert.deepEqual(
+        await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+        { success: true, messageId: 'ai-1' },
+        failure,
+      );
+      assert.equal((setup.service as any).activeTurns.has('room-1'), false, failure);
+      assert.equal((setup.service as any).queueDrains.has('room-1'), false, failure);
+      assert.equal(store.roomLeases.has('room-1'), false, failure);
+      assert.equal(setup.emitter.roomEmits.some(event => (
+        event.event === 'ai_stream_end'
+        || event.event === 'ai_stream_error'
+        || (event.event === 'agent_turn_updated' && (event.args[0] as RoomAgentTurn).status !== 'running')
+      )), false, failure);
+
+      assert.deepEqual(
+        await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }),
+        { success: true, messageId: 'ai-2' },
+        failure,
+      );
+    }
+  });
+
+  it('publishes error and cancelled turns only after active runtime cleanup', async () => {
+    for (const outcome of ['error', 'cancelled'] as const) {
+      const store = new MemoryCodeAgentStore(room(), [userMessage()]);
+      const runner = outcome === 'error'
+        ? new FakeCodeAgentRunnerClient([{
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'error',
+            message: 'runner failed safely',
+            code: 'runner_process_error',
+            retryable: false,
+          }])
+        : new InterruptibleRunner();
+      const setup = createService({
+        store,
+        runner,
+        activeSandboxTtlMs: 60 * 60 * 1000,
+        idleSandboxTtlMs: 2 * 60 * 1000,
+      });
+      if (outcome === 'cancelled') {
+        setup.sandboxService.startRunner = async input => createInterruptibleProcess(
+          input,
+          runner as InterruptibleRunner,
+          false,
+        ).process;
+      }
+      let terminalObserved = false;
+      const readinessOrder: string[] = [];
+      setup.emitter.onEmit = event => {
+        const turn = event.event === 'agent_turn_updated'
+          ? event.args[0] as RoomAgentTurn
+          : undefined;
+        if (turn?.status === outcome) {
+          terminalObserved = true;
+          readinessOrder.push('turn');
+        } else if (terminalObserved && event.event === 'room_updated') {
+          readinessOrder.push('room');
+        } else if (terminalObserved && event.event === 'ai_stream_error') {
+          readinessOrder.push('stream-error');
+        } else {
+          return;
+        }
+        assert.equal((setup.service as any).activeTurns.has('room-1'), false);
+        assert.equal(store.roomLeases.has('room-1'), false);
+        assert.equal(setup.sandboxService.sandboxTimeoutUpdates.at(-1)?.ttlMs, 2 * 60 * 1000);
+      };
+
+      const active = setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+      if (outcome === 'cancelled') {
+        await (runner as InterruptibleRunner).started;
+        assert.deepEqual(await setup.service.interruptTurn('room-1', 'client-1'), { success: true });
+      }
+      await active;
+      assert.equal(terminalObserved, true);
+      assert.deepEqual(readinessOrder, ['turn', 'room', 'stream-error']);
+    }
   });
 
   it('owns the hard turn timeout before the sandbox TTL and closes pending tools without logging command data', async () => {
@@ -4118,7 +4877,7 @@ describe('CodeAgentSessionService', () => {
       },
     ]);
     const observability = createMemoryObservability();
-    const { sandboxService, service, store } = createService({ runner, observability: observability.recorder });
+    const { emitter, sandboxService, service, store } = createService({ runner, observability: observability.recorder });
     sandboxService.startRunner = async input => {
       store.roomLeases.delete(input.handle.roomId);
       return { command: input.command, stop: async () => undefined };
@@ -4130,6 +4889,12 @@ describe('CodeAgentSessionService', () => {
     const failed = observability.events.find(item => item.event === 'code_agent.turn.failed');
     assert.equal(failed?.errorCode, 'room_lease_lost');
     assert.notEqual(failed?.errorCode, 'turn_timeout');
+    assert.deepEqual(sandboxService.sandboxTimeoutUpdates.map(update => update.ttlMs), [60 * 60 * 1000]);
+    assert.equal(emitter.roomEmits.some(event => (
+      event.event === 'ai_stream_end'
+      || event.event === 'ai_stream_error'
+      || (event.event === 'agent_turn_updated' && (event.args[0] as RoomAgentTurn).status !== 'running')
+    )), false);
   });
 
   it('rejects approval responses from members who did not start the turn', async () => {
@@ -4166,7 +4931,7 @@ describe('CodeAgentSessionService', () => {
 
   it('persists follow-up input and starts it as the next complete turn', async () => {
     const runner = new SequencedBlockingRunner();
-    const { service, store } = createService({
+    const { emitter, service, store } = createService({
       runner,
       ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
     });
@@ -4196,6 +4961,16 @@ describe('CodeAgentSessionService', () => {
     assert.equal(runner.requests[1].prompt, 'run the tests next');
     assert.equal(runner.requests[1].mode, 'plan');
     assert.equal(runner.requests[1].priorMessages?.some(item => item.role === 'user' && item.content === 'run the tests next') ?? false, false);
+    const turnUpdates = emitter.roomEmits.filter(event => event.event === 'agent_turn_updated');
+    const firstTerminalIndex = turnUpdates.findIndex(event => (
+      (event.args[0] as RoomAgentTurn).id === 'turn-1'
+      && (event.args[0] as RoomAgentTurn).status === 'complete'
+    ));
+    const secondRunningIndex = turnUpdates.findIndex(event => (
+      (event.args[0] as RoomAgentTurn).id === 'turn-2'
+      && (event.args[0] as RoomAgentTurn).status === 'running'
+    ));
+    assert.ok(firstTerminalIndex >= 0 && secondRunningIndex > firstTerminalIndex);
 
     const deadline = Date.now() + 1_000;
     while (store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput?.state === 'starting' && Date.now() < deadline) {

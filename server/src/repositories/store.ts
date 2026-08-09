@@ -235,6 +235,10 @@ export type CodeAgentMessageMutationResult =
       outcome: 'stale' | 'obsolete';
     };
 
+/**
+ * The terminal transaction deliberately retains the fenced room lease.
+ * Its caller must release that lease only after runner and sandbox cleanup.
+ */
 export interface CodeAgentTurnTerminalInput {
   claim: CodeAgentTurnClaim;
   outcome: 'complete' | 'error' | 'cancelled';

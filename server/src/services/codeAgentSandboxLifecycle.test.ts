@@ -184,6 +184,32 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.deepEqual(sandboxService.initializedWorkspaceVersionControlSandboxIds, [first.ok && first.handle.id]);
   });
 
+  it('passes cancellable bounded idle timeout options through and fails closed', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const { lifecycle } = createLifecycle(store, sandboxService);
+    const handle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    const abortController = new AbortController();
+    let observedOptions: { requestTimeoutMs?: number; signal?: AbortSignal } | undefined;
+    sandboxService.setSandboxTimeout = async (_handle, _ttlMs, options) => {
+      observedOptions = options;
+      throw new Error('bounded timeout update failed');
+    };
+
+    await assert.rejects(
+      lifecycle.shortenSandboxAfterTurn(handle, {
+        requestTimeoutMs: 10_000,
+        signal: abortController.signal,
+        failClosed: true,
+      }),
+      /bounded timeout update failed/,
+    );
+    assert.deepEqual(observedOptions, {
+      requestTimeoutMs: 10_000,
+      signal: abortController.signal,
+    });
+  });
+
   it('persists the current sandbox artifact metadata when creating a sandbox', async () => {
     const store = new MemoryRoomStore([room()]);
     const { lifecycle } = createLifecycle(

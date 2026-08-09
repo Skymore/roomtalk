@@ -2906,15 +2906,6 @@ export class PostgresStore implements DurableRoomStore {
         }
       }
 
-      await client.query(
-        `DELETE FROM code_agent_room_leases
-        WHERE room_id = $1
-          AND turn_id = $2
-          AND owner_id = $3
-          AND fence = $4`,
-        [claim.roomId, claim.turnId, claim.ownerId, claim.fence],
-      );
-
       return {
         outcome: finalizationObsoleted ? 'obsolete' as const : 'applied' as const,
         room: mapRoom(room.rows[0]),

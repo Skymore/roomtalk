@@ -34,6 +34,11 @@ export interface CreateCodeAgentSandboxInput {
   ttlMs: number;
 }
 
+export interface CodeAgentSandboxTimeoutUpdateOptions {
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}
+
 export interface StartCodeAgentRunnerInput {
   handle: CodeAgentSandboxHandle;
   command: string;
@@ -252,7 +257,11 @@ export interface CodeAgentSandboxService {
   create(input: CreateCodeAgentSandboxInput): Promise<CodeAgentSandboxHandle>;
   connect(sandboxId: string): Promise<CodeAgentSandboxHandle>;
   initializeWorkspaceVersionControl?(handle: CodeAgentSandboxHandle): Promise<void>;
-  setSandboxTimeout?(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle>;
+  setSandboxTimeout?(
+    handle: CodeAgentSandboxHandle,
+    ttlMs: number,
+    options?: CodeAgentSandboxTimeoutUpdateOptions
+  ): Promise<CodeAgentSandboxHandle>;
   startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess>;
   startWorkspaceCommand?(input: StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess>;
   startWorkspaceTerminal?(input: StartCodeAgentWorkspaceTerminalInput): Promise<CodeAgentWorkspaceTerminal>;

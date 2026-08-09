@@ -3,6 +3,7 @@ import {
   CodeAgentRunnerProcess,
   CodeAgentSandboxHandle,
   CodeAgentSandboxService,
+  CodeAgentSandboxTimeoutUpdateOptions,
   CodeAgentWorkspaceChanges,
   CodeAgentWorkspaceAsset,
   CodeAgentWorkspaceDiff,
@@ -129,7 +130,12 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
     this.initializedWorkspaceVersionControlSandboxIds.push(handle.id);
   }
 
-  async setSandboxTimeout(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle> {
+  async setSandboxTimeout(
+    handle: CodeAgentSandboxHandle,
+    ttlMs: number,
+    options?: CodeAgentSandboxTimeoutUpdateOptions
+  ): Promise<CodeAgentSandboxHandle> {
+    options?.signal?.throwIfAborted();
     this.consumeFailure('connect');
     const current = this.sandboxes.get(handle.id);
     if (!current) {

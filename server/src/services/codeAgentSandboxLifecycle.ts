@@ -1,6 +1,10 @@
 import { Logger } from '../logger';
 import { Room, RoomSandboxStatus } from '../types';
-import { CodeAgentSandboxHandle, CodeAgentSandboxService } from './codeAgentSandboxService';
+import {
+  CodeAgentSandboxHandle,
+  CodeAgentSandboxService,
+  CodeAgentSandboxTimeoutUpdateOptions,
+} from './codeAgentSandboxService';
 
 export type EnsureCodeAgentSandboxResult =
   | { ok: true; room: Room; handle: CodeAgentSandboxHandle; created: boolean }
@@ -18,6 +22,10 @@ export interface CodeAgentSandboxLifecycleOptions {
   codeAgentSourceRef?: string;
   artifactMigrationMaxArchiveBytes: number;
   artifactMigrationTimeoutMs: number;
+}
+
+export interface CodeAgentSandboxCleanupTimeoutOptions extends CodeAgentSandboxTimeoutUpdateOptions {
+  failClosed?: boolean;
 }
 
 export interface CodeAgentSandboxLifecycleStore {
@@ -165,8 +173,11 @@ export class CodeAgentSandboxLifecycleService {
     return this.updateSandboxTimeout(handle, this.options.activeSandboxTtlMs, 'active');
   }
 
-  async shortenSandboxAfterTurn(handle: CodeAgentSandboxHandle): Promise<CodeAgentSandboxHandle> {
-    return this.updateSandboxTimeout(handle, this.options.idleSandboxTtlMs, 'idle');
+  async shortenSandboxAfterTurn(
+    handle: CodeAgentSandboxHandle,
+    options: CodeAgentSandboxCleanupTimeoutOptions = {}
+  ): Promise<CodeAgentSandboxHandle> {
+    return this.updateSandboxTimeout(handle, this.options.idleSandboxTtlMs, 'idle', options);
   }
 
   async destroyRoomSandbox(roomId: string, clientId: string): Promise<{ destroyed: boolean; room: Room | null; error?: Error }> {
@@ -232,13 +243,17 @@ export class CodeAgentSandboxLifecycleService {
   private async updateSandboxTimeout(
     handle: CodeAgentSandboxHandle,
     ttlMs: number,
-    state: 'active' | 'idle'
+    state: 'active' | 'idle',
+    options: CodeAgentSandboxCleanupTimeoutOptions = {}
   ): Promise<CodeAgentSandboxHandle> {
     if (!this.sandboxService.setSandboxTimeout) {
       return handle;
     }
     try {
-      return await this.sandboxService.setSandboxTimeout(handle, ttlMs);
+      return await this.sandboxService.setSandboxTimeout(handle, ttlMs, {
+        ...(options.requestTimeoutMs !== undefined ? { requestTimeoutMs: options.requestTimeoutMs } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
     } catch (error) {
       this.logger.warn('Unable to update code-agent sandbox timeout', {
         error,
@@ -247,6 +262,9 @@ export class CodeAgentSandboxLifecycleService {
         ttlMs,
         state,
       });
+      if (options.failClosed) {
+        throw error;
+      }
       return handle;
     }
   }

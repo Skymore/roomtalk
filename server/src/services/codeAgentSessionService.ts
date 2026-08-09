@@ -230,6 +230,10 @@ interface ActiveCodeAgentTurn {
   process?: CodeAgentRunnerProcess;
   interruptedByUser: boolean;
   terminationReason?: 'user_interrupt' | 'lease_lost' | 'timeout' | 'invalid_tool_loop';
+  terminalClosing?: {
+    promise: Promise<void>;
+    resolve: () => void;
+  };
   pendingSteerMessageIds: Set<string>;
   pendingControls: Map<string, {
     resolve: (result: CodeAgentControlAck) => void;
@@ -394,6 +398,10 @@ export class CodeAgentSessionService {
       return rejectTurn('Workspace is not enabled for this user', { reason: 'not_allowed' });
     }
 
+    const closingBeforeRoomRead = this.activeTurns.get(input.roomId)?.terminalClosing;
+    if (closingBeforeRoomRead) {
+      await closingBeforeRoomRead.promise;
+    }
     const room = await this.store.getRoomById(input.roomId);
     const member = room ? await this.store.getRoomMember(input.roomId, input.clientId) : null;
     const validation = this.validateRoom(room, input.clientId, member?.role);
@@ -431,6 +439,21 @@ export class CodeAgentSessionService {
     let roomMarkedRunning = false;
     let streamState: CodeAgentTurnStreamState | null = null;
     let turnRecord: RoomAgentTurn | null = null;
+    let pendingTerminalRealtime: (
+      | {
+          kind: 'complete';
+          turn: RoomAgentTurn;
+          room: Room;
+          streamEnd?: Record<string, unknown>;
+          roomCostTotal: RoomAICostTotal;
+        }
+      | {
+          kind: 'failed';
+          turn: RoomAgentTurn;
+          room: Room;
+          streamError: Record<string, unknown>;
+        }
+    ) | undefined;
     let publicFailureMessage: string | undefined;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let roomLeaseFence: number | undefined;
@@ -450,6 +473,33 @@ export class CodeAgentSessionService {
     let leaseRenewalChain: Promise<void> = Promise.resolve();
     let turnUpdateChain: Promise<void> = Promise.resolve();
     let lastRunnerErrorSummary: CodeAgentRunnerErrorSummary | undefined;
+    const freezeTurnDeadlineForTerminal = () => {
+      if (turnDeadlineTimer !== undefined) {
+        this.clearTurnDeadline(turnDeadlineTimer);
+        turnDeadlineTimer = undefined;
+      }
+    };
+    const stopTurnHeartbeatForTerminal = async () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+      await leaseRenewalChain;
+      await turnUpdateChain;
+    };
+    const stopTurnTimersForTerminal = async () => {
+      freezeTurnDeadlineForTerminal();
+      await stopTurnHeartbeatForTerminal();
+    };
+    const markTerminalClosing = () => {
+      const active = this.activeTurns.get(input.roomId);
+      if (active?.turnId !== turnId || active.terminalClosing) return;
+      let resolve!: () => void;
+      const promise = new Promise<void>(done => {
+        resolve = done;
+      });
+      active.terminalClosing = { promise, resolve };
+    };
     const markLeaseLost = () => {
       leaseLost = true;
       const active = this.activeTurns.get(input.roomId);
@@ -1110,6 +1160,8 @@ export class CodeAgentSessionService {
 
       await updatePhase('completing', 'Saving the result');
       assertTurnWithinDeadline();
+      await stopTurnTimersForTerminal();
+      markTerminalClosing();
       if (!turnClaim || !this.store.finishCodeAgentTurn) {
         throw new Error('Atomic code-agent completion is unavailable');
       }
@@ -1150,13 +1202,12 @@ export class CodeAgentSessionService {
       turnRecord = terminal.turn;
       finalMessage = terminal.message || finalMessage;
       const roomCostTotal = terminal.roomCostTotal;
-      this.emitter.to(turnRecord.roomId).emit('agent_turn_updated', turnRecord);
-      if (runnerProcess) {
-        await this.stopRunnerProcess(runnerProcess, input.roomId);
-        runnerProcess = null;
-      }
-      if (finalMessage) {
-        this.emitter.to(input.roomId).emit('ai_stream_end', {
+      pendingTerminalRealtime = {
+        kind: 'complete',
+        turn: turnRecord,
+        room: terminal.room,
+        roomCostTotal,
+        ...(finalMessage ? { streamEnd: {
           messageId: finalActiveId,
           roomId: input.roomId,
           content: finalMessage.content,
@@ -1164,10 +1215,8 @@ export class CodeAgentSessionService {
           usage: finalMessage.usage,
           cost: finalMessage.cost,
           sessionCost: roomCostTotal,
-        });
-      }
-      this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
-      this.emitter.to(terminal.room.creatorId).emit('room_updated', terminal.room);
+        } } : {}),
+      };
       await this.recordTurnEvent('info', 'code_agent.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
         provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
@@ -1189,6 +1238,7 @@ export class CodeAgentSessionService {
       return { success: true, messageId: aiMessageId };
     } catch (error) {
       await deadlineTermination;
+      freezeTurnDeadlineForTerminal();
       const activeAtFailure = this.activeTurns.get(input.roomId);
       const terminationReason = activeAtFailure?.turnId === turnId
         ? activeAtFailure.terminationReason
@@ -1320,6 +1370,8 @@ export class CodeAgentSessionService {
             }));
         }
         if (turnClaim && turnRecord && this.store.finishCodeAgentTurn) {
+          await stopTurnHeartbeatForTerminal();
+          markTerminalClosing();
           terminal = await this.store.finishCodeAgentTurn({
             claim: turnClaim,
             outcome: terminalOutcome,
@@ -1344,18 +1396,24 @@ export class CodeAgentSessionService {
           });
         }
         const persistedMessage = terminal.outcome === 'applied' ? terminal.message : undefined;
+        if (terminal.outcome === 'stale') {
+          leaseLost = true;
+        }
         if (terminal.outcome !== 'stale') {
           turnRecord = terminal.turn;
-          this.emitter.to(turnRecord.roomId).emit('agent_turn_updated', turnRecord);
-          this.emitter.to(terminal.room.creatorId).emit('room_updated', terminal.room);
+          pendingTerminalRealtime = {
+            kind: 'failed',
+            turn: turnRecord,
+            room: terminal.room,
+            streamError: {
+              messageId: errorTargetId,
+              error: content,
+              roomId: input.roomId,
+              persisted: Boolean(persistedMessage),
+              ...(persistedMessage ? { message: stripAIStreamRecoveryMetadata(persistedMessage) } : {}),
+            },
+          };
         }
-        this.emitter.to(input.roomId).emit('ai_stream_error', {
-          messageId: errorTargetId,
-          error: content,
-          roomId: input.roomId,
-          persisted: Boolean(persistedMessage),
-          ...(persistedMessage ? { message: stripAIStreamRecoveryMetadata(persistedMessage) } : {}),
-        });
       }
       if (!callbackSent) {
         ack({ success: false, error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed` });
@@ -1366,35 +1424,229 @@ export class CodeAgentSessionService {
         error: publicFailureMessage || `${this.displayBackendName(turnBackend)} task failed`,
       };
     } finally {
-      if (turnDeadlineTimer !== undefined) this.clearTurnDeadline(turnDeadlineTimer);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      await leaseRenewalChain;
-      await turnUpdateChain;
       const active = this.activeTurns.get(input.roomId);
       const isCurrentTurn = active?.turnId === turnId;
+      const terminalClosing = isCurrentTurn ? active.terminalClosing : undefined;
       const shouldDrainQueue = Boolean(
         isCurrentTurn &&
+        !leaseLost &&
         !active.interruptedByUser &&
         (!input.promptMessageId || placeholderAnnounced)
       );
-      if (runnerProcess) {
-        await this.stopRunnerProcess(runnerProcess, input.roomId);
-      }
-      if (turnSandbox) {
-        if (checkpointStarted) {
-          await this.sandboxService.discardWorkspaceCheckpoint?.(turnSandbox, turnId).catch(() => undefined);
+      let ownsCleanupLease = false;
+      let cleanupSucceeded = true;
+      let releasedCleanupLease = roomLeaseFence === undefined;
+      let cleanupLeaseReleaseThrew = false;
+      let cleanupLeaseLost = false;
+      let cleanupLeaseHeartbeat: ReturnType<typeof setInterval> | undefined;
+      let cleanupLeaseRenewalChain: Promise<void> = Promise.resolve();
+      const cleanupMutationAbortController = new AbortController();
+      // E2B connect and setTimeout each receive this bound. Their combined
+      // request budget stays strictly inside the freshly-renewed lease.
+      const cleanupMutationRequestTimeoutMs = Math.max(
+        1_000,
+        Math.min(10_000, Math.floor((this.roomLeaseTtlMs - 2_000) / 2)),
+      );
+      const markCleanupLeaseLost = () => {
+        cleanupLeaseLost = true;
+        cleanupSucceeded = false;
+        cleanupMutationAbortController.abort();
+        markLeaseLost();
+      };
+      const renewCleanupLease = () => {
+        cleanupLeaseRenewalChain = cleanupLeaseRenewalChain.then(async () => {
+          if (
+            cleanupLeaseLost
+            || leaseLost
+            || !isCurrentTurn
+            || roomLeaseFence === undefined
+            || !this.store.renewCodeAgentRoomLease
+          ) {
+            return;
+          }
+          try {
+            const renewed = await this.store.renewCodeAgentRoomLease(
+              input.roomId,
+              turnId,
+              this.leaseOwnerId,
+              this.now().toISOString(),
+              this.roomLeaseTtlMs,
+              roomLeaseFence,
+            );
+            const cleanupLeaseSafetyMarginMs = 2_000;
+            const requiredCleanupLeaseWindowMs = (2 * cleanupMutationRequestTimeoutMs) + cleanupLeaseSafetyMarginMs;
+            const remainingCleanupLeaseMs = renewed
+              ? Date.parse(renewed.expiresAt) - this.now().getTime()
+              : 0;
+            if (
+              !renewed
+              || renewed.fence !== roomLeaseFence
+              || !Number.isFinite(remainingCleanupLeaseMs)
+              || remainingCleanupLeaseMs <= requiredCleanupLeaseWindowMs
+            ) {
+              markCleanupLeaseLost();
+            }
+          } catch {
+            markCleanupLeaseLost();
+            this.logger.warn('Code-agent cleanup lease renewal failed', {
+              roomId: input.roomId,
+              turnId,
+              leaseFence: roomLeaseFence,
+            });
+          }
+        });
+        return cleanupLeaseRenewalChain;
+      };
+      const stopCleanupLeaseHeartbeat = async () => {
+        if (cleanupLeaseHeartbeat) {
+          clearInterval(cleanupLeaseHeartbeat);
+          cleanupLeaseHeartbeat = undefined;
         }
-        await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox);
+        await cleanupLeaseRenewalChain;
+      };
+      try {
+        await stopTurnTimersForTerminal();
+        if (isCurrentTurn && roomLeaseFence !== undefined) {
+          if (
+            !leaseLost
+            && active.terminationReason !== 'lease_lost'
+            && this.store.renewCodeAgentRoomLease
+          ) {
+            await renewCleanupLease();
+            ownsCleanupLease = !cleanupLeaseLost && !leaseLost;
+            if (ownsCleanupLease) {
+              cleanupLeaseHeartbeat = setInterval(
+                () => { void renewCleanupLease(); },
+                Math.max(1_000, Math.min(CODE_AGENT_TURN_HEARTBEAT_MS, Math.floor(this.roomLeaseTtlMs / 3))),
+              );
+              cleanupLeaseHeartbeat.unref?.();
+            }
+          }
+          if (!ownsCleanupLease) {
+            cleanupSucceeded = false;
+            markLeaseLost();
+          }
+        }
+        if (runnerProcess) {
+          await this.stopRunnerProcess(runnerProcess, input.roomId);
+        }
+        if (ownsCleanupLease) {
+          await renewCleanupLease();
+          ownsCleanupLease = !cleanupLeaseLost && !leaseLost;
+        }
+        if (turnSandbox && ownsCleanupLease) {
+          if (checkpointStarted) {
+            await this.sandboxService.discardWorkspaceCheckpoint?.(turnSandbox, turnId).catch(() => undefined);
+          }
+          await renewCleanupLease();
+          ownsCleanupLease = !cleanupLeaseLost && !leaseLost;
+          if (ownsCleanupLease) {
+            try {
+              await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox, {
+                signal: cleanupMutationAbortController.signal,
+                requestTimeoutMs: cleanupMutationRequestTimeoutMs,
+                failClosed: true,
+              });
+            } catch {
+              cleanupSucceeded = false;
+              cleanupMutationAbortController.abort();
+              this.logger.warn('Code-agent sandbox idle cleanup failed', {
+                roomId: input.roomId,
+                turnId,
+                leaseFence: roomLeaseFence,
+              });
+            }
+          }
+        }
+        if (isCurrentTurn && ownsCleanupLease) {
+          await renewCleanupLease();
+          ownsCleanupLease = !cleanupLeaseLost && !leaseLost;
+        }
+        if (isCurrentTurn && ownsCleanupLease) {
+          try {
+            await this.requeuePendingSteers(active);
+          } catch {
+            cleanupSucceeded = false;
+            this.logger.warn('Code-agent pending steer cleanup failed', {
+              roomId: input.roomId,
+              turnId,
+              leaseFence: roomLeaseFence,
+            });
+          }
+        }
+        if (isCurrentTurn) {
+          this.rejectPendingControls(active, 'The target turn is no longer active');
+        }
+      } catch {
+        cleanupSucceeded = false;
+        this.logger.warn('Code-agent runtime cleanup failed', {
+          roomId: input.roomId,
+          turnId,
+          leaseFence: roomLeaseFence,
+        });
+      } finally {
+        await stopCleanupLeaseHeartbeat();
+        cleanupMutationAbortController.abort();
+        ownsCleanupLease = ownsCleanupLease && !cleanupLeaseLost && !leaseLost;
+        if (roomLeaseFence !== undefined) {
+          try {
+            releasedCleanupLease = Boolean(await this.store.releaseCodeAgentRoomLease?.(
+              input.roomId,
+              turnId,
+              this.leaseOwnerId,
+              roomLeaseFence,
+            ));
+          } catch {
+            releasedCleanupLease = false;
+            cleanupLeaseReleaseThrew = true;
+            this.logger.warn('Code-agent cleanup lease release failed', {
+              roomId: input.roomId,
+              turnId,
+              leaseFence: roomLeaseFence,
+            });
+          }
+        }
+        if (ownsCleanupLease && !releasedCleanupLease) {
+          leaseLost = true;
+          cleanupSucceeded = false;
+          if (!cleanupLeaseReleaseThrew) {
+            this.logger.warn('Code-agent cleanup lease was not released', {
+              roomId: input.roomId,
+              turnId,
+              leaseFence: roomLeaseFence,
+            });
+          }
+        }
+        if (isCurrentTurn) {
+          this.activeTurns.delete(input.roomId);
+          terminalClosing?.resolve();
+        }
       }
-      if (isCurrentTurn) {
-        await this.requeuePendingSteers(active);
-        this.rejectPendingControls(active, 'The target turn is no longer active');
-        this.activeTurns.delete(input.roomId);
+      if (!releasedCleanupLease) {
+        cleanupSucceeded = false;
       }
-      if (roomLeaseFence !== undefined) {
-        await this.store.releaseCodeAgentRoomLease?.(input.roomId, turnId, this.leaseOwnerId, roomLeaseFence);
+      const canEmitTerminalReadiness = Boolean(
+        cleanupSucceeded
+        && pendingTerminalRealtime
+        && ownsCleanupLease
+        && releasedCleanupLease
+        && !leaseLost
+        && !this.activeTurns.has(input.roomId)
+      );
+      if (canEmitTerminalReadiness && pendingTerminalRealtime) {
+        this.emitter.to(pendingTerminalRealtime.turn.roomId).emit('agent_turn_updated', pendingTerminalRealtime.turn);
+        if (pendingTerminalRealtime.kind === 'complete') {
+          if (pendingTerminalRealtime.streamEnd) {
+            this.emitter.to(input.roomId).emit('ai_stream_end', pendingTerminalRealtime.streamEnd);
+          }
+          this.emitter.to(input.roomId).emit('ai_cost_total', pendingTerminalRealtime.roomCostTotal);
+          this.emitter.to(pendingTerminalRealtime.room.creatorId).emit('room_updated', pendingTerminalRealtime.room);
+        } else {
+          this.emitter.to(pendingTerminalRealtime.room.creatorId).emit('room_updated', pendingTerminalRealtime.room);
+          this.emitter.to(input.roomId).emit('ai_stream_error', pendingTerminalRealtime.streamError);
+        }
       }
-      if (shouldDrainQueue) {
+      if (cleanupSucceeded && shouldDrainQueue && releasedCleanupLease && !leaseLost) {
         this.scheduleQueuedTurn(input.roomId);
       }
     }

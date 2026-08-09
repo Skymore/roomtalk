@@ -14,7 +14,15 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly commands: string[] = [];
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
-  readonly timeoutUpdates: Array<{ sandboxId: string; timeoutMs: number }> = [];
+  readonly connectInputs: Array<{
+    sandboxId: string;
+    input?: { timeoutMs?: number; requestTimeoutMs?: number; signal?: AbortSignal };
+  }> = [];
+  readonly timeoutUpdates: Array<{
+    sandboxId: string;
+    timeoutMs: number;
+    options?: { requestTimeoutMs?: number; signal?: AbortSignal };
+  }> = [];
   readonly fileListRequests: Array<{ path: string; options?: { depth?: number } }> = [];
   readonly fileReadRequests: Array<{ path: string; options?: { format?: 'text' | 'bytes' | 'stream' } }> = [];
   readonly fileWriteRequests: Array<{ path: string; data: string | Uint8Array }> = [];
@@ -42,7 +50,11 @@ class FakeE2BDriver implements E2BSandboxDriver {
     return handle;
   }
 
-  async connect(sandboxId: string): Promise<E2BSandboxDriverHandle> {
+  async connect(
+    sandboxId: string,
+    input?: { timeoutMs?: number; requestTimeoutMs?: number; signal?: AbortSignal },
+  ): Promise<E2BSandboxDriverHandle> {
+    this.connectInputs.push({ sandboxId, ...(input ? { input } : {}) });
     const handle = this.handles.get(sandboxId);
     if (!handle) {
       throw new Error(`Missing sandbox: ${sandboxId}`);
@@ -63,8 +75,12 @@ class FakeE2BDriver implements E2BSandboxDriver {
     return {
       id,
       getHost: (port: number) => `${port}-${id}.sandbox.e2b.dev`,
-      setTimeout: async (timeoutMs: number) => {
-        this.timeoutUpdates.push({ sandboxId: id, timeoutMs });
+      setTimeout: async (timeoutMs, options) => {
+        this.timeoutUpdates.push({
+          sandboxId: id,
+          timeoutMs,
+          ...(options ? { options } : {}),
+        });
       },
       commands: {
         run: async (command, options) => {
@@ -301,6 +317,27 @@ describe('E2BCodeAgentSandboxService', () => {
     assert.equal(extendedHandle.expiresAt, '2026-05-03T01:00:00.000Z');
     assert.deepEqual(driver.timeoutUpdates, [{ sandboxId: 'e2b-1', timeoutMs: 3_600_000 }]);
 
+    const cleanupAbort = new AbortController();
+    await service.setSandboxTimeout(handle, 120_000, {
+      requestTimeoutMs: 10_000,
+      signal: cleanupAbort.signal,
+    });
+    assert.deepEqual(driver.timeoutUpdates[1], {
+      sandboxId: 'e2b-1',
+      timeoutMs: 120_000,
+      options: {
+        requestTimeoutMs: 10_000,
+        signal: cleanupAbort.signal,
+      },
+    });
+    assert.deepEqual(driver.connectInputs.at(-1), {
+      sandboxId: 'e2b-1',
+      input: {
+        requestTimeoutMs: 10_000,
+        signal: cleanupAbort.signal,
+      },
+    });
+
     const runner = await service.startRunner({
       handle,
       command: 'python -m roomtalk_code_agent_runner',
@@ -393,6 +430,40 @@ describe('E2BCodeAgentSandboxService', () => {
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);
+  });
+
+  it('does not send a timeout mutation when cleanup is aborted during connect', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    const originalConnect = driver.connect.bind(driver);
+    let markConnectStarted!: () => void;
+    const connectStarted = new Promise<void>(resolve => {
+      markConnectStarted = resolve;
+    });
+    let releaseConnect!: () => void;
+    const connectBlocked = new Promise<void>(resolve => {
+      releaseConnect = resolve;
+    });
+    driver.connect = async (sandboxId, input) => {
+      markConnectStarted();
+      await connectBlocked;
+      return originalConnect(sandboxId, input);
+    };
+    const cleanupAbort = new AbortController();
+
+    const timeoutUpdate = service.setSandboxTimeout(handle, 120_000, {
+      requestTimeoutMs: 10_000,
+      signal: cleanupAbort.signal,
+    });
+    await connectStarted;
+    cleanupAbort.abort();
+    releaseConnect();
+
+    await assert.rejects(timeoutUpdate, error => (
+      error instanceof Error && error.name === 'AbortError'
+    ));
+    assert.deepEqual(driver.timeoutUpdates, []);
   });
 
   it('preserves an exact Vite preview host for RoomTalk-started workspace commands', async () => {

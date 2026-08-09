@@ -63,7 +63,7 @@ interface E2BSdkPty {
 interface E2BSdkSandbox {
   sandboxId: string;
   getHost?(port: number): string;
-  setTimeout?(timeoutMs: number): Promise<void>;
+  setTimeout?(timeoutMs: number, options?: { requestTimeoutMs?: number; signal?: AbortSignal }): Promise<void>;
   commands: E2BSdkCommands;
   pty?: E2BSdkPty;
   files?: {
@@ -130,11 +130,17 @@ class E2BSdkDriver implements E2BSandboxDriver {
     return this.wrapSandbox(sandbox);
   }
 
-  async connect(sandboxId: string, input: { timeoutMs?: number } = {}): Promise<E2BSandboxDriverHandle> {
+  async connect(sandboxId: string, input: {
+    timeoutMs?: number;
+    requestTimeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}): Promise<E2BSandboxDriverHandle> {
     const Sandbox = await this.loadSandboxClass();
     const sandbox = await Sandbox.connect(sandboxId, {
       ...this.connectionOptions(),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.requestTimeoutMs !== undefined ? { requestTimeoutMs: input.requestTimeoutMs } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
     });
     return this.wrapSandbox(sandbox);
   }
@@ -190,7 +196,9 @@ class E2BSdkDriver implements E2BSandboxDriver {
     return {
       id: sandbox.sandboxId,
       getHost: sandbox.getHost ? (port: number) => sandbox.getHost!(port) : undefined,
-      setTimeout: sandbox.setTimeout ? (timeoutMs: number) => sandbox.setTimeout!(timeoutMs) : undefined,
+      setTimeout: sandbox.setTimeout
+        ? (timeoutMs, options) => sandbox.setTimeout!(timeoutMs, options)
+        : undefined,
       commands: {
         run: (command, options) => startE2BCommand(sandbox, command, options?.env || {}, options?.timeoutMs),
       },

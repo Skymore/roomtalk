@@ -28,6 +28,7 @@ import {
   CodeAgentWorkspacePreviewServer,
   CodeAgentWorkspacePreviewTargetResolution,
   CodeAgentWorkspaceTerminal,
+  CodeAgentSandboxTimeoutUpdateOptions,
   SearchCodeAgentWorkspaceEntriesOptions,
   StartCodeAgentRunnerInput,
   StartCodeAgentWorkspaceCommandInput,
@@ -41,7 +42,7 @@ import { Readable, Writable } from 'stream';
 export interface E2BSandboxDriverHandle {
   id: string;
   getHost?(port: number): string;
-  setTimeout?(timeoutMs: number): Promise<void>;
+  setTimeout?(timeoutMs: number, options?: CodeAgentSandboxTimeoutUpdateOptions): Promise<void>;
   commands?: {
     run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
   };
@@ -111,7 +112,11 @@ export interface E2BSandboxDriver {
     metadata: Record<string, string>;
     lifecycle?: E2BSandboxLifecyclePolicy;
   }): Promise<E2BSandboxDriverHandle>;
-  connect(sandboxId: string, input?: { timeoutMs?: number }): Promise<E2BSandboxDriverHandle>;
+  connect(sandboxId: string, input?: {
+    timeoutMs?: number;
+    requestTimeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<E2BSandboxDriverHandle>;
   list?(input?: { metadata?: Record<string, string> }): Promise<E2BListedSandbox[]>;
 }
 
@@ -229,12 +234,21 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     }
   }
 
-  async setSandboxTimeout(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle> {
-    const connected = await this.driver.connect(handle.id);
+  async setSandboxTimeout(
+    handle: CodeAgentSandboxHandle,
+    ttlMs: number,
+    options?: CodeAgentSandboxTimeoutUpdateOptions
+  ): Promise<CodeAgentSandboxHandle> {
+    options?.signal?.throwIfAborted();
+    const connected = await this.driver.connect(handle.id, {
+      ...(options?.requestTimeoutMs !== undefined ? { requestTimeoutMs: options.requestTimeoutMs } : {}),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
     if (!connected.setTimeout) {
       throw new Error('E2B sandbox driver handle does not support timeout updates');
     }
-    await connected.setTimeout(ttlMs);
+    options?.signal?.throwIfAborted();
+    await connected.setTimeout(ttlMs, options);
     return {
       ...handle,
       expiresAt: new Date(this.now().getTime() + ttlMs).toISOString(),

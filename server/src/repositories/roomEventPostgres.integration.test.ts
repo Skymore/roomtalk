@@ -902,6 +902,20 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(restorePlan?.targetRevisionId, `root:${roomId}`);
     assert.deepEqual(restorePlan?.steps.map(step => [step.turnId, step.direction]), [[turnId, 'before']]);
 
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), true);
+    assert.equal(await store.acquireCodeAgentRoomLease(
+      roomId,
+      'checkpoint_restore_blocked',
+      'restore-instance',
+      new Date().toISOString(),
+      60_000,
+    ), null);
+    assert.equal(await store.releaseCodeAgentRoomLease(
+      roomId,
+      turnId,
+      started.lease.ownerId,
+      started.lease.fence,
+    ), true);
     assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), false);
     const restoreLease = await store.acquireCodeAgentRoomLease(
       roomId,
@@ -1498,6 +1512,12 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const cancelEvents = await store.readRoomEvents(roomId, { afterSeq: eventHeadBeforeCancel, limit: 100 });
     assert.deepEqual(cancelEvents.events.find(item => item.type === 'messages.deleted')?.payload.messageIds, [placeholder.id]);
     assert.equal(cancelEvents.events.some(item => item.type === 'messages.upserted' && item.payload.messageIds?.includes(terminalErrorMessage.id)), true);
+    assert.equal(await store.releaseCodeAgentRoomLease(
+      roomId,
+      runningTurn.id,
+      started.lease.ownerId,
+      started.lease.fence,
+    ), true);
 
     const obsoleteTurn: RoomAgentTurn = {
       ...turn(roomId, 'running', new Date().toISOString()),
@@ -1641,6 +1661,14 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(terminal.room.codeAgentStatus, 'idle');
     assert.equal(terminal.room.codeAgentSessionId, 'codex-session-1');
     assert.equal(terminal.roomCostTotal.totalUsd, 0.25);
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), true);
+    assert.equal(await store.acquireCodeAgentRoomLease(
+      roomId,
+      'next-code-agent-turn',
+      'next-instance',
+      new Date().toISOString(),
+      60_000,
+    ), null);
     assert.deepEqual(await store.finishCodeAgentTurn({
       claim,
       outcome: 'complete',
@@ -1648,6 +1676,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       cost: completedMessage.cost,
     }), { outcome: 'stale' });
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.25);
+    assert.equal(await store.releaseCodeAgentRoomLease(
+      roomId,
+      runningTurn.id,
+      started.lease.ownerId,
+      started.lease.fence,
+    ), true);
+    assert.equal(await store.hasActiveCodeAgentRoomLease(roomId, new Date().toISOString()), false);
   });
 
   it('restores abandoned starting and steering queue states but leaves live turns alone', async () => {

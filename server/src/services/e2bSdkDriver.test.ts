@@ -29,7 +29,11 @@ const createFakeSandboxClass = () => {
     filesList: [] as Array<{ path: string; options?: { depth?: number } }>,
     sentStdin: [] as Array<{ pid: number; data: string }>,
     closedStdin: [] as number[],
-    setTimeouts: [] as Array<{ sandboxId: string; timeoutMs: number }>,
+    setTimeouts: [] as Array<{
+      sandboxId: string;
+      timeoutMs: number;
+      options?: { requestTimeoutMs?: number; signal?: AbortSignal };
+    }>,
     killed: [] as string[],
     listed: [] as Record<string, unknown>[],
   };
@@ -40,8 +44,15 @@ const createFakeSandboxClass = () => {
     const sandbox = {
       sandboxId,
       getHost: (port: number) => `${port}-${sandboxId}.e2b.dev`,
-      setTimeout: async (timeoutMs: number) => {
-        calls.setTimeouts.push({ sandboxId, timeoutMs });
+      setTimeout: async (
+        timeoutMs: number,
+        options?: { requestTimeoutMs?: number; signal?: AbortSignal },
+      ) => {
+        calls.setTimeouts.push({
+          sandboxId,
+          timeoutMs,
+          ...(options ? { options } : {}),
+        });
       },
       commands: {
         run: async (command: string, options: any) => {
@@ -187,8 +198,33 @@ describe('E2B SDK driver', () => {
       sandboxId: 'sdk-created-1',
       options: { apiKey: 'e2b-test-key', requestTimeoutMs: 12_000 },
     });
+    const cleanupAbort = new AbortController();
+    await driver.connect(handle.id, {
+      requestTimeoutMs: 10_000,
+      signal: cleanupAbort.signal,
+    });
+    assert.deepEqual(fake.calls.connect[1], {
+      sandboxId: 'sdk-created-1',
+      options: {
+        apiKey: 'e2b-test-key',
+        requestTimeoutMs: 10_000,
+        signal: cleanupAbort.signal,
+      },
+    });
     await connected.setTimeout?.(3_600_000);
     assert.deepEqual(fake.calls.setTimeouts, [{ sandboxId: 'sdk-created-1', timeoutMs: 3_600_000 }]);
+    await connected.setTimeout?.(120_000, {
+      requestTimeoutMs: 10_000,
+      signal: cleanupAbort.signal,
+    });
+    assert.deepEqual(fake.calls.setTimeouts[1], {
+      sandboxId: 'sdk-created-1',
+      timeoutMs: 120_000,
+      options: {
+        requestTimeoutMs: 10_000,
+        signal: cleanupAbort.signal,
+      },
+    });
 
     const command = await connected.commands!.run('python -m roomtalk_code_agent_runner', {
       env: { PYTHONUNBUFFERED: '1' },
