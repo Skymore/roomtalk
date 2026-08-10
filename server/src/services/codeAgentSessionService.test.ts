@@ -695,11 +695,18 @@ class MemoryCodeAgentStore {
     return summary?.roomId === roomId && summary.turnId === turnId ? summary : null;
   }
 
-  async compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: string[], nextStatus: any, updatedAt = '2026-05-03T00:00:00.000Z') {
+  async compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: string[],
+    nextStatus: any,
+    updatedAt = '2026-05-03T00:00:00.000Z',
+    expectedSandboxId?: string,
+  ) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
     const current = room.sandboxStatus || 'none';
     if (!expectedStatuses.includes(current)) return null;
+    if (expectedSandboxId !== undefined && (room.sandboxId || '') !== expectedSandboxId) return null;
     const updated = { ...room, sandboxStatus: nextStatus, sandboxUpdatedAt: updatedAt };
     this.rooms.set(roomId, updated);
     return updated;
@@ -1931,6 +1938,53 @@ describe('CodeAgentSessionService', () => {
     assert.equal(runner.requests[0].sessionId, null);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'acp:hermes-agent:fresh-session');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentLastTurnId, undefined);
+  });
+
+  it('uses the adopted sandbox room state instead of a stale pre-ensure ACP session', async () => {
+    const store = new MemoryCodeAgentStore(room({
+      codeAgentBackend: 'hermes-agent',
+      codeAgentSessionId: 'acp:hermes-agent:stale-session',
+      codeAgentLastTurnId: 'stale-turn',
+    }), [userMessage()]);
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Fresh adopted session' },
+      {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Fresh adopted session',
+        sessionId: 'acp:hermes-agent:fresh-session',
+      },
+    ]);
+    const setup = createService({
+      store,
+      runner,
+      backend: 'hermes-agent',
+      availableBackends: ['hermes-agent'],
+    });
+    const adoptedHandle = await setup.sandboxService.create({
+      roomId: 'room-1',
+      creatorId: 'client-1',
+      ttlMs: 60 * 60 * 1000,
+    });
+    setup.lifecycle.ensureReadySandbox = async () => ({
+      ok: true,
+      created: false,
+      handle: adoptedHandle,
+      room: {
+        ...(await store.getRoomById('room-1'))!,
+        sandboxId: adoptedHandle.id,
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: adoptedHandle.createdAt,
+        codeAgentSessionId: undefined,
+        codeAgentLastTurnId: undefined,
+      },
+    });
+
+    const result = await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, true);
+    assert.equal(runner.requests[0].sessionId, null);
   });
 
   it('fails loudly when a Coco runner omits provider usage', async () => {

@@ -4212,7 +4212,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     roomId: string,
     expectedStatuses: RoomSandboxStatus[],
     nextStatus: RoomSandboxStatus,
-    updatedAt = new Date().toISOString()
+    updatedAt = new Date().toISOString(),
+    expectedSandboxId?: string
   ): Promise<Room | null> {
     if (expectedStatuses.length === 0) {
       return null;
@@ -4229,6 +4230,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       if (!expectedStatuses.includes(currentStatus)) {
         return null;
       }
+      if (expectedSandboxId !== undefined && (room.sandboxId || '') !== expectedSandboxId) {
+        return null;
+      }
 
       return await this.writeRoomRecord(roomId, {
         ...room,
@@ -4236,7 +4240,13 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         sandboxUpdatedAt: updatedAt,
       });
     } catch (error) {
-      this.logger.error('Error comparing and setting Redis room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      this.logger.error('Error comparing and setting Redis room sandbox status', {
+        error,
+        roomId,
+        expectedStatuses,
+        nextStatus,
+        expectedSandboxId,
+      });
       return null;
     }
   }

@@ -10,6 +10,7 @@ class MemoryRoomStore implements CodeAgentSandboxLifecycleStore {
   failNextSaveRoom = false;
   failNextReplaceRoomSandbox = false;
   forceStatusBeforeNextSandboxCas: RoomSandboxStatus | null = null;
+  roomBeforeNextSandboxStatusCas: Partial<Room> | null = null;
   forceSandboxIdBeforeNextReplace: string | null = null;
 
   constructor(initialRooms: Room[] = []) {
@@ -67,7 +68,13 @@ class MemoryRoomStore implements CodeAgentSandboxLifecycleStore {
   }
   async deleteRoom(roomId: string, _creatorId: string) { this.rooms.delete(roomId); this.messages.delete(roomId); }
   async countRooms() { return this.rooms.size; }
-  async compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt = new Date().toISOString()) {
+  async compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: RoomSandboxStatus[],
+    nextStatus: RoomSandboxStatus,
+    updatedAt = new Date().toISOString(),
+    expectedSandboxId?: string,
+  ) {
     let room = this.rooms.get(roomId);
     if (!room) return null;
     if (this.forceStatusBeforeNextSandboxCas) {
@@ -75,8 +82,14 @@ class MemoryRoomStore implements CodeAgentSandboxLifecycleStore {
       this.rooms.set(roomId, room);
       this.forceStatusBeforeNextSandboxCas = null;
     }
+    if (this.roomBeforeNextSandboxStatusCas) {
+      room = { ...room, ...this.roomBeforeNextSandboxStatusCas };
+      this.rooms.set(roomId, room);
+      this.roomBeforeNextSandboxStatusCas = null;
+    }
     const current = room.sandboxStatus || 'none';
     if (!expectedStatuses.includes(current)) return null;
+    if (expectedSandboxId !== undefined && (room.sandboxId || '') !== expectedSandboxId) return null;
     const updatedRoom = { ...room, sandboxStatus: nextStatus, sandboxUpdatedAt: updatedAt };
     this.rooms.set(roomId, updatedRoom);
     return updatedRoom;
@@ -355,6 +368,240 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.notEqual(sandboxService.destroyedSandboxIds[0], oldHandle.id);
   });
 
+  it('adopts a compatible concurrent artifact migration winner after destroying only the losing replacement', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+      sandboxCodeAgentSourceRef: 'source-v1',
+    })]);
+    store.replaceRoomSandbox = async () => {
+      store.rooms.set('room-1', room({
+        sandboxStatus: 'ready',
+        sandboxId: winnerHandle.id,
+        sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        sandboxArtifactVersion: 'artifact-v2',
+        sandboxCodeAgentSourceRef: 'source-v2',
+      }));
+      return null;
+    };
+    const connectedSandboxIds: string[] = [];
+    const originalConnect = sandboxService.connect.bind(sandboxService);
+    sandboxService.connect = async sandboxId => {
+      connectedSandboxIds.push(sandboxId);
+      return originalConnect(sandboxId);
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2', codeAgentSourceRef: 'source-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, false);
+    assert.equal(result.ok && result.handle.id, winnerHandle.id);
+    assert.equal(result.ok && result.room.sandboxId, winnerHandle.id);
+    assert.deepEqual(connectedSandboxIds, [oldHandle.id, winnerHandle.id]);
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(oldHandle.id), false);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(winnerHandle.id), false);
+    assert.equal(await sandboxService.countActiveSandboxes(), 2);
+  });
+
+  it('returns a structured migration failure when destroying a losing replacement fails', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.replaceRoomSandbox = async () => {
+      store.rooms.set('room-1', room({
+        sandboxStatus: 'ready',
+        sandboxId: winnerHandle.id,
+        sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        sandboxArtifactVersion: 'artifact-v2',
+      }));
+      return null;
+    };
+    sandboxService.failNext('destroy');
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'sandbox_error');
+    assert.equal((await store.getRoomById('room-1'))?.sandboxId, winnerHandle.id);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(oldHandle.id), false);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(winnerHandle.id), false);
+    assert.equal(await sandboxService.countActiveSandboxes(), 2);
+  });
+
+  it('keeps the replacement when migration committed but the CAS response was lost', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.replaceRoomSandbox = async (roomId, _expectedSandboxId, next) => {
+      const currentRoom = store.rooms.get(roomId)!;
+      store.rooms.set(roomId, { ...currentRoom, ...next });
+      return null;
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, true);
+    assert.notEqual(result.ok && result.handle.id, oldHandle.id);
+    assert.equal(result.ok && result.room.sandboxId, result.ok && result.handle.id);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
+    assert.equal(await sandboxService.countActiveSandboxes(), 2);
+  });
+
+  it('does not destroy an ambiguous migration candidate when the fresh room read is missing', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.replaceRoomSandbox = async roomId => {
+      store.rooms.delete(roomId);
+      return null;
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'store_conflict');
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
+    assert.equal(await sandboxService.countActiveSandboxes(), 2);
+  });
+
+  it('keeps an incompatible concurrent artifact migration winner as a store conflict', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.replaceRoomSandbox = async () => {
+      store.rooms.set('room-1', room({
+        sandboxStatus: 'ready',
+        sandboxId: winnerHandle.id,
+        sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        sandboxArtifactVersion: 'artifact-v1',
+      }));
+      return null;
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'store_conflict');
+    assert.equal((await store.getRoomById('room-1'))?.sandboxId, winnerHandle.id);
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(oldHandle.id), false);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(winnerHandle.id), false);
+  });
+
+  it('fails closed without logging raw errors when a compatible migration winner cannot connect', async () => {
+    const fakeSecret = 'ROOMTALK_PRIVATE_TOKEN=winner-connect-secret';
+    const warnings: Array<{ message: string; meta?: unknown }> = [];
+    const safeLogger = {
+      ...logger,
+      warn(message: string, meta?: unknown) {
+        warnings.push({ message, meta });
+      },
+    };
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.replaceRoomSandbox = async () => {
+      store.rooms.set('room-1', room({
+        sandboxStatus: 'ready',
+        sandboxId: winnerHandle.id,
+        sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        sandboxArtifactVersion: 'artifact-v2',
+      }));
+      return null;
+    };
+    const originalConnect = sandboxService.connect.bind(sandboxService);
+    sandboxService.connect = async sandboxId => {
+      if (sandboxId === winnerHandle.id) throw new Error(fakeSecret);
+      return originalConnect(sandboxId);
+    };
+    const lifecycle = new CodeAgentSandboxLifecycleService(store, sandboxService, safeLogger as any, {
+      sandboxTtlMs: 60 * 60 * 1000,
+      creatingStaleMs: 2 * 60 * 1000,
+      maxActiveSandboxes: 10,
+      maxActiveSandboxesPerUser: 10,
+      artifactVersion: 'artifact-v2',
+    }, () => new Date('2026-05-03T00:01:00.000Z'));
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'store_conflict');
+    assert.equal(JSON.stringify(warnings).includes(fakeSecret), false);
+    assert.deepEqual(warnings.at(-1), {
+      message: 'Unable to connect concurrent code-agent sandbox winner',
+      meta: {
+        roomId: 'room-1',
+        oldSandboxId: oldHandle.id,
+        winnerSandboxId: winnerHandle.id,
+        winnerSandboxStatus: 'ready',
+      },
+    });
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(oldHandle.id), false);
+    assert.equal(sandboxService.destroyedSandboxIds.includes(winnerHandle.id), false);
+  });
+
   it('rejects missing, non-code-agent, and unauthorized rooms', async () => {
     const store = new MemoryRoomStore([room({ id: 'chat-room', type: undefined })]);
     const { lifecycle } = createLifecycle(store);
@@ -425,6 +672,70 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.equal(result.ok && result.created, false);
     assert.equal(result.ok && result.handle.id, existing.id);
     assert.equal(await sandboxService.countActiveSandboxes(), 1);
+  });
+
+  it('adopts a concurrent ready winner when reconnecting the old sandbox fails', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:01:00.000Z'));
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: 'missing-old-sandbox',
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v2',
+    })]);
+    store.roomBeforeNextSandboxStatusCas = {
+      sandboxStatus: 'ready',
+      sandboxId: winnerHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+      sandboxArtifactVersion: 'artifact-v2',
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, false);
+    assert.equal(result.ok && result.handle.id, winnerHandle.id);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
+  });
+
+  it('adopts a concurrent ready winner instead of expiring it from a stale ready snapshot', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T02:00:00.000Z'));
+    const winnerHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: 'expired-old-sandbox',
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v2',
+    })]);
+    store.roomBeforeNextSandboxStatusCas = {
+      sandboxStatus: 'ready',
+      sandboxId: winnerHandle.id,
+      sandboxUpdatedAt: '2026-05-03T02:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v2',
+    };
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T02:00:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, false);
+    assert.equal(result.ok && result.handle.id, winnerHandle.id);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
   });
 
   it('destroys a newly-created sandbox when persisting ready state fails', async () => {

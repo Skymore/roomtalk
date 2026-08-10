@@ -1354,7 +1354,8 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /UPDATE rooms/);
           assert.match(call.sql, /COALESCE\(sandbox_status, 'none'\) = ANY/);
-          assert.deepEqual(call.params, ['room-1', ['none'], 'creating', statusChangedAt]);
+          assert.match(call.sql, /sandbox_id IS NOT DISTINCT FROM NULLIF\(\$5, ''\)/);
+          assert.deepEqual(call.params, ['room-1', ['none'], 'creating', statusChangedAt, 'old-sandbox']);
         },
       },
       {
@@ -1402,7 +1403,7 @@ describe('PostgresStore', () => {
     ]);
     const store = new PostgresStore(pool, logger as any);
 
-    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating', statusChangedAt), room({
+    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating', statusChangedAt, 'old-sandbox'), room({
       type: 'codeAgent',
       sandboxStatus: 'creating',
       sandboxUpdatedAt: statusChangedAt,

@@ -815,7 +815,7 @@ export class CodeAgentSessionService {
       assertTurnWithinDeadline();
       await updatePhase('starting_agent', 'Starting the agent');
       assertTurnWithinDeadline();
-      const runnerSessionId = sandbox.created ? null : (room!.codeAgentSessionId || null);
+      const runnerSessionId = sandbox.created ? null : (sandbox.room.codeAgentSessionId || null);
 
       streamState = {
         activeMessageId: aiMessageId,

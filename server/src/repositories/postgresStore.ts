@@ -6758,7 +6758,8 @@ export class PostgresStore implements DurableRoomStore {
     roomId: string,
     expectedStatuses: RoomSandboxStatus[],
     nextStatus: RoomSandboxStatus,
-    updatedAt = new Date().toISOString()
+    updatedAt = new Date().toISOString(),
+    expectedSandboxId?: string
   ): Promise<Room | null> {
     if (expectedStatuses.length === 0) {
       return null;
@@ -6772,12 +6773,19 @@ export class PostgresStore implements DurableRoomStore {
           updated_at = NOW()
         WHERE id = $1
           AND COALESCE(sandbox_status, 'none') = ANY($2::text[])
+          AND ($5::text IS NULL OR sandbox_id IS NOT DISTINCT FROM NULLIF($5, ''))
         RETURNING ${ROOM_COLUMNS}`,
-        [roomId, expectedStatuses, nextStatus, updatedAt]
+        [roomId, expectedStatuses, nextStatus, updatedAt, expectedSandboxId ?? null]
       );
       return result.rows[0] ? mapRoom(result.rows[0]) : null;
     } catch (error) {
-      this.logger.error('Error comparing and setting PostgreSQL room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      this.logger.error('Error comparing and setting PostgreSQL room sandbox status', {
+        error,
+        roomId,
+        expectedStatuses,
+        nextStatus,
+        expectedSandboxId,
+      });
       return null;
     }
   }

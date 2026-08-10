@@ -35,7 +35,8 @@ export interface CodeAgentSandboxLifecycleStore {
     roomId: string,
     expectedStatuses: RoomSandboxStatus[],
     nextStatus: RoomSandboxStatus,
-    updatedAt?: string
+    updatedAt?: string,
+    expectedSandboxId?: string
   ): Promise<Room | null>;
   replaceRoomSandbox(
     roomId: string,
@@ -100,10 +101,22 @@ export class CodeAgentSandboxLifecycleService {
           return this.migrateReadySandboxArtifact(room, handle);
         }
         return { ok: true, room, handle, created: false };
-      } catch (error) {
-        await this.store.compareAndSetRoomSandboxStatus(room.id, ['ready'], 'expired', this.now().toISOString());
-        this.logger.warn('code-agent sandbox reconnect failed; marking sandbox expired', { roomId: room.id, sandboxId: room.sandboxId, error });
-        return this.createSandbox(room);
+      } catch {
+        const expiredRoom = await this.store.compareAndSetRoomSandboxStatus(
+          room.id,
+          ['ready'],
+          'expired',
+          this.now().toISOString(),
+          room.sandboxId,
+        );
+        if (!expiredRoom) {
+          return this.reconcileConcurrentReadySandbox(room);
+        }
+        this.logger.warn('code-agent sandbox reconnect failed; marking sandbox expired', {
+          roomId: room.id,
+          sandboxId: room.sandboxId,
+        });
+        return this.createSandbox(expiredRoom);
       }
     }
 
@@ -114,7 +127,17 @@ export class CodeAgentSandboxLifecycleService {
       await this.store.compareAndSetRoomSandboxStatus(room.id, ['creating'], 'error', this.now().toISOString());
     }
     if (room.sandboxStatus === 'ready' && room.sandboxId && !this.isReadyAndUsable(room)) {
-      await this.store.compareAndSetRoomSandboxStatus(room.id, ['ready'], 'expired', this.now().toISOString());
+      const expiredRoom = await this.store.compareAndSetRoomSandboxStatus(
+        room.id,
+        ['ready'],
+        'expired',
+        this.now().toISOString(),
+        room.sandboxId,
+      );
+      if (!expiredRoom) {
+        return this.reconcileConcurrentReadySandbox(room);
+      }
+      return this.createSandbox(expiredRoom);
     }
 
     return this.createSandbox(room);
@@ -311,8 +334,7 @@ export class CodeAgentSandboxLifecycleService {
         ...this.currentSandboxArtifactMetadata(),
       });
       if (!readyRoom) {
-        await this.sandboxService.destroy(newHandle.id);
-        return { ok: false, reason: 'store_conflict', room };
+        return await this.reconcileArtifactMigrationCasMiss(room, newHandle);
       }
 
       await this.sandboxService.destroy(room.sandboxId).catch(error => {
@@ -392,6 +414,91 @@ export class CodeAgentSandboxLifecycleService {
       return false;
     }
     return true;
+  }
+
+  private async reconcileConcurrentReadySandbox(room: Room): Promise<EnsureCodeAgentSandboxResult> {
+    let currentRoom: Room | null;
+    try {
+      currentRoom = await this.store.getRoomById(room.id);
+    } catch {
+      this.logger.warn('Unable to read concurrent code-agent sandbox winner', {
+        roomId: room.id,
+        oldSandboxId: room.sandboxId,
+      });
+      return { ok: false, reason: 'store_conflict', room };
+    }
+    if (
+      !currentRoom
+      || currentRoom.sandboxId === room.sandboxId
+      || !this.isReadyAndUsable(currentRoom)
+      || !this.isSandboxArtifactCompatible(currentRoom)
+    ) {
+      return { ok: false, reason: 'store_conflict', room };
+    }
+
+    return this.connectConcurrentReadySandbox(room, currentRoom);
+  }
+
+  private async reconcileArtifactMigrationCasMiss(
+    room: Room,
+    newHandle: CodeAgentSandboxHandle,
+  ): Promise<EnsureCodeAgentSandboxResult> {
+    let currentRoom: Room | null;
+    try {
+      currentRoom = await this.store.getRoomById(room.id);
+    } catch {
+      this.logger.warn('Unable to read code-agent sandbox after migration CAS miss', {
+        roomId: room.id,
+        oldSandboxId: room.sandboxId,
+        candidateSandboxId: newHandle.id,
+      });
+      return { ok: false, reason: 'store_conflict', room };
+    }
+    if (!currentRoom) {
+      return { ok: false, reason: 'store_conflict', room };
+    }
+
+    const currentIsUsable = this.isReadyAndUsable(currentRoom)
+      && this.isSandboxArtifactCompatible(currentRoom);
+    if (currentRoom.sandboxId === newHandle.id && currentIsUsable) {
+      return {
+        ok: true,
+        room: currentRoom,
+        handle: this.withRoomIdentity(newHandle, currentRoom),
+        created: true,
+      };
+    }
+
+    const hasDifferentWinner = currentRoom.sandboxId !== room.sandboxId
+      && currentRoom.sandboxId !== newHandle.id
+      && currentIsUsable;
+    await this.sandboxService.destroy(newHandle.id);
+    if (!hasDifferentWinner) {
+      return { ok: false, reason: 'store_conflict', room };
+    }
+
+    return this.connectConcurrentReadySandbox(room, currentRoom);
+  }
+
+  private async connectConcurrentReadySandbox(
+    room: Room,
+    currentRoom: Room,
+  ): Promise<EnsureCodeAgentSandboxResult> {
+    try {
+      const currentHandle = this.withRoomIdentity(
+        await this.sandboxService.connect(currentRoom.sandboxId!),
+        currentRoom,
+      );
+      return { ok: true, room: currentRoom, handle: currentHandle, created: false };
+    } catch {
+      this.logger.warn('Unable to connect concurrent code-agent sandbox winner', {
+        roomId: room.id,
+        oldSandboxId: room.sandboxId,
+        winnerSandboxId: currentRoom.sandboxId,
+        winnerSandboxStatus: currentRoom.sandboxStatus,
+      });
+      return { ok: false, reason: 'store_conflict', room };
+    }
   }
 
   private currentSandboxArtifactMetadata(): Pick<Room, 'sandboxArtifactVersion' | 'sandboxCodeAgentSourceRef'> {

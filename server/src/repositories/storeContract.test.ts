@@ -1061,10 +1061,14 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const expectedStatuses = params[1] as string[];
       const nextStatus = params[2] as Room['sandboxStatus'];
       const updatedAt = String(params[3]);
+      const expectedSandboxId = params[4] === null || params[4] === undefined ? undefined : String(params[4]);
       const room = this.rooms.get(roomId);
       if (!room) return { rows: [], rowCount: 0 };
       const currentStatus = room.sandbox_status || 'none';
       if (!expectedStatuses.includes(currentStatus)) return { rows: [], rowCount: 0 };
+      if (expectedSandboxId !== undefined && (room.sandbox_id || '') !== expectedSandboxId) {
+        return { rows: [], rowCount: 0 };
+      }
       const updated = {
         ...room,
         sandbox_status: nextStatus,
@@ -2085,7 +2089,13 @@ for (const [storeName, createFixture] of storeFactories) {
 
     it('compares sandbox status and finds code-agent recovery work', async () => {
       const { store } = createFixture();
-      const readyRoom = room({ id: 'ready-room', type: 'codeAgent', sandboxStatus: 'ready', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' });
+      const readyRoom = room({
+        id: 'ready-room',
+        type: 'codeAgent',
+        sandboxId: 'ready-sandbox',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      });
       const replaceRoom = room({
         id: 'replace-room',
         type: 'codeAgent',
@@ -2146,7 +2156,20 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxStatus: 'ready',
         sandboxUpdatedAt: statusChangedAt,
       });
-      assert.deepEqual(stripRoomStamp(await store.compareAndSetRoomSandboxStatus(readyRoom.id, ['ready'], 'expired', statusChangedAt)), {
+      assert.equal(await store.compareAndSetRoomSandboxStatus(
+        readyRoom.id,
+        ['ready'],
+        'expired',
+        statusChangedAt,
+        'different-sandbox',
+      ), null);
+      assert.deepEqual(stripRoomStamp(await store.compareAndSetRoomSandboxStatus(
+        readyRoom.id,
+        ['ready'],
+        'expired',
+        statusChangedAt,
+        readyRoom.sandboxId,
+      )), {
         ...readyRoom,
         lastActivityAt: fulfilledResult.timestamp,
         sandboxStatus: 'expired',

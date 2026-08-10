@@ -887,7 +887,13 @@ export interface DurableRoomStore {
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<boolean>;
   countRooms(): Promise<number>;
-  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
+  compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: RoomSandboxStatus[],
+    nextStatus: RoomSandboxStatus,
+    updatedAt?: string,
+    expectedSandboxId?: string
+  ): Promise<Room | null>;
   replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement): Promise<Room | null>;
   findInterruptedCodeAgentRooms(now?: string): Promise<Room[]>;
   findDanglingToolCalls(): Promise<Message[]>;
@@ -1661,8 +1667,20 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.countRooms();
   }
 
-  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string) {
-    return this.durableStore.compareAndSetRoomSandboxStatus(roomId, expectedStatuses, nextStatus, updatedAt);
+  compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: RoomSandboxStatus[],
+    nextStatus: RoomSandboxStatus,
+    updatedAt?: string,
+    expectedSandboxId?: string
+  ) {
+    return this.durableStore.compareAndSetRoomSandboxStatus(
+      roomId,
+      expectedStatuses,
+      nextStatus,
+      updatedAt,
+      expectedSandboxId,
+    );
   }
 
   replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement) {
