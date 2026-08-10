@@ -155,6 +155,8 @@ class CodexAppServerJsonRpcMapper:
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
 
         if method == "error":
+            if params.get("willRetry") is True:
+                return [self._status("running", "codex app-server reconnecting")]
             error = params.get("error") if isinstance(params.get("error"), dict) else params
             return [{
                 "schemaVersion": SCHEMA_VERSION,

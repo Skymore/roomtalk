@@ -274,6 +274,61 @@ def test_codex_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Pat
     assert events[-1]["usage"]["reasoningOutputTokens"] == 1
 
 
+def test_codex_app_server_continues_after_retrying_errors_and_completes(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    fake_secret = "ROOMTALK_PRIVATE_TOKEN=retry-detail"
+    factory = FakeSdkClientFactory(notifications=[
+        FakeNotification("error", {
+            "willRetry": True,
+            "error": {"message": fake_secret},
+            "additionalDetails": fake_secret,
+        }),
+        FakeNotification("error", {
+            "willRetry": True,
+            "error": {"message": fake_secret},
+            "additionalDetails": fake_secret,
+        }),
+        FakeNotification("item/agentMessage/delta", {
+            "threadId": "thread-sdk-1",
+            "turnId": "turn-sdk-1",
+            "itemId": "msg-1",
+            "delta": "Recovered response",
+        }),
+        FakeNotification("turn/completed", {
+            "threadId": "thread-sdk-1",
+            "turn": {"id": "turn-sdk-1", "status": "completed", "items": []},
+        }),
+    ])
+
+    codex_app_server.run_request(
+        codex_app_server_request(workspace),
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
+        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    events = event_lines(stdout)
+    assert [event["type"] for event in events] == [
+        "status",
+        "status",
+        "status",
+        "text_delta",
+        "status",
+        "final",
+    ]
+    assert [event["message"] for event in events[1:3]] == [
+        "codex app-server reconnecting",
+        "codex app-server reconnecting",
+    ]
+    assert events[-1]["answer"] == "Recovered response"
+    assert fake_secret not in stdout.getvalue()
+
+
 def test_codex_app_server_resolves_relative_codex_bin_from_path(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

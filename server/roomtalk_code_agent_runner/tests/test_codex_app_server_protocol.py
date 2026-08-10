@@ -64,6 +64,72 @@ def test_codex_user_message_item_confirms_pending_steer_insertion(tmp_path: Path
     }]
 
 
+def test_codex_retrying_error_is_a_safe_non_terminal_status(tmp_path: Path):
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-roomtalk",
+        message_id="ai-1",
+        workspace=tmp_path,
+    )
+    fake_secret = "ROOMTALK_PRIVATE_TOKEN=retry-detail"
+
+    events = mapper.map_notification({
+        "method": "error",
+        "params": {
+            "willRetry": True,
+            "error": {"message": fake_secret, "additionalDetails": fake_secret},
+            "additionalDetails": fake_secret,
+        },
+    })
+
+    assert events == [{
+        "schemaVersion": 1,
+        "type": "status",
+        "turnId": "turn-roomtalk",
+        "status": "running",
+        "message": "codex app-server reconnecting",
+    }]
+    assert fake_secret not in repr(events)
+
+
+@pytest.mark.parametrize("will_retry", [False, None, 1, "true"])
+def test_codex_error_without_strict_retry_signal_remains_terminal(tmp_path: Path, will_retry: Any):
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-roomtalk",
+        message_id="ai-1",
+        workspace=tmp_path,
+    )
+    params: dict[str, Any] = {"error": {"message": "terminal failure"}}
+    if will_retry is not None:
+        params["willRetry"] = will_retry
+
+    events = mapper.map_notification({"method": "error", "params": params})
+
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    assert events[0]["message"] == "terminal failure"
+
+
+def test_codex_failed_turn_completion_remains_terminal_after_retrying_error(tmp_path: Path):
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-roomtalk",
+        message_id="ai-1",
+        workspace=tmp_path,
+    )
+
+    assert mapper.map_notification({
+        "method": "error",
+        "params": {"willRetry": True, "error": {"message": "temporary"}},
+    })[0]["type"] == "status"
+    completed = mapper.map_notification({
+        "method": "turn/completed",
+        "params": {"turn": {"status": "failed", "error": {"message": "final failure"}}},
+    })
+
+    assert len(completed) == 1
+    assert completed[0]["type"] == "error"
+    assert completed[0]["message"] == "final failure"
+
+
 def test_codex_image_url_is_materialized_in_memory(monkeypatch: pytest.MonkeyPatch):
     image_url = "https://media.example/signed/input.png?token=secret"
     response = FakeImageResponse(b"png-bytes", content_type="image/png; charset=binary")

@@ -3,7 +3,7 @@
 [English](code-agent-sandbox-artifact.md)
 
 状态：当前 release 合约
-已按 `master` 和生产非 secret runtime pin 核对：2026-08-09
+已按 `master` 和生产非 secret runtime pin 核对：2026-08-10
 
 ## 用途
 
@@ -15,6 +15,7 @@ Artifact 包含：
 - `roomtalk_code_agent_runner` JSONL adapter 和可复用 daemon；
 - hash-verified Python dependency；
 - 固定 Codex CLI/app-server 和 Python SDK；
+- Codex app-server 仅在固定协议明确返回 `willRetry: true` 时把错误通知作为非终态重连状态处理，且不暴露原始 provider 错误详情；
 - 固定 OpenCode npm package、Hermes Agent commit 和 ACP Python SDK；同时预装锁定版本的 Hermes Anthropic extra，Anthropic turn 不会在运行时修改环境；
 - ACP 在每次 prompt 前重新应用所选 model，并按各 backend advertise 的配置显式切换 mode，恢复旧 session 时同样执行；model/mode 不可用或更新失败时 fail closed；
 - Hermes 恢复旧 session 时，仅在 `load_session` 返回精确空的 missing-session response 后创建新 session；
@@ -28,9 +29,9 @@ Artifact 包含：
 事实源是 `ops/code-agent-sandbox/artifact.lock.json`，当前生产快照：
 
 ```text
-artifactVersion: roomtalk-code-agent-2026-08-09-hermes-row-alignment-v1
+artifactVersion: roomtalk-code-agent-2026-08-10-codex-retry-notification-v1
 codeAgentEngine.sourceRef: 0b5e44eb29ad1bec89b2143737f6917aafa79359
-roomtalk-code-agent-runner: 0.1.51
+roomtalk-code-agent-runner: 0.1.52
 openai-codex: 0.145.0-alpha.4
 openai SDK: 0.1.0b3
 opencode-ai: 1.18.10
