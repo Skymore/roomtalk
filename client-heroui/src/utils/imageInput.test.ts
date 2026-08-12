@@ -5,8 +5,10 @@ import {
   getPasteThrottleMs,
   hasClipboardImageItem,
   INITIAL_PASTE_THROTTLE_MS,
+  isAllowedImageMediaMimeType,
   MAX_IMAGE_FILE_BYTES,
   MAX_MESSAGE_IMAGES,
+  MEDIA_PICKER_ACCEPT,
   shouldResetPasteCount,
   shouldThrottlePaste,
   SUBSEQUENT_PASTE_THROTTLE_MS,
@@ -27,6 +29,14 @@ describe("imageInput", () => {
       ok: false,
       error: { errorKey: "onlyImagesAllowed" },
     });
+    expect(validateImageFile({ type: "image/svg+xml", size: 1024 }, 0)).toEqual({
+      ok: false,
+      error: { errorKey: "unsupportedMediaType" },
+    });
+    expect(validateImageFile({ type: "image/svg+xml;charset=utf-8", size: 1024 }, 0)).toEqual({
+      ok: false,
+      error: { errorKey: "unsupportedMediaType" },
+    });
     expect(validateImageFile({ type: "image/png", size: MAX_IMAGE_FILE_BYTES + 1 }, 0)).toEqual({
       ok: false,
       error: { errorKey: "imageTooLarge" },
@@ -35,6 +45,17 @@ describe("imageInput", () => {
       ok: false,
       error: { errorKey: "maxImagesReached", max: MAX_MESSAGE_IMAGES },
     });
+  });
+
+  it("keeps the media picker and runtime image policy from accepting SVG", () => {
+    expect(MEDIA_PICKER_ACCEPT).toContain("image/png");
+    expect(MEDIA_PICKER_ACCEPT).toContain("video/*");
+    expect(MEDIA_PICKER_ACCEPT).not.toContain("image/*");
+    expect(MEDIA_PICKER_ACCEPT).not.toContain("image/svg+xml");
+    expect(isAllowedImageMediaMimeType("image/webp")).toBe(true);
+    expect(isAllowedImageMediaMimeType("image/webp; charset=binary")).toBe(true);
+    expect(isAllowedImageMediaMimeType("IMAGE/SVG+XML")).toBe(false);
+    expect(isAllowedImageMediaMimeType(" IMAGE/SVG+XML; charset=UTF-8 ")).toBe(false);
   });
 
   it("uses stricter initial paste throttling and allows reset after idle time", () => {

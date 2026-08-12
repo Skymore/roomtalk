@@ -63,6 +63,59 @@ class FakeDeviceAuthDriver implements CodexDeviceAuthDriver {
   }
 }
 
+class DeferredDeviceAuthDriver implements CodexDeviceAuthDriver {
+  readonly started: Promise<void>;
+  private reportStarted: () => void = () => undefined;
+  private readonly result: Promise<{ authJson: string; loginStatus: string }>;
+  private resolveResult: (result: { authJson: string; loginStatus: string }) => void = () => undefined;
+  private rejectResult: (error: unknown) => void = () => undefined;
+
+  constructor() {
+    this.started = new Promise(resolve => {
+      this.reportStarted = resolve;
+    });
+    this.result = new Promise((resolve, reject) => {
+      this.resolveResult = resolve;
+      this.rejectResult = reject;
+    });
+  }
+
+  async runDeviceAuth(input: {
+    clientId: string;
+    onDeviceCode?: (info: CodexDeviceAuthInfo) => void | Promise<void>;
+    signal?: AbortSignal;
+  }) {
+    await input.onDeviceCode?.({
+      url: 'https://auth.openai.com/codex/device',
+      code: 'ABCD-EFGH',
+    });
+    this.reportStarted();
+    return this.result;
+  }
+
+  succeed(nextAuthJson: string) {
+    this.resolveResult({ authJson: nextAuthJson, loginStatus: 'Logged in using ChatGPT' });
+  }
+
+  fail() {
+    this.rejectResult(new Error('device auth failed'));
+  }
+
+  cancel() {
+    this.rejectResult(new CodexConnectionError('device auth cancelled', 'device_auth_cancelled'));
+  }
+}
+
+const makeServiceForStore = (
+  store: InMemoryCodexConnectionStore,
+  driver: CodexDeviceAuthDriver
+) => new CodexConnectionService(
+  store,
+  new CodexAuthCipher('test-secret', 'test-key-v1'),
+  driver,
+  { now: () => new Date('2026-07-04T00:00:00.000Z') }
+);
+
 const makeService = (options: {
   driver?: FakeDeviceAuthDriver;
   now?: Date;
@@ -182,14 +235,164 @@ describe('Codex connection service', () => {
     assert.equal(stored?.encryptedAuthJson, undefined);
   });
 
-  it('disconnects by removing the stored auth record', async () => {
+  it('cancels only the requested device-auth generation', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const oldDriver = new DeferredDeviceAuthDriver();
+    const newDriver = new DeferredDeviceAuthDriver();
+    const oldService = makeServiceForStore(store, oldDriver);
+    const newService = makeServiceForStore(store, newDriver);
+    let oldAuthVersion = 0;
+    let newAuthVersion = 0;
+    const oldAttempt = oldService.connectWithDeviceAuth('client-1', undefined, {
+      onAttemptStarted: authVersion => {
+        oldAuthVersion = authVersion;
+      },
+    });
+    await oldDriver.started;
+    const newAttempt = newService.connectWithDeviceAuth('client-1', undefined, {
+      onAttemptStarted: authVersion => {
+        newAuthVersion = authVersion;
+      },
+    });
+    await newDriver.started;
+
+    assert.equal(oldAuthVersion, 1);
+    assert.equal(newAuthVersion, 2);
+    assert.equal(await oldService.cancelDeviceAuthAttempt('client-1', oldAuthVersion), false);
+    assert.equal((await newService.getConnectionStatus('client-1')).status, 'pending');
+    assert.equal((await newService.getConnectionStatus('client-1')).authVersion, 2);
+    assert.equal(await newService.cancelDeviceAuthAttempt('client-1', newAuthVersion), true);
+    assert.equal((await newService.getConnectionStatus('client-1')).status, 'disconnected');
+
+    oldDriver.succeed(authJson);
+    newDriver.succeed(authJson);
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    await assert.rejects(newAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+  });
+
+  it('does not let an old device-auth success revive credentials after disconnect', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const driver = new DeferredDeviceAuthDriver();
+    const service = makeServiceForStore(store, driver);
+    const oldAttempt = service.connectWithDeviceAuth('client-1');
+    await driver.started;
+
+    const disconnected = await service.disconnect('client-1');
+    assert.equal(disconnected.authVersion, 2);
+    driver.succeed(authJson);
+
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'disconnected');
+    assert.equal(stored?.authVersion, 2);
+    assert.equal(stored?.encryptedAuthJson, undefined);
+  });
+
+  it('does not let an old device-auth failure overwrite disconnect', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const driver = new DeferredDeviceAuthDriver();
+    const service = makeServiceForStore(store, driver);
+    const oldAttempt = service.connectWithDeviceAuth('client-1');
+    await driver.started;
+
+    await service.disconnect('client-1');
+    driver.fail();
+
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'disconnected');
+    assert.equal(stored?.lastError, undefined);
+  });
+
+  it('does not let an old device-auth cancellation overwrite disconnect', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const driver = new DeferredDeviceAuthDriver();
+    const service = makeServiceForStore(store, driver);
+    const oldAttempt = service.connectWithDeviceAuth('client-1');
+    await driver.started;
+
+    await service.disconnect('client-1');
+    driver.cancel();
+
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'disconnected');
+    assert.equal(stored?.authVersion, 2);
+  });
+
+  it('does not let an old device-auth cancellation roll back a newer attempt', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const oldDriver = new DeferredDeviceAuthDriver();
+    const newDriver = new DeferredDeviceAuthDriver();
+    const oldService = makeServiceForStore(store, oldDriver);
+    const newService = makeServiceForStore(store, newDriver);
+    const oldAttempt = oldService.connectWithDeviceAuth('client-1');
+    await oldDriver.started;
+    const newAttempt = newService.connectWithDeviceAuth('client-1');
+    await newDriver.started;
+
+    oldDriver.cancel();
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    const pending = await store.getConnection('client-1');
+    assert.equal(pending?.status, 'pending');
+    assert.equal(pending?.authVersion, 2);
+
+    const newAuthJson = authJson.replace('secret-access-token', 'new-access-token');
+    newDriver.succeed(newAuthJson);
+    const connected = await newAttempt;
+    assert.equal(connected.status, 'connected');
+    assert.equal(connected.authVersion, 2);
+  });
+
+  it('lets only the newest cross-instance device-auth attempt publish credentials', async () => {
+    const store = new InMemoryCodexConnectionStore();
+    const oldDriver = new DeferredDeviceAuthDriver();
+    const newDriver = new DeferredDeviceAuthDriver();
+    const oldService = makeServiceForStore(store, oldDriver);
+    const newService = makeServiceForStore(store, newDriver);
+    const oldAttempt = oldService.connectWithDeviceAuth('client-1');
+    await oldDriver.started;
+    const newAttempt = newService.connectWithDeviceAuth('client-1');
+    await newDriver.started;
+
+    const newAuthJson = authJson.replace('secret-access-token', 'new-access-token');
+    newDriver.succeed(newAuthJson);
+    assert.equal((await newAttempt).authVersion, 2);
+
+    oldDriver.succeed(authJson.replace('secret-access-token', 'stale-access-token'));
+    await assert.rejects(oldAttempt, (error: unknown) => (
+      error instanceof CodexConnectionError && error.code === 'device_auth_cancelled'
+    ));
+    await newService.withCodexAuth('client-1', 'current-run', async currentAuth => {
+      assert.equal(currentAuth, newAuthJson);
+      return { result: undefined };
+    });
+  });
+
+  it('disconnects by clearing auth while preserving a monotonic connection version', async () => {
     const { service, store } = makeService();
     await service.connectWithDeviceAuth('client-1');
 
     const status = await service.disconnect('client-1');
 
     assert.equal(status.status, 'disconnected');
-    assert.equal(await store.getConnection('client-1'), null);
+    assert.equal(status.authVersion, 2);
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'disconnected');
+    assert.equal(stored?.authVersion, 2);
+    assert.equal(stored?.encryptedAuthJson, undefined);
   });
 
   it('runs work with decrypted auth and saves changed auth with a versioned update', async () => {
@@ -248,6 +451,22 @@ describe('Codex connection service', () => {
     assert.equal((await store.getConnection('client-1'))?.authVersion, 1);
   });
 
+  it('marks the exact failing auth version as requiring a new sign-in', async () => {
+    const { service, store } = makeService();
+    await service.connectWithDeviceAuth('client-1');
+
+    const result = await service.withCodexAuth('client-1', 'run-1', async () => ({
+      result: 'failed turn',
+      reauthRequired: true,
+    }));
+
+    assert.equal(result, 'failed turn');
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'reauth_required');
+    assert.equal(stored?.authVersion, 1);
+    assert.equal(stored?.lastError, 'Codex sign-in expired');
+  });
+
   it('does not let a stale concurrent auth write overwrite a newer version', async () => {
     const { service } = makeService();
     await service.connectWithDeviceAuth('client-1');
@@ -264,6 +483,110 @@ describe('Codex connection service', () => {
 
     await service.withCodexAuth('client-1', 'run-3', async currentAuth => {
       assert.equal(currentAuth, secondRefresh);
+      return { result: undefined };
+    });
+  });
+
+  it('does not let stale work mark a newly reconnected credential as expired', async () => {
+    const driver = new FakeDeviceAuthDriver();
+    const { service, store } = makeService({ driver });
+    await service.connectWithDeviceAuth('client-1');
+    let releaseStaleWork: () => void = () => {};
+    let reportStaleWorkStarted: () => void = () => {};
+    const staleWorkMayFinish = new Promise<void>(resolve => {
+      releaseStaleWork = resolve;
+    });
+    const staleWorkStarted = new Promise<void>(resolve => {
+      reportStaleWorkStarted = resolve;
+    });
+    const staleRun = service.withCodexAuth('client-1', 'stale-run', async () => {
+      reportStaleWorkStarted();
+      await staleWorkMayFinish;
+      return { result: 'stale failure', reauthRequired: true };
+    });
+    await staleWorkStarted;
+
+    await service.disconnect('client-1');
+    driver.authJson = authJson.replace('secret-access-token', 'new-access-token');
+    const reconnected = await service.connectWithDeviceAuth('client-1');
+    assert.equal(reconnected.authVersion, 3);
+
+    releaseStaleWork();
+    assert.equal(await staleRun, 'stale failure');
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'connected');
+    assert.equal(stored?.authVersion, 3);
+    await service.withCodexAuth('client-1', 'current-run', async currentAuth => {
+      assert.equal(currentAuth, driver.authJson);
+      return { result: undefined };
+    });
+  });
+
+  it('does not let a stale refreshed credential overwrite a reconnect', async () => {
+    const driver = new FakeDeviceAuthDriver();
+    const { service, store } = makeService({ driver });
+    await service.connectWithDeviceAuth('client-1');
+    let releaseStaleWork: () => void = () => {};
+    let reportStaleWorkStarted: () => void = () => {};
+    const staleWorkMayFinish = new Promise<void>(resolve => {
+      releaseStaleWork = resolve;
+    });
+    const staleWorkStarted = new Promise<void>(resolve => {
+      reportStaleWorkStarted = resolve;
+    });
+    const staleRun = service.withCodexAuth('client-1', 'stale-run', async () => {
+      reportStaleWorkStarted();
+      await staleWorkMayFinish;
+      return {
+        result: 'stale success',
+        refreshedAuthJson: authJson.replace('secret-access-token', 'stale-refreshed-token'),
+      };
+    });
+    await staleWorkStarted;
+
+    await service.disconnect('client-1');
+    driver.authJson = authJson.replace('secret-access-token', 'new-access-token');
+    await service.connectWithDeviceAuth('client-1');
+
+    releaseStaleWork();
+    assert.equal(await staleRun, 'stale success');
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'connected');
+    assert.equal(stored?.authVersion, 3);
+    await service.withCodexAuth('client-1', 'current-run', async currentAuth => {
+      assert.equal(currentAuth, driver.authJson);
+      return { result: undefined };
+    });
+  });
+
+  it('lets a successful same-version refresh recover from a concurrent auth failure', async () => {
+    const { service, store } = makeService();
+    await service.connectWithDeviceAuth('client-1');
+    const refreshed = authJson.replace('secret-access-token', 'recovered-access-token');
+    let releaseRefresh: () => void = () => {};
+    const refreshMayFinish = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+
+    const successfulRun = service.withCodexAuth('client-1', 'run-success', async () => {
+      await refreshMayFinish;
+      return { result: 'success', refreshedAuthJson: refreshed, loginStatus: 'connected' };
+    });
+    const failedRun = await service.withCodexAuth('client-1', 'run-failure', async () => ({
+      result: 'failed',
+      reauthRequired: true,
+    }));
+    assert.equal(failedRun, 'failed');
+    assert.equal((await store.getConnection('client-1'))?.status, 'reauth_required');
+
+    releaseRefresh();
+    assert.equal(await successfulRun, 'success');
+    const stored = await store.getConnection('client-1');
+    assert.equal(stored?.status, 'connected');
+    assert.equal(stored?.authVersion, 2);
+    assert.equal(stored?.lastError, undefined);
+    await service.withCodexAuth('client-1', 'run-after-race', async currentAuth => {
+      assert.equal(currentAuth, refreshed);
       return { result: undefined };
     });
   });

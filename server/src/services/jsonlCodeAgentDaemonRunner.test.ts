@@ -165,6 +165,49 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     assert.deepEqual(emitted.map(event => event.type), ['error']);
   });
 
+  it('retains an earlier auth error when a second terminal event becomes a protocol failure', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient();
+    const emitted: CodeAgentRunnerEvent[] = [];
+
+    const run = runner.run(request, {
+      onEvent: event => {
+        emitted.push(event);
+      },
+    }, createContext(process));
+
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+    process.emit({
+      schemaVersion: 1,
+      type: 'error',
+      turnId: 'turn-1',
+      message: 'Your refresh token was already used. Please log out and sign in again.',
+      code: 'codex_app_server_unauthorized',
+      retryable: false,
+    });
+    process.emit({
+      schemaVersion: 1,
+      type: 'error',
+      turnId: 'turn-1',
+      message: 'RunnerError: Codex app-server turn failed',
+      code: 'runner_failure',
+      retryable: false,
+    });
+
+    const result = await run;
+    const errorEvents = result.events.filter(event => event.type === 'error');
+    assert.deepEqual(errorEvents.map(event => event.code), [
+      'codex_app_server_unauthorized',
+      'protocol_error',
+    ]);
+    assert.equal(result.errorEvent?.code, 'protocol_error');
+    assert.match(result.errorEvent?.message || '', /emitted error after terminal error event/);
+    assert.deepEqual(emitted.map(event => event.type === 'error' ? event.code : event.type), [
+      'codex_app_server_unauthorized',
+    ]);
+  });
+
   it('finishes a terminal turn when the daemon release event is lost', async () => {
     const process = new MemoryDaemonProcess();
     const runner = new JsonlCodeAgentDaemonRunnerClient(10);

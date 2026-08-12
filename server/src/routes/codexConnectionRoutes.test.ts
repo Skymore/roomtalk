@@ -61,6 +61,7 @@ describe('Codex connection routes', () => {
       clientId: 'client-1',
       provider: 'codex',
       status: 'pending',
+      authVersion: 1,
       deviceAuth: server.driver.deviceInfo,
     });
 
@@ -128,11 +129,12 @@ describe('Codex connection routes', () => {
       body: JSON.stringify({ clientId: 'client-1' }),
     });
     assert.equal(first.status, 202);
+    const firstPayload = await first.json() as { authVersion: number };
 
     const cancel = await fetch(`${server.baseUrl}/api/codex/connection/device-auth`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1' }),
+      body: JSON.stringify({ clientId: 'client-1', authVersion: firstPayload.authVersion }),
     });
 
     assert.equal(cancel.status, 200);
@@ -150,13 +152,14 @@ describe('Codex connection routes', () => {
       body: JSON.stringify({ clientId: 'client-1' }),
     });
     assert.equal(second.status, 202);
+    const secondPayload = await second.json() as { authVersion: number };
     server.driver.complete();
     await waitForStatus(server.service, 'client-1', 'connected');
 
     const idleCancel = await fetch(`${server.baseUrl}/api/codex/connection/device-auth`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1' }),
+      body: JSON.stringify({ clientId: 'client-1', authVersion: secondPayload.authVersion }),
     });
     assert.equal(idleCancel.status, 200);
     const idlePayload = await idleCancel.json() as {
@@ -165,6 +168,46 @@ describe('Codex connection routes', () => {
     };
     assert.equal(idlePayload.cancelled, false);
     assert.equal(idlePayload.status.status, 'connected');
+  });
+
+  it('requires the device-auth generation when cancelling', async () => {
+    const response = await fetch(`${server.baseUrl}/api/codex/connection/device-auth`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'authVersion is required' });
+  });
+
+  it('cancels through another app instance without letting the original attempt reconnect', async () => {
+    await server.close();
+    const store = new InMemoryCodexConnectionStore();
+    server = await createTestServer({ store, cancelFromSeparateManager: true });
+
+    const start = await fetch(`${server.baseUrl}/api/codex/connection/device-auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+    const started = await start.json() as { authVersion: number };
+
+    const cancel = await fetch(`${server.baseUrl}/api/codex/connection/device-auth`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', authVersion: started.authVersion }),
+    });
+
+    assert.equal(cancel.status, 200);
+    const payload = await cancel.json() as { cancelled: boolean; status: { status: string } };
+    assert.equal(payload.cancelled, true);
+    assert.equal(payload.status.status, 'disconnected');
+    assert.equal(server.driver.aborted, false);
+
+    server.driver.complete();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal((await server.service.getConnectionStatus('client-1')).status, 'disconnected');
   });
 
   it('aborts a pending device auth session before disconnecting the connection', async () => {
@@ -187,13 +230,18 @@ describe('Codex connection routes', () => {
   });
 });
 
-const createTestServer = async (options: { enabled?: boolean } = {}): Promise<TestServer> => {
+const createTestServer = async (options: {
+  enabled?: boolean;
+  store?: InMemoryCodexConnectionStore;
+  cancelFromSeparateManager?: boolean;
+} = {}): Promise<TestServer> => {
   const app = express();
   app.use(express.json());
 
   const driver = new DeferredDeviceAuthDriver();
+  const store = options.store || new InMemoryCodexConnectionStore();
   const service = new CodexConnectionService(
-    new InMemoryCodexConnectionStore(),
+    store,
     new CodexAuthCipher('test-secret', 'key-v1'),
     driver,
     {
@@ -202,12 +250,27 @@ const createTestServer = async (options: { enabled?: boolean } = {}): Promise<Te
     }
   );
   const sessions = new CodexDeviceAuthSessionManager(service, { deviceCodeTimeoutMs: 1000 });
+  const cancelSessions = options.cancelFromSeparateManager
+    ? new CodexDeviceAuthSessionManager(new CodexConnectionService(
+        store,
+        new CodexAuthCipher('test-secret', 'key-v1'),
+        new DeferredDeviceAuthDriver(),
+        {
+          now: () => new Date('2026-07-04T00:00:00.000Z'),
+          authRefreshLockTtlMs: 60_000,
+        }
+      ), { deviceCodeTimeoutMs: 1000 })
+    : sessions;
   let authorized = true;
 
   registerCodexConnectionRoutes(app, {
     enabled: options.enabled ?? true,
     service,
-    deviceAuthSessions: sessions,
+    deviceAuthSessions: {
+      startDeviceAuth: clientId => sessions.startDeviceAuth(clientId),
+      cancelDeviceAuth: (clientId, authVersion) => cancelSessions.cancelDeviceAuth(clientId, authVersion),
+      abortLocalDeviceAuth: clientId => sessions.abortLocalDeviceAuth(clientId),
+    },
     routeLogger: {
       warn() {},
       error() {},

@@ -1168,6 +1168,23 @@ describe('MessageInput optimistic send flow', () => {
     expect(document.querySelector('[data-icon="lucide:image-plus"]')).toBeTruthy();
   });
 
+  it('rejects SVG from the media picker before staging or uploading it', async () => {
+    renderMessageInput();
+    const input = screen.getByTestId('image-upload-input') as HTMLInputElement;
+    const file = new File(['<svg/>'], 'diagram.svg', { type: 'image/svg+xml' });
+
+    expect(input.accept).toContain('image/png');
+    expect(input.accept).toContain('video/*');
+    expect(input.accept).not.toContain('image/*');
+    expect(input.accept).not.toContain('image/svg+xml');
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('unsupportedMediaType');
+    expect(screen.queryByTestId('attachment-draft')).toBeNull();
+    expect(socketMocks.prepareMediaUpload).not.toHaveBeenCalled();
+  });
+
   it('rejects arbitrary files larger than 50 MB before upload', async () => {
     renderMessageInput();
     const file = new File(['x'], 'archive.zip', { type: 'application/zip' });
@@ -1246,6 +1263,28 @@ describe('MessageInput optimistic send flow', () => {
       localMediaPreviewUrl: 'blob:image-preview',
     }));
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:image-preview');
+  });
+
+  it('preserves the media API error in the persistent send failure notice', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:image-error-preview'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    socketMocks.prepareMediaUpload.mockRejectedValueOnce(new Error('Unsupported media MIME type'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderMessageInput();
+    const file = new File(['image'], 'broken.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
+    fireEvent.click(screen.getByText('send-message'));
+
+    const errorNotice = await screen.findByText('Unsupported media MIME type');
+    expect(errorNotice.textContent).not.toContain('errorSendingMessage');
+    consoleError.mockRestore();
   });
 
   it('removes a staged attachment without uploading it', async () => {

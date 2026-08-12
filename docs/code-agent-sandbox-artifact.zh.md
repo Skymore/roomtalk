@@ -49,7 +49,7 @@ playwright: 1.61.1
 准备 context：
 
 ```bash
-node scripts/code-agent/prepare-sandbox-context.mjs
+node scripts/code-agent/prepare-sandbox-context.mjs --output /tmp/roomtalk-code-agent-sandbox-context
 ```
 
 构建前需验证：

@@ -227,6 +227,54 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.deepEqual(deletePage.events[0].payload.messageIds, ['message-1']);
   });
 
+  it('persists per-client reactions and replays each committed reaction after-image', async () => {
+    const roomId = 'event-message-reaction-room';
+    assert.ok(await store.saveRoom(room(roomId)));
+    assert.ok(await store.appendMessage(message(roomId, 'reaction-message')));
+    const baselineHead = await store.readRoomEventHead(roomId);
+
+    const liked = await store.setMessageReaction(
+      roomId,
+      'reaction-message',
+      'event-test-owner',
+      'like',
+    );
+    assert.deepEqual(liked?.updatedMessage?.reactions, [
+      { clientId: 'event-test-owner', type: 'like' },
+    ]);
+
+    const disliked = await store.setMessageReaction(
+      roomId,
+      'reaction-message',
+      'second-member',
+      'dislike',
+    );
+    assert.deepEqual(disliked?.updatedMessage?.reactions, [
+      { clientId: 'event-test-owner', type: 'like' },
+      { clientId: 'second-member', type: 'dislike' },
+    ]);
+
+    const reactionEvents = await store.readRoomEvents(roomId, { afterSeq: baselineHead, limit: 10 });
+    assert.deepEqual(
+      reactionEvents.events.map(event => event.payload.messages?.[0]?.reactions),
+      [
+        [{ clientId: 'event-test-owner', type: 'like' }],
+        [
+          { clientId: 'event-test-owner', type: 'like' },
+          { clientId: 'second-member', type: 'dislike' },
+        ],
+      ],
+    );
+
+    const removed = await store.setMessageReaction(roomId, 'reaction-message', 'event-test-owner', null);
+    assert.deepEqual(removed?.updatedMessage?.reactions, [
+      { clientId: 'second-member', type: 'dislike' },
+    ]);
+    assert.deepEqual((await store.readMessagesByRoom(roomId))[0].reactions, [
+      { clientId: 'second-member', type: 'dislike' },
+    ]);
+  });
+
   it('rejects moving an existing message ID to another room without emitting ghost events', async () => {
     const sourceRoomId = 'event-message-source-room';
     const targetRoomId = 'event-message-target-room';
@@ -3103,6 +3151,8 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       await migrationPool.query(`ALTER TABLE rooms
         ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT,
         ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT`);
+      await migrationPool.query(`ALTER TABLE room_messages
+        ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
       const migrationStore = new PostgresStore(migrationPool, logger as any);
       const roomId = 'assistant-cutover-room';

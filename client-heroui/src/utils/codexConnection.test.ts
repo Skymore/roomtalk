@@ -48,6 +48,7 @@ describe('Codex connection API helpers', () => {
         clientId: 'client-1',
         provider: 'codex',
         status: 'pending',
+        authVersion: 1,
         deviceAuth: {
           url: 'https://auth.openai.com/codex/device',
           code: 'ABCD-EFGH',
@@ -100,7 +101,7 @@ describe('Codex connection API helpers', () => {
       }),
     })));
 
-    await expect(cancelCodexDeviceAuth('client-1')).resolves.toMatchObject({
+    await expect(cancelCodexDeviceAuth('client-1', 7)).resolves.toMatchObject({
       cancelled: true,
       status: { status: 'disconnected' },
     });
@@ -112,7 +113,7 @@ describe('Codex connection API helpers', () => {
         'X-Client-Id': 'client-1',
         'X-Client-Auth-Token': 'token-1',
       },
-      body: JSON.stringify({ clientId: 'client-1' }),
+      body: JSON.stringify({ clientId: 'client-1', authVersion: 7 }),
     });
   });
 });

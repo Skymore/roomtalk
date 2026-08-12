@@ -173,6 +173,7 @@ const createHarness = (options: {
     socketLogger: logger as any,
     openaiLogger: logger as any,
     codeAgentAvailableBackends: ['code-agent'] as CodeAgentBackend[],
+    codeAgentDefaultBackend: 'code-agent' as CodeAgentBackend,
     normalizeAIModel: (() => ({})) as any,
     getAIClientForModel: (() => ({})) as any,
     codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),

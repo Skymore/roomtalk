@@ -10,6 +10,7 @@ import {
   CodeAgentMode,
   MediaKind,
   Message,
+  MessageReactionType,
   Room,
   RoomClientLookup,
   RoomMediaHistoryKindFilter,
@@ -825,6 +826,24 @@ export const editMessage = (roomId: string, messageId: string, newContent: strin
   ).then(response => {
     if (!response.updatedMessage) {
       throw new SocketRequestError('INVALID_EDIT_RESPONSE', 'Server did not return the edited message');
+    }
+    return response.updatedMessage;
+  })
+);
+
+export const setMessageReaction = (
+  roomId: string,
+  messageId: string,
+  reaction: MessageReactionType | null,
+): Promise<Message> => (
+  emitWithAck<EditMessageAckResponse>(
+    'set_message_reaction',
+    { roomId, messageId, reaction },
+    'Timed out while updating message reaction',
+    'Failed to update message reaction',
+  ).then(response => {
+    if (!response.updatedMessage) {
+      throw new SocketRequestError('INVALID_REACTION_RESPONSE', 'Server did not return the updated message');
     }
     return response.updatedMessage;
   })

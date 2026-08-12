@@ -78,6 +78,7 @@ import {
 import { NoopObservabilityEventRecorder, PostgresObservabilityEventRecorder } from './services/observabilityEvents';
 import { createCodeAgentRoomContextServiceFromEnv } from './services/codeAgentRoomContext';
 import { CodexAuthCipher, CodexConnectionService } from './services/codexConnection';
+import { requireSafeE2EDatabaseUrl, requireSafeE2EQueueRedisUrl, requireSafeE2ERedisUrl } from './services/e2eSafety';
 import { resolveCodexConnectionConfig } from './services/codexConnectionConfig';
 import { CodexCliDeviceAuthDriver } from './services/codexCliDeviceAuthDriver';
 import { assertCodexBackendStartupGate, resolveCodexCliRunnerConfig } from './services/codexCliRunnerConfig';
@@ -761,6 +762,9 @@ const infrastructureReady = (async () => {
     }, parsePositiveIntegerEnv('ROOM_EVENT_PRUNE_INTERVAL_MS', 60 * 60 * 1000));
     roomEventPruneTimer.unref?.();
     if (process.env.E2E_TEST_MODE === 'true' && process.env.E2E_RESET_ON_START === 'true') {
+      requireSafeE2EDatabaseUrl(process.env);
+      requireSafeE2ERedisUrl(process.env);
+      requireSafeE2EQueueRedisUrl(process.env);
       await store.resetAllDataForTests?.();
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
     }

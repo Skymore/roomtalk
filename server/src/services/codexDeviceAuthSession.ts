@@ -8,6 +8,7 @@ export interface CodexDeviceAuthStartResult {
   clientId: string;
   provider: 'codex';
   status: 'pending';
+  authVersion: number;
   deviceAuth: CodexDeviceAuthInfo;
 }
 
@@ -25,7 +26,10 @@ export interface CodexDeviceAuthSessionManagerOptions {
 const DEFAULT_DEVICE_CODE_TIMEOUT_MS = 30_000;
 
 export class CodexDeviceAuthSessionManager {
-  private readonly activeSessions = new Map<string, { abortController: AbortController; done: Promise<void> }>();
+  private readonly activeSessions = new Map<string, {
+    abortController: AbortController;
+    authVersion?: number;
+  }>();
   private readonly deviceCodeTimeoutMs: number;
   private readonly onBackgroundError?: (error: unknown, clientId: string) => void;
 
@@ -38,8 +42,28 @@ export class CodexDeviceAuthSessionManager {
   }
 
   async startDeviceAuth(clientId: string): Promise<CodexDeviceAuthStartResult> {
-    if (this.activeSessions.has(clientId)) {
-      throw new CodexConnectionError(`Codex device auth is already in progress for client ${clientId}.`, 'device_auth_in_progress');
+    while (true) {
+      const active = this.activeSessions.get(clientId);
+      if (!active) {
+        break;
+      }
+      const current = active.authVersion === undefined
+        ? undefined
+        : await this.connectionService.getConnectionStatus(clientId);
+      if (this.activeSessions.get(clientId) !== active) {
+        continue;
+      }
+      if (
+        !current
+        || (current.status === 'pending' && current.authVersion === active.authVersion)
+      ) {
+        throw new CodexConnectionError(`Codex device auth is already in progress for client ${clientId}.`, 'device_auth_in_progress');
+      }
+      active.abortController.abort();
+      if (this.activeSessions.get(clientId) === active) {
+        this.activeSessions.delete(clientId);
+      }
+      break;
     }
 
     const abortController = new AbortController();
@@ -55,6 +79,7 @@ export class CodexDeviceAuthSessionManager {
     });
 
     const timeout = setTimeout(() => {
+      abortController.abort();
       rejectDeviceCode(new CodexConnectionError(
         `Codex device auth did not produce a device code within ${this.deviceCodeTimeoutMs}ms.`,
         'device_auth_code_unavailable'
@@ -62,12 +87,23 @@ export class CodexDeviceAuthSessionManager {
     }, this.deviceCodeTimeoutMs);
     timeout.unref?.();
 
-    const done = this.connectionService.connectWithDeviceAuth(clientId, async info => {
+    const activeSession = {
+      abortController,
+      authVersion: undefined as number | undefined,
+    };
+    this.activeSessions.set(clientId, activeSession);
+
+    void this.connectionService.connectWithDeviceAuth(clientId, async info => {
       if (!resolvedDeviceCode) {
         clearTimeout(timeout);
         settleDeviceCode(info);
       }
-    }, { signal: abortController.signal }).catch(error => {
+    }, {
+      signal: abortController.signal,
+      onAttemptStarted: authVersion => {
+        activeSession.authVersion = authVersion;
+      },
+    }).catch(error => {
       clearTimeout(timeout);
       if (!resolvedDeviceCode) {
         rejectDeviceCode(error);
@@ -77,34 +113,37 @@ export class CodexDeviceAuthSessionManager {
       }
     }).finally(() => {
       clearTimeout(timeout);
-      this.activeSessions.delete(clientId);
+      if (this.activeSessions.get(clientId) === activeSession) {
+        this.activeSessions.delete(clientId);
+      }
     });
-    this.activeSessions.set(clientId, { abortController, done: done.then(() => undefined) });
 
     const deviceAuth = await deviceCodePromise;
     return {
       clientId,
       provider: 'codex',
       status: 'pending',
+      authVersion: activeSession.authVersion!,
       deviceAuth,
     };
   }
 
-  async cancelDeviceAuth(clientId: string): Promise<CodexDeviceAuthCancelResult> {
+  async cancelDeviceAuth(clientId: string, expectedAuthVersion: number): Promise<CodexDeviceAuthCancelResult> {
     const active = this.activeSessions.get(clientId);
-    if (!active) {
-      return {
-        clientId,
-        provider: 'codex',
-        cancelled: false,
-      };
+    const cancelled = await this.connectionService.cancelDeviceAuthAttempt(clientId, expectedAuthVersion);
+    if (active?.authVersion === expectedAuthVersion) {
+      active.abortController.abort();
     }
-    active.abortController.abort();
-    await active.done;
     return {
       clientId,
       provider: 'codex',
-      cancelled: true,
+      cancelled,
     };
+  }
+
+  abortLocalDeviceAuth(clientId: string): boolean {
+    const active = this.activeSessions.get(clientId);
+    active?.abortController.abort();
+    return Boolean(active);
   }
 }

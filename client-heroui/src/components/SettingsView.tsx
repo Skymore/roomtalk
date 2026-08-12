@@ -168,6 +168,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const usernameLabelId = React.useId();
+  const usernameBeforeEditRef = React.useRef(username);
   const currentLanguage = getLanguageOption(i18n.language);
   const [pushStatus, setPushStatus] = React.useState<PushNotificationStatus>('unsupported');
   const [pushError, setPushError] = React.useState('');
@@ -200,6 +201,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isUpdatingGitHub, setIsUpdatingGitHub] = React.useState(false);
   const [githubError, setGitHubError] = React.useState('');
   const [githubMessage, setGitHubMessage] = React.useState('');
+
+  React.useEffect(() => {
+    if (!showEditUsername) {
+      usernameBeforeEditRef.current = username;
+    }
+  }, [showEditUsername, username]);
+
+  const beginUsernameEdit = React.useCallback(() => {
+    usernameBeforeEditRef.current = username;
+    setShowEditUsername(true);
+  }, [setShowEditUsername, username]);
+
+  const cancelUsernameEdit = React.useCallback(() => {
+    setUsername(usernameBeforeEditRef.current);
+    setShowEditUsername(false);
+  }, [setShowEditUsername, setUsername]);
 
   const refreshPushStatus = React.useCallback(async () => {
     try {
@@ -401,7 +418,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         clientId: started.clientId,
         provider: 'codex',
         status: 'pending',
-        authVersion: codexStatus?.authVersion || 0,
+        authVersion: started.authVersion,
         createdAt: codexStatus?.createdAt || '',
         updatedAt: new Date().toISOString(),
         locked: false,
@@ -418,15 +435,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleCancelCodexDeviceAuth = async () => {
+    if (codexStatus?.status !== 'pending') {
+      return;
+    }
     setCodexError('');
     setCodexMessage('');
     setIsUpdatingCodex(true);
     try {
-      const result = await cancelCodexDeviceAuth(clientId);
+      const result = await cancelCodexDeviceAuth(clientId, codexStatus.authVersion);
       setCodexStatus(result.status);
       setCodexDeviceAuth(null);
       setIsCodexLoginModalOpen(false);
-      setCodexMessage(result.cancelled ? t('codexConnectionCancelled') : t('codexConnectionDisconnected'));
+      setCodexMessage(
+        result.cancelled
+          ? t('codexConnectionCancelled')
+          : result.status.status === 'disconnected'
+            ? t('codexConnectionDisconnected')
+            : ''
+      );
     } catch (error) {
       setCodexError(error instanceof Error ? error.message : t('codexConnectionUnknownError'));
     } finally {
@@ -725,7 +751,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onChange={(e) => setUsername(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleSaveUsername();
-                    if (e.key === "Escape") setShowEditUsername(false);
+                    if (e.key === "Escape") cancelUsernameEdit();
                   }}
                 />
                 <div className="flex flex-shrink-0 gap-1">
@@ -739,7 +765,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   >
                     <Icon icon="lucide:check" className="text-sm" />
                   </Button>
-                  <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
+                  <Button isIconOnly size="sm" variant="flat" onPress={cancelUsernameEdit} aria-label={t("cancel")}>
                     <Icon icon="lucide:x" className="text-sm" />
                   </Button>
                 </div>
@@ -754,7 +780,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   size="sm"
                   variant="light"
                   className="h-8 w-8 min-w-8 flex-shrink-0 text-secondary"
-                  onPress={() => setShowEditUsername(true)}
+                  onPress={beginUsernameEdit}
                   aria-label={t("editUsername")}
                 >
                   <Icon icon="lucide:edit" className="text-sm" />

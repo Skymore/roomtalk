@@ -22,6 +22,7 @@ const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendStickerMock = vi.hoisted(() => vi.fn());
 const editMessageMock = vi.hoisted(() => vi.fn());
 const deleteMessageMock = vi.hoisted(() => vi.fn());
+const setMessageReactionMock = vi.hoisted(() => vi.fn());
 const getRoomRoleMembersMock = vi.hoisted(() => vi.fn());
 const setRoomAdminMock = vi.hoisted(() => vi.fn());
 const removeRoomAdminMock = vi.hoisted(() => vi.fn());
@@ -198,6 +199,7 @@ vi.mock('../utils/socket', () => ({
   sendSticker: sendStickerMock,
   editMessage: editMessageMock,
   deleteMessage: deleteMessageMock,
+  setMessageReaction: setMessageReactionMock,
   getRoomRoleMembers: getRoomRoleMembersMock,
   setRoomAdmin: setRoomAdminMock,
   removeRoomAdmin: removeRoomAdminMock,
@@ -248,6 +250,7 @@ vi.mock('./MessageItem', () => ({
     onSteerQueuedMessage,
     onCancelQueuedMessage,
     onDeleteMessage,
+    onSetReaction,
     onOpenWorkspaceFile,
     onUserAction,
     isInteractionDisabled,
@@ -261,6 +264,7 @@ vi.mock('./MessageItem', () => ({
     onSteerQueuedMessage?: (messageId: string) => void;
     onCancelQueuedMessage?: (messageId: string) => void;
     onDeleteMessage?: (messageId: string) => void;
+    onSetReaction?: (messageId: string, reaction: 'like' | 'dislike' | null) => void;
     onOpenWorkspaceFile?: (path: string) => void;
     onUserAction?: (action: 'transferOwnership', message: Message) => void;
     isInteractionDisabled?: boolean;
@@ -274,6 +278,7 @@ vi.mock('./MessageItem', () => ({
       data-delivery-action={message.deliveryAction || ''}
       data-ai-request-room-kind={aiRequestRoomKind || ''}
       data-interaction-disabled={String(Boolean(isInteractionDisabled))}
+      data-reactions={JSON.stringify(message.reactions || [])}
     >
       {message.content}
       <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
@@ -283,6 +288,8 @@ vi.mock('./MessageItem', () => ({
       <button type="button" onClick={() => onSteerQueuedMessage?.(message.id)}>steer-queued-{message.id}</button>
       <button type="button" onClick={() => onCancelQueuedMessage?.(message.id)}>cancel-queued-{message.id}</button>
       <button type="button" onClick={() => onDeleteMessage?.(message.id)}>delete-{message.id}</button>
+      <button type="button" onClick={() => onSetReaction?.(message.id, 'like')}>react-{message.id}</button>
+      <button type="button" onClick={() => onSetReaction?.(message.id, 'dislike')}>dislike-{message.id}</button>
       <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
       <button type="button" onClick={() => onUserAction?.('transferOwnership', message)}>transfer-{message.id}</button>
     </div>
@@ -382,6 +389,7 @@ describe('MessageList optimistic messages', () => {
     sendStickerMock.mockReset();
     editMessageMock.mockResolvedValue(message({ content: 'edited content' }));
     deleteMessageMock.mockResolvedValue(undefined);
+    setMessageReactionMock.mockReset();
     getRoomRoleMembersMock.mockResolvedValue([]);
     setRoomAdminMock.mockResolvedValue(undefined);
     removeRoomAdminMock.mockResolvedValue(undefined);
@@ -452,6 +460,257 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getAllByTestId('message-item')).toHaveLength(1);
     expect(screen.getByTestId('message-item').getAttribute('data-message-id')).toBe('server-message-1');
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('sent');
+  });
+
+  it('rolls back only the current client reaction without dropping newer messages', async () => {
+    let rejectReaction: (error: Error) => void = () => {};
+    setMessageReactionMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectReaction = reject;
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({
+      id: 'reaction-target',
+      reactions: [{ clientId: 'client-2', type: 'dislike' }],
+    });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-target'));
+    await waitFor(() => expect(setMessageReactionMock).toHaveBeenCalledWith('room-1', 'reaction-target', 'like'));
+
+    const newer = message({ id: 'newer-message', content: 'arrived while reaction was saving' });
+    act(() => {
+      socketMock.publishEvent(newer.roomId, 'messages.upserted', { messageIds: [newer.id], messages: [newer] });
+    });
+    expect(await screen.findByText(newer.content)).toBeTruthy();
+
+    await act(async () => {
+      rejectReaction(new Error('reaction write failed'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(newer.content)).toBeTruthy();
+    const targetItem = screen.getAllByTestId('message-item')
+      .find(item => item.getAttribute('data-message-id') === target.id);
+    expect(targetItem?.getAttribute('data-reactions')).toBe(JSON.stringify(target.reactions));
+  });
+
+  it('keeps a newer canonical same-client reaction when an older local mutation fails', async () => {
+    let rejectReaction: (error: Error) => void = () => {};
+    setMessageReactionMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectReaction = reject;
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({ id: 'reaction-same-client-event-race' });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-same-client-event-race'));
+    await waitFor(() => expect(setMessageReactionMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socketMock.publishEvent(target.roomId, 'messages.upserted', {
+        messageIds: [target.id],
+        messages: [{
+          ...target,
+          reactions: [{ clientId: 'client-1', type: 'dislike' }],
+        }],
+      });
+    });
+    await waitFor(() => expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-1', type: 'dislike' },
+    ])));
+
+    await act(async () => {
+      rejectReaction(new Error('older like failed'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-1', type: 'dislike' },
+    ]));
+  });
+
+  it('ignores stale reaction acknowledgements and rollbacks after a newer toggle', async () => {
+    const requests: Array<{
+      resolve: (message: Message) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    setMessageReactionMock.mockImplementation(() => new Promise<Message>((resolve, reject) => {
+      requests.push({ resolve, reject });
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({ id: 'reaction-race' });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-race'));
+    fireEvent.click(screen.getByText('dislike-reaction-race'));
+    await waitFor(() => expect(requests).toHaveLength(2));
+
+    await act(async () => {
+      requests[1].resolve(message({
+        id: target.id,
+        reactions: [{ clientId: 'client-1', type: 'dislike' }],
+      }));
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText('react-reaction-race'));
+    await waitFor(() => expect(requests).toHaveLength(3));
+    await act(async () => {
+      requests[0].reject(new Error('stale like failed'));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      requests[2].resolve(message({
+        id: target.id,
+        reactions: [{ clientId: 'client-1', type: 'like' }],
+      }));
+      await Promise.resolve();
+    });
+
+    const targetItem = screen.getByTestId('message-item');
+    expect(targetItem.getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-1', type: 'like' },
+    ]));
+  });
+
+  it('rolls overlapping failed reaction toggles back to the last confirmed state', async () => {
+    const requests: Array<{ reject: (error: Error) => void }> = [];
+    setMessageReactionMock.mockImplementation(() => new Promise<Message>((_resolve, reject) => {
+      requests.push({ reject });
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({ id: 'reaction-double-failure' });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-double-failure'));
+    fireEvent.click(screen.getByText('dislike-reaction-double-failure'));
+    await waitFor(() => expect(requests).toHaveLength(2));
+
+    await act(async () => {
+      requests[0].reject(new Error('like failed'));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      requests[1].reject(new Error('dislike failed'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe('[]');
+  });
+
+  it('rolls the latest failed reaction back to an earlier successful stale acknowledgement', async () => {
+    const requests: Array<{
+      resolve: (message: Message) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    setMessageReactionMock.mockImplementation(() => new Promise<Message>((resolve, reject) => {
+      requests.push({ resolve, reject });
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({ id: 'reaction-success-then-failure' });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-success-then-failure'));
+    fireEvent.click(screen.getByText('dislike-reaction-success-then-failure'));
+    await waitFor(() => expect(requests).toHaveLength(2));
+
+    await act(async () => {
+      requests[0].resolve(message({
+        id: target.id,
+        reactions: [{ clientId: 'client-1', type: 'like' }],
+      }));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-1', type: 'dislike' },
+    ]));
+
+    await act(async () => {
+      requests[1].reject(new Error('dislike failed'));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-1', type: 'like' },
+    ]));
+  });
+
+  it('merges a reaction acknowledgement without overwriting a newer peer reaction event', async () => {
+    let resolveOwnReaction: (message: Message) => void = () => {};
+    setMessageReactionMock.mockImplementation(() => new Promise<Message>(resolve => {
+      resolveOwnReaction = resolve;
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const target = message({ id: 'reaction-peer-race' });
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [target],
+      snapshotSeq: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    fireEvent.click(await screen.findByText('react-reaction-peer-race'));
+    await waitFor(() => expect(setMessageReactionMock).toHaveBeenCalledTimes(1));
+    act(() => {
+      socketMock.publishEvent(target.roomId, 'messages.upserted', {
+        messageIds: [target.id],
+        messages: [{
+          ...target,
+          reactions: [
+            { clientId: 'client-1', type: 'like' },
+            { clientId: 'client-2', type: 'dislike' },
+          ],
+        }],
+      });
+    });
+
+    await act(async () => {
+      resolveOwnReaction({
+        ...target,
+        reactions: [{ clientId: 'client-1', type: 'like' }],
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('message-item').getAttribute('data-reactions')).toBe(JSON.stringify([
+      { clientId: 'client-2', type: 'dislike' },
+      { clientId: 'client-1', type: 'like' },
+    ]));
   });
 
   it('wires queued edit, steer, and cancel actions to their dedicated APIs', async () => {
@@ -841,6 +1100,7 @@ describe('MessageList optimistic messages', () => {
 
     const container = screen.getByTestId('message-list-scroll') as HTMLDivElement;
     const content = screen.getByTestId('message-list-content');
+    expect(content.className).toContain('shrink-0');
     let scrollHeight = 1000;
     let scrollTop = 900;
     Object.defineProperty(container, 'scrollHeight', { configurable: true, get: () => scrollHeight });
@@ -885,7 +1145,7 @@ describe('MessageList optimistic messages', () => {
 
     const inset = screen.getByTestId('message-list-scroll-end-inset');
     expect(inset.getAttribute('style')).toContain('height: 124px');
-    expect(screen.getByTestId('message-list-scroll').className).toContain('pt-3');
+    expect(screen.getByTestId('message-list-scroll').className).toContain('pt-14');
     expect(screen.getByTestId('message-list-scroll').className).not.toContain('p-3');
     expect(screen.getByText('last visible message').parentElement?.className).not.toContain('pb-4');
   });
@@ -894,6 +1154,7 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     expect(screen.getByText('exportChat').closest('[data-testid="message-list-scroll"]')).toBeNull();
+    expect(screen.getByTestId('message-list-scroll').className).toContain('pt-14');
   });
 
   it('keeps export busy through generation and reports success or format-specific failure without alert()', async () => {
@@ -1160,6 +1421,15 @@ describe('MessageList optimistic messages', () => {
     rendered.rerender(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
     );
+    await waitFor(() => expect(socketMock.requestHistory).toHaveBeenCalled());
+    await resolveNextHistory({
+      roomId: 'room-1',
+      messages: [message({ id: 'cached-oldest' })],
+      snapshotSeq: 1,
+      hasMore: true,
+      oldestMessageId: 'cached-oldest',
+      mode: 'replace',
+    });
     await waitFor(() => expect(socketMock.requestEvents).toHaveBeenCalled());
     socketMock.emit.mockClear();
     fireEvent.scroll(screen.getByTestId('message-list-scroll'));

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsView } from './SettingsView';
@@ -85,6 +86,7 @@ describe('SettingsView Codex connection controls', () => {
       clientId: 'client-1',
       provider: 'codex',
       status: 'pending',
+      authVersion: 1,
       deviceAuth: {
         url: 'https://auth.openai.com/codex/device',
         code: 'ABCD-EFGH',
@@ -99,7 +101,7 @@ describe('SettingsView Codex connection controls', () => {
         clientId: 'client-1',
         provider: 'codex',
         status: 'disconnected',
-        authVersion: 0,
+        authVersion: 1,
         createdAt: '',
         updatedAt: '',
         locked: false,
@@ -257,14 +259,64 @@ describe('SettingsView Codex connection controls', () => {
     await screen.findByText('codexLoginTitle');
     fireEvent.click(screen.getAllByRole('button', { name: 'cancelCodexLogin' })[0]);
 
-    await waitFor(() => expect(codexApiMock.cancelCodexDeviceAuth).toHaveBeenCalledWith('client-1'));
+    await waitFor(() => expect(codexApiMock.cancelCodexDeviceAuth).toHaveBeenCalledWith('client-1', 1));
     expect(await screen.findByText('codexConnectionCancelled')).toBeTruthy();
+  });
+
+  it('does not report a completed Codex connection as disconnected when cancellation loses the race', async () => {
+    codexApiMock.cancelCodexDeviceAuth.mockResolvedValueOnce({
+      clientId: 'client-1',
+      provider: 'codex',
+      cancelled: false,
+      status: {
+        clientId: 'client-1',
+        provider: 'codex',
+        status: 'connected',
+        authVersion: 1,
+        createdAt: '2026-07-04T00:00:00.000Z',
+        updatedAt: '2026-07-04T00:00:00.000Z',
+        locked: false,
+      },
+    });
+    render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'connectCodex' }));
+    await screen.findByText('codexLoginTitle');
+    fireEvent.click(screen.getAllByRole('button', { name: 'cancelCodexLogin' })[0]);
+
+    await waitFor(() => expect(codexApiMock.cancelCodexDeviceAuth).toHaveBeenCalledWith('client-1', 1));
+    expect(screen.queryByText('codexConnectionDisconnected')).toBeNull();
+    expect(await screen.findByText('codexConnectionStatusConnected')).toBeTruthy();
   });
 
   it('labels the username editor from the visible settings label', () => {
     render(<SettingsView {...baseProps} showEditUsername />);
 
     expect(screen.getByRole('textbox', { name: 'username' })).toBeTruthy();
+  });
+
+  it('restores the saved username when editing is cancelled', () => {
+    const Harness = () => {
+      const [username, setUsername] = React.useState('Ada');
+      const [editing, setEditing] = React.useState(false);
+      return (
+        <SettingsView
+          {...baseProps}
+          username={username}
+          setUsername={setUsername}
+          showEditUsername={editing}
+          setShowEditUsername={setEditing}
+        />
+      );
+    };
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'editUsername' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'username' }), { target: { value: 'Cancelled draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(screen.getByText('Ada')).toBeTruthy();
+    expect(screen.queryByText('Cancelled draft')).toBeNull();
   });
 
   it('uses compact, collapsed account guidance', () => {

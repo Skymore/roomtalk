@@ -140,7 +140,8 @@ export function expectMessage(page: Page, text: string) {
 export async function editMessage(page: Page, originalText: string, updatedText: string, askAI = false) {
   const item = messageItem(page, originalText);
   await item.hover();
-  await item.getByLabel('Edit Message').click();
+  await item.getByLabel('More', { exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Edit Message' }).click();
   const dialog = page.getByRole('dialog', { name: 'Edit Message' });
   await expect(dialog).toBeVisible();
   await dialog.getByPlaceholder('Enter your message').fill(updatedText);
@@ -152,7 +153,8 @@ export async function editMessage(page: Page, originalText: string, updatedText:
 export async function deleteMessage(page: Page, text: string) {
   const item = messageItem(page, text);
   await item.hover();
-  await item.getByLabel('Delete Message').click();
+  await item.getByLabel('More', { exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Delete Message' }).click();
   const dialog = page.getByRole('dialog', { name: 'Confirm Deletion' });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();

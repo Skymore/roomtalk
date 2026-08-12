@@ -6,7 +6,7 @@ import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSessio
 export interface CodexConnectionRouteOptions {
   enabled: boolean;
   service?: Pick<CodexConnectionService, 'getConnectionStatus' | 'disconnect'>;
-  deviceAuthSessions?: Pick<CodexDeviceAuthSessionManager, 'startDeviceAuth' | 'cancelDeviceAuth'>;
+  deviceAuthSessions?: Pick<CodexDeviceAuthSessionManager, 'startDeviceAuth' | 'cancelDeviceAuth' | 'abortLocalDeviceAuth'>;
   routeLogger: Pick<Logger, 'warn' | 'error'>;
   getQueryClientId: (req: Request) => string | null;
   getBodyClientId: (req: Request) => string | null;
@@ -85,9 +85,13 @@ export const registerCodexConnectionRoutes = (app: Express, options: CodexConnec
     if (!(await options.authorizeClientRequest(req, res, clientId, 'DELETE /api/codex/connection/device-auth'))) {
       return;
     }
+    const authVersion = req.body?.authVersion;
+    if (!Number.isSafeInteger(authVersion) || authVersion < 1) {
+      return res.status(400).json({ error: 'authVersion is required' });
+    }
 
     try {
-      const cancelled = await options.deviceAuthSessions!.cancelDeviceAuth(clientId);
+      const cancelled = await options.deviceAuthSessions!.cancelDeviceAuth(clientId, authVersion);
       const status = await options.service!.getConnectionStatus(clientId);
       return res.json({ ...cancelled, status });
     } catch (error) {
@@ -109,7 +113,7 @@ export const registerCodexConnectionRoutes = (app: Express, options: CodexConnec
     }
 
     try {
-      await options.deviceAuthSessions!.cancelDeviceAuth(clientId);
+      options.deviceAuthSessions!.abortLocalDeviceAuth(clientId);
       return res.json(await options.service!.disconnect(clientId));
     } catch (error) {
       options.routeLogger.error('Failed to disconnect Codex connection', { error, clientId, endpoint: 'DELETE /api/codex/connection', ip: req.ip });

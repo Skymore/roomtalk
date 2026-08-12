@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { Writable } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { Logger } from '../logger';
 import { AIModelOption, CodeAgentMode, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
@@ -26,7 +26,12 @@ import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage'
 import { ObservabilityEventInput } from './observabilityEvents';
 import { CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
-import { CodexConnectionError } from './codexConnection';
+import {
+  CodexAuthCipher,
+  CodexConnectionError,
+  CodexConnectionService,
+  InMemoryCodexConnectionStore,
+} from './codexConnection';
 import { getAIStreamFence, getAIStreamOwnerId, stripAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentCheckpointBoundary, CodeAgentCheckpointRestorePlan, CodeAgentWorkspaceRevisionRecord } from '../repositories/store';
 
@@ -3274,6 +3279,272 @@ describe('CodeAgentSessionService', () => {
       provider: 'openai',
       label: 'GPT-5.5 Extra High',
     });
+  });
+
+  it('marks expired Codex app-server auth for reauthentication and shows an actionable failure', async () => {
+    const rawError = 'Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.';
+    const errorEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'error' as const,
+      message: rawError,
+      code: 'codex_app_server_unauthorized',
+      retryable: false,
+    };
+    const runner = new FakeCodeAgentRunnerClient([errorEvent]);
+    let reauthRequired = false;
+    const codexConnectionService = {
+      async withCodexAuth(
+        _clientId: string,
+        _runId: string,
+        work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>,
+      ) {
+        const workResult = await work('{"tokens":{"access_token":"test"}}', { authVersion: 1 });
+        reauthRequired = workResult.reauthRequired === true;
+        return workResult.result;
+      },
+    };
+    const observability = createMemoryObservability();
+    const errorLogs: Array<{ message: string; meta?: unknown }> = [];
+    const capturingLogger = {
+      debug() {},
+      error(message: string, meta?: unknown) {
+        errorLogs.push({ message, meta });
+      },
+      info() {},
+      warn() {},
+    } as unknown as Logger;
+    const setup = createService({
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
+      runner,
+      backend: 'code-agent',
+      runnerCommandByBackend: {
+        'code-agent': DEFAULT_CODE_AGENT_RUNNER_COMMAND,
+        'codex-app-server': DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+      },
+      codexBackendEnabled: true,
+      codexConnectionService,
+      observability: observability.recorder,
+      logger: capturingLogger,
+      ids: ['ai-1', 'turn-1', 'status-1'],
+    });
+
+    const result = await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    assert.equal(reauthRequired, true);
+    const messages = setup.store.messages.get('room-1') || [];
+    assert.equal(messages[1].content, 'Your Codex sign-in expired. Reconnect Codex in Settings and try again');
+    assert.equal(messages[1].content.includes('refresh token'), false);
+    assert.equal(
+      observability.events.find(event => event.event === 'code_agent.runner.error')?.errorCode,
+      'codex_auth_required',
+    );
+    const failedEvent = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failedEvent?.errorMessage, 'Codex sign-in expired.');
+    assert.equal((failedEvent?.payload as any)?.runnerErrorCode, 'codex_auth_required');
+    assert.deepEqual(errorLogs.find(log => log.message === 'Code agent turn failed')?.meta, {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      backend: 'codex-app-server',
+      errorCode: 'turn_failed',
+      failureKind: 'runner',
+      failureDetailLength: rawError.length,
+      runnerErrorCode: 'codex_auth_required',
+    });
+    assert.equal(JSON.stringify(observability.events).includes(rawError), false);
+  });
+
+  it('persists Codex reauthentication when a later daemon protocol error replaces the terminal error', async () => {
+    const rawError = 'Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.';
+    const authError = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'error' as const,
+      turnId: 'turn-1',
+      message: rawError,
+      code: 'codex_app_server_unauthorized',
+      retryable: false,
+    };
+    const protocolError = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'error' as const,
+      turnId: 'turn-1',
+      message: 'sandbox daemon emitted error after terminal error event',
+      code: 'protocol_error',
+      retryable: false,
+    };
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers) {
+        await handlers.onEvent(authError);
+        return {
+          events: [authError, protocolError],
+          errorEvent: protocolError,
+        };
+      },
+    };
+    const connectionStore = new InMemoryCodexConnectionStore();
+    const codexConnectionService = new CodexConnectionService(
+      connectionStore,
+      new CodexAuthCipher('test-secret', 'test-key-v1'),
+      {
+        async runDeviceAuth() {
+          return {
+            authJson: '{"tokens":{"access_token":"test","refresh_token":"test-refresh"}}',
+            loginStatus: 'Logged in using ChatGPT',
+          };
+        },
+      },
+      { now: () => new Date('2026-05-03T00:00:00.000Z') },
+    );
+    await codexConnectionService.connectWithDeviceAuth('client-1');
+    const observability = createMemoryObservability();
+    const setup = createService({
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
+      runner,
+      backend: 'code-agent',
+      runnerCommandByBackend: {
+        'code-agent': DEFAULT_CODE_AGENT_RUNNER_COMMAND,
+        'codex-app-server': DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+      },
+      codexBackendEnabled: true,
+      codexConnectionService,
+      observability: observability.recorder,
+      ids: ['ai-1', 'turn-1', 'status-1'],
+    });
+
+    const result = await setup.service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    assert.equal((await codexConnectionService.getConnectionStatus('client-1')).status, 'reauth_required');
+    const messages = setup.store.messages.get('room-1') || [];
+    assert.equal(messages[1].content, 'Your Codex sign-in expired. Reconnect Codex in Settings and try again');
+    assert.equal(messages[1].content.includes('refresh token'), false);
+    assert.equal(
+      observability.events.find(event => event.event === 'code_agent.runner.error')?.errorCode,
+      'codex_auth_required',
+    );
+    const failedEvent = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failedEvent?.errorMessage, 'Codex sign-in expired.');
+    assert.equal((failedEvent?.payload as any)?.runnerErrorCode, 'codex_auth_required');
+    assert.equal(JSON.stringify(observability.events).includes(rawError), false);
+  });
+
+  it('does not tell Coco users to reconnect Codex for a generic unauthorized runner error', async () => {
+    const rawError = 'upstream unauthorized';
+    const runner = new FakeCodeAgentRunnerClient([{
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'error',
+      message: rawError,
+      code: 'unauthorized',
+      retryable: false,
+    }]);
+    const observability = createMemoryObservability();
+    const errorLogs: Array<{ message: string; meta?: unknown }> = [];
+    const capturingLogger = {
+      debug() {},
+      error(message: string, meta?: unknown) {
+        errorLogs.push({ message, meta });
+      },
+      info() {},
+      warn() {},
+    } as unknown as Logger;
+    const setup = createService({
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'code-agent' }), [userMessage()]),
+      runner,
+      backend: 'code-agent',
+      observability: observability.recorder,
+      logger: capturingLogger,
+      ids: ['ai-1', 'turn-1', 'status-1'],
+    });
+
+    const result = await setup.service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.equal(result.success, false);
+    const messages = setup.store.messages.get('room-1') || [];
+    assert.equal(messages[1].content, 'Coco task failed. Retry, or switch engines if the problem continues.');
+    assert.equal(messages[1].content.includes('Codex'), false);
+    const runnerEvent = observability.events.find(event => event.event === 'code_agent.runner.error');
+    assert.equal(runnerEvent?.errorCode, 'runner_failure');
+    assert.equal(runnerEvent?.errorMessage, 'Code agent runner failed.');
+    assert.deepEqual(runnerEvent?.payload, {
+      backend: 'code-agent',
+      code: 'runner_failure',
+      message: 'Code agent runner failed.',
+      detailLength: rawError.length,
+      retryable: false,
+    });
+    const failedEvent = observability.events.find(event => event.event === 'code_agent.turn.failed');
+    assert.equal(failedEvent?.errorMessage, 'Code agent runner failed.');
+    assert.equal((failedEvent?.payload as any)?.runnerErrorCode, 'runner_failure');
+    assert.equal((failedEvent?.payload as any)?.runnerErrorDetailLength, rawError.length);
+    assert.deepEqual(errorLogs.find(log => log.message === 'Code agent turn failed')?.meta, {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      backend: 'code-agent',
+      errorCode: 'turn_failed',
+      failureKind: 'runner',
+      failureDetailLength: rawError.length,
+      runnerErrorCode: 'runner_failure',
+    });
+    const diagnostics = JSON.stringify({ events: observability.events, logs: errorLogs });
+    assert.equal(diagnostics.includes('codex_auth_required'), false);
+    assert.equal(diagnostics.includes('Codex sign-in expired'), false);
+  });
+
+  it('marks expired Codex auth from thread browsing without exposing provider details', async () => {
+    const rawError = 'Your access token could not be refreshed because your refresh token was already used.';
+    let reauthRequired = false;
+    const codexConnectionService = {
+      async withCodexAuth(
+        _clientId: string,
+        _runId: string,
+        work: (authJson: string, snapshot: { authVersion: number }) => Promise<any>,
+      ) {
+        const workResult = await work('{"tokens":{"access_token":"test"}}', { authVersion: 1 });
+        reauthRequired = workResult.reauthRequired === true;
+        return workResult.result;
+      },
+    };
+    const setup = createService({
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' })),
+      backend: 'codex-app-server',
+      runnerClient: 'jsonl',
+      codexBackendEnabled: true,
+      codexConnectionService,
+    });
+    setup.sandboxService.startRunner = async input => {
+      const stdout = new PassThrough();
+      const stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          stdout.end(`${JSON.stringify({
+            schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+            type: 'error',
+            message: rawError,
+            code: 'codex_app_server_unauthorized',
+            retryable: false,
+          })}\n`);
+          callback();
+        },
+      });
+      return {
+        command: input.command,
+        stdin,
+        stdout,
+        completed: Promise.resolve({ exitCode: 0 }),
+        stop: async () => {},
+      };
+    };
+
+    await assert.rejects(
+      () => setup.service.listCodexThreads({ roomId: 'room-1', clientId: 'client-1' }),
+      error => error instanceof Error
+        && error.message === 'Your Codex sign-in expired. Reconnect Codex in Settings and try again'
+        && !error.message.includes('refresh token'),
+    );
+    assert.equal(reauthRequired, true);
   });
 
   it('persists reused OpenCode tool message IDs independently across sequential turns', async () => {

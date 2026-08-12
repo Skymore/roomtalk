@@ -136,6 +136,35 @@ describe('validateStoredRoomEventPayload', () => {
     }, /position must be a non-negative safe integer/);
   });
 
+  it('accepts durable reactions while retaining legacy V1 events without them', () => {
+    expectValid('messages.upserted', {
+      messageRows: [messageRow({
+        reactions: [
+          { clientId: 'client-1', type: 'like' },
+          { clientId: 'client-2', type: 'dislike' },
+        ],
+      })],
+      mediaAssets: [],
+    });
+    expectValid('messages.upserted', {
+      messageRows: [messageRow()],
+      mediaAssets: [],
+    });
+    expectInvalid('messages.upserted', {
+      messageRows: [messageRow({ reactions: [{ clientId: 'client-1', type: 'love' }] })],
+      mediaAssets: [],
+    }, /reactions\[0\]\.type must be one of like, dislike/);
+    expectInvalid('messages.upserted', {
+      messageRows: [messageRow({
+        reactions: [
+          { clientId: 'client-1', type: 'like' },
+          { clientId: 'client-1', type: 'dislike' },
+        ],
+      })],
+      mediaAssets: [],
+    }, /reactions must be free of duplicate client IDs/);
+  });
+
   it('accepts every non-message V1 payload', () => {
     const cases: Array<[RoomEventType, unknown]> = [
       ['messages.deleted', { messageIds: ['message-1'], deletedAt: CREATED_AT }],

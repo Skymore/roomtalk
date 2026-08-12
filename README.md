@@ -214,9 +214,13 @@ npm run lint
 npm run check:i18n
 npm test
 npm run build
-npm run test:e2e
-npm run test:e2e:postgres
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e:postgres
 ```
+
+Both E2E commands require a disposable PostgreSQL database whose name contains
+`test` or `e2e` as a separated token. The harness also uses a local, non-zero
+Redis database and refuses unsafe reset targets.
 
 ## Configuration
 

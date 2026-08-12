@@ -41,6 +41,13 @@ export type CodeAgentDaemonThreadQueryResult =
   | CodeAgentRunnerThreadReadResultEvent
   | CodeAgentRunnerThreadForkResultEvent;
 
+export class CodeAgentThreadQueryRunnerError extends Error {
+  constructor(readonly event: CodeAgentRunnerErrorEvent) {
+    super(event.message);
+    this.name = 'CodeAgentThreadQueryRunnerError';
+  }
+}
+
 export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
   private readonly connections = new WeakMap<CodeAgentRunnerProcess, DaemonConnection>();
 
@@ -418,7 +425,7 @@ class ActiveDaemonQuery {
 
   async handleEvent(event: CodeAgentRunnerEvent): Promise<void> {
     if (event.type === 'error') {
-      this.reject(new Error(event.message));
+      this.reject(new CodeAgentThreadQueryRunnerError(event));
       return;
     }
     if (event.type === this.expectedType) {

@@ -26,7 +26,9 @@ import {
   getFirstClipboardImageFile,
   hasClipboardImageItem,
   ImageInputValidationError,
+  isAllowedImageMediaMimeType,
   MAX_MESSAGE_IMAGES,
+  MEDIA_PICKER_ACCEPT,
   PASTE_RESET_IDLE_MS,
   shouldResetPasteCount,
   shouldThrottlePaste,
@@ -1178,7 +1180,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       void mediaPromise.catch(error => {
         console.error('Error sending media batch:', error);
         if (isSubmitRoomCurrent()) {
-          showPersistentError(t('errorSendingMessage'), { announce: !onOptimisticMessageFailed });
+          showPersistentError(getErrorMessage(error, t('errorSendingMessage')), { announce: !onOptimisticMessageFailed });
         }
       });
       if (textSendPromise) {
@@ -1632,7 +1634,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     const fileList = Array.from(files);
     const videoFiles = fileList.filter(isVideoFile);
     const videoFileSet = new Set(videoFiles);
-    const imageFiles = fileList.filter(file => !videoFileSet.has(file) && file.type.startsWith('image/'));
+    const imageFiles = fileList.filter(file => (
+      !videoFileSet.has(file) && isAllowedImageMediaMimeType(file.type)
+    ));
     const supportedFileSet = new Set([...imageFiles, ...videoFiles]);
     const unsupportedFiles = fileList.filter(file => !supportedFileSet.has(file)).length;
     if (unsupportedFiles > 0) {
@@ -2076,7 +2080,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             /* ===== Text mode: normal editor ===== */
             <div
               key="text-input"
-              className="min-h-8 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-1 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
+              className="min-h-8 max-h-28 min-w-0 basis-full overflow-y-auto px-2 py-1 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
               contentEditable={canUseRetainedRoomAccess && !isSending && !isAIInputLocked && canPost}
               onInput={parseEditorContent}
               onPaste={handlePaste}
@@ -2094,7 +2098,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             ></div>
           )}
 
-          <div className="flex min-h-8 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
+          <div
+            data-testid="message-input-toolbar"
+            className="flex min-h-8 w-full flex-shrink-0 items-center justify-between gap-1 px-0 pb-0 sm:min-h-12 sm:justify-start sm:gap-2 sm:px-3 sm:pb-2"
+          >
             {/* 语音/键盘切换按钮 */}
             <Button
               isIconOnly
@@ -2173,7 +2180,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               data-testid="image-upload-input"
               ref={fileInputRef}
               className="hidden"
-              accept="image/*,video/*,.m4v,.mov,.mp4,.qt,.webm"
+              accept={MEDIA_PICKER_ACCEPT}
               multiple={true}
               onChange={handleImageUpload}
               disabled={isNonTextInputDisabled}

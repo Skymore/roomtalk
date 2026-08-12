@@ -429,6 +429,7 @@ const createHarness = (options: {
     socketLogger: logger as any,
     openaiLogger: logger as any,
     codeAgentAvailableBackends: ['code-agent'] as CodeAgentBackend[],
+    codeAgentDefaultBackend: 'code-agent' as CodeAgentBackend,
     normalizeAIModel: (modelId?: unknown) => {
       store.normalizeAIModelCalls.push(modelId);
       return options.model || selectedModel;

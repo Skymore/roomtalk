@@ -45,7 +45,8 @@ test('renames an owned room from the room card and current room header', async (
   await openRoomsPage(page);
 
   const card = page.getByTestId('room-card').filter({ hasText: room.name });
-  await card.getByRole('button', { name: 'Edit Room Name' }).click();
+  await card.getByRole('button', { name: `More ${room.name}` }).click();
+  await page.getByRole('menuitem', { name: 'Edit Room Name' }).click();
   await expect(page.getByText('Rename Room')).toBeVisible();
   await page.getByRole('dialog').getByLabel('Room Name').fill(cardRename);
   await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
@@ -77,10 +78,12 @@ test('uses the desktop saved list without a separate saved navigation card', asy
 
   await expect(page.getByRole('button', { name: 'Saved', exact: true })).toHaveCount(0);
   const savedSection = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Saved' }) });
-  await expect(savedSection.getByRole('button', { name: new RegExp(room.name) })).toBeVisible();
+  const savedRoomButton = savedSection.getByRole('button').filter({ hasText: room.name });
+  await expect(savedRoomButton).toBeVisible();
 
-  await savedSection.getByRole('button', { name: `Unsave ${room.id}` }).click();
-  await expect(savedSection.getByRole('button', { name: new RegExp(room.name) })).toHaveCount(0);
+  await savedSection.getByRole('button', { name: `More ${room.name}` }).click();
+  await page.getByRole('menuitem', { name: 'Unsave' }).click();
+  await expect(savedRoomButton).toHaveCount(0);
   const rooms = await getClientRoomsViaApi(request, clientId);
   expect(rooms.find(item => item.id === room.id)?.name).toBe(room.name);
 });

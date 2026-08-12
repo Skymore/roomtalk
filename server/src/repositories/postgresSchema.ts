@@ -2436,4 +2436,72 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION attach_room_message_positions_to_event();
     `,
   },
+  {
+    // Reactions are durable per-client message state. Keep retained V1 events
+    // immutable, and enrich only newly captured message after-images so room
+    // event replay carries the same state as a fresh snapshot.
+    id: '0024_message_reactions',
+    sql: `
+      ALTER TABLE room_messages
+        ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+      ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_reactions_array_check;
+      ALTER TABLE room_messages ADD CONSTRAINT room_messages_reactions_array_check
+        CHECK (jsonb_typeof(reactions) = 'array');
+
+      CREATE OR REPLACE FUNCTION attach_room_message_reactions_to_event()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.schema_version = 1 AND NEW.event_type = 'messages.upserted' THEN
+          NEW.payload := jsonb_set(
+            NEW.payload,
+            '{messageRows}',
+            COALESCE(
+              (
+                SELECT jsonb_agg(
+                  element.message_row || jsonb_build_object(
+                    'reactions', COALESCE(message_row.reactions, '[]'::jsonb)
+                  )
+                  ORDER BY element.ordinality
+                )
+                FROM jsonb_array_elements(
+                  COALESCE(NEW.payload->'messageRows', '[]'::jsonb)
+                ) WITH ORDINALITY AS element(message_row, ordinality)
+                LEFT JOIN room_messages AS message_row
+                  ON message_row.room_id = NEW.room_id
+                  AND message_row.id = element.message_row->>'id'
+              ),
+              '[]'::jsonb
+            ),
+            FALSE
+          );
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS room_events_attach_message_reactions ON room_events;
+      CREATE TRIGGER room_events_attach_message_reactions
+        BEFORE INSERT ON room_events
+        FOR EACH ROW EXECUTE FUNCTION attach_room_message_reactions_to_event();
+    `,
+  },
+  {
+    // A durable attempt generation prevents an older device-auth process from
+    // reviving credentials after a disconnect or a newer cross-instance login.
+    id: '0025_codex_device_auth_attempt_generation',
+    sql: `
+      ALTER TABLE codex_connections
+        ADD COLUMN IF NOT EXISTS device_auth_restore_status TEXT;
+
+      ALTER TABLE codex_connections
+        DROP CONSTRAINT IF EXISTS codex_connections_device_auth_restore_status_check;
+      ALTER TABLE codex_connections
+        ADD CONSTRAINT codex_connections_device_auth_restore_status_check
+        CHECK (
+          device_auth_restore_status IS NULL
+          OR device_auth_restore_status IN ('connected', 'reauth_required', 'disconnected')
+        );
+    `,
+  },
 ];

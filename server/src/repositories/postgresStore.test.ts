@@ -192,6 +192,25 @@ describe('PostgresStore', () => {
     assert.doesNotMatch(migration.sql, /UPDATE room_events/);
   });
 
+  it('adds durable reactions to new message after-images without rewriting retained events', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0024_message_reactions');
+    assert.ok(migration);
+    assert.match(migration.sql, /ADD COLUMN IF NOT EXISTS reactions JSONB/);
+    assert.match(migration.sql, /BEFORE INSERT ON room_events/);
+    assert.match(migration.sql, /jsonb_build_object\(\s*'reactions'/);
+    assert.match(migration.sql, /NEW\.event_type = 'messages\.upserted'/);
+    assert.doesNotMatch(migration.sql, /UPDATE room_events/);
+  });
+
+  it('adds a durable Codex device-auth restore state in an append-only migration', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0025_codex_device_auth_attempt_generation');
+    assert.ok(migration);
+    assert.match(migration.sql, /ADD COLUMN IF NOT EXISTS device_auth_restore_status TEXT/);
+    assert.match(migration.sql, /DROP CONSTRAINT IF EXISTS codex_connections_device_auth_restore_status_check/);
+    assert.match(migration.sql, /IN \('connected', 'reauth_required', 'disconnected'\)/);
+    assert.ok(POSTGRES_SCHEMA_SQL.every(sql => !/device_auth_restore_status/.test(sql)));
+  });
+
   it('settles one room model usage event and increments the total in the same transaction', async () => {
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
@@ -1463,6 +1482,10 @@ describe('PostgresStore', () => {
           },
         }],
       },
+      reactions: [
+        { clientId: 'client-1', type: 'like' },
+        { clientId: 'client-2', type: 'dislike' },
+      ],
     });
     const client = new ScriptedClient([
       { rowCount: 0 },
@@ -1479,6 +1502,9 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[26], null);
           assert.equal(call.params?.[27], null);
           assert.equal(call.params?.[28], 0);
+          assert.equal(call.params?.[34], JSON.stringify(aiMessage.reactions));
+          assert.match(call.sql, /reactions\s*\) VALUES/);
+          assert.doesNotMatch(call.sql, /reactions = EXCLUDED\.reactions/);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -1511,6 +1537,7 @@ describe('PostgresStore', () => {
           cost: aiMessage.cost,
           reply_to: aiMessage.replyTo,
           ui_payload: aiMessage.uiPayload,
+          reactions: aiMessage.reactions,
         }],
       },
     ], client);

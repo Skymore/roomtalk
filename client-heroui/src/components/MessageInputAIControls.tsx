@@ -421,7 +421,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <HoverTooltip content={`${t('send')} (Enter)`} placement="top">
           <Button
             type="button"
-            onClick={onSend}
+            onPress={onSend}
             color="primary"
             size="sm"
             isDisabled={isControlLocked || !hasInputContent}

@@ -30,6 +30,13 @@ export interface MessageMediaAsset {
   durationMs?: number;
 }
 
+export type MessageReactionType = 'like' | 'dislike';
+
+export interface MessageReaction {
+  clientId: string;
+  type: MessageReactionType;
+}
+
 export type A2UIVersion = 'v0.9';
 
 export interface A2UIActionEvent {
@@ -140,6 +147,7 @@ export interface Message {
   codeAgentImageMessageIds?: string[];
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
+  reactions?: MessageReaction[];
   /** Browser-local preview used while an optimistic media message is being uploaded. */
   localMediaPreviewUrl?: string;
   /** Client-only marker preventing signed-URL loading before the media asset exists. */

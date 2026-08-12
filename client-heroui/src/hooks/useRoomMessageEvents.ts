@@ -41,6 +41,7 @@ interface UseRoomMessageEventsArgs {
   getCurrentMessages: () => Message[];
   getCurrentAgentTurns?: () => RoomAgentTurn[];
   updateMessages: (updater: SetStateAction<Message[]>) => void;
+  onCanonicalMessagesApplied?: (messages: Message[]) => void;
   setAgentTurns: Dispatch<SetStateAction<RoomAgentTurn[]>>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsLoadingMore: Dispatch<SetStateAction<boolean>>;
@@ -260,6 +261,7 @@ export const useRoomMessageEvents = ({
   getCurrentMessages,
   getCurrentAgentTurns = getEmptyAgentTurns,
   updateMessages,
+  onCanonicalMessagesApplied,
   setAgentTurns,
   setIsLoading,
   setIsLoadingMore,
@@ -333,6 +335,10 @@ export const useRoomMessageEvents = ({
 
     const filterMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
     const filterTurns = (turns: RoomAgentTurn[]) => turns.filter(turn => turn.roomId === roomId);
+    const applyCanonicalMessages = (messages: Message[]) => {
+      onCanonicalMessagesApplied?.(messages);
+      updateMessages(messages);
+    };
     const setCursor = (seq: number) => {
       syncState.applyCursor(seq);
       setLastAppliedSeq(seq);
@@ -505,7 +511,7 @@ export const useRoomMessageEvents = ({
           ...canonicalMessages,
         ])));
         setAgentTurns(canonicalTurns);
-        updateMessages(canonicalMessages);
+        applyCanonicalMessages(canonicalMessages);
         setHasMore(snapshot.hasMore);
         setOldest(snapshot.oldestMessageId);
         cacheWindow(canonicalMessages, canonicalTurns, syncState.lastAppliedSeq, snapshot.hasMore, snapshot.oldestMessageId);
@@ -525,7 +531,7 @@ export const useRoomMessageEvents = ({
       setLastAppliedSeq(snapshot.snapshotSeq);
       setHasMore(snapshot.hasMore);
       setOldest(snapshot.oldestMessageId);
-      updateMessages(nextMessages);
+      applyCanonicalMessages(nextMessages);
       setAgentTurns(nextTurns);
       cacheWindow(nextMessages, nextTurns, snapshot.snapshotSeq, snapshot.hasMore, snapshot.oldestMessageId);
       setIsLoading(false);
@@ -699,7 +705,7 @@ export const useRoomMessageEvents = ({
       }
       if (reduced.updatedRoom) onRoomUpdated?.(reduced.updatedRoom);
       if (reduced.membersChanged) onMembersChanged?.(roomId);
-      updateMessages(canonicalMessages);
+      applyCanonicalMessages(canonicalMessages);
       setAgentTurns(reduced.turns);
       setCursor(nextSeq);
       const toolEvents = accepted.flatMap(event => (
@@ -899,7 +905,7 @@ export const useRoomMessageEvents = ({
       syncState.applyCursor(memoryWindow.lastAppliedSeq);
       hasMoreMessages = memoryWindow.hasMore;
       oldestMessageId = memoryWindow.oldestMessageId;
-      updateMessages(messages);
+      applyCanonicalMessages(messages);
       setAgentTurns(turns);
       setLastAppliedSeq(syncState.lastAppliedSeq);
       setHasMoreMessages(hasMoreMessages);
@@ -916,7 +922,7 @@ export const useRoomMessageEvents = ({
         message => message.deliveryStatus === 'pending' || message.deliveryStatus === 'failed',
       );
       canonicalTurns = [];
-      updateMessages(canonicalMessages);
+      applyCanonicalMessages(canonicalMessages);
       setIsLoading(true);
       cacheHydrationPromise = readCachedRoomMessageWindow(roomId)
         .then(cachedWindow => {
@@ -934,7 +940,7 @@ export const useRoomMessageEvents = ({
           syncState.applyCursor(cachedWindow.lastAppliedSeq);
           hasMoreMessages = cachedWindow.hasMore;
           oldestMessageId = cachedWindow.oldestMessageId;
-          updateMessages(canonicalMessages);
+          applyCanonicalMessages(canonicalMessages);
           setAgentTurns(turns);
           setLastAppliedSeq(syncState.lastAppliedSeq);
           setHasMoreMessages(hasMoreMessages);
@@ -954,7 +960,9 @@ export const useRoomMessageEvents = ({
         });
     }
 
+    let replayRequestedAfterInstall = false;
     const issueHistoryRequest: RoomMessageHistoryRequest = async (options = {}) => {
+      if (!options.beforeMessageId) replayRequestedAfterInstall = true;
       await cacheHydrationPromise;
       if (cancelled) return;
       if (options.beforeMessageId) {
@@ -964,6 +972,24 @@ export const useRoomMessageEvents = ({
       await syncFromCursor();
     };
     requestHistoryRef.current = issueHistoryRequest;
+    // The lifecycle effect can be rebuilt while the initial cache read is in
+    // flight (for example, URL cleanup changes a parent callback). In that
+    // case the session signal itself stays ready and its separate effect does
+    // not fire again, so ensure the newly installed handler still gets one
+    // replay request after all effects in this commit have had a chance to run.
+    queueMicrotask(() => {
+      if (
+        !cancelled
+        && sessionReadyRef.current
+        && !replayRequestedAfterInstall
+        && requestHistoryRef.current === issueHistoryRequest
+      ) {
+        void issueHistoryRequest({
+          limit: ROOM_MESSAGE_PAGE_LIMIT,
+          reason: 'session-sync',
+        });
+      }
+    });
 
     const handleRoomEventAvailable = (event: RoomEventAvailable) => {
       if (event.roomId !== roomId || !Number.isSafeInteger(event.headSeq)) return;
@@ -1195,6 +1221,7 @@ export const useRoomMessageEvents = ({
     getCurrentMessages,
     getCurrentAgentTurns,
     updateMessages,
+    onCanonicalMessagesApplied,
     setAgentTurns,
     setIsLoading,
     setIsLoadingMore,

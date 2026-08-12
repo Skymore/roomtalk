@@ -24,8 +24,12 @@ npm run dev                 # Vite dev server
 npm test                    # Vitest unit/component tests
 npm run lint                # ESLint
 npm run build               # i18n check + TypeScript + Vite build
-npm run test:e2e            # Playwright E2E
-npm run test:e2e:postgres   # E2E against PostgreSQL persistence mode
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e:postgres
 ```
+
+The E2E database must be disposable and its name must contain `test` or `e2e`
+as a separated token. The harness rejects unsafe PostgreSQL and Redis reset
+targets.
 
 Development reads `VITE_SOCKET_URL` from `.env.development` and defaults to the local server on `http://localhost:3012`. Production uses `.env.production` with same-origin Socket.IO/API routing.

@@ -1915,6 +1915,51 @@ describe('API routes', () => {
     ]);
   });
 
+  it('rejects parameterized SVG MIME types when initializing and completing image uploads', async () => {
+    server.store.members.add('room-1:client-svg');
+
+    const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-svg',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/svg+xml;charset=utf-8',
+        byteSize: 123,
+      }),
+    });
+    assert.equal(uploadResponse.status, 400);
+    assert.deepEqual(await uploadResponse.json(), { error: 'Unsupported media MIME type' });
+
+    const assetId = 'asset-parameterized-svg';
+    const objectKey = `rooms/room-1/media/image/${assetId}`;
+    server.store.pendingMediaUploads.set(assetId, pendingUpload({
+      assetId,
+      objectKey,
+      kind: 'image',
+      mimeType: 'image/svg+xml;charset=utf-8',
+      byteSize: 123,
+      uploadedByClientId: 'client-svg',
+    }));
+
+    const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-svg',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'IMAGE/SVG+XML; charset=UTF-8',
+        byteSize: 123,
+        objectKey,
+      }),
+    });
+    assert.equal(completeResponse.status, 400);
+    assert.deepEqual(await completeResponse.json(), { error: 'Unsupported media MIME type' });
+    assert.equal(server.store.appendedMediaAssets.length, 0);
+  });
+
   it('creates file media messages with arbitrary MIME types and sanitized filenames', async () => {
     server.store.members.add('room-1:client-file');
 

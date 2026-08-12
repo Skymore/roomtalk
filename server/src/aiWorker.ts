@@ -21,11 +21,22 @@ import { processAssistantRunJob } from './services/assistantRunBullProcessor';
 import { RedisAssistantRunEventPublisher } from './services/assistantRunEvents';
 import { resolveRuntimeInstanceId } from './services/runtimeInstance';
 import {
+  requireSafeE2EDatabaseUrl,
+  requireSafeE2EQueueRedisUrl,
+  requireSafeE2ERedisUrl,
+} from './services/e2eSafety';
+import {
   RedisProviderAdmissionController,
   resolveProviderAdmissionLimits,
 } from './services/providerAdmission';
 
 dotenv.config();
+
+if (process.env.E2E_TEST_MODE === 'true') {
+  requireSafeE2EDatabaseUrl(process.env);
+  requireSafeE2ERedisUrl(process.env);
+  requireSafeE2EQueueRedisUrl(process.env);
+}
 
 const logger = new Logger('AIWorker');
 const openaiLogger = new Logger('OpenAI');

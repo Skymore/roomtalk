@@ -3,8 +3,10 @@ import { PostgresPool } from '../repositories/postgresStore';
 import {
   CodexConnectionAuthUpdate,
   CodexConnectionRecord,
+  CodexConnectionReauthUpdate,
   CodexConnectionStatus,
   CodexConnectionStore,
+  CodexDeviceAuthAttemptUpdate,
   CodexEncryptedAuthJson,
 } from './codexConnection';
 
@@ -21,6 +23,7 @@ const CODEX_CONNECTION_COLUMNS = [
   'last_used_at',
   'auth_refresh_owner_id',
   'auth_refresh_locked_until',
+  'device_auth_restore_status',
   'last_error',
 ].join(', ');
 
@@ -37,6 +40,7 @@ type CodexConnectionRow = {
   last_used_at: string | Date | null;
   auth_refresh_owner_id: string | null;
   auth_refresh_locked_until: string | Date | null;
+  device_auth_restore_status: Exclude<CodexConnectionStatus, 'pending'> | null;
   last_error: string | null;
 };
 
@@ -68,9 +72,10 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         last_used_at,
         auth_refresh_owner_id,
         auth_refresh_locked_until,
+        device_auth_restore_status,
         last_error
       )
-      VALUES ($1, 'codex', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, 'codex', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (client_id) DO UPDATE SET
         status = EXCLUDED.status,
         encrypted_auth_json = EXCLUDED.encrypted_auth_json,
@@ -81,6 +86,7 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         last_used_at = EXCLUDED.last_used_at,
         auth_refresh_owner_id = EXCLUDED.auth_refresh_owner_id,
         auth_refresh_locked_until = EXCLUDED.auth_refresh_locked_until,
+        device_auth_restore_status = EXCLUDED.device_auth_restore_status,
         last_error = EXCLUDED.last_error
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
       [
@@ -95,6 +101,7 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
         record.lastUsedAt || null,
         record.authRefreshOwnerId || null,
         record.authRefreshLockedUntil || null,
+        record.deviceAuthRestoreStatus || null,
         record.lastError || null,
       ]
     );
@@ -113,6 +120,131 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
     return (result.rowCount || 0) > 0;
   }
 
+  async beginDeviceAuthAttempt(
+    clientId: string,
+    keyVersion: string,
+    createdAt: string,
+    updatedAt: string
+  ): Promise<CodexConnectionRecord> {
+    const result = await this.pool.query<CodexConnectionRow>(
+      `INSERT INTO codex_connections (
+        client_id,
+        provider,
+        status,
+        auth_version,
+        key_version,
+        created_at,
+        updated_at,
+        device_auth_restore_status
+      )
+      VALUES ($1, 'codex', 'pending', 1, $2, $3, $4, 'disconnected')
+      ON CONFLICT (client_id) DO UPDATE SET
+        status = 'pending',
+        auth_version = codex_connections.auth_version + 1,
+        key_version = EXCLUDED.key_version,
+        updated_at = EXCLUDED.updated_at,
+        auth_refresh_owner_id = NULL,
+        auth_refresh_locked_until = NULL,
+        device_auth_restore_status = CASE
+          WHEN codex_connections.status = 'pending'
+            THEN COALESCE(codex_connections.device_auth_restore_status, 'disconnected')
+          ELSE codex_connections.status
+        END
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [clientId, keyVersion, createdAt, updatedAt]
+    );
+    const pending = mapPostgresConnectionRow(result.rows[0]);
+    if (!pending) {
+      throw new Error(`PostgreSQL did not start Codex device auth for client ${clientId}`);
+    }
+    return pending;
+  }
+
+  async settleDeviceAuthAttempt(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexDeviceAuthAttemptUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    if (update.outcome === 'connected') {
+      const result = await this.pool.query<CodexConnectionRow>(
+        `UPDATE codex_connections
+        SET status = 'connected',
+            encrypted_auth_json = $3,
+            key_version = $4,
+            updated_at = $5,
+            last_validated_at = $6,
+            auth_refresh_owner_id = NULL,
+            auth_refresh_locked_until = NULL,
+            device_auth_restore_status = NULL,
+            last_error = NULL
+        WHERE client_id = $1
+          AND status = 'pending'
+          AND auth_version = $2
+        RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+        [
+          clientId,
+          expectedAuthVersion,
+          update.encryptedAuthJson,
+          update.keyVersion,
+          update.updatedAt,
+          update.lastValidatedAt,
+        ]
+      );
+      return mapPostgresConnectionRow(result.rows[0]);
+    }
+
+    if (update.outcome === 'failed') {
+      const result = await this.pool.query<CodexConnectionRow>(
+        `UPDATE codex_connections
+        SET status = 'reauth_required',
+            updated_at = $3,
+            auth_refresh_owner_id = NULL,
+            auth_refresh_locked_until = NULL,
+            device_auth_restore_status = NULL,
+            last_error = $4
+        WHERE client_id = $1
+          AND status = 'pending'
+          AND auth_version = $2
+        RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+        [clientId, expectedAuthVersion, update.updatedAt, update.lastError]
+      );
+      return mapPostgresConnectionRow(result.rows[0]);
+    }
+
+    const result = await this.pool.query<CodexConnectionRow>(
+      `UPDATE codex_connections
+      SET status = COALESCE(device_auth_restore_status, 'disconnected'),
+          updated_at = $3,
+          auth_refresh_owner_id = NULL,
+          auth_refresh_locked_until = NULL,
+          device_auth_restore_status = NULL
+      WHERE client_id = $1
+        AND status = 'pending'
+        AND auth_version = $2
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [clientId, expectedAuthVersion, update.updatedAt]
+    );
+    return mapPostgresConnectionRow(result.rows[0]);
+  }
+
+  async disconnectConnection(clientId: string, updatedAt: string): Promise<CodexConnectionRecord | null> {
+    const result = await this.pool.query<CodexConnectionRow>(
+      `UPDATE codex_connections
+      SET status = 'disconnected',
+          encrypted_auth_json = NULL,
+          auth_version = auth_version + 1,
+          updated_at = $2,
+          auth_refresh_owner_id = NULL,
+          auth_refresh_locked_until = NULL,
+          device_auth_restore_status = NULL,
+          last_error = NULL
+      WHERE client_id = $1
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [clientId, updatedAt]
+    );
+    return mapPostgresConnectionRow(result.rows[0]);
+  }
+
   async compareAndSwapAuth(
     clientId: string,
     expectedAuthVersion: number,
@@ -121,6 +253,7 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
     const result = await this.pool.query<CodexConnectionRow>(
       `UPDATE codex_connections
       SET encrypted_auth_json = $3,
+          status = 'connected',
           auth_version = auth_version + 1,
           key_version = $4,
           updated_at = $5,
@@ -128,7 +261,7 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
           last_validated_at = COALESCE($7, last_validated_at),
           last_error = NULL
       WHERE client_id = $1
-        AND status = 'connected'
+        AND status IN ('connected', 'reauth_required')
         AND auth_version = $2
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
       [
@@ -144,19 +277,44 @@ export class PostgresCodexConnectionStore implements CodexConnectionStore {
     return mapPostgresConnectionRow(result.rows[0]);
   }
 
+  async markReauthRequired(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexConnectionReauthUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const result = await this.pool.query<CodexConnectionRow>(
+      `UPDATE codex_connections
+      SET status = 'reauth_required',
+          updated_at = $3,
+          last_used_at = $4,
+          last_error = $5,
+          auth_refresh_owner_id = NULL,
+          auth_refresh_locked_until = NULL
+      WHERE client_id = $1
+        AND status = 'connected'
+        AND auth_version = $2
+      RETURNING ${CODEX_CONNECTION_COLUMNS}`,
+      [clientId, expectedAuthVersion, update.updatedAt, update.lastUsedAt, update.lastError]
+    );
+    return mapPostgresConnectionRow(result.rows[0]);
+  }
+
   async touchConnection(
     clientId: string,
+    expectedAuthVersion: number,
     lastUsedAt: string,
     lastValidatedAt?: string
   ): Promise<CodexConnectionRecord | null> {
     const result = await this.pool.query<CodexConnectionRow>(
       `UPDATE codex_connections
-      SET updated_at = $2,
-          last_used_at = $2,
-          last_validated_at = COALESCE($3, last_validated_at)
+      SET updated_at = $3,
+          last_used_at = $3,
+          last_validated_at = COALESCE($4, last_validated_at)
       WHERE client_id = $1
+        AND status = 'connected'
+        AND auth_version = $2
       RETURNING ${CODEX_CONNECTION_COLUMNS}`,
-      [clientId, lastUsedAt, lastValidatedAt || null]
+      [clientId, expectedAuthVersion, lastUsedAt, lastValidatedAt || null]
     );
     return mapPostgresConnectionRow(result.rows[0]);
   }
@@ -221,6 +379,52 @@ export class RedisCodexConnectionStore implements CodexConnectionStore {
     return deleted > 0;
   }
 
+  async beginDeviceAuthAttempt(
+    clientId: string,
+    keyVersion: string,
+    createdAt: string,
+    updatedAt: string
+  ): Promise<CodexConnectionRecord> {
+    const raw = await (this.redisClient as any).eval(REDIS_BEGIN_CODEX_DEVICE_AUTH_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [clientId, keyVersion, createdAt, updatedAt],
+    }) as string | null;
+    const pending = parseRedisConnectionRecord(raw);
+    if (!pending) {
+      throw new Error(`Redis did not start Codex device auth for client ${clientId}`);
+    }
+    return pending;
+  }
+
+  async settleDeviceAuthAttempt(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexDeviceAuthAttemptUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_SETTLE_CODEX_DEVICE_AUTH_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [
+        clientId,
+        String(expectedAuthVersion),
+        update.outcome,
+        update.updatedAt,
+        update.outcome === 'connected' ? JSON.stringify(update.encryptedAuthJson) : '',
+        update.outcome === 'connected' ? update.keyVersion : '',
+        update.outcome === 'connected' ? update.lastValidatedAt : '',
+        update.outcome === 'failed' ? update.lastError : '',
+      ],
+    }) as string | null;
+    return parseRedisConnectionRecord(raw);
+  }
+
+  async disconnectConnection(clientId: string, updatedAt: string): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_DISCONNECT_CODEX_CONNECTION_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [clientId, updatedAt],
+    }) as string | null;
+    return parseRedisConnectionRecord(raw);
+  }
+
   async compareAndSwapAuth(
     clientId: string,
     expectedAuthVersion: number,
@@ -241,14 +445,33 @@ export class RedisCodexConnectionStore implements CodexConnectionStore {
     return parseRedisConnectionRecord(raw);
   }
 
+  async markReauthRequired(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexConnectionReauthUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const raw = await (this.redisClient as any).eval(REDIS_MARK_CODEX_REAUTH_REQUIRED_SCRIPT, {
+      keys: [REDIS_CODEX_CONNECTIONS_KEY],
+      arguments: [
+        clientId,
+        String(expectedAuthVersion),
+        update.updatedAt,
+        update.lastUsedAt,
+        update.lastError,
+      ],
+    }) as string | null;
+    return parseRedisConnectionRecord(raw);
+  }
+
   async touchConnection(
     clientId: string,
+    expectedAuthVersion: number,
     lastUsedAt: string,
     lastValidatedAt?: string
   ): Promise<CodexConnectionRecord | null> {
     const raw = await (this.redisClient as any).eval(REDIS_TOUCH_CODEX_CONNECTION_SCRIPT, {
       keys: [REDIS_CODEX_CONNECTIONS_KEY],
-      arguments: [clientId, lastUsedAt, lastValidatedAt || ''],
+      arguments: [clientId, String(expectedAuthVersion), lastUsedAt, lastValidatedAt || ''],
     }) as string | null;
     return parseRedisConnectionRecord(raw);
   }
@@ -275,7 +498,150 @@ export class RedisCodexConnectionStore implements CodexConnectionStore {
   }
 }
 
+const REDIS_BEGIN_CODEX_DEVICE_AUTH_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+local record
+
+if raw then
+  local ok, parsed = pcall(cjson.decode, raw)
+  if not ok then
+    return ''
+  end
+  record = parsed
+  if record['status'] == 'pending' then
+    record['deviceAuthRestoreStatus'] = record['deviceAuthRestoreStatus'] or 'disconnected'
+  else
+    record['deviceAuthRestoreStatus'] = record['status'] or 'disconnected'
+  end
+  record['authVersion'] = tonumber(record['authVersion'] or 0) + 1
+else
+  record = {
+    clientId = ARGV[1],
+    provider = 'codex',
+    authVersion = 1,
+    createdAt = ARGV[3],
+    deviceAuthRestoreStatus = 'disconnected'
+  }
+end
+
+record['status'] = 'pending'
+record['keyVersion'] = ARGV[2]
+record['updatedAt'] = ARGV[4]
+record['authRefreshOwnerId'] = nil
+record['authRefreshLockedUntil'] = nil
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REDIS_SETTLE_CODEX_DEVICE_AUTH_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then
+  return ''
+end
+
+local ok, record = pcall(cjson.decode, raw)
+if not ok then
+  return ''
+end
+
+if record['status'] ~= 'pending' or tonumber(record['authVersion']) ~= tonumber(ARGV[2]) then
+  return ''
+end
+
+if ARGV[3] == 'connected' then
+  local auth_ok, encrypted_auth_json = pcall(cjson.decode, ARGV[5])
+  if not auth_ok then
+    return ''
+  end
+  record['status'] = 'connected'
+  record['encryptedAuthJson'] = encrypted_auth_json
+  record['keyVersion'] = ARGV[6]
+  record['lastValidatedAt'] = ARGV[7]
+  record['lastError'] = nil
+elseif ARGV[3] == 'failed' then
+  record['status'] = 'reauth_required'
+  record['lastError'] = ARGV[8]
+elseif ARGV[3] == 'cancelled' then
+  record['status'] = record['deviceAuthRestoreStatus'] or 'disconnected'
+else
+  return ''
+end
+
+record['updatedAt'] = ARGV[4]
+record['authRefreshOwnerId'] = nil
+record['authRefreshLockedUntil'] = nil
+record['deviceAuthRestoreStatus'] = nil
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
 const REDIS_COMPARE_AND_SWAP_CODEX_AUTH_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then
+  return ''
+end
+
+local ok, record = pcall(cjson.decode, raw)
+if not ok then
+  return ''
+end
+
+if (record['status'] ~= 'connected' and record['status'] ~= 'reauth_required')
+  or tonumber(record['authVersion']) ~= tonumber(ARGV[2]) then
+  return ''
+end
+
+local auth_ok, encrypted_auth_json = pcall(cjson.decode, ARGV[3])
+if not auth_ok then
+  return ''
+end
+
+record['encryptedAuthJson'] = encrypted_auth_json
+record['status'] = 'connected'
+record['authVersion'] = tonumber(ARGV[2]) + 1
+record['keyVersion'] = ARGV[4]
+record['updatedAt'] = ARGV[5]
+record['lastUsedAt'] = ARGV[6]
+if ARGV[7] ~= '' then
+  record['lastValidatedAt'] = ARGV[7]
+end
+record['lastError'] = nil
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REDIS_DISCONNECT_CODEX_CONNECTION_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then
+  return ''
+end
+
+local ok, record = pcall(cjson.decode, raw)
+if not ok then
+  return ''
+end
+
+record['status'] = 'disconnected'
+record['encryptedAuthJson'] = nil
+record['authVersion'] = tonumber(record['authVersion'] or 0) + 1
+record['updatedAt'] = ARGV[2]
+record['authRefreshOwnerId'] = nil
+record['authRefreshLockedUntil'] = nil
+record['deviceAuthRestoreStatus'] = nil
+record['lastError'] = nil
+
+local encoded = cjson.encode(record)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REDIS_MARK_CODEX_REAUTH_REQUIRED_SCRIPT = `
 local raw = redis.call('HGET', KEYS[1], ARGV[1])
 if not raw then
   return ''
@@ -290,20 +656,12 @@ if record['status'] ~= 'connected' or tonumber(record['authVersion']) ~= tonumbe
   return ''
 end
 
-local auth_ok, encrypted_auth_json = pcall(cjson.decode, ARGV[3])
-if not auth_ok then
-  return ''
-end
-
-record['encryptedAuthJson'] = encrypted_auth_json
-record['authVersion'] = tonumber(ARGV[2]) + 1
-record['keyVersion'] = ARGV[4]
-record['updatedAt'] = ARGV[5]
-record['lastUsedAt'] = ARGV[6]
-if ARGV[7] ~= '' then
-  record['lastValidatedAt'] = ARGV[7]
-end
-record['lastError'] = nil
+record['status'] = 'reauth_required'
+record['updatedAt'] = ARGV[3]
+record['lastUsedAt'] = ARGV[4]
+record['lastError'] = ARGV[5]
+record['authRefreshOwnerId'] = nil
+record['authRefreshLockedUntil'] = nil
 
 local encoded = cjson.encode(record)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
@@ -321,10 +679,14 @@ if not ok then
   return ''
 end
 
-record['updatedAt'] = ARGV[2]
-record['lastUsedAt'] = ARGV[2]
-if ARGV[3] ~= '' then
-  record['lastValidatedAt'] = ARGV[3]
+if record['status'] ~= 'connected' or tonumber(record['authVersion']) ~= tonumber(ARGV[2]) then
+  return ''
+end
+
+record['updatedAt'] = ARGV[3]
+record['lastUsedAt'] = ARGV[3]
+if ARGV[4] ~= '' then
+  record['lastValidatedAt'] = ARGV[4]
 end
 
 local encoded = cjson.encode(record)
@@ -402,6 +764,7 @@ const mapPostgresConnectionRow = (row?: CodexConnectionRow): CodexConnectionReco
     lastUsedAt: toOptionalIsoString(row.last_used_at),
     authRefreshOwnerId: row.auth_refresh_owner_id || undefined,
     authRefreshLockedUntil: toOptionalIsoString(row.auth_refresh_locked_until),
+    deviceAuthRestoreStatus: row.device_auth_restore_status || undefined,
     lastError: row.last_error || undefined,
   };
 };

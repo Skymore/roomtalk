@@ -848,6 +848,57 @@ end
 return { 1, found, cjson.encode(room), updatedPayload }
 `;
 
+const UPDATE_MESSAGE_REACTION_SCRIPT = `
+-- UPDATE_MESSAGE_REACTION
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local targetId = ARGV[2]
+local reactingClientId = ARGV[3]
+local nextReaction = ARGV[4]
+local updatedPayload = ''
+local found = 0
+
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == targetId then
+    local nextReactions = {}
+    local currentReactions = decoded['reactions']
+    if type(currentReactions) == 'table' then
+      for reactionIndex = 1, #currentReactions do
+        local currentReaction = currentReactions[reactionIndex]
+        if type(currentReaction) == 'table'
+          and tostring(currentReaction['clientId'] or '') ~= reactingClientId then
+          table.insert(nextReactions, currentReaction)
+        end
+      end
+    end
+    if nextReaction ~= '' then
+      table.insert(nextReactions, { clientId = reactingClientId, type = nextReaction })
+    end
+    if #nextReactions > 0 then
+      decoded['reactions'] = nextReactions
+    else
+      decoded['reactions'] = nil
+    end
+    updatedPayload = cjson.encode(decoded)
+    redis.call('LSET', KEYS[2], i - 1, updatedPayload)
+    found = 1
+    break
+  end
+end
+
+return { 1, found, cjson.encode(room), updatedPayload }
+`;
+
 const REPLACE_MEDIA_MESSAGE_ASSET_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -1783,6 +1834,42 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return { room: updatedRoom, found: true, updatedMessage };
     } catch (error) {
       this.logger.error('Error updating message in Redis', { error, messageId, roomId });
+      return null;
+    }
+  }
+
+  async setMessageReaction(
+    roomId: string,
+    messageId: string,
+    clientId: string,
+    reaction: 'like' | 'dislike' | null,
+  ) {
+    try {
+      const result = await (this.redisClient as any).eval(UPDATE_MESSAGE_REACTION_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, clientId, reaction || ''],
+      });
+      const updatedRoom = parseScriptRoom(result, 2);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot update reaction for missing or invalid Redis room', { messageId, roomId });
+        return null;
+      }
+
+      const found = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      if (!found) {
+        return { room: updatedRoom, found: false };
+      }
+
+      const updatedMessage = parseScriptMessage(Array.isArray(result) ? result[3] : undefined);
+      if (!updatedMessage) {
+        this.logger.warn('Redis reaction update succeeded without returning a message', { messageId, roomId });
+        return null;
+      }
+
+      await this.invalidateRoomMessagesCache(roomId);
+      return { room: updatedRoom, found: true, updatedMessage };
+    } catch (error) {
+      this.logger.error('Error updating message reaction in Redis', { error, messageId, roomId, clientId });
       return null;
     }
   }

@@ -55,17 +55,17 @@ E2E 补充 unit、component、API 与 socket tests，不替代它们。
 
 ```bash
 cd client-heroui
-npm run test:e2e
-npm run test:e2e:postgres
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e:postgres
 ```
 
-Redis 模式使用隔离 DB。PostgreSQL 命令必须要求安全的 test database，并配合 Redis realtime。CI 保存 Playwright report 与 failure artifacts，同时避免把 external-service flakiness 伪装为产品 regression。
+所有 E2E 入口都要求显式提供可丢弃的 PostgreSQL test database（database 名必须以独立 token 包含 `test` 或 `e2e`），并使用隔离 Redis DB 承载 realtime、queue 与 Socket.IO adapter。默认配置会同时启动 backend、assistant worker 和 frontend；受控 `E2E_FAKE_AI` 不会调用真实模型。CI 保存 Playwright report 与 failure artifacts，同时避免把 external-service flakiness 伪装为产品 regression。
 
 ## Commit 与交付边界
 
 原计划按 harness、core flows、extended flows、CI/deployment integration 分批提交，使失败可以定位到能力层。最终交付要求：
 
-- 核心用户旅程在 Redis durable 模式通过；
+- 核心用户旅程在 PostgreSQL durable + Redis realtime 模式通过；
 - 高风险持久化旅程在 PostgreSQL durable + Redis realtime 模式通过；
 - 多客户端、reload/reconnect 与顺序问题有稳定断言；
 - test data 与 production credential 明确隔离；

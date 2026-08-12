@@ -350,6 +350,24 @@ class MemoryRedis {
       return [1, deleted ? 1 : 0, remaining.length, JSON.stringify(updatedRoom)];
     }
 
+    if (script.includes('UPDATE_MESSAGE_REACTION')) {
+      const [roomsKey, messagesKey] = options.keys;
+      const [roomId, messageId, clientId, reaction] = options.arguments;
+      const roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
+      const list = this.lists.get(messagesKey) || [];
+      const index = list.findIndex(item => JSON.parse(item).id === messageId);
+      if (index === -1) return [1, 0, roomJson, ''];
+      const updatedMessage = JSON.parse(list[index]) as Message;
+      const reactions = (updatedMessage.reactions || []).filter(item => item.clientId !== clientId);
+      if (reaction) reactions.push({ clientId, type: reaction as 'like' | 'dislike' });
+      if (reactions.length > 0) updatedMessage.reactions = reactions;
+      else delete updatedMessage.reactions;
+      list[index] = JSON.stringify(updatedMessage);
+      this.lists.set(messagesKey, list);
+      return [1, 1, roomJson, list[index]];
+    }
+
     if (script.includes('RENEW_ROOM_ACCESS_MUTATION_LOCK')) {
       const [token] = options.arguments;
       return this.strings.get(options.keys[0]) === token ? 1 : 0;
@@ -1172,6 +1190,34 @@ describe('RedisStore', () => {
 
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+  });
+
+  it('persists one reaction per client and removes an empty reaction list', async () => {
+    const { store } = createStore();
+    await store.saveRoom(room());
+    await store.appendMessage(message({ id: 'reaction-message' }));
+
+    assert.deepEqual(
+      (await store.setMessageReaction('room-1', 'reaction-message', 'client-1', 'like'))?.updatedMessage?.reactions,
+      [{ clientId: 'client-1', type: 'like' }],
+    );
+    assert.deepEqual(
+      (await store.setMessageReaction('room-1', 'reaction-message', 'client-2', 'dislike'))?.updatedMessage?.reactions,
+      [
+        { clientId: 'client-1', type: 'like' },
+        { clientId: 'client-2', type: 'dislike' },
+      ],
+    );
+    assert.deepEqual(
+      (await store.setMessageReaction('room-1', 'reaction-message', 'client-1', 'dislike'))?.updatedMessage?.reactions,
+      [
+        { clientId: 'client-2', type: 'dislike' },
+        { clientId: 'client-1', type: 'dislike' },
+      ],
+    );
+    await store.setMessageReaction('room-1', 'reaction-message', 'client-2', null);
+    await store.setMessageReaction('room-1', 'reaction-message', 'client-1', null);
+    assert.equal((await store.readMessagesByRoom('room-1'))[0].reactions, undefined);
   });
 
   it('claims, transitions, finds, and deletes queued code-agent messages atomically', async () => {

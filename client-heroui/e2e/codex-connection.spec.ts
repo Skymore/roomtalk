@@ -28,7 +28,9 @@ test('connects, cancels, completes, and disconnects Codex through the settings U
 
   await openRoomsPage(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await expect(
+    page.getByRole('main', { name: 'Settings' }).getByRole('heading', { name: 'Settings', level: 2 }),
+  ).toBeVisible();
   await expect(page.getByText('Codex', { exact: true })).toBeVisible();
   await expect(page.getByText('Not connected').first()).toBeVisible();
 

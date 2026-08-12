@@ -70,6 +70,43 @@ test('keeps the chat scroller expanded behind the mobile input overlay', async (
   expect(layout.bottomNav.top - layout.inputPanel.bottom).toBeLessThanOrEqual(4);
 });
 
+test('keeps a multiline editor usable at 320px without squeezing it beside the toolbar', async ({ page, context, request }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const clientId = await seedClient(context);
+  const room = await createRoomViaApi(request, clientId, shortName('mobile-composer'));
+
+  await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+
+  const editor = page.getByTestId('message-editor');
+  await editor.fill('mobile multiline draft\nwith a second line');
+
+  const layout = await page.evaluate(() => {
+    const rect = (testId: string) => {
+      const element = document.querySelector(`[data-testid="${testId}"]`);
+      if (!element) throw new Error(`Missing ${testId}`);
+      const bounds = element.getBoundingClientRect();
+      return {
+        top: bounds.top,
+        bottom: bounds.bottom,
+        width: bounds.width,
+      };
+    };
+
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      editor: rect('message-editor'),
+      toolbar: rect('message-input-toolbar'),
+      panel: rect('message-input-panel'),
+    };
+  });
+
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(layout.editor.width).toBeGreaterThan(layout.panel.width * 0.8);
+  expect(layout.toolbar.top).toBeGreaterThanOrEqual(layout.editor.bottom - 1);
+});
+
 test('restores the active room after a mobile browser reload', async ({ page, context, request }) => {
   const clientId = await seedClient(context, shortName('mobile-restore-client'));
   const room = await createRoomViaApi(request, clientId, shortName('mobile-restore'));

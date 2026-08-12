@@ -47,7 +47,7 @@ import { CODE_AGENT_CODEX_AUTH_API_PREFIX, CodexConnectionError, CodexConnection
 import { GitHubConnectionService } from './githubConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
-import { JsonlCodeAgentDaemonRunnerClient } from './jsonlCodeAgentDaemonRunner';
+import { CodeAgentThreadQueryRunnerError, JsonlCodeAgentDaemonRunnerClient } from './jsonlCodeAgentDaemonRunner';
 import {
   CodeAgentRunnerErrorSummary,
   summarizeCodeAgentRunnerError,
@@ -948,7 +948,13 @@ export class CodeAgentSessionService {
           if (turnTimedOut) return;
           if (this.activeTurns.get(input.roomId)?.terminationReason === 'invalid_tool_loop') return;
           if (event.type === 'error') {
-            lastRunnerErrorSummary = summarizeCodeAgentRunnerError(event);
+            const runnerErrorSummary = summarizeCodeAgentRunnerError(event, { backend: turnBackend });
+            if (runnerErrorSummary.code === 'codex_auth_required' || lastRunnerErrorSummary?.code !== 'codex_auth_required') {
+              lastRunnerErrorSummary = runnerErrorSummary;
+            }
+            if (isCodexBackend(turnBackend) && runnerErrorSummary.code === 'codex_auth_required') {
+              publicFailureMessage = this.describeCodexAuthRequired(input.clientId === room!.creatorId);
+            }
           }
           if (event.type === 'approval_request') {
             await updatePhase('waiting_approval', event.title);
@@ -966,6 +972,7 @@ export class CodeAgentSessionService {
             streamState!,
             turnBackend,
             codexRunSettings,
+            publicFailureMessage,
           );
           if (disposition !== OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE) return;
 
@@ -1035,7 +1042,18 @@ export class CodeAgentSessionService {
       assertTurnWithinDeadline();
 
       if (runResult.errorEvent) {
-        lastRunnerErrorSummary ||= summarizeCodeAgentRunnerError(runResult.errorEvent);
+        const codexAuthErrorSummary = isCodexBackend(turnBackend)
+          ? runResult.events
+            .filter((event): event is Extract<CodeAgentRunnerEvent, { type: 'error' }> => event.type === 'error')
+            .map(event => summarizeCodeAgentRunnerError(event, { backend: turnBackend }))
+            .find(summary => summary.code === 'codex_auth_required')
+          : undefined;
+        lastRunnerErrorSummary = codexAuthErrorSummary
+          || lastRunnerErrorSummary
+          || summarizeCodeAgentRunnerError(runResult.errorEvent, { backend: turnBackend });
+        if (codexAuthErrorSummary) {
+          publicFailureMessage = this.describeCodexAuthRequired(input.clientId === room!.creatorId);
+        }
         throw new Error(lastRunnerErrorSummary.message);
       }
       if (!runResult.finalEvent) {
@@ -1251,6 +1269,9 @@ export class CodeAgentSessionService {
         ? this.describeCodexConnectionError(error, input.clientId === room!.creatorId)
         : undefined;
       if (publicCodexError) publicFailureMessage = publicCodexError;
+      if (isCodexBackend(turnBackend) && lastRunnerErrorSummary?.code === 'codex_auth_required') {
+        publicFailureMessage = this.describeCodexAuthRequired(input.clientId === room!.creatorId);
+      }
       const failedSegmentId = streamState?.activeMessageId || aiMessageId;
       const interruptedByUser = Boolean(activeAtFailure?.turnId === turnId && activeAtFailure.interruptedByUser);
       const userInterrupted = terminationReason
@@ -2370,7 +2391,8 @@ export class CodeAgentSessionService {
 
     const queryId = this.createId();
     try {
-      return await connectionService.withCodexAuth(input.codexClientId, queryId, async (authJson, snapshot) => {
+      type CodexThreadQueryReauthResult = { type: 'reauth_required'; message: string };
+      const result = await connectionService.withCodexAuth<T | CodexThreadQueryReauthResult>(input.codexClientId, queryId, async (authJson, snapshot) => {
         const authPath = this.codexSecretFilePath(queryId, 'auth.json');
         const refreshedAuthPath = this.codexSecretFilePath(queryId, 'refreshed-auth.json');
         await this.sandboxService.writeSecretFile!(input.sandbox, {
@@ -2397,9 +2419,25 @@ export class CodeAgentSessionService {
                 timeoutMs: 0,
               });
           try {
-            const result = this.options.runnerClient === 'daemon'
-              ? await this.collectCodexDaemonThreadQueryResult<T>(runnerProcess, input.request, input.expectedType, runnerEnv)
-              : await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
+            let result: T;
+            try {
+              result = this.options.runnerClient === 'daemon'
+                ? await this.collectCodexDaemonThreadQueryResult<T>(runnerProcess, input.request, input.expectedType, runnerEnv)
+                : await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
+            } catch (error) {
+              if (error instanceof CodeAgentThreadQueryRunnerError) {
+                const summary = summarizeCodeAgentRunnerError(error.event, { backend: 'codex-app-server' });
+                if (summary.code === 'codex_auth_required') {
+                  const publicMessage = this.describeCodexAuthRequired(input.request.clientId === input.codexClientId);
+                  return {
+                    result: { type: 'reauth_required' as const, message: publicMessage },
+                    reauthRequired: true,
+                  };
+                }
+                throw new Error(summary.message);
+              }
+              throw error;
+            }
             refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
             return {
               result,
@@ -2417,6 +2455,10 @@ export class CodeAgentSessionService {
           ]);
         }
       });
+      if (result.type === 'reauth_required') {
+        throw new Error(result.message);
+      }
+      return result;
     } catch (error) {
       if (error instanceof CodexConnectionError) {
         throw new Error(this.describeCodexConnectionError(
@@ -2474,7 +2516,7 @@ export class CodeAgentSessionService {
     for await (const chunk of runnerProcess.stdout) {
       for (const event of parser.push(bufferToString(chunk))) {
         if (event.type === 'error') {
-          throw new Error(event.message);
+          throw new CodeAgentThreadQueryRunnerError(event);
         }
         if (event.type === expectedType) {
           result = event as T;
@@ -2483,7 +2525,7 @@ export class CodeAgentSessionService {
     }
     for (const event of parser.flush()) {
       if (event.type === 'error') {
-        throw new Error(event.message);
+        throw new CodeAgentThreadQueryRunnerError(event);
       }
       if (event.type === expectedType) {
         result = event as T;
@@ -2539,6 +2581,7 @@ export class CodeAgentSessionService {
       });
 
       let refreshedAuthJson: string | undefined;
+      let handlerObservedCodexAuthError = false;
       try {
         const effectiveRunnerEnv = {
           ...input.runnerEnv,
@@ -2547,16 +2590,34 @@ export class CodeAgentSessionService {
           ROOMTALK_CODEX_AUTH_VERSION: String(snapshot.authVersion),
         };
         const process = await input.startRunnerProcess(effectiveRunnerEnv);
-        const result = await this.runner.run(input.request, input.handlers, {
+        const result = await this.runner.run(input.request, {
+          onEvent: async event => {
+            if (
+              event.type === 'error'
+              && summarizeCodeAgentRunnerError(event, { backend: input.backend }).code === 'codex_auth_required'
+            ) {
+              handlerObservedCodexAuthError = true;
+            }
+            await input.handlers.onEvent(event);
+          },
+        }, {
           process,
           sandbox: input.sandbox,
           backend: input.backend,
           runnerEnv: effectiveRunnerEnv,
         });
         refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
+        const reauthRequired = handlerObservedCodexAuthError || result.events.some(event => (
+          event.type === 'error'
+          && summarizeCodeAgentRunnerError(event, { backend: input.backend }).code === 'codex_auth_required'
+        )) || (
+          result.errorEvent !== undefined
+          && summarizeCodeAgentRunnerError(result.errorEvent, { backend: input.backend }).code === 'codex_auth_required'
+        );
         return {
           result,
           ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
+          ...(reauthRequired ? { reauthRequired: true } : {}),
         };
       } finally {
         await Promise.all([
@@ -2728,6 +2789,12 @@ export class CodeAgentSessionService {
     return requesterIsOwner
       ? 'Your Codex connection is unavailable. Reconnect it in Settings and try again'
       : "The room owner's Codex connection is unavailable. Ask the owner to reconnect it";
+  }
+
+  private describeCodexAuthRequired(requesterIsOwner: boolean): string {
+    return requesterIsOwner
+      ? 'Your Codex sign-in expired. Reconnect Codex in Settings and try again'
+      : "The room owner's Codex sign-in expired. Ask the owner to reconnect it in Settings";
   }
 
   private messageAIModelForBackend(
@@ -3074,10 +3141,12 @@ export class CodeAgentSessionService {
     selectedModel: AIModelOption,
     state: CodeAgentTurnStreamState,
     backend: CodeAgentBackend,
-    codexRunSettings: CodexRunSettings
+    codexRunSettings: CodexRunSettings,
+    publicFailureMessage?: string,
   ): Promise<typeof OPENCODE_INVALID_TOOL_LOOP_ERROR_CODE | undefined> {
     const observedAtMs = this.now().getTime();
-    const publicRunnerFailureMessage = `${this.displayBackendName(backend)} task failed. Retry, or switch engines if the problem continues.`;
+    const publicRunnerFailureMessage = publicFailureMessage
+      || `${this.displayBackendName(backend)} task failed. Retry, or switch engines if the problem continues.`;
     const observableEvent: CodeAgentRunnerEvent = event.type === 'status' && event.status === 'error'
       ? { ...event, message: publicRunnerFailureMessage }
       : event;
@@ -3672,9 +3741,9 @@ export class CodeAgentSessionService {
       return;
     }
 
-    const payload = this.summarizeRunnerEvent(event);
+    const payload = this.summarizeRunnerEvent(event, backend);
     const errorSummary = event.type === 'error'
-      ? summarizeCodeAgentRunnerError(event)
+      ? summarizeCodeAgentRunnerError(event, { backend })
       : undefined;
     await this.recordObservabilityEvent({
       level: event.type === 'error' ? 'error' : 'info',
@@ -3692,7 +3761,7 @@ export class CodeAgentSessionService {
     });
   }
 
-  private summarizeRunnerEvent(event: CodeAgentRunnerEvent): Record<string, unknown> {
+  private summarizeRunnerEvent(event: CodeAgentRunnerEvent, backend: CodeAgentBackend): Record<string, unknown> {
     switch (event.type) {
       case 'status':
         return { status: event.status, messageLength: event.message?.length };
@@ -3738,7 +3807,7 @@ export class CodeAgentSessionService {
       case 'usage':
         return { usage: event.usage };
       case 'error': {
-        const summary = summarizeCodeAgentRunnerError(event);
+        const summary = summarizeCodeAgentRunnerError(event, { backend });
         return {
           code: summary.code,
           message: summary.message,

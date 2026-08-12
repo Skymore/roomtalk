@@ -88,7 +88,7 @@ const validateMessageRow = (value: unknown, path: string, roomId: string): strin
   // position was added to schemaVersion 1 after immutable room events were
   // already in production. Keep it optional so retained pre-rollout events
   // remain replayable while every newly captured message carries the key.
-  const row = exactKeys(value, path, MESSAGE_KEYS, ['position']);
+  const row = exactKeys(value, path, MESSAGE_KEYS, ['position', 'reactions']);
   string(row.id, `${path}.id`);
   if (string(row.room_id, `${path}.room_id`) !== roomId) fail(`${path}.room_id`, `equal to ${roomId}`);
   string(row.client_id, `${path}.client_id`);
@@ -116,6 +116,19 @@ const validateMessageRow = (value: unknown, path: string, roomId: string): strin
     && (typeof row.position !== 'number' || !Number.isSafeInteger(row.position) || row.position < 0)
   ) {
     fail(`${path}.position`, 'a non-negative safe integer when present');
+  }
+  if (row.reactions !== undefined) {
+    if (!Array.isArray(row.reactions)) fail(`${path}.reactions`, 'an array when present');
+    const reactionClientIds = (row.reactions as unknown[]).map((reaction, index) => {
+      const reactionPath = `${path}.reactions[${index}]`;
+      const item = exactKeys(reaction, reactionPath, ['clientId', 'type']);
+      const reactionClientId = string(item.clientId, `${reactionPath}.clientId`);
+      oneOf(item.type, `${reactionPath}.type`, ['like', 'dislike']);
+      return reactionClientId;
+    });
+    if (new Set(reactionClientIds).size !== reactionClientIds.length) {
+      fail(`${path}.reactions`, 'free of duplicate client IDs');
+    }
   }
   return row.id as string;
 };

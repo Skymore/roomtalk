@@ -7,7 +7,7 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { isValidStickerId } from '../stickers/catalog';
-import { A2UIActionEvent, Message, RoomAICostTotal, RoomEventPage, RoomSnapshot } from '../types';
+import { A2UIActionEvent, Message, MessageReactionType, RoomAICostTotal, RoomEventPage, RoomSnapshot } from '../types';
 import { RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPayloadInvalidError, RoomEventTooLargeError, RoomPaginationBoundaryExpiredError } from '../repositories/store';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -85,6 +85,7 @@ const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
 export function registerMessageHandlers({ io, socket, store, socketLogger, resolveClientId }: SocketConnectionContext) {
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
+  const reactionMutationQueues = new Map<string, Promise<void>>();
   socket.on('get_room_messages', (_request: unknown, callback?: (response: {
     success: false;
     code: 'UPGRADE_REQUIRED';
@@ -558,6 +559,83 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
       socketLogger.error('Error editing message', { error, ...data, editorClientId: clientId });
       callback?.({ success: false, error: 'Server error while editing message' });
     }
+  });
+
+  socket.on('set_message_reaction', (
+    data: { roomId: string; messageId: string; reaction: MessageReactionType | null },
+    callback?: (response: { success: boolean; updatedMessage?: Message; error?: string }) => void,
+  ) => {
+    if (!allowMessageMutation()) {
+      return callback?.({ success: false, error: 'Too many message requests' });
+    }
+    if (
+      !isBoundedSocketIdentifier(data?.roomId)
+      || !isBoundedSocketIdentifier(data?.messageId)
+      || ![null, 'like', 'dislike'].includes(data?.reaction)
+    ) {
+      return callback?.({ success: false, error: 'Invalid reaction request' });
+    }
+
+    const mutationKey = `${data.roomId}\u0000${data.messageId}`;
+    const previousMutation = reactionMutationQueues.get(mutationKey) || Promise.resolve();
+    let queuedMutation: Promise<void>;
+    queuedMutation = previousMutation.catch(() => undefined).then(async () => {
+      const clientId = await resolveClientId();
+      if (!clientId) {
+        callback?.({ success: false, error: 'Not registered' });
+        return;
+      }
+      if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+        callback?.({ success: false, error: 'You are not authorized to access this room' });
+        return;
+      }
+      if (!(await getRoomMessage(store, data.roomId, data.messageId))) {
+        callback?.({ success: false, error: 'Message not found' });
+        return;
+      }
+      if (!store.setMessageReaction) {
+        callback?.({ success: false, error: 'Message reactions are unavailable' });
+        return;
+      }
+
+      try {
+        const result = await store.setMessageReaction(
+          data.roomId,
+          data.messageId,
+          clientId,
+          data.reaction,
+        );
+        if (!result) {
+          callback?.({ success: false, error: 'Failed to save message reaction' });
+          return;
+        }
+        if (!result.found || !result.updatedMessage) {
+          callback?.({ success: false, error: 'Message not found' });
+          return;
+        }
+        socketLogger.info('Message reaction updated', {
+          roomId: data.roomId,
+          messageId: data.messageId,
+          clientId,
+          reaction: data.reaction,
+        });
+        callback?.({ success: true, updatedMessage: result.updatedMessage });
+      } catch (error) {
+        socketLogger.error('Error updating message reaction', {
+          error,
+          roomId: data.roomId,
+          messageId: data.messageId,
+          clientId,
+        });
+        callback?.({ success: false, error: 'Server error while updating message reaction' });
+      }
+    }).finally(() => {
+      if (reactionMutationQueues.get(mutationKey) === queuedMutation) {
+        reactionMutationQueues.delete(mutationKey);
+      }
+    });
+    reactionMutationQueues.set(mutationKey, queuedMutation);
+    return queuedMutation;
   });
 
   socket.on('delete_message', async (data: { roomId: string; messageId: string }, callback?: (response: { success: boolean; error?: string }) => void) => {

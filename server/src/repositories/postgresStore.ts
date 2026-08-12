@@ -156,6 +156,7 @@ type MessageRow = {
   code_agent_queued_input?: unknown;
   code_agent_image_message_ids?: unknown;
   position?: number | string | null;
+  reactions?: unknown;
 };
 
 type RoomMemberRow = {
@@ -370,7 +371,7 @@ type AccountEntitlementRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position, reactions';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -843,6 +844,7 @@ const mapMessage = (row: MessageRow): Message => {
   const uiPayload = parseJsonValue<Message['uiPayload']>(row.ui_payload);
   const codeAgentQueuedInput = parseJsonValue<Message['codeAgentQueuedInput']>(row.code_agent_queued_input);
   const codeAgentImageMessageIds = parseJsonValue<Message['codeAgentImageMessageIds']>(row.code_agent_image_message_ids);
+  const reactions = parseJsonValue<Message['reactions']>(row.reactions);
 
   const message: Message = {
     id: row.id,
@@ -883,6 +885,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (codeAgentQueuedInput) message.codeAgentQueuedInput = codeAgentQueuedInput;
   if (codeAgentImageMessageIds?.length) message.codeAgentImageMessageIds = codeAgentImageMessageIds;
   if (replyTo) message.replyTo = replyTo;
+  if (Array.isArray(reactions)) message.reactions = reactions;
   if (uiPayload) message.uiPayload = uiPayload;
 
   return message;
@@ -923,6 +926,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   message.clientMessageId || null,
   message.clientBatchId || null,
   message.clientBatchIndex ?? null,
+  toJsonb(message.reactions || []),
 ];
 
 const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
@@ -1014,9 +1018,10 @@ const INSERT_MESSAGE_ROW_SQL = `INSERT INTO room_messages (
   model_step_sequence,
   client_message_id,
   client_batch_id,
-  client_batch_index
+  client_batch_index,
+  reactions
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30, $31, $32, $33, $34
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27::jsonb, $28::jsonb, $29, $30, $31, $32, $33, $34, $35::jsonb
 )`;
 
 const UPSERT_MESSAGE_SQL = `${INSERT_MESSAGE_ROW_SQL} ON CONFLICT (id) DO UPDATE SET
@@ -1575,6 +1580,57 @@ export class PostgresStore implements DurableRoomStore {
       });
     } catch (error) {
       this.logger.error('Error updating message in PostgreSQL', { error, roomId, messageId });
+      return null;
+    }
+  }
+
+  async setMessageReaction(
+    roomId: string,
+    messageId: string,
+    clientId: string,
+    reaction: 'like' | 'dislike' | null,
+  ) {
+    try {
+      return await this.transaction(async transaction => {
+        const room = await transaction.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId],
+        );
+        if (room.rows.length === 0) {
+          return null;
+        }
+
+        const updated = await transaction.query<MessageRow>(
+          `UPDATE room_messages AS target
+          SET reactions = COALESCE(
+              (
+                SELECT jsonb_agg(existing.reaction ORDER BY existing.ordinality)
+                FROM jsonb_array_elements(target.reactions)
+                  WITH ORDINALITY AS existing(reaction, ordinality)
+                WHERE existing.reaction->>'clientId' <> $3
+              ),
+              '[]'::jsonb
+            ) || CASE
+              WHEN $4::text IS NULL THEN '[]'::jsonb
+              ELSE jsonb_build_array(jsonb_build_object('clientId', $3, 'type', $4::text))
+            END
+          WHERE room_id = $1 AND id = $2
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, messageId, clientId, reaction],
+        );
+
+        if (updated.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), found: false };
+        }
+
+        return {
+          room: mapRoom(room.rows[0]),
+          found: true,
+          updatedMessage: mapMessage(updated.rows[0]),
+        };
+      });
+    } catch (error) {
+      this.logger.error('Error updating message reaction in PostgreSQL', { error, roomId, messageId, clientId });
       return null;
     }
   }

@@ -1,10 +1,14 @@
 import { defineConfig, devices } from '@playwright/test';
+import { requireSafeE2EDatabaseUrl, requireSafeE2ERedisUrl, shellQuote } from './playwright.e2e-env';
 
 const clientPort = Number(process.env.E2E_CLIENT_PORT || 3331);
 const serverPort = Number(process.env.E2E_SERVER_PORT || 3332);
 const clientURL = `http://127.0.0.1:${clientPort}`;
 const serverURL = `http://127.0.0.1:${serverPort}`;
+const databaseUrl = requireSafeE2EDatabaseUrl();
+const redisUrl = requireSafeE2ERedisUrl();
 const fakeCodexStateDir = `/tmp/roomtalk-codex-ui-e2e-${serverPort}`;
+const chromiumExecutablePath = process.env.E2E_CHROMIUM_EXECUTABLE_PATH;
 
 export default defineConfig({
   testDir: './e2e',
@@ -18,6 +22,7 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: clientURL,
+    launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -34,8 +39,12 @@ export default defineConfig({
         'NODE_ENV=development',
         'DISABLE_LOCAL_MEDIA_STORAGE=false',
         `CLIENT_URL=${clientURL}`,
-        'REDIS_URL=redis://127.0.0.1:6379/15',
+        `REDIS_URL=${shellQuote(redisUrl)}`,
+        `QUEUE_REDIS_URL=${shellQuote(redisUrl)}`,
+        'PERSISTENCE_STORE=postgres',
+        `DATABASE_URL=${shellQuote(databaseUrl)}`,
         'E2E_TEST_MODE=true',
+        'E2E_RESET_ON_START=true',
         'E2E_FAKE_AI=true',
         'E2E_FAKE_AI_CHUNK_DELAY_MS=1000',
         'CODE_AGENT_ENABLED=true',

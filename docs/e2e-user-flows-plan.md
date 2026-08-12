@@ -158,26 +158,26 @@ Run E2E from the client package:
 ```bash
 cd client-heroui
 npx playwright install chromium
-npm run test:e2e
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e
 ```
 
-The Playwright config starts the backend and frontend automatically. The backend uses `redis://127.0.0.1:6379/15`, enables `E2E_TEST_MODE=true`, and uses `E2E_FAKE_AI=true`, so E2E runs do not call real AI providers. The reset endpoint flushes only the selected Redis DB.
+The Playwright config starts the backend, assistant worker, and frontend automatically. The backend uses the disposable PostgreSQL database from `E2E_DATABASE_URL`, uses `redis://127.0.0.1:6379/15` for realtime and queues, enables `E2E_TEST_MODE=true`, and uses `E2E_FAKE_AI=true`, so E2E runs do not call real AI providers. Startup resets only the selected E2E PostgreSQL database and Redis DB.
 
 Optional overrides:
 
 ```bash
-E2E_CLIENT_PORT=3311 E2E_SERVER_PORT=3312 npm run test:e2e
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" E2E_CLIENT_PORT=3311 E2E_SERVER_PORT=3312 npm run test:e2e
 ```
 
-PostgreSQL mode:
+PostgreSQL-focused mode:
 
 ```bash
 E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e:postgres
 ```
 
-`E2E_DATABASE_URL` must point to a disposable PostgreSQL database whose name
-includes `test` or `e2e` as a separated token. The Postgres config still uses
-Redis DB 15 for realtime state and Socket.IO adapter behavior.
+All E2E configs require `E2E_DATABASE_URL` to point to a disposable PostgreSQL
+database whose name includes `test` or `e2e` as a separated token. They still
+use Redis DB 15 for realtime state, queues, and Socket.IO adapter behavior.
 
 ### Acceptance Criteria
 

@@ -1,6 +1,9 @@
 import { CodeAgentRunnerErrorEvent } from './codeAgentRunnerProtocol';
+import type { CodeAgentBackend } from '../types';
+import { isCodexCodeAgentBackend } from './codeAgentBackends';
 
 export type CodeAgentRunnerObservableErrorCode =
+  | 'codex_auth_required'
   | 'runner_daemon_failure'
   | 'runner_protocol_failure'
   | 'runner_harness_failure'
@@ -19,6 +22,7 @@ export interface CodeAgentRunnerErrorSummary {
 }
 
 const SUMMARY_MESSAGES: Record<CodeAgentRunnerObservableErrorCode, string> = {
+  codex_auth_required: 'Codex sign-in expired.',
   runner_daemon_failure: 'Code agent runner daemon failed.',
   runner_protocol_failure: 'Code agent runner protocol failed.',
   runner_harness_failure: 'Code agent harness failed.',
@@ -30,11 +34,20 @@ const SUMMARY_MESSAGES: Record<CodeAgentRunnerObservableErrorCode, string> = {
   runner_failure: 'Code agent runner failed.',
 };
 
-const classifyRunnerErrorCode = (value: unknown): CodeAgentRunnerObservableErrorCode => {
+const classifyRunnerErrorCode = (value: unknown, message: unknown): CodeAgentRunnerObservableErrorCode => {
+  const detail = typeof message === 'string' ? message : '';
   if (typeof value !== 'string') {
-    return 'runner_failure';
+    return /access token could not be refreshed|refresh token was already used|log out and sign in again/i.test(detail)
+      ? 'codex_auth_required'
+      : 'runner_failure';
   }
   const code = value.trim().toLowerCase();
+  if (
+    /(?:^|_)(?:unauthorized|invalid_grant|auth_(?:expired|invalid|required))(?:_|$)/.test(code)
+    || /access token could not be refreshed|refresh token was already used|log out and sign in again/i.test(detail)
+  ) {
+    return 'codex_auth_required';
+  }
   if (/^(?:daemon_|sandbox_daemon)/.test(code)) {
     return 'runner_daemon_failure';
   }
@@ -64,8 +77,14 @@ const classifyRunnerErrorCode = (value: unknown): CodeAgentRunnerObservableError
 
 export const summarizeCodeAgentRunnerError = (
   event: Pick<CodeAgentRunnerErrorEvent, 'code' | 'message' | 'retryable'>,
+  context: { backend?: CodeAgentBackend } = {},
 ): CodeAgentRunnerErrorSummary => {
-  const code = classifyRunnerErrorCode(event.code);
+  const classifiedCode = classifyRunnerErrorCode(event.code, event.message);
+  const code = classifiedCode === 'codex_auth_required'
+    && context.backend !== undefined
+    && !isCodexCodeAgentBackend(context.backend)
+    ? 'runner_failure'
+    : classifiedCode;
   return {
     code,
     message: SUMMARY_MESSAGES[code],

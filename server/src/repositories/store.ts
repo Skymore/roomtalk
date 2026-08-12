@@ -766,6 +766,12 @@ export interface DurableRoomStore {
   claimAIMessageStream(roomId: string, messageId: string, ownership: AIStreamOwnership): Promise<AIStreamClaimResult>;
   finalizeAIMessage(message: Message, expectedOwnership: AIStreamOwnership): Promise<AITerminalTransitionResult>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
+  setMessageReaction?(
+    roomId: string,
+    messageId: string,
+    clientId: string,
+    reaction: 'like' | 'dislike' | null,
+  ): Promise<MessageUpdateResult | null>;
   updateCodeAgentQueuedMessage?(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate): Promise<MessageUpdateResult | null>;
   materializeCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, turnId?: string, insertedAt?: string): Promise<MessageUpdateResult | null>;
   materializeCodeAgentQueuedMessageForTurn?(roomId: string, messageId: string, expectedState: CodeAgentQueueState, claim: CodeAgentTurnClaim, insertedAt?: string): Promise<MessageUpdateResult | null>;
@@ -1042,6 +1048,22 @@ export class CompositeRoomStore implements RoomStore {
 
   async updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string) {
     const result = await this.durableStore.updateMessageContent(roomId, messageId, updatedContent, updatedAt);
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async setMessageReaction(
+    roomId: string,
+    messageId: string,
+    clientId: string,
+    reaction: 'like' | 'dislike' | null,
+  ) {
+    if (!this.durableStore.setMessageReaction) {
+      return null;
+    }
+    const result = await this.durableStore.setMessageReaction(roomId, messageId, clientId, reaction);
     if (result?.found) {
       await this.invalidateRoomMessagesCache(roomId);
     }

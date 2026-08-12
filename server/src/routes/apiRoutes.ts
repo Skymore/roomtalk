@@ -43,6 +43,7 @@ import type { AssistantRunQueueHealthSnapshot } from '../services/assistantRunQu
 import { MembershipStatus, MembershipTier } from '../services/accountEntitlements';
 import { ClientLoginRateLimiter, RedisClientLoginRateLimiter } from '../services/clientLoginRateLimiter';
 import { accountMatchesPlatformAdminEmail, resolvePlatformAdminEmails } from '../services/platformAdmin';
+import { requireSafeE2EDatabaseUrl, requireSafeE2EQueueRedisUrl, requireSafeE2ERedisUrl } from '../services/e2eSafety';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -126,10 +127,11 @@ const isAllowedMediaMimeType = (kind: MediaKind, mimeType: string) => {
   if (kind === 'file') {
     return true;
   }
+  const baseMimeType = mimeType.split(';', 1)[0].trim().toLowerCase();
   if (kind === 'image') {
-    return mimeType.startsWith('image/') && mimeType !== 'image/svg+xml';
+    return baseMimeType.startsWith('image/') && baseMimeType !== 'image/svg+xml';
   }
-  return mimeType.startsWith(`${kind}/`);
+  return baseMimeType.startsWith(`${kind}/`);
 };
 
 const parseStickerAssetPath = (assetPath: unknown): string | null => {
@@ -2060,6 +2062,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   app.get('/api/health/ready', handleReadiness);
 
   if (process.env.E2E_TEST_MODE === 'true') {
+    // This endpoint ultimately calls Redis FLUSHDB. Refuse to expose it unless
+    // both storage targets are explicitly disposable test databases.
+    requireSafeE2EDatabaseUrl(process.env);
+    requireSafeE2ERedisUrl(process.env);
+    requireSafeE2EQueueRedisUrl(process.env);
     app.post('/api/e2e/reset', async (_req: Request, res: Response) => {
       try {
         if (store.resetAllDataForTests) {

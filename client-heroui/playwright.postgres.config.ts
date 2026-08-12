@@ -1,46 +1,18 @@
 import path from 'path';
 import { tmpdir } from 'os';
 import { defineConfig, devices } from '@playwright/test';
+import { requireSafeE2EDatabaseUrl, requireSafeE2ERedisUrl, shellQuote } from './playwright.e2e-env';
 
 const clientPort = Number(process.env.E2E_CLIENT_PORT || 3321);
 const serverPort = Number(process.env.E2E_SERVER_PORT || 3322);
 const clientURL = `http://127.0.0.1:${clientPort}`;
 const serverURL = `http://127.0.0.1:${serverPort}`;
+const workerPort = serverPort + 1;
 const localMediaDir = path.join(tmpdir(), `roomtalk-postgres-e2e-media-${serverPort}`);
 
-const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
-
-const requireSafeE2EDatabaseUrl = () => {
-  const databaseUrl = process.env.E2E_DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error(
-      'E2E_DATABASE_URL is required for npm run test:e2e:postgres. Use a dedicated test database whose name includes "test" or "e2e" as a separated token.'
-    );
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(databaseUrl);
-  } catch {
-    throw new Error('E2E_DATABASE_URL must be a valid PostgreSQL connection URL.');
-  }
-
-  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
-    throw new Error('E2E_DATABASE_URL must use the postgres:// or postgresql:// protocol.');
-  }
-
-  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  if (!/(^|[_-])(test|e2e)([_-]|$)/i.test(databaseName)) {
-    throw new Error(
-      `Refusing to run PostgreSQL E2E against database "${databaseName || '(missing)'}". The database name must include "test" or "e2e" as a separated token.`
-    );
-  }
-
-  return databaseUrl;
-};
-
 const databaseUrl = requireSafeE2EDatabaseUrl();
-const redisUrl = process.env.E2E_REDIS_URL || 'redis://127.0.0.1:6379/15';
+const redisUrl = requireSafeE2ERedisUrl();
+const chromiumExecutablePath = process.env.E2E_CHROMIUM_EXECUTABLE_PATH;
 
 export default defineConfig({
   testDir: './e2e',
@@ -53,6 +25,7 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: clientURL,
+    launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -70,6 +43,7 @@ export default defineConfig({
         'NODE_ENV=production',
         `CLIENT_URL=${clientURL}`,
         `REDIS_URL=${shellQuote(redisUrl)}`,
+        `QUEUE_REDIS_URL=${shellQuote(redisUrl)}`,
         'PERSISTENCE_STORE=postgres',
         `DATABASE_URL=${shellQuote(databaseUrl)}`,
         'MEDIA_STORAGE_MODE=local',
@@ -89,6 +63,28 @@ export default defineConfig({
       ].join(' '),
       cwd: '../server',
       url: `${serverURL}/api/status`,
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: [
+        `AI_WORKER_HEALTH_PORT=${workerPort}`,
+        `REDIS_URL=${shellQuote(redisUrl)}`,
+        `QUEUE_REDIS_URL=${shellQuote(redisUrl)}`,
+        'PERSISTENCE_STORE=postgres',
+        `DATABASE_URL=${shellQuote(databaseUrl)}`,
+        'E2E_TEST_MODE=true',
+        'E2E_FAKE_AI=true',
+        'E2E_FAKE_AI_CHUNK_DELAY_MS=1000',
+        'AI_MODEL=deepseek-v4-pro',
+        'OPENAI_API_KEY=e2e',
+        'OPENROUTER_API_KEY=e2e',
+        'DEEPSEEK_API_KEY=e2e',
+        'ANTHROPIC_API_KEY=e2e',
+        'npm run start:e2e:ai-worker',
+      ].join(' '),
+      cwd: '../server',
+      url: `http://127.0.0.1:${workerPort}/health`,
       reuseExistingServer: false,
       timeout: 60_000,
     },

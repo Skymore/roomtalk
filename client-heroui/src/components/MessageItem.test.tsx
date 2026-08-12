@@ -153,6 +153,47 @@ describe('MessageItem replies', () => {
     expect(onReply).toHaveBeenCalledWith(message);
   });
 
+  it('renders durable reaction counts and routes like toggles through the parent', async () => {
+    const onSetReaction = vi.fn();
+    const rendered = render(
+      <MessageItem
+        message={message}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onSetReaction={onSetReaction}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    fireEvent.click(await screen.findByText('like'));
+    expect(onSetReaction).toHaveBeenLastCalledWith(message.id, 'like');
+
+    rendered.rerender(
+      <MessageItem
+        message={{
+          ...message,
+          reactions: [
+            { clientId: 'viewer', type: 'like' },
+            { clientId: 'another-client', type: 'like' },
+          ],
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onSetReaction={onSetReaction}
+        onReply={vi.fn()}
+      />
+    );
+
+    const visibleReaction = screen.getByTestId(`message-reaction-like-${message.id}`);
+    expect(visibleReaction.textContent).toContain('2');
+    expect(visibleReaction.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(visibleReaction);
+    expect(onSetReaction).toHaveBeenLastCalledWith(message.id, null);
+  });
+
   it('exposes sender, time, and delivery state on the message article', () => {
     render(
       <MessageItem

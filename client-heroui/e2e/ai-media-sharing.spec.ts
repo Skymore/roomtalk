@@ -52,7 +52,7 @@ test('requires both confirmations before switching to a premium model', async ({
   await page.getByRole('button', { name: 'AI Settings' }).click();
   const settingsDialog = page.getByRole('dialog', { name: 'AI Settings' });
   await settingsDialog.getByRole('button', { name: /Select AI Model/ }).click();
-  await page.getByRole('option', { name: /GPT-5\.5/ }).click();
+  await page.getByRole('option', { name: /GPT-5\.6 Sol/ }).click();
 
   const pricingDialog = page.getByRole('dialog', { name: 'Confirm premium model pricing' });
   await expect(pricingDialog).toBeVisible();
@@ -63,7 +63,7 @@ test('requires both confirmations before switching to a premium model', async ({
   await expect(switchDialog).toBeVisible();
   await switchDialog.getByRole('button', { name: 'Switch model' }).click();
 
-  await expect(settingsDialog.getByTestId('ai-model-select')).toContainText('GPT-5.5');
+  await expect(settingsDialog.getByTestId('ai-model-select')).toContainText('GPT-5.6 Sol');
   await settingsDialog.getByRole('button', { name: 'Apply' }).click();
 });
 
@@ -87,7 +87,8 @@ test('retries a completed AI response without duplicating the old answer', async
   await askAI(page, prompt);
   const aiMessage = messageItem(page, responseText);
   await aiMessage.hover();
-  await aiMessage.getByLabel('Retry').click();
+  await aiMessage.getByLabel('More', { exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Retry' }).click();
 
   await expect(page.getByText(responseText)).toHaveCount(1);
   await expect(messageItem(page, responseText)).toContainText('cache hit 25%');
@@ -119,6 +120,38 @@ test('uploads and sends an image message', async ({ page, context, request }) =>
   await expect(page.getByTestId('attachment-draft')).toHaveCount(0, { timeout: 20000 });
 
   await expect(page.getByRole('img', { name: 'Shared image' }).first()).toBeVisible();
+});
+
+test('rejects SVG before upload while keeping the text draft intact', async ({ page, context, request }) => {
+  test.skip(!hasMediaStorageConfig(), 'Media object storage is not configured for the default E2E server.');
+  await openOwnedRoom(page, context, request);
+
+  const draftText = uniqueName('svg-draft');
+  const editor = page.getByTestId('message-editor');
+  await editor.click();
+  await page.keyboard.insertText(draftText);
+
+  let mediaUploadRequests = 0;
+  page.on('request', requestEvent => {
+    if (requestEvent.method() === 'POST' && /\/api\/media\/uploads$/.test(new URL(requestEvent.url()).pathname)) {
+      mediaUploadRequests += 1;
+    }
+  });
+
+  await page.getByTestId('image-upload-input').setInputFiles({
+    name: 'unsupported.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'),
+  });
+
+  await expect(page.getByRole('alert')).toContainText('Unsupported media file');
+  await expect(page.getByTestId('attachment-draft')).toHaveCount(0);
+  await expect(editor).toContainText(draftText);
+  await expectMessage(page, draftText).toHaveCount(0);
+  expect(mediaUploadRequests).toBe(0);
+
+  await page.getByTestId('image-upload-input').setInputFiles(tinyPng);
+  await expect(page.getByTestId('attachment-draft')).toHaveCount(1);
 });
 
 test('opens a shared room link and joins after confirmation', async ({ page, context, request }) => {

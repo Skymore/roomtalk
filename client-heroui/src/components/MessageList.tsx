@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { cancelQueuedCodeAgentInput, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, restoreCodeAgentCheckpoint, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
+import { cancelQueuedCodeAgentInput, clientId, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, restoreCodeAgentCheckpoint, sendMessage, sendSticker, setMessageReaction, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
-import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
+import { Message, MessageReactionType, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { AgentTurnItem } from './AgentTurnItem';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
@@ -222,6 +222,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const loadMoreInFlightRef = useRef(false);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryingClientMessageIdsRef = useRef(new Set<string>());
+  const reactionMutationSequenceRef = useRef(0);
+  const reactionMutationGenerationRef = useRef(new Map<string, number>());
+  const confirmedOwnReactionRef = useRef(new Map<string, MessageReactionType | undefined>());
   const isNearBottomRef = useRef(true);
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingScrollFrameRef = useRef<number | null>(null);
@@ -339,6 +342,14 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   const getCurrentMessages = useCallback(() => messagesRef.current, []);
   const getCurrentAgentTurns = useCallback(() => agentTurnsRef.current, []);
+  const handleCanonicalMessagesApplied = useCallback((canonicalMessages: Message[]) => {
+    reactionMutationGenerationRef.current.forEach((_generation, messageId) => {
+      const canonicalReaction = canonicalMessages
+        .find(message => message.id === messageId)
+        ?.reactions?.find(reaction => reaction.clientId === clientId)?.type;
+      confirmedOwnReactionRef.current.set(messageId, canonicalReaction);
+    });
+  }, []);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const container = containerRef.current;
@@ -667,7 +678,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (isNearBottomRef.current) {
       scheduleScrollToBottom('auto');
     }
-  }, [bottomInsetPx, scheduleScrollToBottom]);
+  }, [agentTurns, bottomInsetPx, messages, scheduleScrollToBottom]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -688,10 +699,21 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       observer.observe(contentRef.current || container);
     }
 
+    let mutationObserver: MutationObserver | null = null;
+    if (typeof MutationObserver !== 'undefined' && contentRef.current) {
+      mutationObserver = new MutationObserver(stickToBottomIfNeeded);
+      mutationObserver.observe(contentRef.current, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    }
+
     container.addEventListener('load', stickToBottomIfNeeded, true);
 
     return () => {
       observer?.disconnect();
+      mutationObserver?.disconnect();
       container.removeEventListener('load', stickToBottomIfNeeded, true);
     };
   }, [scheduleScrollToBottom]);
@@ -764,6 +786,66 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         notifyActionError(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
       });
   }, [ensureRoomOperationReady, notifyActionError, roomId, updateMessages, t]);
+
+  const handleSetReaction = useCallback(async (
+    messageId: string,
+    reaction: MessageReactionType | null,
+  ) => {
+    if (!retainedRoomAccessRef.current) return;
+    try {
+      await ensureRoomOperationReady();
+    } catch (error) {
+      notifyActionError(error instanceof Error ? error.message : t('unknownError'));
+      return;
+    }
+
+    if (!reactionMutationGenerationRef.current.has(messageId)) {
+      confirmedOwnReactionRef.current.set(
+        messageId,
+        messagesRef.current
+          .find(message => message.id === messageId)
+          ?.reactions?.find(item => item.clientId === clientId)?.type,
+      );
+    }
+    const mutationGeneration = ++reactionMutationSequenceRef.current;
+    reactionMutationGenerationRef.current.set(messageId, mutationGeneration);
+    updateMessages(previous => previous.map(message => {
+      if (message.id !== messageId) return message;
+      const reactions = (message.reactions || []).filter(item => item.clientId !== clientId);
+      if (reaction) reactions.push({ clientId, type: reaction });
+      return { ...message, reactions };
+    }));
+
+    try {
+      const updatedMessage = await setMessageReaction(roomId, messageId, reaction);
+      const savedOwnReaction = updatedMessage.reactions
+        ?.find(item => item.clientId === clientId);
+      confirmedOwnReactionRef.current.set(messageId, savedOwnReaction?.type);
+      if (reactionMutationGenerationRef.current.get(messageId) !== mutationGeneration) return;
+      updateMessages(previous => previous.map(message => {
+        if (message.id !== messageId) return message;
+        const reactions = (message.reactions || []).filter(item => item.clientId !== clientId);
+        if (savedOwnReaction) reactions.push(savedOwnReaction);
+        return { ...message, reactions };
+      }));
+    } catch (error) {
+      console.error('Failed to update message reaction:', error);
+      if (reactionMutationGenerationRef.current.get(messageId) !== mutationGeneration) return;
+      const confirmedReaction = confirmedOwnReactionRef.current.get(messageId);
+      updateMessages(previous => previous.map(message => {
+        if (message.id !== messageId) return message;
+        const reactions = (message.reactions || []).filter(item => item.clientId !== clientId);
+        if (confirmedReaction) reactions.push({ clientId, type: confirmedReaction });
+        return { ...message, reactions };
+      }));
+      notifyActionError(error instanceof Error ? error.message : t('unknownError'));
+    } finally {
+      if (reactionMutationGenerationRef.current.get(messageId) === mutationGeneration) {
+        reactionMutationGenerationRef.current.delete(messageId);
+        confirmedOwnReactionRef.current.delete(messageId);
+      }
+    }
+  }, [ensureRoomOperationReady, notifyActionError, roomId, t, updateMessages]);
 
   const handleSteerQueuedMessage = useCallback(async (messageId: string) => {
     if (!retainedRoomAccessRef.current) return;
@@ -1005,6 +1087,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     getCurrentMessages,
     getCurrentAgentTurns,
     updateMessages,
+    onCanonicalMessagesApplied: handleCanonicalMessagesApplied,
     setAgentTurns,
     setIsLoading,
     setIsLoadingMore,
@@ -1192,10 +1275,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           aria-live={isMessageLogLive ? 'polite' : 'off'}
           aria-relevant="additions"
           aria-busy={isLoading}
-          className="relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 pt-3"
+          className={`relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 ${presentation === 'code-agent' ? 'pt-3' : 'pt-14'}`}
           onScroll={handleScroll}
         >
-          <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
+          <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full shrink-0 flex-col">
             {hasMoreMessages && (
               <div
                 ref={historyLoadSentinelRef}
@@ -1242,6 +1325,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       aiRequestRoomKind={aiRequestRoomKind}
                       onStartEdit={handleOpenEditModal}
                       onDeleteMessage={handleOpenDeleteModal}
+                      onSetReaction={handleSetReaction}
                       onEditQueuedMessage={handleOpenEditModal}
                       onSteerQueuedMessage={handleSteerQueuedMessage}
                       onCancelQueuedMessage={handleCancelQueuedMessage}
@@ -1298,6 +1382,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 aiRequestRoomKind={aiRequestRoomKind}
                 onStartEdit={handleOpenEditModal}
                 onDeleteMessage={handleOpenDeleteModal}
+                onSetReaction={handleSetReaction}
                 onEditQueuedMessage={handleOpenEditModal}
                 onSteerQueuedMessage={handleSteerQueuedMessage}
                 onCancelQueuedMessage={handleCancelQueuedMessage}

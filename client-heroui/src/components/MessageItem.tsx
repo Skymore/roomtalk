@@ -12,7 +12,7 @@ import {
 import { Icon } from "@iconify/react";
 import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription, sendA2UIAction } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomMemberRole, RoomPermissions } from "../utils/types";
+import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, MessageReactionType, RoomMemberRole, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
@@ -39,6 +39,7 @@ interface MessageItemProps {
   aiRequestRoomKind?: AIRequestRoomKind;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
+  onSetReaction?: (messageId: string, reaction: MessageReactionType | null) => void;
   onEditQueuedMessage?: (messageId: string) => void;
   onSteerQueuedMessage?: (messageId: string) => void;
   onCancelQueuedMessage?: (messageId: string) => void;
@@ -295,6 +296,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   aiRequestRoomKind = 'chat',
   onStartEdit,
   onDeleteMessage,
+  onSetReaction,
   onEditQueuedMessage,
   onSteerQueuedMessage,
   onCancelQueuedMessage,
@@ -435,8 +437,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }, [aiRequestRoomKind, ensureRoomOperationReady, message.id, message.roomId]);
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [liked, setLiked] = useState(false);
-  const [disliked, setDisliked] = useState(false);
+  const ownReaction = message.reactions?.find(reaction => reaction.clientId === clientId)?.type;
+  const liked = ownReaction === 'like';
+  const disliked = ownReaction === 'dislike';
+  const likeCount = message.reactions?.filter(reaction => reaction.type === 'like').length || 0;
+  const dislikeCount = message.reactions?.filter(reaction => reaction.type === 'dislike').length || 0;
   const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileDownloadResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const a2uiInteractionRootRef = React.useRef<HTMLDivElement | null>(null);
@@ -1091,13 +1096,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   };
 
   const toggleLike = () => {
-    setLiked((value) => !value);
-    if (!liked) setDisliked(false);
+    if (!isInteractionDisabled) onSetReaction?.(message.id, liked ? null : 'like');
   };
 
   const toggleDislike = () => {
-    setDisliked((value) => !value);
-    if (!disliked) setLiked(false);
+    if (!isInteractionDisabled) onSetReaction?.(message.id, disliked ? null : 'dislike');
   };
 
   // 修改成不使用事件参数的简单处理函数，避免类型错误
@@ -1387,6 +1390,37 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               {aiCostLabel && ` • ${aiCostLabel}`}
             </span>
 
+            {likeCount > 0 && (
+              <Button
+                size="sm"
+                variant={liked ? 'flat' : 'light'}
+                aria-label={`${t('like')} ${likeCount}`}
+                aria-pressed={liked}
+                data-testid={`message-reaction-like-${message.id}`}
+                className={`mr-0.5 h-8 min-w-10 gap-1 px-2 text-xs md:h-6 ${liked ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+                onPress={toggleLike}
+                isDisabled={isInteractionDisabled || !onSetReaction}
+              >
+                <Icon icon="lucide:thumbs-up" className="h-3.5 w-3.5" />
+                <span>{likeCount}</span>
+              </Button>
+            )}
+            {dislikeCount > 0 && (
+              <Button
+                size="sm"
+                variant={disliked ? 'flat' : 'light'}
+                aria-label={`${t('dislike')} ${dislikeCount}`}
+                aria-pressed={disliked}
+                data-testid={`message-reaction-dislike-${message.id}`}
+                className={`mr-0.5 h-8 min-w-10 gap-1 px-2 text-xs md:h-6 ${disliked ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+                onPress={toggleDislike}
+                isDisabled={isInteractionDisabled || !onSetReaction}
+              >
+                <Icon icon="lucide:thumbs-down" className="h-3.5 w-3.5" />
+                <span>{dislikeCount}</span>
+              </Button>
+            )}
+
             <div className="ml-1 flex items-center gap-0.5 opacity-100 transition-opacity md:opacity-55 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
               {isMine && isQueuedInput && (
                 <Dropdown placement="top-end">
@@ -1526,6 +1560,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     startContent={<Icon icon="lucide:thumbs-up" />}
                     onPress={toggleLike}
                     className={liked ? "text-[#c96442] dark:text-[#d97757]" : ""}
+                    isDisabled={isInteractionDisabled || !onSetReaction}
                   >
                     {liked ? t('cancelLike') : t('like')}
                   </DropdownItem>
@@ -1534,6 +1569,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     startContent={<Icon icon="lucide:thumbs-down" />}
                     onPress={toggleDislike}
                     className={disliked ? "text-[#c96442] dark:text-[#d97757]" : ""}
+                    isDisabled={isInteractionDisabled || !onSetReaction}
                   >
                     {disliked ? t('cancelDislike') : t('dislike')}
                   </DropdownItem>

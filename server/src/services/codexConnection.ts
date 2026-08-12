@@ -23,6 +23,7 @@ export interface CodexConnectionRecord {
   lastUsedAt?: string;
   authRefreshOwnerId?: string;
   authRefreshLockedUntil?: string;
+  deviceAuthRestoreStatus?: Exclude<CodexConnectionStatus, 'pending'>;
   lastError?: string;
 }
 
@@ -71,6 +72,7 @@ export interface CodexAuthWorkResult<T> {
   result: T;
   refreshedAuthJson?: string;
   loginStatus?: string;
+  reauthRequired?: boolean;
 }
 
 export interface CodexAuthSnapshot {
@@ -85,6 +87,30 @@ export interface CodexConnectionAuthUpdate {
   lastValidatedAt?: string;
 }
 
+export interface CodexConnectionReauthUpdate {
+  updatedAt: string;
+  lastUsedAt: string;
+  lastError: string;
+}
+
+export type CodexDeviceAuthAttemptUpdate =
+  | {
+      outcome: 'connected';
+      encryptedAuthJson: CodexEncryptedAuthJson;
+      keyVersion: string;
+      updatedAt: string;
+      lastValidatedAt: string;
+    }
+  | {
+      outcome: 'failed';
+      updatedAt: string;
+      lastError: string;
+    }
+  | {
+      outcome: 'cancelled';
+      updatedAt: string;
+    };
+
 export interface CodexChatgptAuthRefreshResult {
   authJson: string;
   authVersion: number;
@@ -97,12 +123,29 @@ export interface CodexConnectionStore {
   getConnection(clientId: string): Promise<CodexConnectionRecord | null>;
   saveConnection(record: CodexConnectionRecord): Promise<CodexConnectionRecord>;
   deleteConnection(clientId: string): Promise<boolean>;
+  beginDeviceAuthAttempt(
+    clientId: string,
+    keyVersion: string,
+    createdAt: string,
+    updatedAt: string
+  ): Promise<CodexConnectionRecord>;
+  settleDeviceAuthAttempt(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexDeviceAuthAttemptUpdate
+  ): Promise<CodexConnectionRecord | null>;
+  disconnectConnection(clientId: string, updatedAt: string): Promise<CodexConnectionRecord | null>;
   compareAndSwapAuth(
     clientId: string,
     expectedAuthVersion: number,
     update: CodexConnectionAuthUpdate
   ): Promise<CodexConnectionRecord | null>;
-  touchConnection(clientId: string, lastUsedAt: string, lastValidatedAt?: string): Promise<CodexConnectionRecord | null>;
+  markReauthRequired(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexConnectionReauthUpdate
+  ): Promise<CodexConnectionRecord | null>;
+  touchConnection(clientId: string, expectedAuthVersion: number, lastUsedAt: string, lastValidatedAt?: string): Promise<CodexConnectionRecord | null>;
   acquireAuthRefreshLease(
     clientId: string,
     ownerId: string,
@@ -220,57 +263,60 @@ export class CodexConnectionService {
   async connectWithDeviceAuth(
     clientId: string,
     onDeviceCode?: (info: CodexDeviceAuthInfo) => void | Promise<void>,
-    options: { signal?: AbortSignal } = {}
+    options: {
+      signal?: AbortSignal;
+      onAttemptStarted?: (authVersion: number) => void;
+    } = {}
   ): Promise<CodexConnectionPublicStatus> {
-    const existing = await this.store.getConnection(clientId);
-    const createdAt = existing?.createdAt || this.timestamp();
-    const pending = await this.store.saveConnection({
+    const startedAt = this.timestamp();
+    const pending = await this.store.beginDeviceAuthAttempt(
       clientId,
-      provider: 'codex',
-      status: 'pending',
-      encryptedAuthJson: existing?.encryptedAuthJson,
-      authVersion: existing?.authVersion || 0,
-      keyVersion: this.cipher.keyVersion,
-      createdAt,
-      updatedAt: this.timestamp(),
-      lastValidatedAt: existing?.lastValidatedAt,
-      lastUsedAt: existing?.lastUsedAt,
-    });
+      this.cipher.keyVersion,
+      startedAt,
+      startedAt
+    );
+    options.onAttemptStarted?.(pending.authVersion);
 
     try {
-      const result = await this.deviceAuthDriver.runDeviceAuth({ clientId, onDeviceCode, signal: options.signal });
-      const connected = await this.store.saveConnection({
-        ...pending,
-        status: 'connected',
-        encryptedAuthJson: this.cipher.encryptAuthJson(result.authJson),
-        authVersion: pending.authVersion + 1,
-        keyVersion: this.cipher.keyVersion,
-        updatedAt: this.timestamp(),
-        lastValidatedAt: this.timestamp(),
-        lastError: undefined,
+      const result = await this.deviceAuthDriver.runDeviceAuth({
+        clientId,
+        onDeviceCode,
+        signal: options.signal,
       });
+      const completedAt = this.timestamp();
+      const connected = await this.store.settleDeviceAuthAttempt(clientId, pending.authVersion, {
+        outcome: 'connected',
+        encryptedAuthJson: this.cipher.encryptAuthJson(result.authJson),
+        keyVersion: this.cipher.keyVersion,
+        updatedAt: completedAt,
+        lastValidatedAt: completedAt,
+      });
+      if (!connected) {
+        throw new CodexConnectionError(
+          `Codex device auth was superseded for client ${clientId}.`,
+          'device_auth_cancelled'
+        );
+      }
       return publicStatus(connected, this.now(), summarizeCodexAuthAccount(result.authJson));
     } catch (error) {
       if (isCodexConnectionError(error, 'device_auth_cancelled') || options.signal?.aborted) {
-        if (existing) {
-          await this.store.saveConnection({
-            ...existing,
-            authRefreshOwnerId: undefined,
-            authRefreshLockedUntil: undefined,
-            lastError: undefined,
-            updatedAt: this.timestamp(),
-          });
-        } else {
-          await this.store.deleteConnection(clientId);
-        }
+        await this.store.settleDeviceAuthAttempt(clientId, pending.authVersion, {
+          outcome: 'cancelled',
+          updatedAt: this.timestamp(),
+        });
         throw new CodexConnectionError(`Codex device auth was cancelled for client ${clientId}.`, 'device_auth_cancelled');
       }
-      const failed = await this.store.saveConnection({
-        ...pending,
-        status: 'reauth_required',
+      const failed = await this.store.settleDeviceAuthAttempt(clientId, pending.authVersion, {
+        outcome: 'failed',
         updatedAt: this.timestamp(),
         lastError: 'Codex device auth failed',
       });
+      if (!failed) {
+        throw new CodexConnectionError(
+          `Codex device auth was superseded for client ${clientId}.`,
+          'device_auth_cancelled'
+        );
+      }
       throw new CodexConnectionError(`Codex device auth failed for client ${clientId}.`, 'device_auth_failed');
     }
   }
@@ -291,8 +337,16 @@ export class CodexConnectionService {
     return publicStatus(record, this.now(), this.accountSummaryForRecord(record));
   }
 
+  async cancelDeviceAuthAttempt(clientId: string, expectedAuthVersion: number): Promise<boolean> {
+    const cancelled = await this.store.settleDeviceAuthAttempt(clientId, expectedAuthVersion, {
+      outcome: 'cancelled',
+      updatedAt: this.timestamp(),
+    });
+    return Boolean(cancelled);
+  }
+
   async disconnect(clientId: string): Promise<CodexConnectionPublicStatus> {
-    await this.store.deleteConnection(clientId);
+    await this.store.disconnectConnection(clientId, this.timestamp());
     return this.getConnectionStatus(clientId);
   }
 
@@ -305,6 +359,14 @@ export class CodexConnectionService {
     const authJson = this.cipher.decryptAuthJson(connection.encryptedAuthJson!);
     const workResult = await work(authJson, { authVersion: connection.authVersion });
     const updatedAt = this.timestamp();
+    if (workResult.reauthRequired) {
+      await this.store.markReauthRequired(clientId, connection.authVersion, {
+        updatedAt,
+        lastUsedAt: updatedAt,
+        lastError: 'Codex sign-in expired',
+      });
+      return workResult.result;
+    }
     const refreshedAuthJson = workResult.refreshedAuthJson;
     const authChanged = refreshedAuthJson && !sameCodexAuthCredentials(authJson, refreshedAuthJson);
 
@@ -323,6 +385,7 @@ export class CodexConnectionService {
 
     await this.store.touchConnection(
       clientId,
+      connection.authVersion,
       updatedAt,
       workResult.loginStatus ? updatedAt : undefined
     );
@@ -500,17 +563,116 @@ export class InMemoryCodexConnectionStore implements CodexConnectionStore {
     return this.records.delete(clientId);
   }
 
+  async beginDeviceAuthAttempt(
+    clientId: string,
+    keyVersion: string,
+    createdAt: string,
+    updatedAt: string
+  ): Promise<CodexConnectionRecord> {
+    const existing = this.records.get(clientId);
+    const restoreStatus = existing?.status === 'pending'
+      ? existing.deviceAuthRestoreStatus || 'disconnected'
+      : existing?.status || 'disconnected';
+    const pending: CodexConnectionRecord = {
+      ...(existing || {
+        clientId,
+        provider: 'codex' as const,
+        createdAt,
+      }),
+      status: 'pending',
+      authVersion: (existing?.authVersion || 0) + 1,
+      keyVersion,
+      updatedAt,
+      authRefreshOwnerId: undefined,
+      authRefreshLockedUntil: undefined,
+      deviceAuthRestoreStatus: restoreStatus,
+    };
+    this.records.set(clientId, pending);
+    return cloneRecord(pending)!;
+  }
+
+  async settleDeviceAuthAttempt(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexDeviceAuthAttemptUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const record = this.records.get(clientId);
+    if (!record || record.status !== 'pending' || record.authVersion !== expectedAuthVersion) {
+      return null;
+    }
+
+    let settled: CodexConnectionRecord;
+    if (update.outcome === 'connected') {
+      settled = {
+        ...record,
+        status: 'connected',
+        encryptedAuthJson: update.encryptedAuthJson,
+        keyVersion: update.keyVersion,
+        updatedAt: update.updatedAt,
+        lastValidatedAt: update.lastValidatedAt,
+        authRefreshOwnerId: undefined,
+        authRefreshLockedUntil: undefined,
+        deviceAuthRestoreStatus: undefined,
+      };
+    } else if (update.outcome === 'failed') {
+      settled = {
+        ...record,
+        status: 'reauth_required',
+        updatedAt: update.updatedAt,
+        authRefreshOwnerId: undefined,
+        authRefreshLockedUntil: undefined,
+        deviceAuthRestoreStatus: undefined,
+        lastError: update.lastError,
+      };
+    } else {
+      settled = {
+        ...record,
+        status: record.deviceAuthRestoreStatus || 'disconnected',
+        updatedAt: update.updatedAt,
+        authRefreshOwnerId: undefined,
+        authRefreshLockedUntil: undefined,
+        deviceAuthRestoreStatus: undefined,
+        lastError: undefined,
+      };
+    }
+    this.records.set(clientId, settled);
+    return cloneRecord(settled)!;
+  }
+
+  async disconnectConnection(clientId: string, updatedAt: string): Promise<CodexConnectionRecord | null> {
+    const record = this.records.get(clientId);
+    if (!record) return null;
+    const disconnected: CodexConnectionRecord = {
+      ...record,
+      status: 'disconnected',
+      encryptedAuthJson: undefined,
+      authVersion: record.authVersion + 1,
+      updatedAt,
+      authRefreshOwnerId: undefined,
+      authRefreshLockedUntil: undefined,
+      deviceAuthRestoreStatus: undefined,
+      lastError: undefined,
+    };
+    this.records.set(clientId, disconnected);
+    return cloneRecord(disconnected);
+  }
+
   async compareAndSwapAuth(
     clientId: string,
     expectedAuthVersion: number,
     update: CodexConnectionAuthUpdate
   ): Promise<CodexConnectionRecord | null> {
     const record = this.records.get(clientId);
-    if (!record || record.status !== 'connected' || record.authVersion !== expectedAuthVersion) {
+    if (
+      !record
+      || (record.status !== 'connected' && record.status !== 'reauth_required')
+      || record.authVersion !== expectedAuthVersion
+    ) {
       return null;
     }
     const updated: CodexConnectionRecord = {
       ...record,
+      status: 'connected',
       encryptedAuthJson: update.encryptedAuthJson,
       authVersion: expectedAuthVersion + 1,
       keyVersion: update.keyVersion,
@@ -523,13 +685,36 @@ export class InMemoryCodexConnectionStore implements CodexConnectionStore {
     return cloneRecord(updated)!;
   }
 
+  async markReauthRequired(
+    clientId: string,
+    expectedAuthVersion: number,
+    update: CodexConnectionReauthUpdate
+  ): Promise<CodexConnectionRecord | null> {
+    const record = this.records.get(clientId);
+    if (!record || record.status !== 'connected' || record.authVersion !== expectedAuthVersion) {
+      return null;
+    }
+    const updated: CodexConnectionRecord = {
+      ...record,
+      status: 'reauth_required',
+      updatedAt: update.updatedAt,
+      lastUsedAt: update.lastUsedAt,
+      lastError: update.lastError,
+      authRefreshOwnerId: undefined,
+      authRefreshLockedUntil: undefined,
+    };
+    this.records.set(clientId, updated);
+    return cloneRecord(updated)!;
+  }
+
   async touchConnection(
     clientId: string,
+    expectedAuthVersion: number,
     lastUsedAt: string,
     lastValidatedAt?: string
   ): Promise<CodexConnectionRecord | null> {
     const record = this.records.get(clientId);
-    if (!record) {
+    if (!record || record.status !== 'connected' || record.authVersion !== expectedAuthVersion) {
       return null;
     }
     const updated: CodexConnectionRecord = {

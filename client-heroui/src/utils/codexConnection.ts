@@ -32,6 +32,7 @@ export interface CodexDeviceAuthStartResult {
   clientId: string;
   provider: 'codex';
   status: 'pending';
+  authVersion: number;
   deviceAuth: CodexDeviceAuthInfo;
 }
 
@@ -89,14 +90,17 @@ export const startCodexDeviceAuth = async (clientId: string): Promise<CodexDevic
   return response.json() as Promise<CodexDeviceAuthStartResult>;
 };
 
-export const cancelCodexDeviceAuth = async (clientId: string): Promise<CodexDeviceAuthCancelResult> => {
+export const cancelCodexDeviceAuth = async (
+  clientId: string,
+  authVersion: number
+): Promise<CodexDeviceAuthCancelResult> => {
   const response = await fetch(apiPath('/api/codex/connection/device-auth'), {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
       ...clientHeaders(clientId),
     },
-    body: JSON.stringify({ clientId }),
+    body: JSON.stringify({ clientId, authVersion }),
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to cancel Codex login'));

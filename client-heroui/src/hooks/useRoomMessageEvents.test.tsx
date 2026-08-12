@@ -288,6 +288,39 @@ describe('useRoomMessageEvents event-log synchronization', () => {
     expect(socketMock.requestEvents).toHaveBeenCalledWith(expect.objectContaining({ roomId: 'room-1', afterSeq: 4 }));
   });
 
+  it('restarts the initial sync when callback changes rebuild the lifecycle effect during cache hydration', async () => {
+    let resolveCacheRead!: (value: CachedRoomMessageWindow | null) => void;
+    const cacheRead = new Promise<CachedRoomMessageWindow | null>(resolve => {
+      resolveCacheRead = resolve;
+    });
+    cacheMock.readCachedRoomMessageWindow
+      .mockImplementationOnce(() => cacheRead)
+      .mockImplementationOnce(() => cacheRead);
+    socketMock.requestSnapshot.mockImplementationOnce(async request => snapshot({
+      requestId: request.requestId,
+      messages: [message({ id: 'history-after-effect-rebuild' })],
+      snapshotSeq: 4,
+    }));
+
+    const { rerender } = render(
+      <Harness onRoomDeleted={vi.fn()} onRoomAccessDenied={vi.fn()} />,
+    );
+    await waitFor(() => expect(cacheMock.readCachedRoomMessageWindow).toHaveBeenCalledTimes(1));
+
+    rerender(<Harness onRoomDeleted={vi.fn()} onRoomAccessDenied={vi.fn()} />);
+    await waitFor(() => expect(cacheMock.readCachedRoomMessageWindow).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveCacheRead(null);
+      await cacheRead;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state').dataset.messages).toBe('history-after-effect-rebuild');
+    });
+    expect(socketMock.requestSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps canonical position through snapshot, replay upsert, and prepend pagination', async () => {
     const requestHistoryRef: { current: RoomMessageHistoryRequest | null } = { current: null };
     const ai = message({

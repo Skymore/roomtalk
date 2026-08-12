@@ -107,6 +107,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     savedHistory: [] as Message[][],
     appendedMessages: [] as Message[],
     editedMessages: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
+    reactionUpdates: [] as Array<{ roomId: string; messageId: string; clientId: string; reaction: 'like' | 'dislike' | null }>,
     deletedMessages: [] as Array<{ roomId: string; messageId: string }>,
     clearedRooms: [] as string[],
     async getClientId() {
@@ -223,6 +224,24 @@ const createHarness = (clientId: string | null = 'client-1') => {
         content: newContent,
         updatedAt: '2026-05-03T00:00:10.000Z',
       };
+      this.messages = this.messages.map(item => item.id === messageId ? updatedMessage : item);
+      return { room: roomActivityForMessages(this.messages), found: true, updatedMessage };
+    },
+    async setMessageReaction(
+      roomId: string,
+      messageId: string,
+      reactingClientId: string,
+      reaction: 'like' | 'dislike' | null,
+    ) {
+      this.reactionUpdates.push({ roomId, messageId, clientId: reactingClientId, reaction });
+      const messageIndex = this.messages.findIndex(item => item.roomId === roomId && item.id === messageId);
+      if (messageIndex === -1) {
+        return { room: roomActivityForMessages(this.messages), found: false };
+      }
+      const reactions = (this.messages[messageIndex].reactions || [])
+        .filter(item => item.clientId !== reactingClientId);
+      if (reaction) reactions.push({ clientId: reactingClientId, type: reaction });
+      const updatedMessage = { ...this.messages[messageIndex], reactions };
       this.messages = this.messages.map(item => item.id === messageId ? updatedMessage : item);
       return { room: roomActivityForMessages(this.messages), found: true, updatedMessage };
     },
@@ -880,6 +899,83 @@ describe('message socket handlers', () => {
     assert.equal(failing.store.editedMessages.length, 1);
     assert.equal(failing.store.savedHistory.length, 0);
     assert.deepEqual(failing.io.roomEmits, []);
+  });
+
+  it('persists one reaction per room member and leaves realtime fan-out to room_events', async () => {
+    const unregistered = createHarness(null);
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'like',
+    }, (result: unknown) => { unregisteredResponse = result; });
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'Not registered' });
+
+    const invalid = createHarness();
+    let invalidResponse: unknown;
+    await invalid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'love',
+    }, (result: unknown) => { invalidResponse = result; });
+    assert.deepEqual(invalidResponse, { success: false, error: 'Invalid reaction request' });
+
+    const noAccess = createHarness('client-2');
+    noAccess.store.members.delete('room-1:client-2');
+    let noAccessResponse: unknown;
+    await noAccess.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'like',
+    }, (result: unknown) => { noAccessResponse = result; });
+    assert.deepEqual(noAccessResponse, { success: false, error: 'You are not authorized to access this room' });
+
+    const valid = createHarness('client-2');
+    let response: { success: boolean; updatedMessage?: Message } | undefined;
+    await valid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'like',
+    }, (result: typeof response) => { response = result; });
+    assert.equal(response?.success, true);
+    assert.deepEqual(response?.updatedMessage?.reactions, [{ clientId: 'client-2', type: 'like' }]);
+    assert.deepEqual(valid.store.reactionUpdates, [{
+      roomId: 'room-1', messageId: 'message-1', clientId: 'client-2', reaction: 'like',
+    }]);
+    assert.deepEqual(valid.io.roomEmits, []);
+
+    await valid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'dislike',
+    }, (result: typeof response) => { response = result; });
+    assert.deepEqual(response?.updatedMessage?.reactions, [{ clientId: 'client-2', type: 'dislike' }]);
+
+    await valid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: null,
+    }, (result: typeof response) => { response = result; });
+    assert.deepEqual(response?.updatedMessage?.reactions, []);
+  });
+
+  it('serializes rapid reactions from one socket so the last click wins durably', async () => {
+    const valid = createHarness('client-2');
+    const originalSetMessageReaction = valid.store.setMessageReaction.bind(valid.store);
+    let releaseFirstMutation: (() => void) | undefined;
+    const firstMutationGate = new Promise<void>(resolve => {
+      releaseFirstMutation = resolve;
+    });
+    const startedReactions: Array<'like' | 'dislike' | null> = [];
+    valid.store.setMessageReaction = async (roomId, messageId, clientId, reaction) => {
+      startedReactions.push(reaction);
+      if (reaction === 'like') await firstMutationGate;
+      return originalSetMessageReaction(roomId, messageId, clientId, reaction);
+    };
+
+    const firstMutation = valid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'like',
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const secondMutation = valid.socket.invoke('set_message_reaction', {
+      roomId: 'room-1', messageId: 'message-1', reaction: 'dislike',
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(startedReactions, ['like']);
+    releaseFirstMutation?.();
+    await Promise.all([firstMutation, secondMutation]);
+
+    assert.deepEqual(startedReactions, ['like', 'dislike']);
+    assert.deepEqual(valid.store.messages[0].reactions, [{ clientId: 'client-2', type: 'dislike' }]);
   });
 
   it('deletes messages idempotently and leaves durable fan-out to room_events', async () => {
