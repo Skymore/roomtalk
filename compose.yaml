@@ -212,7 +212,7 @@ services:
     profiles: ["edge"]
     restart: unless-stopped
     logging: *default-logging
-    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--config", "/etc/cloudflared/config.yml", "run"]
     volumes:
       - ${CLOUDFLARE_TUNNEL_CONFIG_FILE:-./runtime/cloudflared/config.yml}:/etc/cloudflared/config.yml:ro
       - ${CLOUDFLARE_TUNNEL_CREDENTIALS_FILE:-./runtime/cloudflared/credentials.json}:/etc/cloudflared/credentials.json:ro
@@ -227,7 +227,7 @@ services:
     profiles: ["edge"]
     restart: unless-stopped
     logging: *default-logging
-    command: ["tunnel", "--no-autoupdate", "run"]
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "run"]
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_WENLIN_TUNNEL_TOKEN:-}
     depends_on:
