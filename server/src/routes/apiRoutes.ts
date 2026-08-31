@@ -723,6 +723,10 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.status(204).send();
   });
 
+  app.get('/api/auth/config', (_req: Request, res: Response) => {
+    return res.json({ googleConfigured: googleClientIds.length > 0 });
+  });
+
   app.get('/api/auth/account', async (req: Request, res: Response) => {
     const clientId = getQueryClientId(req);
     if (!clientId) {

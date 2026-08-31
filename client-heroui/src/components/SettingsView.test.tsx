@@ -17,6 +17,7 @@ const githubApiMock = vi.hoisted(() => ({
   disconnectGitHub: vi.fn(),
 }));
 const accountApiMock = vi.hoisted(() => ({
+  getAuthConfig: vi.fn(),
   getClientAccountStatus: vi.fn(),
   disconnectGoogleAccount: vi.fn(),
 }));
@@ -38,6 +39,7 @@ vi.mock('@iconify/react', () => ({
 
 vi.mock('../utils/socket', () => ({
   getClientAuthStatus: vi.fn(async (clientId: string) => ({ clientId, hasPassword: false })),
+  getAuthConfig: accountApiMock.getAuthConfig,
   getClientAccountStatus: accountApiMock.getClientAccountStatus,
   disconnectGoogleAccount: accountApiMock.disconnectGoogleAccount,
   loginWithClientPassword: vi.fn(),
@@ -73,6 +75,7 @@ describe('SettingsView Codex connection controls', () => {
     localStorage.clear();
     vi.clearAllMocks();
     vi.stubGlobal('open', vi.fn());
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id');
     codexApiMock.getCodexConnectionStatus.mockResolvedValue({
       clientId: 'client-1',
       provider: 'codex',
@@ -123,6 +126,7 @@ describe('SettingsView Codex connection controls', () => {
       roles: [],
       entitlement: null,
     });
+    accountApiMock.getAuthConfig.mockResolvedValue({ googleConfigured: false });
     accountApiMock.disconnectGoogleAccount.mockResolvedValue({
       clientId: 'client-1',
       hasPassword: true,
@@ -327,6 +331,20 @@ describe('SettingsView Codex connection controls', () => {
 
     expect(googleHelp.open).toBe(false);
     expect(userIdHelp.open).toBe(false);
+  });
+
+  it('renders Google sign-in when the protected account status requires reauthentication', async () => {
+    const initialize = vi.fn();
+    const renderButton = vi.fn();
+    vi.stubGlobal('google', { accounts: { id: { initialize, renderButton } } });
+    accountApiMock.getAuthConfig.mockResolvedValueOnce({ googleConfigured: true });
+    accountApiMock.getClientAccountStatus.mockRejectedValueOnce(new Error('User ID password login is required'));
+
+    render(<SettingsView {...baseProps} />);
+
+    await waitFor(() => expect(renderButton).toHaveBeenCalled());
+    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ client_id: 'google-client-id' }));
+    expect(screen.getByRole('alert').textContent).toBe('User ID password login is required');
   });
 
   it('removes Google connection guidance after the account is linked', async () => {

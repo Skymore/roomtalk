@@ -1031,6 +1031,15 @@ describe('API routes', () => {
     });
   });
 
+  it('returns public Google authentication configuration without a client session', async () => {
+    await server.close();
+    server = await createTestServer({ googleClientIds: ['google-client-id'] });
+
+    const response = await fetch(`${server.baseUrl}/api/auth/config`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { googleConfigured: true });
+  });
+
   it('links a Google account to the current User ID and reuses it on later Google login', async () => {
     await server.close();
     server = await createTestServer({

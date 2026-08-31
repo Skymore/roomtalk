@@ -87,6 +87,7 @@ const {
   ensureRoomJoined,
   ensureRegisteredSocket,
   disconnectGoogleAccount,
+  getAuthConfig,
   getAudioTranscription,
   getClientAccountStatus,
   getClientAuthStatus,
@@ -866,6 +867,17 @@ describe('socket message acknowledgement helpers', () => {
       method: 'DELETE',
       headers: { 'X-Client-Id': 'client-google', 'X-Client-Auth-Token': 'google-token' },
     });
+  });
+
+  it('loads public authentication configuration without client credentials', async () => {
+    setClientAuthToken('old-token');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ googleConfigured: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getAuthConfig()).resolves.toEqual({ googleConfigured: true });
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/config', { cache: 'no-store' });
   });
 
   it('uploads media objects through relative local media URLs', async () => {

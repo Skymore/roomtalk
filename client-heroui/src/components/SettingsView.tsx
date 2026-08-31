@@ -28,6 +28,7 @@ import {
   ClientAccountStatus,
   ClientAuthStatus,
   disconnectGoogleAccount,
+  getAuthConfig,
   getClientAccountStatus,
   getClientAuthStatus,
   loginWithClientPassword,
@@ -55,7 +56,7 @@ import {
   getGitHubConnectionStatus,
 } from "../utils/githubConnection";
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+const getGoogleClientId = () => import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
 const GOOGLE_BUTTON_MAX_WIDTH = 320;
 const GOOGLE_BUTTON_DARK_FRAME_GUTTER = 10;
 const GOOGLE_BUTTON_DARK_FRAME_HEIGHT = 44;
@@ -182,6 +183,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [loginClientId, setLoginClientId] = React.useState('');
   const [loginPassword, setLoginPassword] = React.useState('');
   const [accountStatus, setAccountStatus] = React.useState<ClientAccountStatus | null>(null);
+  const [googleConfigured, setGoogleConfigured] = React.useState(false);
   const [isUpdatingGoogleAuth, setIsUpdatingGoogleAuth] = React.useState(false);
   const [googleAuthError, setGoogleAuthError] = React.useState('');
   const [googleAuthMessage, setGoogleAuthMessage] = React.useState('');
@@ -245,10 +247,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     void refreshClientAuthStatus();
   }, [refreshClientAuthStatus]);
 
+  React.useEffect(() => {
+    void getAuthConfig()
+      .then(config => setGoogleConfigured(config.googleConfigured))
+      .catch(error => setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError')));
+  }, [t]);
+
   const refreshAccountStatus = React.useCallback(async () => {
     try {
       const status = await getClientAccountStatus(clientId);
       setAccountStatus(status);
+      setGoogleConfigured(current => current || status.googleConfigured);
       setGoogleAuthError('');
     } catch (error) {
       setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError'));
@@ -573,13 +582,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const isGoogleLoginAvailable = Boolean(GOOGLE_CLIENT_ID) && Boolean(accountStatus?.googleConfigured);
+  const googleClientId = getGoogleClientId();
+  const isGoogleLoginAvailable = Boolean(googleClientId) && googleConfigured;
   const isGoogleLinked = accountStatus?.account?.googleLinked === true;
   const shouldRenderGoogleButton = isGoogleLoginAvailable && !isGoogleLinked;
 
   React.useEffect(() => {
     const buttonContainer = googleButtonRef.current;
-    if (!shouldRenderGoogleButton || !buttonContainer || !GOOGLE_CLIENT_ID) {
+    if (!shouldRenderGoogleButton || !buttonContainer || !googleClientId) {
       buttonContainer?.replaceChildren();
       return;
     }
@@ -594,7 +604,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           return;
         }
         window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
+          client_id: googleClientId,
           callback: handleGoogleCredential,
           color_scheme: isDark ? 'dark' : 'light',
           auto_select: false,
@@ -643,7 +653,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
       buttonContainer.replaceChildren();
     };
-  }, [handleGoogleCredential, isDark, shouldRenderGoogleButton, t]);
+  }, [googleClientId, handleGoogleCredential, isDark, shouldRenderGoogleButton, t]);
 
   const pushStatusLabel = React.useMemo(() => {
     if (pushStatus === 'subscribed') return t('notificationStatusOn');

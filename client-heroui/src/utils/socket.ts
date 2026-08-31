@@ -261,6 +261,10 @@ export type ClientAccountStatus = {
   entitlement: AccountEntitlementInfo | null;
 };
 
+export type AuthConfig = {
+  googleConfigured: boolean;
+};
+
 type GoogleAuthResponse = ClientAuthResponse & {
   account: ClientAccountInfo;
 };
@@ -977,6 +981,14 @@ export const getClientAuthStatus = async (targetClientId = getClientId()): Promi
     throw new Error(await parseApiError(response, 'Failed to load User ID login status'));
   }
   return response.json() as Promise<ClientAuthStatus>;
+};
+
+export const getAuthConfig = async (): Promise<AuthConfig> => {
+  const response = await fetch(apiPath('/api/auth/config'), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to load authentication configuration'));
+  }
+  return response.json() as Promise<AuthConfig>;
 };
 
 export const getClientAccountStatus = async (targetClientId = getClientId()): Promise<ClientAccountStatus> => {
