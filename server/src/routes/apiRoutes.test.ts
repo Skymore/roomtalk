@@ -521,7 +521,8 @@ async function createTestServer(overrides: {
       this.clientAuthTokens.set(token.tokenHash, token);
     },
     async isClientAuthTokenValid(clientId: string, tokenHash: string) {
-      return this.clientAuthTokens.get(tokenHash)?.clientId === clientId;
+      const token = this.clientAuthTokens.get(tokenHash);
+      return token?.clientId === clientId && (!token.expiresAt || Date.parse(token.expiresAt) > Date.now());
     },
     async deleteClientAuthToken(clientId: string, tokenHash: string) {
       const token = this.clientAuthTokens.get(tokenHash);
@@ -1063,7 +1064,7 @@ describe('API routes', () => {
     const linkResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token' }),
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token', intent: 'sign_in' }),
     });
     assert.equal(linkResponse.status, 200);
     const linkPayload = await linkResponse.json() as {
@@ -1214,7 +1215,7 @@ describe('API routes', () => {
     const authorizedResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token', clientAuthToken }),
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token', clientAuthToken, intent: 'sign_in' }),
     });
     assert.equal(authorizedResponse.status, 200);
     const payload = await authorizedResponse.json() as { clientId: string; hasPassword: boolean; account: ClientAccount };
@@ -1222,6 +1223,73 @@ describe('API routes', () => {
     assert.equal(payload.hasPassword, true);
     assert.equal(payload.account.email, 'grace@example.com');
   });
+
+  for (const sessionState of ['missing', 'invalid', 'expired'] as const) {
+    it(`signs in with a new Google identity without claiming a password account (${sessionState} session)`, async () => {
+      await server.close();
+      server = await createTestServer({
+        googleClientIds: ['google-client-id'],
+        verifyGoogleCredential: async () => ({
+          ok: true,
+          profile: {
+            providerSubject: 'independent-google-subject',
+            email: 'new-google@example.com',
+            emailVerified: true,
+          },
+        }),
+      });
+      const passwordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+      });
+      assert.equal(passwordResponse.status, 200);
+      const passwordSession = await passwordResponse.json() as { clientAuthToken: string };
+      const originalAccount = await server.store.getAccountByClientId('client-1');
+      const originalPassword = await server.store.getClientPasswordHash('client-1');
+      if (sessionState === 'expired') {
+        const token = server.store.clientAuthTokens.get(hashClientAuthToken(passwordSession.clientAuthToken))!;
+        token.expiresAt = '2020-01-01T00:00:00.000Z';
+      }
+      const clientAuthToken = sessionState === 'expired' ? passwordSession.clientAuthToken
+        : sessionState === 'invalid' ? 'invalid-session-token' : undefined;
+      const response = await fetch(`${server.baseUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-1', credential: 'google-id-token', intent: 'sign_in', clientAuthToken,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const signedIn = await response.json() as {
+        clientId: string; clientAuthToken: string; hasPassword: boolean; account: ClientAccount;
+      };
+      assert.notEqual(signedIn.clientId, 'client-1');
+      assert.notEqual(signedIn.account.accountId, originalAccount?.accountId);
+      assert.equal(signedIn.account.googleLinked, true);
+      assert.equal(signedIn.hasPassword, false);
+      assert.deepEqual(await server.store.getAccountByClientId('client-1'), originalAccount);
+      assert.equal(await server.store.getClientPasswordHash('client-1'), originalPassword);
+      const status = await fetch(`${server.baseUrl}/api/auth/account`, {
+        headers: { 'X-Client-Id': signedIn.clientId, 'X-Client-Auth-Token': signedIn.clientAuthToken },
+      });
+      assert.equal(status.status, 200);
+      const oldAccountStatus = await fetch(`${server.baseUrl}/api/auth/account`, {
+        headers: { 'X-Client-Id': 'client-1', 'X-Client-Auth-Token': signedIn.clientAuthToken },
+      });
+      assert.equal(oldAccountStatus.status, 401);
+
+      const repeatResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token', intent: 'sign_in' }),
+      });
+      assert.equal(repeatResponse.status, 200);
+      const repeated = await repeatResponse.json() as { clientId: string; account: ClientAccount };
+      assert.equal(repeated.clientId, signedIn.clientId);
+      assert.equal(repeated.account.accountId, signedIn.account.accountId);
+    });
+  }
 
   it('sets client ID passwords and issues login tokens', async () => {
     const initialStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);

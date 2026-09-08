@@ -851,6 +851,7 @@ describe('socket message acknowledgement helpers', () => {
     expect(JSON.parse(googleRequest.body as string)).toEqual({
       clientId: 'client-uuid',
       credential: 'google-credential',
+      intent: 'sign_in',
       clientAuthToken: 'old-token',
     });
     expect(localStorage.getItem('clientId')).toBe('client-google');
@@ -878,6 +879,18 @@ describe('socket message acknowledgement helpers', () => {
 
     await expect(getAuthConfig()).resolves.toEqual({ googleConfigured: true });
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/config', { cache: 'no-store' });
+  });
+
+  it('treats unauthorized account status as signed out without hiding service failures', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'User ID password login is required' }), {
+      status: 401,
+    }));
+    await expect(getClientAccountStatus()).resolves.toBeNull();
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Authentication service temporarily unavailable' }), {
+      status: 503,
+    }));
+    await expect(getClientAccountStatus()).rejects.toThrow('Authentication service temporarily unavailable');
   });
 
   it('uploads media objects through relative local media URLs', async () => {

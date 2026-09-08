@@ -773,23 +773,30 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         account = refreshed?.googleLinked ? refreshed : null;
       }
       if (!account) {
-        if (!requestedClientId) {
+        let targetClientId = requestedClientId;
+        // Signing in with Google proves the Google identity, not ownership of a
+        // protected User ID left in this browser by an earlier session.
+        if (req.body?.intent === 'sign_in' && (!targetClientId
+          || !(await isClientRequestAuthorized(store, targetClientId, getClientAuthToken(req))))) {
+          targetClientId = uuidv4();
+        }
+        if (!targetClientId) {
           return res.status(400).json({ error: 'clientId is required' });
         }
 
-        const existingClientAccount = await store.getAccountByClientId(requestedClientId);
+        const existingClientAccount = await store.getAccountByClientId(targetClientId);
         if (existingClientAccount?.googleLinked) {
           return res.status(409).json({ error: 'This User ID is already linked to another Google account' });
         }
 
-        if (!(await authorizeClientRequest(req, res, requestedClientId, 'POST /api/auth/google'))) {
+        if (!(await authorizeClientRequest(req, res, targetClientId, 'POST /api/auth/google'))) {
           return;
         }
 
         account = await store.createGoogleAccountForClient({
           ...profile,
           accountId: uuidv4(),
-          clientId: requestedClientId,
+          clientId: targetClientId,
         });
         if (!account) {
           return res.status(409).json({ error: 'Failed to link Google account to this User ID' });

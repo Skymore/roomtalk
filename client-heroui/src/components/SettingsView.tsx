@@ -257,7 +257,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const status = await getClientAccountStatus(clientId);
       setAccountStatus(status);
-      setGoogleConfigured(current => current || status.googleConfigured);
+      if (status) {
+        setGoogleConfigured(current => current || status.googleConfigured);
+      }
       setGoogleAuthError('');
     } catch (error) {
       setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError'));
@@ -547,7 +549,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsUpdatingGoogleAuth(true);
     try {
       const result = await loginWithGoogleCredential(credential);
-      setAccountStatus(await getClientAccountStatus(result.clientId));
+      const status = await getClientAccountStatus(result.clientId);
+      if (!status) {
+        throw new Error(t('googleSignInUnknownError'));
+      }
+      setAccountStatus(status);
       setClientAuthStatus({
         clientId: result.clientId,
         hasPassword: result.hasPassword,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsView } from './SettingsView';
 
@@ -20,6 +20,7 @@ const accountApiMock = vi.hoisted(() => ({
   getAuthConfig: vi.fn(),
   getClientAccountStatus: vi.fn(),
   disconnectGoogleAccount: vi.fn(),
+  loginWithGoogleCredential: vi.fn(),
 }));
 const i18nMock = vi.hoisted(() => ({
   t: (key: string) => key,
@@ -43,7 +44,7 @@ vi.mock('../utils/socket', () => ({
   getClientAccountStatus: accountApiMock.getClientAccountStatus,
   disconnectGoogleAccount: accountApiMock.disconnectGoogleAccount,
   loginWithClientPassword: vi.fn(),
-  loginWithGoogleCredential: vi.fn(),
+  loginWithGoogleCredential: accountApiMock.loginWithGoogleCredential,
   setClientPassword: vi.fn(),
 }));
 
@@ -338,13 +339,44 @@ describe('SettingsView Codex connection controls', () => {
     const renderButton = vi.fn();
     vi.stubGlobal('google', { accounts: { id: { initialize, renderButton } } });
     accountApiMock.getAuthConfig.mockResolvedValueOnce({ googleConfigured: true });
-    accountApiMock.getClientAccountStatus.mockRejectedValueOnce(new Error('User ID password login is required'));
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce(null);
 
     render(<SettingsView {...baseProps} />);
 
     await waitFor(() => expect(renderButton).toHaveBeenCalled());
     expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ client_id: 'google-client-id' }));
-    expect(screen.getByRole('alert').textContent).toBe('User ID password login is required');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('completes Google sign-in after loading settings with an unauthorized old account', async () => {
+    const initialize = vi.fn();
+    const renderButton = vi.fn();
+    vi.stubGlobal('google', { accounts: { id: { initialize, renderButton } } });
+    accountApiMock.getAuthConfig.mockResolvedValueOnce({ googleConfigured: true });
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      clientId: 'client-google', hasPassword: false, googleConfigured: true,
+      account: { googleLinked: true, emailVerified: true, displayName: 'Google User' },
+      roles: [], entitlement: null,
+    });
+    accountApiMock.loginWithGoogleCredential.mockResolvedValueOnce({
+      clientId: 'client-google', hasPassword: false,
+    });
+    render(<SettingsView {...baseProps} />);
+    await waitFor(() => expect(renderButton).toHaveBeenCalled());
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await initialize.mock.calls[0][0].callback({ credential: 'verified-google-credential' });
+      });
+      expect(accountApiMock.loginWithGoogleCredential).toHaveBeenCalledWith('verified-google-credential');
+      expect(accountApiMock.getClientAccountStatus).toHaveBeenLastCalledWith('client-google');
+      expect(screen.getByText('googleSignInSuccess')).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('removes Google connection guidance after the account is linked', async () => {

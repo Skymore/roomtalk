@@ -991,11 +991,14 @@ export const getAuthConfig = async (): Promise<AuthConfig> => {
   return response.json() as Promise<AuthConfig>;
 };
 
-export const getClientAccountStatus = async (targetClientId = getClientId()): Promise<ClientAccountStatus> => {
+export const getClientAccountStatus = async (targetClientId = getClientId()): Promise<ClientAccountStatus | null> => {
   const response = await fetch(apiPath('/api/auth/account'), {
     cache: 'no-store',
     headers: clientAuthHeaders(targetClientId),
   });
+  if (response.status === 401) {
+    return null;
+  }
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to load account status'));
   }
@@ -1057,6 +1060,7 @@ export const loginWithGoogleCredential = async (credential: string): Promise<Goo
   const response = await postJson<GoogleAuthResponse>('/api/auth/google', withClientAuthBody({
     clientId: getClientId(),
     credential,
+    intent: 'sign_in',
   }));
   await adoptAuthenticatedClient(response);
   return response;
