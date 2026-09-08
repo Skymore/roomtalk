@@ -53,6 +53,72 @@ jobs:
       # above supplies the URL used by trigger, transaction, and NOTIFY tests.
       - run: npm test
 
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, postgres]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: roomtalk_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d roomtalk_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      E2E_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/roomtalk_e2e
+      E2E_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client-heroui/package-lock.json
+      - run: npm ci --prefix server
+      - run: npm ci --prefix client-heroui
+      - run: npm run migrate:schema --prefix server
+        env:
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: client-heroui
+      - if: matrix.suite == 'core'
+        run: >-
+          npm run test:e2e --
+          multi-client-realtime.spec.ts room-restore.spec.ts
+          message-drafts.spec.ts long-conversation.spec.ts
+          code-agent-flows.spec.ts code-agent-mobile.mobile.spec.ts mobile-core.mobile.spec.ts
+        working-directory: client-heroui
+      - if: matrix.suite == 'postgres'
+        run: npm run test:e2e:postgres
+        working-directory: client-heroui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-${{ matrix.suite }}
+          path: client-heroui/test-results/
+          retention-days: 7
+
   client:
     runs-on: ubuntu-latest
     defaults:

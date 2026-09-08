@@ -38,6 +38,7 @@ import { AppConfirmDialog } from './AppActionDialog';
 const LOAD_MORE_MESSAGE_COUNT = 80;
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 240;
 const AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS = 160;
+const ignoreReply = () => {};
 
 type MessageTimelineItem =
   | { kind: 'message'; message: Message }
@@ -158,7 +159,7 @@ export interface MessageListHandle {
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
   room,
-  onReply = () => {},
+  onReply = ignoreReply,
   roomPermissions = null,
   bottomInsetPx = 16,
   onScrollButtonVisibilityChange,
@@ -253,6 +254,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
+  const roomCreatorId = (codeAgentRoom || room)?.creatorId;
 
   const ensureRoomOperationReady = useCallback(async () => {
     if (!retainedRoomAccessRef.current) {
@@ -291,6 +293,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     return map;
   }, [roleMembers]);
 
+  const previousToolResultPairing = useRef<{
+    resultByCallId: Map<string, Message>;
+    consumed: Set<string>;
+  }>({ resultByCallId: new Map(), consumed: new Set() });
   const toolResultPairing = React.useMemo(() => {
     const resultByCallId = new Map<string, Message>();
     const consumed = new Set<string>();
@@ -306,7 +312,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         consumed.add(msg.id);
       }
     }
-    return { resultByCallId, consumed };
+    const previous = previousToolResultPairing.current;
+    if (
+      previous.resultByCallId.size === resultByCallId.size
+      && previous.consumed.size === consumed.size
+      && [...resultByCallId].every(([id, result]) => previous.resultByCallId.get(id) === result)
+      && [...consumed].every(id => previous.consumed.has(id))
+    ) return previous;
+    previousToolResultPairing.current = { resultByCallId, consumed };
+    return previousToolResultPairing.current;
   }, [messages]);
   const displayMessages = React.useMemo(
     () => messages.filter(message => !(message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id))),
@@ -1181,6 +1195,41 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // ... loading/empty states ...
   // ... return statement with JSX ...
 
+  const renderMessage = useCallback((message: Message, turnGrouped = false) => (
+    <MessageItem
+      key={turnGrouped ? undefined : message.id}
+      message={message}
+      pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
+        ? toolResultPairing.resultByCallId.get(message.toolCallId)
+        : undefined}
+      roomPermissions={roomPermissions}
+      senderRole={message.clientId === roomCreatorId
+        ? 'owner'
+        : roleMemberByClientId.get(message.clientId)?.role ?? null}
+      senderDisplayId={roleMemberByClientId.get(message.clientId)?.displayId}
+      aiRequestRoomKind={aiRequestRoomKind}
+      onStartEdit={handleOpenEditModal}
+      onDeleteMessage={handleOpenDeleteModal}
+      onSetReaction={handleSetReaction}
+      onEditQueuedMessage={handleOpenEditModal}
+      onSteerQueuedMessage={handleSteerQueuedMessage}
+      onCancelQueuedMessage={handleCancelQueuedMessage}
+      onRefreshAI={handleRefreshAI}
+      onRetryDelivery={handleRetryDelivery}
+      onReply={onReply}
+      onUserAction={handleUserAction}
+      onOpenWorkspaceFile={onOpenWorkspaceFile}
+      workspaceRoot={workspaceRoot}
+      turnGrouped={turnGrouped}
+      isInteractionDisabled={!canUseRetainedRoomAccess}
+      ensureRoomOperationReady={ensureRoomOperationReady}
+    />
+  ), [aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
+    handleCancelQueuedMessage, handleOpenDeleteModal, handleOpenEditModal, handleRefreshAI, handleRetryDelivery,
+    handleSetReaction, handleSteerQueuedMessage, handleUserAction, onOpenWorkspaceFile, onReply,
+    roleMemberByClientId, roomCreatorId, roomPermissions, toolResultPairing.resultByCallId, workspaceRoot]);
+  const renderAgentMessage = useCallback((message: Message) => renderMessage(message, true), [renderMessage]);
+
   return (
     <>
       {presentation !== 'code-agent' && (
@@ -1310,44 +1359,14 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             {!isLoading && messages.length > 0 && (
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
-                  const renderMessage = (message: Message, turnGrouped = false) => (
-                    <MessageItem
-                      key={turnGrouped ? undefined : message.id}
-                      message={message}
-                      pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
-                        ? toolResultPairing.resultByCallId.get(message.toolCallId)
-                        : undefined}
-                      roomPermissions={roomPermissions}
-                      senderRole={message.clientId === (codeAgentRoom || room)?.creatorId
-                        ? 'owner'
-                        : roleMemberByClientId.get(message.clientId)?.role ?? null}
-                      senderDisplayId={roleMemberByClientId.get(message.clientId)?.displayId}
-                      aiRequestRoomKind={aiRequestRoomKind}
-                      onStartEdit={handleOpenEditModal}
-                      onDeleteMessage={handleOpenDeleteModal}
-                      onSetReaction={handleSetReaction}
-                      onEditQueuedMessage={handleOpenEditModal}
-                      onSteerQueuedMessage={handleSteerQueuedMessage}
-                      onCancelQueuedMessage={handleCancelQueuedMessage}
-                      onRefreshAI={handleRefreshAI}
-                      onRetryDelivery={handleRetryDelivery}
-                      onReply={onReply}
-                      onUserAction={handleUserAction}
-                      onOpenWorkspaceFile={onOpenWorkspaceFile}
-                      workspaceRoot={workspaceRoot}
-                      turnGrouped={turnGrouped}
-                      isInteractionDisabled={!canUseRetainedRoomAccess}
-                      ensureRoomOperationReady={ensureRoomOperationReady}
-                    />
-                  );
                   if (item.kind === 'agent-turn') {
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}
                         turn={item.turn}
                         messages={item.messages}
-                        renderAgentMessage={message => renderMessage(message, true)}
-                        renderStandaloneMessage={message => renderMessage(message)}
+                        renderAgentMessage={renderAgentMessage}
+                        renderStandaloneMessage={renderMessage}
                         onRestoreCheckpoint={roomPermissions?.canManageRoom ? handleRestoreAgentCheckpoint : undefined}
                       />
                     );

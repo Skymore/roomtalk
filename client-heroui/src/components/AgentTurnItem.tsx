@@ -40,7 +40,7 @@ export const formatAgentTurnDuration = (durationMs: number) => {
   return `${seconds}s`;
 };
 
-export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
+const AgentTurnItemComponent: React.FC<AgentTurnItemProps> = ({
   turn,
   messages,
   renderAgentMessage,
@@ -259,3 +259,14 @@ export const AgentTurnItem: React.FC<AgentTurnItemProps> = ({
     </div>
   );
 };
+
+// Timeline grouping creates fresh arrays on each chunk. Compare their members
+// so unchanged turns retain their rendered content and local expansion state.
+export const AgentTurnItem = React.memo(AgentTurnItemComponent, (previous, next) => (
+  previous.turn === next.turn
+  && previous.renderAgentMessage === next.renderAgentMessage
+  && previous.renderStandaloneMessage === next.renderStandaloneMessage
+  && previous.onRestoreCheckpoint === next.onRestoreCheckpoint
+  && previous.messages.length === next.messages.length
+  && previous.messages.every((message, index) => message === next.messages[index])
+));

@@ -43,6 +43,23 @@ const turn = (overrides: Partial<RoomAgentTurn> = {}): RoomAgentTurn => ({
 afterEach(cleanup);
 
 describe('AgentTurnItem', () => {
+  it('skips unchanged history but updates content and action callbacks', () => {
+    const completed = turn();
+    const final = message({ id: 'ai-final', content: 'Original response' });
+    const renderMessage = vi.fn((item: Message) => <div>{item.content}</div>);
+    const props = { turn: completed, messages: [final], renderAgentMessage: renderMessage, renderStandaloneMessage: renderMessage };
+    const rendered = render(<AgentTurnItem {...props} />);
+    renderMessage.mockClear();
+    rendered.rerender(<AgentTurnItem {...props} messages={[final]} />);
+    expect(renderMessage).not.toHaveBeenCalled();
+    rendered.rerender(<AgentTurnItem {...props} messages={[{ ...final, content: 'Updated response' }]} />);
+    expect(screen.getByText('Updated response')).toBeTruthy();
+    const replacementRenderer = vi.fn((item: Message) => <div>New action: {item.content}</div>);
+    rendered.rerender(<AgentTurnItem {...props} renderAgentMessage={replacementRenderer} />);
+    expect(replacementRenderer).toHaveBeenCalled();
+    expect(screen.getByText('New action: Original response')).toBeTruthy();
+  });
+
   it('shows one working header and one avatar for a running turn', () => {
     const messages = [
       message({ id: 'ai-first', content: 'first update', status: 'complete' }),

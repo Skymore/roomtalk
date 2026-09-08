@@ -253,6 +253,7 @@ const installVoiceRecordingMocks = () => {
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    localStorage.clear();
     clearRegisteredMediaUploadsForTests();
     stickerMocks.suggestions = [];
     disclosureMocks.isOpen = false;
@@ -326,6 +327,87 @@ describe('MessageInput optimistic send flow', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('restores plain text drafts independently for each room and client', async () => {
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'First room\n<b>literal</b>');
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    expect(rendered.editor.textContent).toBe('');
+    setEditorText(rendered.editor, 'Second room');
+    rendered.rerender(<MessageInput {...rendered.props} />);
+    expect(rendered.editor.textContent).toBe('First room\n<b>literal</b>');
+    expect(rendered.editor.querySelector('b')).toBeNull();
+    rendered.rerender(<MessageInput {...rendered.props} clientId="client-2" />);
+    expect(rendered.editor.textContent).toBe('');
+    rendered.unmount();
+    const remounted = renderMessageInput();
+    expect(remounted.editor.textContent).toBe('First room\n<b>literal</b>');
+  });
+
+  it('retains a failed send draft across remounts', async () => {
+    socketMocks.sendMessage.mockRejectedValue(new Error('offline'));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'Recover after failure');
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(rendered.props.onOptimisticMessageFailed).toHaveBeenCalled());
+    expect(rendered.editor.textContent).toBe('');
+    rendered.unmount();
+    expect(renderMessageInput().editor.textContent).toBe('Recover after failure');
+  });
+
+  it('keeps a newly typed identical draft when an earlier send is acknowledged', async () => {
+    let resolveSend!: (message: Message) => void;
+    socketMocks.sendMessage.mockImplementation(() => new Promise(resolve => { resolveSend = resolve; }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'Same text');
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalled());
+    setEditorText(rendered.editor, 'Same text');
+    await act(async () => { resolveSend(message()); });
+    rendered.unmount();
+    expect(renderMessageInput().editor.textContent).toBe('Same text');
+  });
+
+  it('clears only the sending room draft when its ack arrives after navigation', async () => {
+    let resolveSend!: (message: Message) => void;
+    socketMocks.sendMessage.mockImplementation(() => new Promise(resolve => { resolveSend = resolve; }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'Sent first room');
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalled());
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    setEditorText(rendered.editor, 'Unsent second room');
+    await act(async () => { resolveSend(message()); });
+    rendered.rerender(<MessageInput {...rendered.props} />);
+    expect(rendered.editor.textContent).toBe('');
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    expect(rendered.editor.textContent).toBe('Unsent second room');
+  });
+
+  it('removes a manually emptied draft', () => {
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'Discard this');
+    setEditorText(rendered.editor, '');
+    rendered.unmount();
+    expect(renderMessageInput().editor.textContent).toBe('');
+  });
+
+  it.each([false, true])('retains a failed AI draft and clears it after acknowledgement (queued=%s)', async (queued) => {
+    const send = queued ? socketMocks.queueCodeAgentInput : socketMocks.sendMessageAndAskAI;
+    send.mockRejectedValueOnce(new Error('offline'));
+    const options = { isCodeAgentRoom: queued, isRoomAIProcessing: queued };
+    const rendered = renderMessageInput(options);
+    setEditorText(rendered.editor, 'AI draft');
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(rendered.props.onOptimisticMessageFailed).toHaveBeenCalled());
+    rendered.unmount();
+    const restored = renderMessageInput(options);
+    expect(restored.editor.textContent).toBe('AI draft');
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(restored.props.onOptimisticMessageSaved).toHaveBeenCalled());
+    restored.unmount();
+    expect(renderMessageInput(options).editor.textContent).toBe('');
   });
 
   it('clears text input immediately and sends text with a clientMessageId', async () => {

@@ -34,6 +34,7 @@ import {
   shouldThrottlePaste,
   validateImageFile,
 } from '../utils/imageInput';
+import { useRoomTextDraft } from '../hooks/useRoomTextDraft';
 import { useAIRoles } from '../hooks/useAIRoles';
 import { useAIModelSelection } from '../hooks/useAIModelSelection';
 import { startStreamingTranscription, StreamingTranscriber } from '../utils/streamingTranscription';
@@ -469,6 +470,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     dismissError();
   }, [dismissError, roomId]);
 
+  const { saveDraft, beginDraftSend } = useRoomTextDraft(clientId, roomId, editorRef, setCurrentInputText);
+
   // A transient transport loss does not revoke the last acknowledged room
   // access. Keep drafts, recording, and in-flight HTTP work alive while the
   // socket rejoins. Explicit access invalidation still stops every sensitive
@@ -856,13 +859,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     imageCountRef.current = nextImageCount;
   }, [attachmentDrafts]);
 
-  // 监听编辑器内容变化
-  useEffect(() => {
+  // Detach the previous room observer before restoring the next room draft.
+  React.useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
     const syncEditorState = () => {
-      setCurrentInputText(editor.innerText || '');
+      const text = editor.innerText ?? editor.textContent ?? '';
+      setCurrentInputText(text);
+      saveDraft(text);
       parseEditorContent();
     };
 
@@ -882,7 +887,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       observer.disconnect();
       editor.removeEventListener('input', syncEditorState);
     };
-  }, [parseEditorContent]);
+  }, [parseEditorContent, saveDraft]);
 
   const uploadAIImageMessages = async (
     avatar: { text: string; color: string },
@@ -976,6 +981,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           updatedAt: queuedAt,
         };
         onOptimisticMessage?.(optimisticMessage);
+        const completeDraftSend = beginDraftSend();
         clearEditorImmediately({ blur: true });
         const savedMessage = await queueCodeAgentInput({
           roomId: requestRoomId,
@@ -989,6 +995,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ...codeAgentRunSettings,
           codeAgentMode,
         });
+        completeDraftSend();
         if (!isRequestRoomCurrent()) return;
         onOptimisticMessageSaved?.(clientMessageId, savedMessage);
         if (reviewComments.length > 0) {
@@ -1012,6 +1019,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage, 'ask-ai');
       if (imageMessageIds.length > 0) optimisticMessage.codeAgentImageMessageIds = imageMessageIds;
       onOptimisticMessage?.(optimisticMessage);
+      const completeDraftSend = beginDraftSend();
       clearEditorImmediately({ blur: true });
 
       const { userMessage, aiError } = await sendMessageAndAskAI({
@@ -1026,6 +1034,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         ...codeAgentRunSettings,
       });
 
+      completeDraftSend();
       if (!isRequestRoomCurrent()) return;
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
       if (isCodeAgentRoom && reviewComments.length > 0) {
@@ -1104,11 +1113,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const optimisticMessage = buildOptimisticTextMessage(singleTextItem.content, clientMessageId, avatar, replyToMessage);
 
       onOptimisticMessage?.(optimisticMessage);
+      const completeDraftSend = beginDraftSend();
       clearEditorImmediately();
       onCancelReply();
 
       sendMessage(singleTextItem.content, textSendRoomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
         .then((savedMessage) => {
+          completeDraftSend();
           if (!isTextSendRoomCurrent()) return undefined;
           onOptimisticMessageSaved?.(clientMessageId, savedMessage);
           return undefined;
@@ -1146,6 +1157,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       let textSendPromise: Promise<void> | undefined;
 
       if (textItem?.type === 'text') {
+        const completeDraftSend = beginDraftSend();
         const clientMessageId = createClientMessageId();
         const optimisticMessage = buildOptimisticTextMessage(textItem.content, clientMessageId, avatar, replyToMessage);
         optimisticMessage.timestamp = new Date(sendStartedAt + currentAttachmentDrafts.length).toISOString();
@@ -1163,6 +1175,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           clientBatchId ? { id: clientBatchId, index: currentAttachmentDrafts.length } : undefined,
         )
           .then(savedMessage => {
+            completeDraftSend();
             if (isSubmitRoomCurrent()) {
               onOptimisticMessageSaved?.(clientMessageId, savedMessage);
             }

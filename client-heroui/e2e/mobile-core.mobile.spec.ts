@@ -107,7 +107,7 @@ test('keeps a multiline editor usable at 320px without squeezing it beside the t
   expect(layout.toolbar.top).toBeGreaterThanOrEqual(layout.editor.bottom - 1);
 });
 
-test('restores the active room after a mobile browser reload', async ({ page, context, request }) => {
+test('restores the active room and text draft after a mobile browser reload', async ({ page, context, request }) => {
   const clientId = await seedClient(context, shortName('mobile-restore-client'));
   const room = await createRoomViaApi(request, clientId, shortName('mobile-restore'));
   const message = shortName('mobile-restore-msg');
@@ -117,8 +117,11 @@ test('restores the active room after a mobile browser reload', async ({ page, co
   await openRoomFromCard(page, room);
   await expectMessage(page, message).toBeVisible();
 
+  const editor = page.getByTestId('message-editor');
+  await editor.fill('Unsent mobile draft\nSecond line');
   await page.reload();
 
   await expectChatRoom(page, room.name);
   await expectMessage(page, message).toBeVisible();
+  await expect(editor).toHaveText('Unsent mobile draft\nSecond line');
 });

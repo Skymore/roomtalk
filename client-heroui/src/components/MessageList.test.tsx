@@ -7,6 +7,7 @@ import { Message, RoomPermissions } from '../utils/types';
 import { buildMessageTimeline, MessageList, MessageListHandle } from './MessageList';
 import { clearCachedRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
+const messageRenderMock = vi.hoisted(() => vi.fn());
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
 const requestRoomAICostMock = vi.hoisted(() => vi.fn(() => new Promise(() => {})));
@@ -224,11 +225,10 @@ vi.mock('../utils/codeAgentWorkspace', async () => {
   };
 });
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: { message?: string }) => values?.message ? `${key}:${values.message}` : key,
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, values?: { message?: string }) => values?.message ? `${key}:${values.message}` : key;
+  return { useTranslation: () => ({ t }) };
+});
 
 vi.mock('@iconify/react', () => ({
   Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
@@ -268,7 +268,9 @@ vi.mock('./MessageItem', () => ({
     onOpenWorkspaceFile?: (path: string) => void;
     onUserAction?: (action: 'transferOwnership', message: Message) => void;
     isInteractionDisabled?: boolean;
-  }) => (
+  }) => {
+    messageRenderMock(message.id);
+    return (
     <div
       data-testid="message-item"
       data-message-id={message.id}
@@ -293,7 +295,8 @@ vi.mock('./MessageItem', () => ({
       <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
       <button type="button" onClick={() => onUserAction?.('transferOwnership', message)}>transfer-{message.id}</button>
     </div>
-  ),
+    );
+  },
   preloadMarkdownContent: () => {},
 }));
 
@@ -418,6 +421,25 @@ describe('MessageList optimistic messages', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('does not rerender completed agent turns when another message changes', async () => {
+    const first = message({ id: 'first-final', turnId: 'first-turn', messageType: 'ai', content: 'Completed first response' });
+    const second = message({ id: 'second-final', turnId: 'second-turn', messageType: 'ai', content: 'Second response' });
+    const turns = [first, second].map(item => ({
+      id: item.turnId!, roomId: 'room-1', status: 'complete', backend: 'codex-app-server',
+      assistantName: 'Codex', startedAt: item.timestamp, completedAt: item.timestamp,
+      updatedAt: item.timestamp, finalMessageId: item.id,
+    }));
+    render(<MessageList roomId="room-1" />);
+    await resolveNextHistory({ roomId: 'room-1', messages: [first, second], turns, snapshotSeq: 0, hasMore: false, mode: 'replace' });
+    await screen.findByText('Completed first response');
+    messageRenderMock.mockClear();
+    const updated = { ...second, content: 'Updated second response' };
+    act(() => socketMock.publishEvent('room-1', 'messages.upserted', { messageIds: [updated.id], messages: [updated] }));
+    await screen.findByText('Updated second response');
+    expect(messageRenderMock.mock.calls.filter(([id]) => id === first.id)).toHaveLength(0);
+    expect(messageRenderMock).toHaveBeenCalledWith(second.id);
   });
 
   it('shows pending messages and replaces matching server messages without duplicates', async () => {
