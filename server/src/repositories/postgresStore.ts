@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
+import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getMediaThumbnailObjectKey } from '../services/mediaThumbnail';
@@ -6647,6 +6647,22 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async recordClientPresenceEvent(event: ClientPresenceEventInput): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO client_presence_events (
+        id, client_id, socket_id, browser_instance_id, action, reason, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())`,
+      [
+        nanoid(16),
+        event.clientId,
+        event.socketId,
+        event.browserInstanceId || null,
+        event.action,
+        event.reason || null,
+      ]
+    );
+  }
+
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
@@ -6984,7 +7000,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_identity_events, account_role_events, account_roles, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, client_presence_events, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_identity_events, account_role_events, account_roles, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

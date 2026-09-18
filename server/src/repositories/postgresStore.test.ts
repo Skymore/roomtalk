@@ -211,6 +211,40 @@ describe('PostgresStore', () => {
     assert.ok(POSTGRES_SCHEMA_SQL.every(sql => !/device_auth_restore_status/.test(sql)));
   });
 
+  it('adds an append-only durable audit table for client online and offline events', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0026_client_presence_events');
+    assert.ok(migration);
+    assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS client_presence_events/);
+    assert.match(migration.sql, /action IN \('online', 'offline'\)/);
+    assert.match(migration.sql, /idx_client_presence_events_client_created/);
+  });
+
+  it('persists a client presence event with a database timestamp', async () => {
+    const pool = new ScriptedPool([{
+      rowCount: 1,
+      assertCall(call) {
+        assert.match(call.sql, /INSERT INTO client_presence_events/);
+        assert.match(call.sql, /clock_timestamp\(\)/);
+        assert.deepEqual(call.params?.slice(1), [
+          'client-1',
+          'socket-1',
+          'browser-1',
+          'offline',
+          'transport close',
+        ]);
+      },
+    }]);
+    const store = new PostgresStore(pool, logger as any);
+
+    await store.recordClientPresenceEvent({
+      clientId: 'client-1',
+      socketId: 'socket-1',
+      browserInstanceId: 'browser-1',
+      action: 'offline',
+      reason: 'transport close',
+    });
+  });
+
   it('settles one room model usage event and increments the total in the same transaction', async () => {
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },

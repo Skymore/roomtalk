@@ -11,6 +11,18 @@ import {
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
+export type ClientPresenceEventAction = 'online' | 'offline';
+
+// This is an audit record for an authenticated Socket.IO session, rather than
+// the Redis-backed current-presence projection used by the room UI.
+export interface ClientPresenceEventInput {
+  clientId: string;
+  socketId: string;
+  action: ClientPresenceEventAction;
+  browserInstanceId?: string;
+  reason?: string;
+}
+
 export interface RoomMessagePageOptions {
   // A complete agent turn counts as one unit. Messages without turnId each
   // count as one unit, so a page never splits an agent turn at its boundary.
@@ -907,6 +919,7 @@ export interface DurableRoomStore {
   // survive Redis flushes; presence (who is online) stays in the realtime store.
   setClientNickname(clientId: string, nickname: string): Promise<void>;
   getClientNicknames(clientIds: string[]): Promise<Record<string, string>>;
+  recordClientPresenceEvent?(event: ClientPresenceEventInput): Promise<void>;
   resetAllDataForTests?(): Promise<void>;
   failInterruptedStreamingMessages?(content: string, options?: InterruptedStreamingMessageRecoveryOptions): Promise<number>;
   heartbeatAIStreamOwner?(ownerId: string, instanceId: string, now: string | undefined, ttlMs: number): Promise<void>;
@@ -1799,6 +1812,10 @@ export class CompositeRoomStore implements RoomStore {
 
   getClientNicknames(clientIds: string[]) {
     return this.durableStore.getClientNicknames(clientIds);
+  }
+
+  recordClientPresenceEvent(event: ClientPresenceEventInput) {
+    return this.durableStore.recordClientPresenceEvent?.(event) || Promise.resolve();
   }
 
   clearRealtimeRoomMembers() {

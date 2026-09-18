@@ -2502,6 +2502,27 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
           device_auth_restore_status IS NULL
           OR device_auth_restore_status IN ('connected', 'reauth_required', 'disconnected')
         );
+      `,
+  },
+  {
+    // Redis presence is intentionally rebuildable. Keep a separate append-only
+    // audit trail for authenticated Socket.IO session starts and ends.
+    id: '0026_client_presence_events',
+    sql: `
+      CREATE TABLE IF NOT EXISTS client_presence_events (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        socket_id TEXT NOT NULL,
+        browser_instance_id TEXT,
+        action TEXT NOT NULL CHECK (action IN ('online', 'offline')),
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_client_presence_events_client_created
+        ON client_presence_events (client_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_client_presence_events_created
+        ON client_presence_events (created_at DESC, id DESC);
     `,
   },
 ];

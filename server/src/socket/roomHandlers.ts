@@ -356,8 +356,24 @@ export function registerRoomHandlers({
 
         socket.leave(previousUserId);
         await store.storeUserRooms(socket.id, []);
+        await store.recordClientPresenceEvent?.({
+          clientId: previousUserId,
+          socketId: socket.id,
+          action: 'offline',
+          ...(previousBrowserInstanceId ? { browserInstanceId: previousBrowserInstanceId } : {}),
+          reason: 'client_identity_switched',
+        });
       }
 
+      if (socket.data.roomtalkPresenceClientId !== userId) {
+        await store.recordClientPresenceEvent?.({
+          clientId: userId,
+          socketId: socket.id,
+          action: 'online',
+          ...(browserInstanceId ? { browserInstanceId } : {}),
+        });
+        socket.data.roomtalkPresenceClientId = userId;
+      }
       await store.storeClientSession(socket.id, userId, browserInstanceId);
       socket.data.roomtalkClientId = userId;
       socket.data.roomtalkBrowserInstanceId = browserInstanceId;
@@ -1381,14 +1397,25 @@ export function registerRoomHandlers({
       : await store.getClientId(socket.id);
     if (userId) {
       socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
+      const browserInstanceId = typeof socket.data.roomtalkBrowserInstanceId === 'string'
+        ? socket.data.roomtalkBrowserInstanceId
+        : await store.getBrowserInstanceId(socket.id);
+      try {
+        await store.recordClientPresenceEvent?.({
+          clientId: userId,
+          socketId: socket.id,
+          action: 'offline',
+          ...(browserInstanceId ? { browserInstanceId } : {}),
+          reason,
+        });
+      } catch (error) {
+        socketLogger.error('Failed to persist client offline event', { error, socketId: socket.id, userId, reason });
+      }
       const storedRooms = await store.getUserRooms(socket.id);
       const rooms = [...new Set([
         ...storedRooms,
         ...disconnectingRoomIds.filter(roomId => roomId !== userId),
       ])];
-      const browserInstanceId = typeof socket.data.roomtalkBrowserInstanceId === 'string'
-        ? socket.data.roomtalkBrowserInstanceId
-        : await store.getBrowserInstanceId(socket.id);
       for (const roomId of rooms) {
         const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
         if (browserInstanceId) {

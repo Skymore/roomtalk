@@ -148,6 +148,7 @@ const createHarness = (
     removedSessions: [] as string[],
     nicknames: new Map<string, string>(),
     nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
+    presenceEvents: [] as Array<{ clientId: string; socketId: string; action: 'online' | 'offline'; browserInstanceId?: string; reason?: string }>,
     memberCountUpdates: [] as Array<{ roomId: string; userId: string; socketId: string; isJoining: boolean }>,
     roomPasswordHashes: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
@@ -213,6 +214,9 @@ const createHarness = (
           .map(clientId => [clientId, this.nicknames.get(clientId)])
           .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
       );
+    },
+    async recordClientPresenceEvent(event: { clientId: string; socketId: string; action: 'online' | 'offline'; browserInstanceId?: string; reason?: string }) {
+      this.presenceEvents.push(event);
     },
     async getRoomOnlineMembers(roomId: string) {
       return [...this.members]
@@ -399,6 +403,7 @@ describe('room socket handlers', () => {
     assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
     assert.deepEqual(socket.emitted, []);
+    assert.deepEqual(store.presenceEvents, [{ clientId: 'client-1', socketId: 'socket-1', action: 'online' }]);
   });
 
   it('does not read room lists during registration', async () => {
@@ -418,6 +423,15 @@ describe('room socket handlers', () => {
     assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
     assert.deepEqual(socket.emitted, []);
+  });
+
+  it('records one online event when a client repeats registration on the same socket', async () => {
+    const { socket, store } = createHarness(null);
+
+    await socket.invoke('register', 'client-1', () => {});
+    await socket.invoke('register', 'client-1', () => {});
+
+    assert.deepEqual(store.presenceEvents, [{ clientId: 'client-1', socketId: 'socket-1', action: 'online' }]);
   });
 
   it('rejects malformed or oversized client identities during registration', async () => {
@@ -505,6 +519,16 @@ describe('room socket handlers', () => {
     assert.equal(leaveEvent.action, 'leave');
     assert.match(leaveEvent.timestamp, /^\d{4}-\d{2}-\d{2}T/);
     assert.deepEqual(response, { success: true, clientId: 'client-new' });
+    assert.deepEqual(store.presenceEvents, [
+      {
+        clientId: 'client-old',
+        socketId: 'socket-1',
+        action: 'offline',
+        browserInstanceId: 'browser-1',
+        reason: 'client_identity_switched',
+      },
+      { clientId: 'client-new', socketId: 'socket-1', action: 'online', browserInstanceId: 'browser-1' },
+    ]);
   });
 
   it('rejects socket registration for password-protected User IDs without a valid token', async () => {
@@ -1441,6 +1465,12 @@ describe('room socket handlers', () => {
     assert.deepEqual(store.removedSessions, ['socket-1']);
     assert.deepEqual(store.socketRooms, []);
     assert.deepEqual(io.roomEmits.map(item => item.event), ['room_member_change', 'room_member_change']);
+    assert.deepEqual(store.presenceEvents, [{
+      clientId: 'client-1',
+      socketId: 'socket-1',
+      action: 'offline',
+      reason: 'transport close',
+    }]);
 
     const lookup = createHarness('client-1');
     let foundRoom: Room | null | undefined;
