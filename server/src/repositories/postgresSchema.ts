@@ -2502,7 +2502,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
           device_auth_restore_status IS NULL
           OR device_auth_restore_status IN ('connected', 'reauth_required', 'disconnected')
         );
-      `,
+    `,
   },
   {
     // Redis presence is intentionally rebuildable. Keep a separate append-only
