@@ -173,6 +173,8 @@ const ReplyReference: React.FC<{
   const mediaAsset = replyTo.mediaAsset;
   const playableMediaKind = getPlayableMediaKind(mediaAsset);
   const canRenderMedia = replyTo.messageType === "media" && Boolean(mediaAsset?.id && playableMediaKind);
+  const stickerUrl = useStickerUrl(replyTo.messageType === "sticker" ? replyTo.stickerId : undefined);
+  const stickerName = useStickerName(replyTo.messageType === "sticker" ? replyTo.stickerId : undefined);
   const replySenderName = (replyTo.messageType === 'ai'
     ? getCodeAgentAssistantDisplayName(replyTo.username)
     : replyTo.username)
@@ -239,7 +241,15 @@ const ReplyReference: React.FC<{
   }, [canRenderMedia, isInteractionDisabled, localCachedUrl, mediaAsset?.byteSize, mediaAsset?.id, playableMediaKind, roomId, signedUrl]);
 
   let content: React.ReactNode = <div className="truncate">{fallbackPreview}</div>;
-  if (canRenderMedia && displayMediaUrl && !mediaError) {
+  if (replyTo.messageType === "sticker" && stickerUrl) {
+    content = (
+      <img
+        src={stickerUrl}
+        alt={stickerName || fallbackPreview}
+        className="mt-1 block max-h-24 max-w-full rounded-md object-contain"
+      />
+    );
+  } else if (canRenderMedia && displayMediaUrl && !mediaError) {
     if (playableMediaKind === "image") {
       content = (
         <img

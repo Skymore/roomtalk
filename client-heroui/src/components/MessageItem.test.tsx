@@ -45,6 +45,11 @@ vi.mock('./MarkdownContent', () => ({
   MarkdownContent: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 
+vi.mock('../hooks/useStickers', () => ({
+  useStickerUrl: (id?: string) => id ? `https://stickers.example/${id}.webp` : undefined,
+  useStickerName: (id?: string) => id ? '开心小狐' : undefined,
+}));
+
 vi.mock('@pierre/diffs/react', () => ({
   FileDiff: ({ fileDiff }: { fileDiff: { name?: string } }) => (
     <div data-testid="file-diff">{fileDiff.name}</div>
@@ -151,6 +156,30 @@ describe('MessageItem replies', () => {
 
     fireEvent.click(screen.getByLabelText('replyToMessage'));
     expect(onReply).toHaveBeenCalledWith(message);
+  });
+
+  it('renders the referenced sticker image', () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          replyTo: {
+            messageId: 'quoted-sticker',
+            username: 'Ada',
+            messageType: 'sticker',
+            stickerId: 'fox/happy',
+            preview: '[Sticker]',
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const sticker = screen.getByRole('img', { name: '开心小狐' });
+    expect(sticker.getAttribute('src')).toBe('https://stickers.example/fox/happy.webp');
   });
 
   it('renders durable reaction counts and routes like toggles through the parent', async () => {

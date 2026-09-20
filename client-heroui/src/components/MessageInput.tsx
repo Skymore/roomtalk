@@ -595,6 +595,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       messageType: message.messageType,
       mediaKind: message.messageType === 'media' ? message.mediaAsset?.kind : undefined,
       mediaAsset: message.messageType === 'media' && message.mediaAsset ? { ...message.mediaAsset } : undefined,
+      stickerId: message.messageType === 'sticker' ? message.content : undefined,
       preview,
     };
   }, [t]);
