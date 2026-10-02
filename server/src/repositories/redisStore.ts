@@ -2954,6 +2954,21 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null): Promise<RoomMember | null> {
+    try {
+      const member = await this.getRoomMember(roomId, clientId);
+      if (!member) return null;
+      const updated: RoomMember = { ...member };
+      if (nickname) updated.nickname = nickname;
+      else delete updated.nickname;
+      await this.redisClient.hSet(getPersistentRoomMembersKey(roomId), clientId, JSON.stringify(updated));
+      return updated;
+    } catch (error) {
+      this.logger.error('Error updating Redis room member nickname', { error, roomId, clientId });
+      return null;
+    }
+  }
+
   async isRoomMember(roomId: string, clientId: string): Promise<boolean> {
     return !!(await this.getRoomMember(roomId, clientId));
   }
@@ -4069,8 +4084,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   // Self-joined presence + nicknames, used when Redis is the only store.
   async getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]> {
     const clientIds = await this.getRoomOnlineMemberIds(roomId);
-    const nicknames = await this.getClientNicknames(clientIds);
-    return clientIds.map((clientId) => ({ clientId, nickname: nicknames[clientId] }));
+    const [members, nicknames] = await Promise.all([
+      this.readRoomMembers(roomId),
+      this.getClientNicknames(clientIds),
+    ]);
+    const roomNicknames = new Map(members.map(member => [member.clientId, member.nickname]));
+    return clientIds.map((clientId) => ({ clientId, nickname: roomNicknames.get(clientId) || nicknames[clientId] }));
   }
 
   async setClientNickname(clientId: string, nickname: string): Promise<void> {

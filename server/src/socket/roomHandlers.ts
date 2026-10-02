@@ -162,7 +162,7 @@ const lookupKnownRoomClient = async (
     store.getRoomMember(roomId, targetClientId),
     store.getClientNicknames([targetClientId]),
   ]);
-  const nickname = nicknames[targetClientId];
+  const nickname = member?.nickname || nicknames[targetClientId];
 
   return {
     clientId: targetClientId,
@@ -184,8 +184,8 @@ const readRoomRoleMembers = async (
   return members
     .map(member => ({
       ...member,
-      nickname: nicknames[member.clientId],
-      displayId: getClientDisplayId(member.clientId, nicknames[member.clientId]),
+      nickname: member.nickname || nicknames[member.clientId],
+      displayId: getClientDisplayId(member.clientId, member.nickname || nicknames[member.clientId]),
     }))
     .sort((a, b) => roleRank[a.role] - roleRank[b.role] || a.joinedAt.localeCompare(b.joinedAt));
 };

@@ -228,6 +228,16 @@ describe('PostgresStore', () => {
     assert.match(migration.sql, /REFERENCES room_members\(room_id, client_id\)\s+ON DELETE CASCADE/);
   });
 
+  it('adds room-scoped member nicknames in an append-only migration', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0029_room_member_nicknames');
+    assert.ok(migration);
+    assert.match(migration.sql, /ALTER TABLE room_members/);
+    assert.match(migration.sql, /ADD COLUMN IF NOT EXISTS nickname TEXT/);
+    const initialRoomMembers = POSTGRES_SCHEMA_SQL.find(sql => /CREATE TABLE IF NOT EXISTS room_members/.test(sql));
+    assert.ok(initialRoomMembers);
+    assert.doesNotMatch(initialRoomMembers, /nickname/);
+  });
+
   it('persists a client presence event with a database timestamp', async () => {
     const pool = new ScriptedPool([{
       rowCount: 1,
@@ -679,6 +689,19 @@ describe('PostgresStore', () => {
         },
       },
       {
+        rows: [{
+          room_id: 'room-1',
+          client_id: 'client-2',
+          role: 'member',
+          joined_at: '2026-05-03T00:01:00.000Z',
+          nickname: '软软小狐',
+        }],
+        assertCall(call) {
+          assert.match(call.sql, /UPDATE room_members/);
+          assert.deepEqual(call.params, ['room-1', 'client-2', '软软小狐']);
+        },
+      },
+      {
         rows: [{ '?column?': 1 }],
         assertCall(call) {
           assert.match(call.sql, /SELECT 1 FROM room_members/);
@@ -725,6 +748,13 @@ describe('PostgresStore', () => {
       clientId: 'client-2',
       role: 'member',
       joinedAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.deepEqual(await store.setRoomMemberNickname('room-1', 'client-2', '软软小狐'), {
+      roomId: 'room-1',
+      clientId: 'client-2',
+      role: 'member',
+      joinedAt: '2026-05-03T00:01:00.000Z',
+      nickname: '软软小狐',
     });
     assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
     assert.deepEqual(await store.readRoomMembers('room-1'), [

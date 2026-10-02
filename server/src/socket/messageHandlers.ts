@@ -458,13 +458,14 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
       replyTo = createReplyReference(quotedMessage);
     }
 
+    const roomUsername = postAuth.actor.member.nickname || messageData.username;
     const message = messageType === 'sticker'
       ? createStickerMessage({
           id: uuidv4(),
           clientId,
           stickerId: messageData.content,
           roomId: messageData.roomId,
-          username: messageData.username,
+          username: roomUsername,
           avatar: messageData.avatar,
           replyTo,
           clientMessageId,
@@ -474,7 +475,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
           clientId,
           content: messageData.content,
           roomId: messageData.roomId,
-          username: messageData.username,
+          username: roomUsername,
           avatar: messageData.avatar,
           replyTo,
           clientMessageId,

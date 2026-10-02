@@ -47,6 +47,7 @@ type TestServer = {
     audioTranscriptions: Map<string, AudioTranscriptionRecord>;
     pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     roomNotificationMutes: Set<string>;
+    roomNicknames: Map<string, string>;
     accounts: Map<string, ClientAccount>;
     entitlements: Map<string, AccountEntitlement>;
     membershipChangeEntitlements: Map<string, AccountEntitlement>;
@@ -59,6 +60,7 @@ type TestServer = {
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
+    setRoomMemberNickname: (roomId: string, clientId: string, nickname: string | null) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string; nickname?: string } | null>;
     isRoomMember: (roomId: string, clientId: string) => Promise<boolean>;
     readRoomMembers: (roomId: string) => Promise<Array<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string }>>;
     savePushSubscription: (subscription: { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
@@ -236,6 +238,7 @@ async function createTestServer(overrides: {
     audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
     pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     roomNotificationMutes: new Set<string>(),
+    roomNicknames: new Map<string, string>(),
     accounts: new Map<string, ClientAccount>(),
     entitlements: new Map<string, AccountEntitlement>(),
     membershipChangeEntitlements: new Map<string, AccountEntitlement>(),
@@ -253,9 +256,22 @@ async function createTestServer(overrides: {
       return { roomId, clientId: memberClientId, role, joinedAt };
     },
     async getRoomMember(roomId: string, memberClientId: string) {
-      return this.members.has(`${roomId}:${memberClientId}`)
-        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
-        : null;
+      if (!this.members.has(`${roomId}:${memberClientId}`)) return null;
+      const nickname = this.roomNicknames.get(`${roomId}:${memberClientId}`);
+      return {
+        roomId,
+        clientId: memberClientId,
+        role: 'member' as const,
+        joinedAt: '2026-05-03T00:00:00.000Z',
+        ...(nickname ? { nickname } : {}),
+      };
+    },
+    async setRoomMemberNickname(roomId: string, memberClientId: string, nickname: string | null) {
+      if (!this.members.has(`${roomId}:${memberClientId}`)) return null;
+      const key = `${roomId}:${memberClientId}`;
+      if (nickname) this.roomNicknames.set(key, nickname);
+      else this.roomNicknames.delete(key);
+      return this.getRoomMember(roomId, memberClientId);
     },
     async isRoomMember(roomId: string, memberClientId: string) {
       return this.members.has(`${roomId}:${memberClientId}`);
@@ -1078,6 +1094,41 @@ describe('API routes', () => {
     });
     assert.equal(response.status, 403);
     assert.equal(server.store.roomNotificationMutes.size, 0);
+  });
+
+  it('persists a nickname scoped to the current room member', async () => {
+    const initialResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/member-profile`, {
+      headers: { 'X-Client-Id': 'client-1' },
+    });
+    assert.equal(initialResponse.status, 200);
+    assert.deepEqual(await initialResponse.json(), { roomId: 'room-1', nickname: null });
+
+    const updateResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/member-profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', nickname: '  软软   小狐  ' }),
+    });
+    assert.equal(updateResponse.status, 200);
+    assert.deepEqual(await updateResponse.json(), { roomId: 'room-1', nickname: '软软 小狐' });
+    assert.equal(server.store.roomNicknames.get('room-1:client-1'), '软软 小狐');
+
+    const clearResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/member-profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', nickname: '' }),
+    });
+    assert.equal(clearResponse.status, 200);
+    assert.deepEqual(await clearResponse.json(), { roomId: 'room-1', nickname: null });
+  });
+
+  it('rejects room nickname updates for non-members', async () => {
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/member-profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-2', nickname: 'Not a member' }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(server.store.roomNicknames.size, 0);
   });
 
   it('returns account auth status for the current User ID', async () => {

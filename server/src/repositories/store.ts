@@ -868,6 +868,7 @@ export interface DurableRoomStore {
   addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
   removeRoomMember(roomId: string, clientId: string): Promise<boolean>;
   getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null>;
+  setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null): Promise<RoomMember | null>;
   isRoomMember(roomId: string, clientId: string): Promise<boolean>;
   readRoomMembers(roomId: string): Promise<RoomMember[]>;
   savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void>;
@@ -1555,6 +1556,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.getRoomMember(roomId, clientId);
   }
 
+  setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null) {
+    return this.durableStore.setRoomMemberNickname(roomId, clientId, nickname);
+  }
+
   isRoomMember(roomId: string, clientId: string) {
     return this.durableStore.isRoomMember(roomId, clientId);
   }
@@ -1809,8 +1814,15 @@ export class CompositeRoomStore implements RoomStore {
 
   async getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]> {
     const clientIds = await this.realtimeStore.getRoomOnlineMemberIds(roomId);
-    const nicknames = await this.durableStore.getClientNicknames(clientIds);
-    return clientIds.map((clientId) => ({ clientId, nickname: nicknames[clientId] }));
+    const [members, nicknames] = await Promise.all([
+      this.durableStore.readRoomMembers(roomId),
+      this.durableStore.getClientNicknames(clientIds),
+    ]);
+    const roomNicknames = new Map(members.map(member => [member.clientId, member.nickname]));
+    return clientIds.map((clientId) => ({
+      clientId,
+      nickname: roomNicknames.get(clientId) || nicknames[clientId],
+    }));
   }
 
   getRoomOnlineMemberIds(roomId: string) {

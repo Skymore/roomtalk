@@ -155,6 +155,9 @@ const durableRoomAccessStubs = () => ({
   async getRoomMember(roomId: string, clientId: string) {
     return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' };
   },
+  async setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null) {
+    return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z', ...(nickname ? { nickname } : {}) };
+  },
   async isRoomMember() {
     return true;
   },
@@ -416,6 +419,7 @@ describe('CompositeRoomStore', () => {
       async addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') { calls.push('durable.addRoomMember'); return { roomId, clientId, role, joinedAt }; },
       async removeRoomMember(_roomId: string, _clientId: string) { calls.push('durable.removeRoomMember'); return true; },
       async getRoomMember(roomId: string, clientId: string) { calls.push('durable.getRoomMember'); return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }; },
+      async setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null) { calls.push('durable.setRoomMemberNickname'); return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z', ...(nickname ? { nickname } : {}) }; },
       async isRoomMember(_roomId: string, _clientId: string) { calls.push('durable.isRoomMember'); return true; },
       async readRoomMembers(roomId: string) { calls.push('durable.readRoomMembers'); return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }]; },
       async savePushSubscription() { calls.push('durable.savePushSubscription'); },
@@ -579,6 +583,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.addRoomMember('room-1', 'client-2', 'member'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
     assert.equal(await store.removeRoomMember('room-1', 'client-2'), true);
     assert.deepEqual(await store.getRoomMember('room-1', 'client-2'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
+    assert.equal((await store.setRoomMemberNickname('room-1', 'client-2', '小狐'))?.nickname, '小狐');
     assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
     assert.deepEqual(await store.readRoomMembers('room-1'), [{ roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z' }]);
     await store.savePushSubscription({ clientId: 'client-2', endpoint: 'https://push.example/1', p256dh: 'p256dh', auth: 'auth' });
@@ -752,6 +757,7 @@ describe('CompositeRoomStore', () => {
       'durable.addRoomMember',
       'durable.removeRoomMember',
       'durable.getRoomMember',
+      'durable.setRoomMemberNickname',
       'durable.isRoomMember',
       'durable.readRoomMembers',
       'durable.savePushSubscription',
@@ -814,6 +820,7 @@ describe('CompositeRoomStore', () => {
       'durable.setClientNickname',
       'durable.getClientNicknames',
       'realtime.getRoomOnlineMemberIds',
+      'durable.readRoomMembers',
       'durable.getClientNicknames',
     ]);
   });

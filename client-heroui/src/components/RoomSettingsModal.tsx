@@ -49,6 +49,7 @@ import { PostingScheduleEditor } from './PostingScheduleEditor';
 import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 import { validateRoomName } from '../utils/roomState';
 import { AppConfirmDialog } from './AppActionDialog';
+import { getRoomNickname, setRoomNickname } from '../utils/roomMemberProfile';
 
 const backendIcons: Record<CodeAgentBackend, string> = {
   'code-agent': 'lucide:sparkles',
@@ -146,6 +147,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const runtimeRoomType = room.type as string | undefined;
 
   const [activeTab, setActiveTab] = React.useState<SettingsTabKey>('general');
+  const [roomNickname, setRoomNicknameValue] = React.useState('');
+  const [savedRoomNickname, setSavedRoomNickname] = React.useState('');
   const [roomName, setRoomName] = React.useState(room.name);
   const [password, setPassword] = React.useState('');
   const [hasPassword, setHasPassword] = React.useState(Boolean(room.hasPassword));
@@ -224,6 +227,26 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setStatus(null);
     setActiveTab(canManageGeneral ? 'general' : 'personal');
   }, [canManageGeneral, canManageMembers, canManageSettings, isOpen, resetSchedule, room.name, room.hasPassword]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    void getRoomNickname(room.id)
+      .then(nickname => {
+        if (!active) return;
+        setRoomNicknameValue(nickname);
+        setSavedRoomNickname(nickname);
+      })
+      .catch(error => {
+        if (active) {
+          setStatus({
+            type: 'error',
+            message: error instanceof Error ? error.message : t('roomNicknameLoadFailed'),
+          });
+        }
+      });
+    return () => { active = false; };
+  }, [isOpen, room.id, t]);
 
   React.useEffect(() => {
     if (isOpen && canManageMembers) {
@@ -612,8 +635,42 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const renderTabPanel = (tabKey: SettingsTabKey) => {
     if (tabKey === 'personal') {
+      const normalizedNickname = roomNickname.trim();
+      const nicknameChanged = normalizedNickname !== savedRoomNickname;
+
       return (
         <section className="space-y-6">
+          <div className="space-y-2">
+            {renderSectionLabel('lucide:user-round', t('roomNickname'))}
+            <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-2">
+              <Input
+                aria-label={t('roomNickname')}
+                placeholder={t('roomNicknamePlaceholder')}
+                value={roomNickname}
+                onChange={event => setRoomNicknameValue(event.target.value)}
+                maxLength={40}
+                description={t('roomNicknameDescription')}
+                classNames={{ inputWrapper: 'h-12' }}
+              />
+              <HoverTooltip content={t('save')}>
+                <Button
+                  isIconOnly
+                  aria-label={t('save')}
+                  className="h-12 w-12 min-w-12 rounded-lg bg-secondary text-secondary-foreground"
+                  isDisabled={!nicknameChanged || isSaving}
+                  isLoading={isSaving}
+                  onPress={() => void runAction(async () => {
+                    const saved = await setRoomNickname(room.id, normalizedNickname);
+                    setRoomNicknameValue(saved);
+                    setSavedRoomNickname(saved);
+                  }, t('roomNicknameUpdated'))}
+                >
+                  <Icon icon="lucide:check" className="h-5 w-5" />
+                </Button>
+              </HoverTooltip>
+            </div>
+          </div>
+
           <div className="space-y-2">
             {renderSectionLabel('lucide:bell', t('roomNotificationSettings'))}
             <Button

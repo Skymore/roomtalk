@@ -104,6 +104,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     messages: [message()],
     rooms: [room()],
     members: new Set(['room-1:client-1', 'room-1:client-2']),
+    roomNicknames: new Map<string, string>(),
     savedHistory: [] as Message[][],
     appendedMessages: [] as Message[],
     editedMessages: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
@@ -167,9 +168,15 @@ const createHarness = (clientId: string | null = 'client-1') => {
       return { roomId, clientId: memberClientId, role, joinedAt };
     },
     async getRoomMember(roomId: string, memberClientId: string) {
-      return this.members.has(`${roomId}:${memberClientId}`)
-        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
-        : null;
+      if (!this.members.has(`${roomId}:${memberClientId}`)) return null;
+      const nickname = this.roomNicknames.get(`${roomId}:${memberClientId}`);
+      return {
+        roomId,
+        clientId: memberClientId,
+        role: 'member' as const,
+        joinedAt: '2026-05-03T00:00:00.000Z',
+        ...(nickname ? { nickname } : {}),
+      };
     },
     async isRoomMember(roomId: string, memberClientId: string) {
       return this.members.has(`${roomId}:${memberClientId}`);
@@ -685,6 +692,19 @@ describe('message socket handlers', () => {
     assert.equal(textResponses.length, 2);
     assert.equal(textResponses[1].message?.id, textResponses[0].message?.id);
     assert.equal(textResponses[1].message?.content, 'retry-safe text');
+  });
+
+  it('uses the member room nickname instead of the global message username', async () => {
+    const h = createHarness('client-2');
+    h.store.roomNicknames.set('room-1:client-2', '软软小狐');
+
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'hello',
+      username: 'Global name',
+    }, () => undefined);
+
+    assert.equal(h.store.appendedMessages[0]?.username, '软软小狐');
   });
 
   it('rejects empty or oversized client message IDs', async () => {

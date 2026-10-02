@@ -47,6 +47,16 @@ import { ClientLoginRateLimiter, RedisClientLoginRateLimiter } from '../services
 import { accountMatchesPlatformAdminEmail, resolvePlatformAdminEmails } from '../services/platformAdmin';
 import { requireSafeE2EDatabaseUrl, requireSafeE2EQueueRedisUrl, requireSafeE2ERedisUrl } from '../services/e2eSafety';
 
+const normalizeRoomNickname = (value: string): string | null => {
+  const nickname = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
+    .trim();
+  return nickname || null;
+};
+
 interface ApiRouteOptions {
   store: RoomStore;
   io: Server;
@@ -769,6 +779,40 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.json({ roomId, muted });
   });
 
+  app.get('/api/rooms/:roomId/member-profile', async (req: Request, res: Response) => {
+    const roomId = req.params.roomId?.trim();
+    const clientId = getQueryClientId(req);
+    if (!roomId || !clientId) {
+      return res.status(400).json({ error: 'roomId and clientId are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/rooms/:roomId/member-profile'))) {
+      return;
+    }
+    const member = await store.getRoomMember(roomId, clientId);
+    if (!member) {
+      return res.status(403).json({ error: 'You are not authorized to access this room' });
+    }
+    return res.json({ roomId, nickname: member.nickname || null });
+  });
+
+  app.put('/api/rooms/:roomId/member-profile', async (req: Request, res: Response) => {
+    const roomId = req.params.roomId?.trim();
+    const clientId = getBodyClientId(req);
+    if (!roomId || !clientId || typeof req.body?.nickname !== 'string') {
+      return res.status(400).json({ error: 'roomId, clientId, and nickname are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'PUT /api/rooms/:roomId/member-profile'))) {
+      return;
+    }
+    const nickname = normalizeRoomNickname(req.body.nickname);
+    const member = await store.setRoomMemberNickname(roomId, clientId, nickname);
+    if (!member) {
+      return res.status(403).json({ error: 'You are not authorized to access this room' });
+    }
+    io.to(roomId).emit('room_role_members_updated', roomId);
+    return res.json({ roomId, nickname: member.nickname || null });
+  });
+
   app.get('/api/auth/config', (_req: Request, res: Response) => {
     return res.json({ googleConfigured: googleClientIds.length > 0 });
   });
@@ -1470,6 +1514,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       roomId,
       timestamp: new Date().toISOString(),
       messageType: 'text',
+      ...(postAuth.actor.member.nickname ? { username: postAuth.actor.member.nickname } : {}),
     };
 
     const loggableMessage = routeLogger.formatMessageForLog(message);
@@ -1708,7 +1753,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       width,
       height,
       durationMs,
-      username: typeof req.body?.username === 'string' ? req.body.username : undefined,
+      username: postAuth.actor.member.nickname || (typeof req.body?.username === 'string' ? req.body.username : undefined),
       avatar: req.body?.avatar,
       replyTo,
       clientMessageId: clientMessageId || undefined,

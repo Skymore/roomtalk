@@ -166,6 +166,7 @@ type RoomMemberRow = {
   client_id: string;
   role: RoomMemberRole;
   joined_at: string | Date;
+  nickname: string | null;
 };
 
 type CodeAgentRoomLeaseRow = {
@@ -374,7 +375,7 @@ type AccountEntitlementRow = {
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position, reactions';
-const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
+const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at, nickname';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
@@ -511,6 +512,7 @@ const mapRoomMember = (row: RoomMemberRow): RoomMember => ({
   clientId: row.client_id,
   role: row.role,
   joinedAt: toIsoString(row.joined_at),
+  ...(row.nickname ? { nickname: row.nickname } : {}),
 });
 
 const mapCodeAgentRoomLease = (row: CodeAgentRoomLeaseRow): CodeAgentRoomLease => ({
@@ -5081,6 +5083,22 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapRoomMember(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room member', { error, roomId, clientId });
+      return null;
+    }
+  }
+
+  async setRoomMemberNickname(roomId: string, clientId: string, nickname: string | null): Promise<RoomMember | null> {
+    try {
+      const result = await this.pool.query<RoomMemberRow>(
+        `UPDATE room_members
+        SET nickname = $3
+        WHERE room_id = $1 AND client_id = $2
+        RETURNING ${ROOM_MEMBER_COLUMNS}`,
+        [roomId, clientId, nickname],
+      );
+      return result.rows[0] ? mapRoomMember(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL room member nickname', { error, roomId, clientId });
       return null;
     }
   }

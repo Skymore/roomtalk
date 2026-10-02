@@ -1267,7 +1267,7 @@ export function registerAIHandlers({
       clientId,
       content: data.content.trim(),
       roomId: data.roomId,
-      username: data.username,
+      username: postAuth.actor.member.nickname || data.username,
       avatar: data.avatar,
       replyTo,
       clientMessageId: data.clientMessageId,
@@ -1474,7 +1474,7 @@ export function registerAIHandlers({
       clientId,
       content: data.content,
       roomId: data.roomId,
-      username: data.username,
+      username: postAuth.actor.member.nickname || data.username,
       avatar: data.avatar,
       replyTo,
       clientMessageId: data.clientMessageId,
@@ -1710,6 +1710,7 @@ export function registerAIHandlers({
       clientId,
       roomId,
       content: buildA2UIFollowUpMessageContent(action),
+      username: (await store.getRoomMember(roomId, clientId))?.nickname,
     });
 
     const updatedRoom = await store.appendMessage(followUpMessage);

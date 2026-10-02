@@ -15,6 +15,10 @@ const socketMocks = vi.hoisted(() => ({
 const i18nMock = vi.hoisted(() => ({
   t: (key: string) => key,
 }));
+const roomProfileMocks = vi.hoisted(() => ({
+  getRoomNickname: vi.fn(async () => ''),
+  setRoomNickname: vi.fn(async (_roomId: string, nickname: string) => nickname.trim()),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -38,6 +42,11 @@ vi.mock('../utils/socket', () => ({
     on: socketMocks.on,
     off: socketMocks.off,
   },
+}));
+
+vi.mock('../utils/roomMemberProfile', () => ({
+  getRoomNickname: roomProfileMocks.getRoomNickname,
+  setRoomNickname: roomProfileMocks.setRoomNickname,
 }));
 
 vi.mock('./HoverTooltip', () => ({
@@ -88,6 +97,8 @@ describe('RoomSettingsModal tabs', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    roomProfileMocks.getRoomNickname.mockResolvedValue('');
+    roomProfileMocks.setRoomNickname.mockImplementation(async (_roomId: string, nickname: string) => nickname.trim());
   });
 
   it('connects tabs to one active panel and uses roving tabindex', async () => {
@@ -126,6 +137,48 @@ describe('RoomSettingsModal tabs', () => {
     fireEvent.keyDown(tabs[4], { key: 'Home' });
     await waitFor(() => expect(tabs[0].getAttribute('aria-selected')).toBe('true'));
     expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it('lets a regular member update their room nickname and room notifications', async () => {
+    const memberPermissions: RoomPermissions = {
+      ...permissions,
+      role: 'member',
+      canEditAnyMessage: false,
+      canDeleteAnyMessage: false,
+      canClearHistory: false,
+      canManageRoom: false,
+      canManageAdmins: false,
+      canManageMembers: false,
+      canTransferOwnership: false,
+    };
+    const onToggleRoomNotifications = vi.fn();
+    roomProfileMocks.getRoomNickname.mockResolvedValueOnce('小狐');
+
+    render(
+      <RoomSettingsModal
+        isOpen
+        room={room}
+        roomPermissions={memberPermissions}
+        clientId="client-2"
+        onClose={vi.fn()}
+        onRenameRoom={vi.fn(async () => undefined)}
+        onClearHistory={vi.fn(async () => undefined)}
+        onDeleteRoom={vi.fn()}
+        roomNotificationsMuted
+        onToggleRoomNotifications={onToggleRoomNotifications}
+      />,
+    );
+
+    const nicknameInput = await screen.findByLabelText('roomNickname') as HTMLInputElement;
+    expect(nicknameInput.value).toBe('小狐');
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+
+    fireEvent.change(nicknameInput, { target: { value: '软软小狐' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    await waitFor(() => expect(roomProfileMocks.setRoomNickname).toHaveBeenCalledWith('room-1', '软软小狐'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'unmuteRoomNotifications' }));
+    expect(onToggleRoomNotifications).toHaveBeenCalledTimes(1);
   });
 
   it('blocks an overlong inline room rename before submit', async () => {

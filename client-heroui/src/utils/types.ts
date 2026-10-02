@@ -213,6 +213,7 @@ export interface RoomMember {
   clientId: string;
   role: RoomMemberRole;
   joinedAt: string;
+  nickname?: string;
 }
 
 export interface RoomPostingWindow {

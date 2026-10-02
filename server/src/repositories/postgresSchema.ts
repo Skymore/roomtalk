@@ -2545,6 +2545,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
+    id: '0029_room_member_nicknames',
+    sql: `
+      ALTER TABLE room_members
+        ADD COLUMN IF NOT EXISTS nickname TEXT;
+    `,
+  },
+  {
     id: '0030_membership_credit_overdraft',
     sql: `
       ALTER TABLE account_ai_usage_events DROP CONSTRAINT account_ai_usage_events_source_check;
