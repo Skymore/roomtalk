@@ -96,7 +96,7 @@ describe('RoomSettingsModal tabs', () => {
     const tabs = await screen.findAllByRole('tab');
     const panel = screen.getByRole('tabpanel');
 
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(5);
     expect(tabs[0].getAttribute('aria-selected')).toBe('true');
     expect(tabs[0].getAttribute('tabindex')).toBe('0');
     expect(tabs.slice(1).every(tab => tab.getAttribute('tabindex') === '-1')).toBe(true);
@@ -120,10 +120,10 @@ describe('RoomSettingsModal tabs', () => {
     expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(tabs[1].id);
 
     fireEvent.keyDown(tabs[1], { key: 'End' });
-    await waitFor(() => expect(tabs[3].getAttribute('aria-selected')).toBe('true'));
-    expect(document.activeElement).toBe(tabs[3]);
+    await waitFor(() => expect(tabs[4].getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement).toBe(tabs[4]);
 
-    fireEvent.keyDown(tabs[3], { key: 'Home' });
+    fireEvent.keyDown(tabs[4], { key: 'Home' });
     await waitFor(() => expect(tabs[0].getAttribute('aria-selected')).toBe('true'));
     expect(document.activeElement).toBe(tabs[0]);
   });

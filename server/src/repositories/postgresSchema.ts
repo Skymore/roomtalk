@@ -2526,6 +2526,25 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
+    id: '0028_room_notification_preferences',
+    sql: `
+      CREATE TABLE IF NOT EXISTS room_notification_preferences (
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        client_id TEXT NOT NULL,
+        muted BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (room_id, client_id),
+        FOREIGN KEY (room_id, client_id)
+          REFERENCES room_members(room_id, client_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_room_notification_preferences_muted
+        ON room_notification_preferences (room_id, client_id)
+        WHERE muted = TRUE;
+    `,
+  },
+  {
     id: '0030_membership_credit_overdraft',
     sql: `
       ALTER TABLE account_ai_usage_events DROP CONSTRAINT account_ai_usage_events_source_check;

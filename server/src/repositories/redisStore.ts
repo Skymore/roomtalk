@@ -56,6 +56,7 @@ const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
 const getRoomActiveBrowserInstancesKey = (roomId: string) => `room:${roomId}:active_browser_instances`;
 const getRoomBrowserInstanceSocketsKey = (roomId: string, browserInstanceId: string) => `room:${roomId}:browser_instance_sockets:${browserInstanceId}`;
+const getRoomNotificationMutesKey = (roomId: string) => `room:${roomId}:notification_mutes`;
 const PUSH_SUBSCRIPTIONS_KEY = 'push_subscriptions';
 const CLIENT_PASSWORDS_KEY = 'client:passwords';
 const CLIENT_AUTH_TOKENS_KEY = 'client:auth_tokens';
@@ -3034,6 +3035,39 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return subscriptions.sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt));
     } catch (error) {
       this.logger.error('Error reading Redis room push subscriptions', { error, roomId });
+      return [];
+    }
+  }
+
+  async setRoomNotificationsMuted(roomId: string, clientId: string, muted: boolean): Promise<boolean> {
+    try {
+      if (!(await this.isRoomMember(roomId, clientId))) return false;
+      if (muted) {
+        await this.redisClient.sAdd(getRoomNotificationMutesKey(roomId), clientId);
+      } else {
+        await this.redisClient.sRem(getRoomNotificationMutesKey(roomId), clientId);
+      }
+      return true;
+    } catch (error) {
+      this.logger.error('Error updating Redis room notification preference', { error, roomId, clientId, muted });
+      return false;
+    }
+  }
+
+  async isRoomNotificationsMuted(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      return (await this.redisClient.sIsMember(getRoomNotificationMutesKey(roomId), clientId)) === 1;
+    } catch (error) {
+      this.logger.error('Error reading Redis room notification preference', { error, roomId, clientId });
+      return false;
+    }
+  }
+
+  async readMutedNotificationClientIdsByRoom(roomId: string): Promise<string[]> {
+    try {
+      return await this.redisClient.sMembers(getRoomNotificationMutesKey(roomId));
+    } catch (error) {
+      this.logger.error('Error reading Redis room notification mutes', { error, roomId });
       return [];
     }
   }

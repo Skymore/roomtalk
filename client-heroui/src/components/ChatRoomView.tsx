@@ -39,6 +39,8 @@ interface ChatRoomViewProps {
   onMembersChanged?: (roomId: string) => void;
   onRoomDeleted?: (roomId: string) => void;
   onRoomAccessDenied?: (roomId: string) => void;
+  showSuccess?: (message: string) => void;
+  showError?: (message: string) => void;
 }
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
@@ -68,6 +70,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   onMembersChanged,
   onRoomDeleted,
   onRoomAccessDenied,
+  showSuccess,
+  showError,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -127,6 +131,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         clientId={clientId}
         roomPermissions={effectiveRoomPermissions}
         onRoomUpdated={onRoomUpdated}
+        showSuccess={showSuccess}
+        showError={showError}
       />
 
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">

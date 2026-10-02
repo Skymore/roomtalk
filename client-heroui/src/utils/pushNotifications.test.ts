@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./socket', () => ({
   apiPath: (path: string) => path,
   browserInstanceId: 'browser-1',
+  getClientAuthToken: () => 'auth-token-1',
   getCurrentClientId: () => 'client-1',
-  withClientAuthBody: (body: Record<string, unknown>) => body,
+  withClientAuthBody: (body: Record<string, unknown>) => ({ ...body, clientAuthToken: 'auth-token-1' }),
 }));
 
 const setNavigatorValue = (key: keyof Navigator, value: unknown) => {
@@ -59,4 +60,51 @@ describe('push notification platform detection', () => {
     await expect(getPushNotificationStatus()).resolves.toBe('unsupported');
   });
 
+});
+
+describe('room notification preferences', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('loads the current room mute preference with client authentication headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ roomId: 'room/1', muted: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getRoomNotificationsMuted } = await import('./pushNotifications');
+
+    await expect(getRoomNotificationsMuted('room/1')).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room%2F1/notification-preference', {
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Client-Id': 'client-1',
+        'X-Client-Auth-Token': 'auth-token-1',
+      },
+    });
+  });
+
+  it('persists a room mute preference for the current client', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ roomId: 'room-1', muted: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setRoomNotificationsMuted } = await import('./pushNotifications');
+
+    await expect(setRoomNotificationsMuted('room-1', true)).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/notification-preference', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Client-Id': 'client-1',
+        'X-Client-Auth-Token': 'auth-token-1',
+      },
+      body: JSON.stringify({ clientId: 'client-1', muted: true, clientAuthToken: 'auth-token-1' }),
+    });
+  });
 });

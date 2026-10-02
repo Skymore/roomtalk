@@ -873,6 +873,9 @@ export interface DurableRoomStore {
   savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void>;
   deletePushSubscription(clientId: string, endpoint: string): Promise<boolean>;
   readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
+  setRoomNotificationsMuted(roomId: string, clientId: string, muted: boolean): Promise<boolean>;
+  isRoomNotificationsMuted(roomId: string, clientId: string): Promise<boolean>;
+  readMutedNotificationClientIdsByRoom(roomId: string): Promise<string[]>;
   getAccountByClientId(clientId: string): Promise<ClientAccount | null>;
   getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null>;
   getAccountRoles(accountId: string): Promise<AccountRole[]>;
@@ -1570,6 +1573,18 @@ export class CompositeRoomStore implements RoomStore {
 
   readPushSubscriptionsByRoom(roomId: string) {
     return this.durableStore.readPushSubscriptionsByRoom(roomId);
+  }
+
+  setRoomNotificationsMuted(roomId: string, clientId: string, muted: boolean) {
+    return this.durableStore.setRoomNotificationsMuted(roomId, clientId, muted);
+  }
+
+  isRoomNotificationsMuted(roomId: string, clientId: string) {
+    return this.durableStore.isRoomNotificationsMuted(roomId, clientId);
+  }
+
+  readMutedNotificationClientIdsByRoom(roomId: string) {
+    return this.durableStore.readMutedNotificationClientIdsByRoom(roomId);
   }
 
   getAccountByClientId(clientId: string) {

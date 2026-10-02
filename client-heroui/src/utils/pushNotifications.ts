@@ -1,4 +1,4 @@
-import { apiPath, browserInstanceId, getCurrentClientId, withClientAuthBody } from './socket';
+import { apiPath, browserInstanceId, getClientAuthToken, getCurrentClientId, withClientAuthBody } from './socket';
 
 export type PushNotificationStatus =
   | 'unsupported'
@@ -147,4 +147,42 @@ export const disablePushNotifications = async () => {
     })),
   }).catch(() => undefined);
   await subscription.unsubscribe();
+};
+
+const roomNotificationHeaders = () => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Client-Id': getCurrentClientId(),
+  };
+  const token = getClientAuthToken();
+  if (token) headers['X-Client-Auth-Token'] = token;
+  return headers;
+};
+
+export const getRoomNotificationsMuted = async (roomId: string): Promise<boolean> => {
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/notification-preference`), {
+    cache: 'no-store',
+    headers: roomNotificationHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to load room notification preference');
+  }
+  const result = await response.json() as { muted?: unknown };
+  return result.muted === true;
+};
+
+export const setRoomNotificationsMuted = async (roomId: string, muted: boolean): Promise<boolean> => {
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/notification-preference`), {
+    method: 'PUT',
+    headers: roomNotificationHeaders(),
+    body: JSON.stringify(withClientAuthBody({
+      clientId: getCurrentClientId(),
+      muted,
+    })),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to update room notification preference');
+  }
+  const result = await response.json() as { muted?: unknown };
+  return result.muted === true;
 };

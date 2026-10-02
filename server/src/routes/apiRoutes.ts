@@ -725,6 +725,50 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.status(204).send();
   });
 
+  app.get('/api/rooms/:roomId/notification-preference', async (req: Request, res: Response) => {
+    const roomId = req.params.roomId?.trim();
+    const clientId = getQueryClientId(req);
+    if (!roomId || !clientId) {
+      return res.status(400).json({ error: 'roomId and clientId are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/rooms/:roomId/notification-preference'))) {
+      return;
+    }
+    const room = await store.getRoomById(roomId);
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    if (!(await store.isRoomMember(roomId, clientId))) {
+      return res.status(403).json({ error: 'You are not authorized to access this room' });
+    }
+    const muted = await store.isRoomNotificationsMuted(roomId, clientId);
+    return res.json({ roomId, muted });
+  });
+
+  app.put('/api/rooms/:roomId/notification-preference', async (req: Request, res: Response) => {
+    const roomId = req.params.roomId?.trim();
+    const clientId = getBodyClientId(req);
+    const muted = req.body?.muted;
+    if (!roomId || !clientId || typeof muted !== 'boolean') {
+      return res.status(400).json({ error: 'roomId, clientId, and muted are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'PUT /api/rooms/:roomId/notification-preference'))) {
+      return;
+    }
+    const room = await store.getRoomById(roomId);
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    if (!(await store.isRoomMember(roomId, clientId))) {
+      return res.status(403).json({ error: 'You are not authorized to access this room' });
+    }
+    const updated = await store.setRoomNotificationsMuted(roomId, clientId, muted);
+    if (!updated) {
+      return res.status(500).json({ error: 'Unable to update room notification preference' });
+    }
+    return res.json({ roomId, muted });
+  });
+
   app.get('/api/auth/config', (_req: Request, res: Response) => {
     return res.json({ googleConfigured: googleClientIds.length > 0 });
   });

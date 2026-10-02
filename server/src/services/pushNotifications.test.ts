@@ -46,6 +46,16 @@ describe('push notification recipient selection', () => {
     assert.deepEqual([...recipients.keys()], ['https://push.example/legacy']);
   });
 
+  it('excludes every subscription owned by a client that muted the room', () => {
+    const recipients = selectPushRecipients([
+      subscription({ clientId: 'muted-client', browserInstanceId: 'browser-1', endpoint: 'https://push.example/muted-1' }),
+      subscription({ clientId: 'muted-client', browserInstanceId: 'browser-2', endpoint: 'https://push.example/muted-2' }),
+      subscription({ clientId: 'client-3', browserInstanceId: 'browser-3', endpoint: 'https://push.example/client-3' }),
+    ], new Set(), 'sender', new Set(['muted-client']));
+
+    assert.deepEqual([...recipients.keys()], ['https://push.example/client-3']);
+  });
+
   it('deduplicates by endpoint using Map semantics', () => {
     const recipients = selectPushRecipients([
       subscription({ clientId: 'client-2', browserInstanceId: 'browser-1', endpoint: 'https://push.example/shared', p256dh: 'old-key' }),

@@ -5170,6 +5170,65 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async setRoomNotificationsMuted(roomId: string, clientId: string, muted: boolean): Promise<boolean> {
+    try {
+      if (muted) {
+        const result = await this.pool.query(
+          `INSERT INTO room_notification_preferences (room_id, client_id, muted, updated_at)
+          SELECT room_id, client_id, TRUE, NOW()
+          FROM room_members
+          WHERE room_id = $1 AND client_id = $2
+          ON CONFLICT (room_id, client_id) DO UPDATE SET
+            muted = TRUE,
+            updated_at = NOW()`,
+          [roomId, clientId],
+        );
+        return (result.rowCount || 0) > 0;
+      }
+
+      const member = await this.getRoomMember(roomId, clientId);
+      if (!member) return false;
+      await this.pool.query(
+        'DELETE FROM room_notification_preferences WHERE room_id = $1 AND client_id = $2',
+        [roomId, clientId],
+      );
+      return true;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL room notification preference', { error, roomId, clientId, muted });
+      return false;
+    }
+  }
+
+  async isRoomNotificationsMuted(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query<{ muted: boolean }>(
+        `SELECT muted
+        FROM room_notification_preferences
+        WHERE room_id = $1 AND client_id = $2`,
+        [roomId, clientId],
+      );
+      return result.rows[0]?.muted === true;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room notification preference', { error, roomId, clientId });
+      return false;
+    }
+  }
+
+  async readMutedNotificationClientIdsByRoom(roomId: string): Promise<string[]> {
+    try {
+      const result = await this.pool.query<{ client_id: string }>(
+        `SELECT client_id
+        FROM room_notification_preferences
+        WHERE room_id = $1 AND muted = TRUE`,
+        [roomId],
+      );
+      return result.rows.map(row => row.client_id);
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room notification mutes', { error, roomId });
+      return [];
+    }
+  }
+
   async getAccountByClientId(clientId: string): Promise<ClientAccount | null> {
     try {
       const result = await this.pool.query<ClientAccountRow>(

@@ -61,10 +61,14 @@ export const selectPushRecipients = (
   subscriptions: PushSubscriptionRecord[],
   activeBrowserInstanceIds: Set<string>,
   senderClientId: string,
+  mutedClientIds: Set<string> = new Set(),
 ): Map<string, PushSubscriptionRecord> => new Map(
   subscriptions
     .filter(subscription => {
       if (subscription.clientId === senderClientId) {
+        return false;
+      }
+      if (mutedClientIds.has(subscription.clientId)) {
         return false;
       }
       if (subscription.browserInstanceId && activeBrowserInstanceIds.has(subscription.browserInstanceId)) {
@@ -89,11 +93,17 @@ export const notifyRoomMessage = async (params: {
 
   webPush.setVapidDetails(config.subject, config.publicKey, config.privateKey);
 
-  const [subscriptions, activeBrowserInstanceIds] = await Promise.all([
+  const [subscriptions, activeBrowserInstanceIds, mutedClientIds] = await Promise.all([
     store.readPushSubscriptionsByRoom(message.roomId),
     store.getRoomActiveBrowserInstanceIds(message.roomId),
+    store.readMutedNotificationClientIdsByRoom(message.roomId),
   ]);
-  const recipients = selectPushRecipients(subscriptions, new Set(activeBrowserInstanceIds), message.clientId);
+  const recipients = selectPushRecipients(
+    subscriptions,
+    new Set(activeBrowserInstanceIds),
+    message.clientId,
+    new Set(mutedClientIds),
+  );
 
   if (recipients.size === 0) {
     return;

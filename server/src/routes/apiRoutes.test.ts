@@ -46,6 +46,7 @@ type TestServer = {
     pendingMediaUploads: Map<string, PendingMediaUpload>;
     audioTranscriptions: Map<string, AudioTranscriptionRecord>;
     pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
+    roomNotificationMutes: Set<string>;
     accounts: Map<string, ClientAccount>;
     entitlements: Map<string, AccountEntitlement>;
     membershipChangeEntitlements: Map<string, AccountEntitlement>;
@@ -63,6 +64,9 @@ type TestServer = {
     savePushSubscription: (subscription: { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
     deletePushSubscription: (clientId: string, endpoint: string) => Promise<boolean>;
     readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
+    setRoomNotificationsMuted: (roomId: string, clientId: string, muted: boolean) => Promise<boolean>;
+    isRoomNotificationsMuted: (roomId: string, clientId: string) => Promise<boolean>;
+    readMutedNotificationClientIdsByRoom: (roomId: string) => Promise<string[]>;
     getAccountByClientId: (clientId: string) => Promise<ClientAccount | null>;
     getAccountByGoogleSubject: (providerSubject: string) => Promise<ClientAccount | null>;
     getAccountRoles: (accountId: string) => Promise<Array<'admin'>>;
@@ -231,6 +235,7 @@ async function createTestServer(overrides: {
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
     audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
     pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
+    roomNotificationMutes: new Set<string>(),
     accounts: new Map<string, ClientAccount>(),
     entitlements: new Map<string, AccountEntitlement>(),
     membershipChangeEntitlements: new Map<string, AccountEntitlement>(),
@@ -281,6 +286,22 @@ async function createTestServer(overrides: {
           createdAt: '2026-05-03T00:00:00.000Z',
           updatedAt: '2026-05-03T00:00:00.000Z',
         }));
+    },
+    async setRoomNotificationsMuted(roomId: string, memberClientId: string, muted: boolean) {
+      if (!this.members.has(`${roomId}:${memberClientId}`)) return false;
+      const key = `${roomId}:${memberClientId}`;
+      if (muted) this.roomNotificationMutes.add(key);
+      else this.roomNotificationMutes.delete(key);
+      return true;
+    },
+    async isRoomNotificationsMuted(roomId: string, memberClientId: string) {
+      return this.roomNotificationMutes.has(`${roomId}:${memberClientId}`);
+    },
+    async readMutedNotificationClientIdsByRoom(roomId: string) {
+      const prefix = `${roomId}:`;
+      return [...this.roomNotificationMutes]
+        .filter(key => key.startsWith(prefix))
+        .map(key => key.slice(prefix.length));
     },
     async getAccountByClientId(clientId: string) {
       const accountId = this.clientAccountLinks.get(clientId);
@@ -1017,6 +1038,46 @@ describe('API routes', () => {
     });
     assert.equal(deleteResponse.status, 204);
     assert.equal(server.store.pushSubscriptions.has(body.subscription.endpoint), false);
+  });
+
+  it('persists room notification preferences for each room member', async () => {
+    const initialResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/notification-preference`, {
+      headers: { 'X-Client-Id': 'client-1' },
+    });
+    assert.equal(initialResponse.status, 200);
+    assert.deepEqual(await initialResponse.json(), { roomId: 'room-1', muted: false });
+
+    const muteResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/notification-preference`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', muted: true }),
+    });
+    assert.equal(muteResponse.status, 200);
+    assert.deepEqual(await muteResponse.json(), { roomId: 'room-1', muted: true });
+
+    const savedResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/notification-preference`, {
+      headers: { 'X-Client-Id': 'client-1' },
+    });
+    assert.equal(savedResponse.status, 200);
+    assert.deepEqual(await savedResponse.json(), { roomId: 'room-1', muted: true });
+
+    const unmuteResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/notification-preference`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', muted: false }),
+    });
+    assert.equal(unmuteResponse.status, 200);
+    assert.deepEqual(await unmuteResponse.json(), { roomId: 'room-1', muted: false });
+  });
+
+  it('rejects room notification preferences for non-members', async () => {
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/notification-preference`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-2', muted: true }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(server.store.roomNotificationMutes.size, 0);
   });
 
   it('returns account auth status for the current User ID', async () => {

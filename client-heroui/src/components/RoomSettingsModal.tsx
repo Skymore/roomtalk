@@ -84,7 +84,7 @@ const roleClassName: Record<RoomMemberRole, string> = {
   member: 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]',
 };
 
-type SettingsTabKey = 'general' | 'schedule' | 'members' | 'transfer';
+type SettingsTabKey = 'personal' | 'general' | 'schedule' | 'members' | 'transfer';
 
 interface RoomSettingsModalProps {
   isOpen: boolean;
@@ -100,6 +100,9 @@ interface RoomSettingsModalProps {
   codeAgentAvailableBackends?: CodeAgentBackend[];
   codeAgentDefaultBackend?: CodeAgentBackend;
   onRoomUpdated?: (room: Room) => void;
+  roomNotificationsMuted?: boolean;
+  isUpdatingRoomNotifications?: boolean;
+  onToggleRoomNotifications?: () => void;
 }
 
 export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
@@ -116,6 +119,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   codeAgentAvailableBackends = ['code-agent'],
   codeAgentDefaultBackend = 'code-agent',
   onRoomUpdated,
+  roomNotificationsMuted = false,
+  isUpdatingRoomNotifications = false,
+  onToggleRoomNotifications,
 }) => {
   const { t } = useTranslation();
   const tabSetId = React.useId();
@@ -216,7 +222,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setPendingTransfer(null);
     setPendingMemberRemoval(null);
     setStatus(null);
-    setActiveTab(canManageGeneral ? 'general' : canManageMembers ? 'members' : 'transfer');
+    setActiveTab(canManageGeneral ? 'general' : 'personal');
   }, [canManageGeneral, canManageMembers, canManageSettings, isOpen, resetSchedule, room.name, room.hasPassword]);
 
   React.useEffect(() => {
@@ -460,6 +466,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     ...(canManageGeneral ? [
       { key: 'general' as const, icon: 'lucide:settings-2', label: t('settings') },
     ] : []),
+    { key: 'personal' as const, icon: 'lucide:user-round-cog', label: t('personalRoomSettings') },
     ...(canManageSettings ? [
       { key: 'schedule' as const, icon: 'lucide:clock-3', label: t('scheduleTab') },
     ] : []),
@@ -604,6 +611,28 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   };
 
   const renderTabPanel = (tabKey: SettingsTabKey) => {
+    if (tabKey === 'personal') {
+      return (
+        <section className="space-y-6">
+          <div className="space-y-2">
+            {renderSectionLabel('lucide:bell', t('roomNotificationSettings'))}
+            <Button
+              variant="flat"
+              className="h-11 w-full justify-start rounded-lg px-3 text-sm font-semibold"
+              startContent={<Icon icon={roomNotificationsMuted ? 'lucide:bell' : 'lucide:bell-off'} className="h-4 w-4" />}
+              isDisabled={!onToggleRoomNotifications || isUpdatingRoomNotifications}
+              isLoading={isUpdatingRoomNotifications}
+              onPress={onToggleRoomNotifications}
+            >
+              {t(roomNotificationsMuted ? 'unmuteRoomNotifications' : 'muteRoomNotifications')}
+            </Button>
+          </div>
+
+          {renderStatusBanner()}
+        </section>
+      );
+    }
+
     if (tabKey === 'general' && canManageGeneral) {
       const roomNameValidation = validateRoomName(roomName, 20);
       const roomNameChanged = roomNameValidation.ok && roomNameValidation.name !== room.name;

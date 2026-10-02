@@ -77,6 +77,8 @@ interface CodeAgentRoomViewProps {
   onMembersChanged?: (roomId: string) => void;
   onRoomDeleted?: (roomId: string) => void;
   onRoomAccessDenied?: (roomId: string) => void;
+  showSuccess?: (message: string) => void;
+  showError?: (message: string) => void;
 }
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
@@ -149,6 +151,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   onMembersChanged,
   onRoomDeleted,
   onRoomAccessDenied,
+  showSuccess,
+  showError,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -475,6 +479,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       codeAgentAvailableBackends={availableBackends}
       codeAgentDefaultBackend={defaultBackend}
       onRoomUpdated={onRoomUpdated}
+      showSuccess={showSuccess}
+      showError={showError}
     />
   );
 

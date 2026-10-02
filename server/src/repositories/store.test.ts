@@ -168,6 +168,15 @@ const durableRoomAccessStubs = () => ({
   async readPushSubscriptionsByRoom() {
     return [];
   },
+  async setRoomNotificationsMuted() {
+    return true;
+  },
+  async isRoomNotificationsMuted() {
+    return false;
+  },
+  async readMutedNotificationClientIdsByRoom() {
+    return [];
+  },
   ...durableClientAccountStubs(),
   async setClientPasswordHash() {},
   async getClientPasswordHash() {
@@ -412,6 +421,9 @@ describe('CompositeRoomStore', () => {
       async savePushSubscription() { calls.push('durable.savePushSubscription'); },
       async deletePushSubscription() { calls.push('durable.deletePushSubscription'); return true; },
       async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
+      async setRoomNotificationsMuted() { calls.push('durable.setRoomNotificationsMuted'); return true; },
+      async isRoomNotificationsMuted() { calls.push('durable.isRoomNotificationsMuted'); return true; },
+      async readMutedNotificationClientIdsByRoom() { calls.push('durable.readMutedNotificationClientIdsByRoom'); return ['client-2']; },
       async getAccountByClientId(_clientId: string) { calls.push('durable.getAccountByClientId'); return clientAccount(); },
       async getAccountByGoogleSubject(_providerSubject: string) { calls.push('durable.getAccountByGoogleSubject'); return clientAccount(); },
       async getAccountRoles(_accountId: string) { calls.push('durable.getAccountRoles'); return ['admin' as const]; },
@@ -572,6 +584,9 @@ describe('CompositeRoomStore', () => {
     await store.savePushSubscription({ clientId: 'client-2', endpoint: 'https://push.example/1', p256dh: 'p256dh', auth: 'auth' });
     assert.equal(await store.deletePushSubscription('client-2', 'https://push.example/1'), true);
     assert.deepEqual(await store.readPushSubscriptionsByRoom('room-1'), []);
+    assert.equal(await store.setRoomNotificationsMuted('room-1', 'client-2', true), true);
+    assert.equal(await store.isRoomNotificationsMuted('room-1', 'client-2'), true);
+    assert.deepEqual(await store.readMutedNotificationClientIdsByRoom('room-1'), ['client-2']);
     assert.deepEqual(await store.getAccountByClientId('client-1'), clientAccount());
     assert.deepEqual(await store.getAccountByGoogleSubject('google-subject-1'), clientAccount());
     assert.deepEqual(await store.getAccountRoles('account-1'), ['admin']);
@@ -742,6 +757,9 @@ describe('CompositeRoomStore', () => {
       'durable.savePushSubscription',
       'durable.deletePushSubscription',
       'durable.readPushSubscriptionsByRoom',
+      'durable.setRoomNotificationsMuted',
+      'durable.isRoomNotificationsMuted',
+      'durable.readMutedNotificationClientIdsByRoom',
       'durable.getAccountByClientId',
       'durable.getAccountByGoogleSubject',
       'durable.getAccountRoles',

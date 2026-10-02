@@ -1388,6 +1388,8 @@ export const MessagePage: React.FC = () => {
               onMembersChanged={handleRoomPermissionsInvalidated}
               onRoomDeleted={applyRoomRemoval}
               onRoomAccessDenied={applyRoomRemoval}
+              showSuccess={showSuccess}
+              showError={setError}
             />
           );
         }
@@ -1420,6 +1422,8 @@ export const MessagePage: React.FC = () => {
             onMembersChanged={handleRoomPermissionsInvalidated}
             onRoomDeleted={applyRoomRemoval}
             onRoomAccessDenied={applyRoomRemoval}
+            showSuccess={showSuccess}
+            showError={setError}
           />
         );
       }

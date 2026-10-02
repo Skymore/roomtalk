@@ -24,6 +24,7 @@ import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import { getCodeAgentBackend } from '../utils/codeAgent';
 import type { EnsureRoomSessionReady } from '../utils/roomSessionController';
+import { getRoomNotificationsMuted, setRoomNotificationsMuted } from '../utils/pushNotifications';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -51,6 +52,8 @@ interface ChatHeaderProps {
   codeAgentAvailableBackends?: CodeAgentBackend[];
   codeAgentDefaultBackend?: CodeAgentBackend;
   onRoomUpdated: (room: Room) => void;
+  showSuccess?: (message: string) => void;
+  showError?: (message: string) => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -79,6 +82,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   codeAgentAvailableBackends,
   codeAgentDefaultBackend = 'code-agent',
   onRoomUpdated,
+  showSuccess,
+  showError,
 }) => {
   const { t } = useTranslation();
   const isTouchDevice = useIsTouchDevice();
@@ -88,9 +93,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const [onlineMembers, setOnlineMembers] = useState<RoomOnlineMember[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState(false);
+  const [roomNotificationsMuted, setRoomNotificationsMutedState] = useState(false);
+  const [isUpdatingRoomNotifications, setIsUpdatingRoomNotifications] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const membersRequestGenerationRef = useRef(0);
-  const canManageRoom = Boolean(roomPermissions?.canManageRoom);
   const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
   const codeAgentBackend = getCodeAgentBackend(currentRoom, codeAgentDefaultBackend);
   const isCodeAgent = codeAgentBackend !== null;
@@ -106,10 +112,28 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   }, [currentRoom.id]);
 
   useEffect(() => {
-    if (!isRoomSessionReady || !canManageRoom) {
+    let cancelled = false;
+    setRoomNotificationsMutedState(false);
+    setIsUpdatingRoomNotifications(false);
+    if (!canUseRetainedRoomAccess) return () => { cancelled = true; };
+
+    setIsUpdatingRoomNotifications(true);
+    void getRoomNotificationsMuted(currentRoom.id)
+      .then(muted => {
+        if (!cancelled) setRoomNotificationsMutedState(muted);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setIsUpdatingRoomNotifications(false);
+      });
+    return () => { cancelled = true; };
+  }, [canUseRetainedRoomAccess, currentRoom.id]);
+
+  useEffect(() => {
+    if (!isRoomSessionReady) {
       setIsSettingsOpen(false);
     }
-  }, [canManageRoom, isRoomSessionReady]);
+  }, [isRoomSessionReady]);
 
   const handleCopyRoomId = () => {
     handleCopyToClipboard(currentRoom.id);
@@ -152,6 +176,22 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     clearRoomUrlParam();
   };
 
+  const handleToggleRoomNotifications = async () => {
+    if (!canUseRetainedRoomAccess || isUpdatingRoomNotifications) return;
+    const nextMuted = !roomNotificationsMuted;
+    setIsUpdatingRoomNotifications(true);
+    try {
+      await ensureRoomSessionReady(currentRoom.id);
+      const savedMuted = await setRoomNotificationsMuted(currentRoom.id, nextMuted);
+      setRoomNotificationsMutedState(savedMuted);
+      showSuccess?.(t(savedMuted ? 'roomNotificationsMuted' : 'roomNotificationsUnmuted'));
+    } catch {
+      showError?.(t('roomNotificationPreferenceUpdateFailed'));
+    } finally {
+      setIsUpdatingRoomNotifications(false);
+    }
+  };
+
   return (
     <>
     <div className="safe-top flex min-h-10 items-center justify-between border-b border-[#dedbd0] bg-[#faf9f5]/90 px-2 py-0.5 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/90 md:min-h-16 md:px-4 md:py-1">
@@ -172,7 +212,17 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           {showRoomSessionSpinner ? (
             <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
           ) : null}
-          <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
+          <h2 data-testid="chat-room-title" className="flex w-[38vw] max-w-[148px] flex-shrink-0 items-center gap-1 font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">
+            {roomNotificationsMuted ? (
+              <Icon
+                icon="lucide:bell-off"
+                aria-label={t('roomNotificationsMuted')}
+                data-testid="room-notifications-muted-icon"
+                className="h-3.5 w-3.5 flex-shrink-0 text-[#8a8880] dark:text-[#aaa79e]"
+              />
+            ) : null}
+            <span className="min-w-0 truncate">{currentRoom.name}</span>
+          </h2>
           {!isRoomSessionReady && !isRestoringRoom ? (
             <Button
               size="sm"
@@ -303,11 +353,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 {t('postingScheduleDetails')}
               </DropdownItem>
             ) : null}
-            {canManageRoom ? (
-              <DropdownItem key="roomSettings" isDisabled={!isRoomSessionReady} startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
-                {t('settings')}
-              </DropdownItem>
-            ) : null}
+            <DropdownItem key="roomSettings" isDisabled={!isRoomSessionReady} startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
+              {t('settings')}
+            </DropdownItem>
             <DropdownItem
               key="save"
               isDisabled={!canUseRetainedRoomAccess}
@@ -344,6 +392,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       codeAgentAvailableBackends={codeAgentAvailableBackends}
       codeAgentDefaultBackend={codeAgentDefaultBackend}
       onRoomUpdated={onRoomUpdated}
+      roomNotificationsMuted={roomNotificationsMuted}
+      isUpdatingRoomNotifications={isUpdatingRoomNotifications}
+      onToggleRoomNotifications={() => void handleToggleRoomNotifications()}
     />
     <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">
       <ModalContent>

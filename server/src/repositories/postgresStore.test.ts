@@ -219,6 +219,15 @@ describe('PostgresStore', () => {
     assert.match(migration.sql, /idx_client_presence_events_client_created/);
   });
 
+  it('adds per-member room notification preferences', () => {
+    const migration = POSTGRES_MIGRATIONS.find(candidate => candidate.id === '0028_room_notification_preferences');
+    assert.ok(migration);
+    assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS room_notification_preferences/);
+    assert.match(migration.sql, /PRIMARY KEY \(room_id, client_id\)/);
+    assert.match(migration.sql, /FOREIGN KEY \(room_id, client_id\)/);
+    assert.match(migration.sql, /REFERENCES room_members\(room_id, client_id\)\s+ON DELETE CASCADE/);
+  });
+
   it('persists a client presence event with a database timestamp', async () => {
     const pool = new ScriptedPool([{
       rowCount: 1,
