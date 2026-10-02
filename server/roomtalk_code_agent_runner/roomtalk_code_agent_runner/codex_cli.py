@@ -24,10 +24,14 @@ SCHEMA_VERSION = 1
 PUBLISH_STATIC_SITE_TOOL = "PublishStaticSite"
 DEFAULT_CODEX_CLI_BIN = "codex"
 DEFAULT_CODEX_SECRET_PARENT = "/tmp/roomtalk-codex"
-DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+DEFAULT_CODEX_MODEL = "gpt-6.1-sol"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_CODEX_PERMISSION_MODE = "approveForMe"
 ALLOWED_CODEX_MODELS = {
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",

@@ -1,3 +1,4 @@
+import { getAIModelAccessError } from '../services/accountEntitlements';
 import { v4 as uuidv4 } from 'uuid';
 import type { AssistantRunClaim, AssistantRunProjectionResult, AssistantRunTerminalPayloadV1, RoomStore } from '../repositories/store';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from '../services/aiHistory';
@@ -155,6 +156,7 @@ const addReportedUsage = (current: ReportedUsage, next: any): ReportedUsage => {
 
   const summed = { ...current };
   [
+    'cost',
     'prompt_tokens',
     'completion_tokens',
     'total_tokens',
@@ -337,6 +339,7 @@ const streamAnthropicWithA2UI = async (params: {
         system: [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: providerMessages,
         tools: [anthropicA2UITool],
+        ...(/claude-(?:opus-5-5|fable-5-1)/.test(params.model) ? { thinking: { type: 'adaptive' } } : {}),
       } as any, params.signal ? { signal: params.signal } : undefined);
 
       for await (const event of stream as any) {
@@ -565,7 +568,7 @@ export type AssistantRunExecutorDeps = Pick<
   io?: SocketHandlerDeps['io'];
   eventPublisher?: AssistantRunEventPublisher;
   store: Required<Pick<RoomStore,
-    'stageAssistantRunTerminal' | 'projectAssistantRunTerminal'
+    'stageAssistantRunTerminal' | 'projectAssistantRunTerminal' | 'getAccountEntitlementByClientId'
   >>;
 };
 
@@ -749,6 +752,13 @@ export const executeAssistantRun = async (
 
   let terminal: AssistantRunTerminalPayloadV1;
   try {
+    const accessError = getAIModelAccessError(
+      await store.getAccountEntitlementByClientId(run.requestedByClientId), selectedModel,
+    );
+    if (accessError) {
+      await stageAndProject(terminalError(accessError));
+      return;
+    }
     if (isE2EFakeAIEnabled()) {
       const lastUserMessage = [...contextMessages].reverse().find(message => message.clientId !== 'ai_assistant');
       const targetContent = lastUserMessage?.content?.trim() || 'empty prompt';
@@ -852,7 +862,7 @@ export const executeAssistantRun = async (
 
         execution.signal.throwIfAborted();
         const usage = normalizeUsage(reportedUsage, usageMessages, fullContent);
-        const cost = calculateAICost(selectedModel, usage);
+        const cost = calculateAICost(selectedModel, usage, reportedUsage?.cost);
         terminal = {
           schemaVersion: 1,
           outcome: 'complete',
@@ -890,7 +900,7 @@ export const executeAssistantRun = async (
         partial?.usageMessages ?? fallbackUsageMessages,
         partialContent,
       );
-      const cost = calculateAICost(selectedModel, usage);
+      const cost = calculateAICost(selectedModel, usage, partial?.reportedUsage?.cost);
       terminal = {
         schemaVersion: 1,
         outcome: 'complete',
@@ -919,7 +929,7 @@ export const executeAssistantRun = async (
               partial?.usageMessages ?? fallbackUsageMessages,
               partialContent,
             );
-            return { usage, cost: calculateAICost(selectedModel, usage) };
+            return { usage, cost: calculateAICost(selectedModel, usage, partial?.reportedUsage?.cost) };
           })()
         : undefined;
       terminal = terminalError(notice, {
@@ -976,6 +986,17 @@ export function registerAIHandlers({
     });
     if (!postAuth.ok) {
       callback?.({ success: false, error: postAuth.message });
+      return;
+    }
+    try {
+      const accessError = getAIModelAccessError(await store.getAccountEntitlementByClientId(clientId), selectedModel);
+      if (accessError) {
+        callback?.({ success: false, error: accessError });
+        return;
+      }
+    } catch (error) {
+      socketLogger.error('Unable to check AI account entitlement', { error, clientId });
+      callback?.({ success: false, error: 'Account entitlement is temporarily unavailable' });
       return;
     }
     const maxContextMessages = normalizeAIContextMessageLimit(data.maxContextMessages, MAX_CONTEXT_MESSAGES);

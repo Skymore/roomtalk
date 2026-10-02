@@ -2525,4 +2525,20 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON client_presence_events (created_at DESC, id DESC);
     `,
   },
+  {
+    id: '0030_membership_credit_overdraft',
+    sql: `
+      ALTER TABLE account_ai_usage_events DROP CONSTRAINT account_ai_usage_events_source_check;
+      ALTER TABLE account_ai_usage_events ADD CONSTRAINT account_ai_usage_events_source_check
+        CHECK (source IN ('assistant_run', 'code_agent_gateway', 'ai_role_draft'));
+      ALTER TABLE account_credit_balances
+        DROP CONSTRAINT account_credit_balances_available_usd_check;
+      ALTER TABLE account_credit_balances
+        ADD CONSTRAINT account_credit_balances_available_usd_check CHECK (available_usd >= -5);
+      ALTER TABLE account_credit_ledger
+        DROP CONSTRAINT account_credit_ledger_balance_after_usd_check;
+      ALTER TABLE account_credit_ledger
+        ADD CONSTRAINT account_credit_ledger_balance_after_usd_check CHECK (balance_after_usd >= -5);
+    `,
+  },
 ];

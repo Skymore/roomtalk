@@ -9,7 +9,7 @@ import type {
   RoomAIUsageSettlement,
 } from '../repositories/store';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
-import type { AssistantRunSchedulingSnapshot } from './accountEntitlements';
+import { getAIModelAccessError, type AccountEntitlement, type AssistantRunSchedulingSnapshot } from './accountEntitlements';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 import { normalizeCodeAgentMode } from './codeAgentModes';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
@@ -68,6 +68,7 @@ export interface CodeAgentModelGatewayTokenStateStore {
 }
 
 export interface CodeAgentModelGatewayOptions {
+  getAccountEntitlement: (clientId: string) => Promise<AccountEntitlement | null>;
   publicBaseUrl: string;
   tokenSecret: string;
   providerApiKeys: Partial<Record<AIModelProvider, string>>;
@@ -318,6 +319,7 @@ return actual_micro_usd
 `;
 
 interface ReportedUsageAccumulator {
+  reportedCostUsd?: number;
   anthropic: {
     inputTokens?: number;
     outputTokens?: number;
@@ -354,6 +356,7 @@ const addReportedUsageFragment = (accumulator: ReportedUsageAccumulator, usage: 
     return;
   }
 
+  accumulator.reportedCostUsd = mergeMaxNumber(accumulator.reportedCostUsd, usage.cost);
   const inputTokens = readFiniteNumber(usage.input_tokens);
   const outputTokens = readFiniteNumber(usage.output_tokens);
   const cacheReadInputTokens = readFiniteNumber(usage.cache_read_input_tokens);
@@ -577,6 +580,18 @@ export class CodeAgentModelGateway {
       }
     }
 
+    if (req.method !== 'GET') {
+      try {
+        const accessError = getAIModelAccessError(await this.options.getAccountEntitlement(claims.clientId), {
+          id: claims.modelId, apiModel: claims.apiModel, pricing: claims.pricing,
+        });
+        if (accessError) return res.status(402).json({ error: accessError });
+      } catch (error) {
+        this.options.logger?.error('Unable to check model access', { error });
+        return res.status(503).json({ error: 'Account entitlement is temporarily unavailable' });
+      }
+    }
+
     const consumeResult = await this.stateStore.consumeRequest({
       tokenId: claims.jti,
       ttlSeconds: this.ttlSecondsForClaims(claims),
@@ -665,10 +680,20 @@ export class CodeAgentModelGateway {
           signal: requestAbort.signal,
         });
       }
+      const upstreamBody = { ...req.body };
+      if (claims.provider === 'anthropic' && /claude-(?:opus-5-5|fable-5-1)/.test(claims.apiModel)) {
+        delete upstreamBody.temperature;
+        delete upstreamBody.top_p;
+        delete upstreamBody.top_k;
+        upstreamBody.thinking = { type: 'adaptive' };
+        if (upstreamBody.tool_choice?.type === 'any' || upstreamBody.tool_choice?.type === 'tool') {
+          upstreamBody.tool_choice = { type: 'auto' };
+        }
+      }
       const upstream = await this.fetchFn(route.url, {
         method: req.method,
         headers: this.buildUpstreamHeaders(req, claims.provider, providerKey),
-        body: req.method === 'GET' ? undefined : stableJson(req.body ?? {}),
+        body: req.method === 'GET' ? undefined : stableJson(upstreamBody),
         signal: requestAbort.signal,
       });
       res.status(upstream.status);
@@ -889,7 +914,7 @@ export class CodeAgentModelGateway {
       return;
     }
 
-    const costUsd = calculateReportedUsageCostUsd(usage, claims.pricing);
+    const costUsd = accumulator.reportedCostUsd ?? calculateReportedUsageCostUsd(usage, claims.pricing);
     if (!(costUsd > 0)) {
       return;
     }

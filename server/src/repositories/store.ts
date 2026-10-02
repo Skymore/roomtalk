@@ -700,7 +700,7 @@ export interface AccountCreditGrantInput {
   now?: string;
 }
 
-export type AccountAIUsageSource = 'assistant_run' | 'code_agent_gateway';
+export type AccountAIUsageSource = 'assistant_run' | 'code_agent_gateway' | 'ai_role_draft';
 
 export interface AccountAIUsageInput {
   id: string;

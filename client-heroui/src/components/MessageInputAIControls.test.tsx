@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageInputAIControls } from './MessageInputAIControls';
 import type { AIRole } from '../utils/aiRoles';
+
+vi.mock('../utils/socket', () => ({ getClientAccountStatus: async () => ({ entitlement: { effectiveTier: 'priority', creditBalanceUsd: 50, creditUnlimited: true } }) }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -349,7 +351,7 @@ describe('MessageInputAIControls', () => {
     expect(onRoleChange).not.toHaveBeenCalled();
   });
 
-  it('closes the nested premium confirmation when the room session locks', () => {
+  it('closes the nested premium confirmation when the room session locks', async () => {
     const premiumModel = {
       ...model,
       id: 'premium-model',
@@ -365,6 +367,7 @@ describe('MessageInputAIControls', () => {
       />
     );
 
+    await waitFor(() => expect(screen.queryAllByText('loading')).toHaveLength(0));
     fireEvent.click(screen.getByTestId('change-selectAIModel'));
     expect(screen.getByText('premiumModelPriceConfirmationTitle')).toBeTruthy();
 

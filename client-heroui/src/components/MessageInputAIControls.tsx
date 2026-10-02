@@ -14,7 +14,8 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { AIRoleManager } from './AIRoleManager';
 import { HoverTooltip } from './HoverTooltip';
-import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel } from '../utils/aiModels';
+import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel, getAIModelAccessReason } from '../utils/aiModels';
+import { getClientAccountStatus, type AccountEntitlementInfo } from '../utils/socket';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
 import {
   MAX_AI_CONTEXT_MESSAGE_LIMIT,
@@ -185,6 +186,20 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onCodexRunSettingsChange,
 }) => {
   const { t } = useTranslation();
+  const [entitlement, setEntitlement] = React.useState<AccountEntitlementInfo | null>();
+  React.useEffect(() => {
+    if (!isSettingsOpen) return;
+    let active = true;
+    setEntitlement(undefined);
+    void getClientAccountStatus().then(status => {
+      if (active) setEntitlement(status?.entitlement || null);
+    }).catch(() => { if (active) setEntitlement(null); });
+    return () => { active = false; };
+  }, [isSettingsOpen]);
+  const modelAccessReason = (model: AIModelOption) => getAIModelAccessReason(entitlement, model);
+  const codexAccessReason = (modelId: string) => getAIModelAccessReason(
+    entitlement, aiModels.find(model => model.id === modelId) || { id: modelId },
+  );
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
   const [aiContextMessageLimitDraft, setAIContextMessageLimitDraft] = React.useState(() => (
     normalizeAIContextMessageLimit(aiContextMessageLimit)
@@ -282,6 +297,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     if (modelId === selectedAIModelDraft) return;
 
     const model = aiModels.find(item => item.id === modelId);
+    if (model && modelAccessReason(model)) return;
     if (model && isPremiumAIModel(model)) {
       setPendingPremiumModelId(model.id);
       setPremiumConfirmationStep(1);
@@ -466,6 +482,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   size="sm"
                   label={t('selectCodexModel')}
                   data-testid="codex-model-select"
+                  disabledKeys={CODEX_MODEL_OPTIONS.filter(model => codexAccessReason(model.id)).map(model => model.id)}
                   selectedKeys={[codexRunSettingsDraft.model]}
                   onSelectionChange={handleCodexModelSelection}
                   classNames={{
@@ -486,6 +503,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                       <span className="block truncate text-xs font-medium leading-4">
                         {model.label}
                       </span>
+                      {codexAccessReason(model.id) && <span className="block text-[10px] text-warning">{t(codexAccessReason(model.id)!)}</span>}
                     </SelectItem>
                   ))}
                 </Select>
@@ -549,6 +567,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 size="sm"
                 label={t('selectAIModel')}
                 data-testid="ai-model-select"
+                disabledKeys={aiModels.filter(model => modelAccessReason(model)).map(model => model.id)}
                 selectedKeys={[selectedAIModelDraft]}
                 onSelectionChange={(keys) => {
                   const selectedKey = Array.from(keys)[0]?.toString();
@@ -590,6 +609,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                           <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
                         )}
                       </span>
+                      {modelAccessReason(model) && <span className="block text-[10px] text-warning">{t(modelAccessReason(model)!)}</span>}
                       <ModelPriceGrid model={model} />
                     </span>
                   </SelectItem>

@@ -7,15 +7,15 @@ import {
 
 describe('codexRunSettings', () => {
   it('normalizes requested Codex model and reasoning effort', () => {
-    assert.deepEqual(normalizeCodexRunSettings('gpt-5.6-sol', 'high', 'fullAccess', 'priority'), {
-      model: 'gpt-5.6-sol',
+    assert.deepEqual(normalizeCodexRunSettings('gpt-6.1-sol', 'high', 'fullAccess', 'priority'), {
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
       serviceTier: 'priority',
     });
-    assert.equal(normalizeCodexRunSettings('gpt-5.3-codex-spark', 'high', 'fullAccess', 'priority').serviceTier, 'default');
+    assert.equal(normalizeCodexRunSettings('gpt-5.3-codex-spark', 'high', 'fullAccess', 'priority').model, 'gpt-6.1-sol');
     assert.deepEqual(normalizeCodexRunSettings('unknown', 'invalid', 'invalid'), {
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'edit',
       serviceTier: 'default',

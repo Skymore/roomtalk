@@ -33,6 +33,27 @@ export interface AssistantRunSchedulingSnapshot {
 
 export const BULLMQ_MAX_PRIORITY = 2_097_152;
 export const FREE_MONTHLY_CREDIT_USD = 5;
+export const MONTHLY_CREDIT_USD: Record<MembershipTier, number> = { free: 5, pro: 20, priority: 50 };
+export const CREDIT_OVERDRAFT_LIMIT_USD = 5;
+
+export const getAIModelAccessError = (
+  entitlement: Pick<AccountEntitlement, 'effectiveTier' | 'creditBalanceUsd' | 'creditUnlimited'> | null,
+  model: { id: string; apiModel?: string; pricing?: { inputPerMillion: number } },
+): string | undefined => {
+  if (entitlement?.creditUnlimited) return;
+  if (!entitlement) return 'Sign in to use AI models';
+  const membersOnly = /(?:gpt-6-astra|claude-fable)/.test(`${model.id} ${model.apiModel || ''}`);
+  if (membersOnly && entitlement.effectiveTier === 'free') {
+    return 'This model requires an active Pro or Priority membership';
+  }
+  if (entitlement.creditBalanceUsd <= -CREDIT_OVERDRAFT_LIMIT_USD) {
+    return 'AI credits have reached the -$5 limit. Wait for monthly credits or add credits';
+  }
+  if (entitlement.creditBalanceUsd <= 0
+    && !(typeof model.pricing?.inputPerMillion === 'number' && model.pricing.inputPerMillion < 1)) {
+    return 'Credits are exhausted. Choose a model with input pricing below $1 per million tokens';
+  }
+};
 
 const PRIORITY_POLICY: Record<SchedulingTier, {
   available: number;

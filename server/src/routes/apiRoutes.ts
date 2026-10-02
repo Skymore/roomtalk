@@ -1,3 +1,5 @@
+import { getAIModelAccessError } from '../services/accountEntitlements';
+import { AI_ROLE_GENERATOR_MODEL_ID, REQUESTED_AI_MODEL_CATALOG } from '../services/aiModels';
 import express, { Express, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -53,7 +55,7 @@ interface ApiRouteOptions {
   assistantQueueHealth?: () => Promise<AssistantRunQueueHealthSnapshot>;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
-  generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
+  generateAIRoleDraft: (idea: string, clientId: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
   mediaObjectStorage: MediaObjectStorage;
   mediaThumbnailService?: MediaThumbnailResolver;
@@ -1899,7 +1901,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     try {
-      return res.json(await generateAIRoleDraft(idea));
+      const accessError = getAIModelAccessError(
+        await store.getAccountEntitlementByClientId(clientId),
+        REQUESTED_AI_MODEL_CATALOG.find(model => model.id === AI_ROLE_GENERATOR_MODEL_ID)!,
+      );
+      if (accessError) return res.status(402).json({ error: accessError });
+      return res.json(await generateAIRoleDraft(idea, clientId));
     } catch (error) {
       routeLogger.error('Failed to generate AI role draft', {
         error: error instanceof Error ? error.message : error,

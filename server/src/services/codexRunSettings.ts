@@ -7,19 +7,21 @@ export interface CodexRunSettings {
   serviceTier: CodexServiceTier;
 }
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol';
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'high';
 export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'edit';
 export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
 const CODEX_MODELS = [
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', supportsFast: true },
+  { id: 'gpt-6-astra', label: 'GPT-6-Astra', supportsFast: true },
+  { id: 'gpt-6-sol', label: 'GPT-6-Sol', supportsFast: true },
+  { id: 'gpt-6-luna', label: 'GPT-6-Luna', supportsFast: true },
   { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', supportsFast: true },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', supportsFast: true },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', supportsFast: true },
   { id: 'gpt-5.5', label: 'GPT-5.5', supportsFast: true },
   { id: 'gpt-5.4', label: 'GPT-5.4', supportsFast: true },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', supportsFast: false },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', supportsFast: false },
 ];
 
 const CODEX_MODEL_IDS = new Set(CODEX_MODELS.map(model => model.id));
@@ -62,8 +64,7 @@ export const normalizeCodexRunSettings = (
 
 export const codexModelLabel = (modelId: string): string => (
   CODEX_MODELS.find(model => model.id === modelId)?.label
-  || CODEX_MODELS.find(model => model.id === DEFAULT_CODEX_MODEL)?.label
-  || DEFAULT_CODEX_MODEL
+  || modelId
 );
 
 export const codexReasoningLabel = (effort: CodexReasoningEffort): string => {

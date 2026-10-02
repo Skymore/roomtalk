@@ -12,6 +12,7 @@ export interface AIRoleDraft {
 
 interface AIRoleGeneratorOptions {
   model: AIModelOption;
+  onUsage?: (clientId: string, usage: unknown) => Promise<void>;
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
 }
 
@@ -44,8 +45,9 @@ export function parseAIRoleDraft(value: string): AIRoleDraft {
 export function createAIRoleDraftGenerator({
   model,
   getAIClientForModel,
+  onUsage,
 }: AIRoleGeneratorOptions) {
-  return async (idea: string): Promise<AIRoleDraft> => {
+  return async (idea: string, clientId?: string): Promise<AIRoleDraft> => {
     const clientWrapper = getAIClientForModel(model);
     if (clientWrapper.provider !== 'openrouter') {
       throw new Error('AI role generation requires the OpenRouter model');
@@ -69,6 +71,7 @@ export function createAIRoleDraftGenerator({
       temperature: 0.7,
     } as any);
 
+    if (clientId && onUsage) await onUsage(clientId, response.usage);
     const content = response.choices[0]?.message?.content;
     if (!content) {
       throw new Error('Role generator returned an empty response');

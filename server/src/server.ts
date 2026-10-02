@@ -1,6 +1,7 @@
 // 导入日志类
 import { Logger, httpLogger } from './logger';
 
+import { randomUUID } from 'node:crypto';
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -14,7 +15,7 @@ import { RedisStore } from './repositories/redisStore';
 import { createPostgresPool } from './repositories/postgresPool';
 import { PostgresPool, PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomAIUsageSettlement } from './repositories/store';
-import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
+import { AI_ROLE_GENERATOR_MODEL_ID, calculateAICost, normalizeUsage, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
@@ -133,6 +134,15 @@ const { getAIClientForModel } = createAIClients(process.env);
 const generateAIRoleDraft = createAIRoleDraftGenerator({
   model: normalizeAIModel(AI_ROLE_GENERATOR_MODEL_ID),
   getAIClientForModel,
+  onUsage: async (clientId, reportedUsage) => {
+    const model = normalizeAIModel(AI_ROLE_GENERATOR_MODEL_ID);
+    const usage = normalizeUsage(reportedUsage, [], '');
+    const cost = calculateAICost(model, usage, (reportedUsage as { cost?: number } | null)?.cost);
+    if (cost) await store.settleAccountAIUsage({
+      id: randomUUID(), clientId, source: 'ai_role_draft', costUsd: cost.totalUsd,
+      provider: model.provider, modelId: model.id,
+    });
+  },
 });
 
 const resolveClientDistPath = () => {
@@ -313,6 +323,7 @@ const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
     logger: codeAgentLogger,
     observability: observabilityRecorder,
     providerAdmission: codeAgentProviderAdmission,
+    getAccountEntitlement: clientId => store.getAccountEntitlementByClientId(clientId),
     resolveAccountScheduling: async clientId => {
       const entitlement = await store.getAccountEntitlementByClientId(clientId);
       return resolveAssistantRunScheduling(entitlement ? {

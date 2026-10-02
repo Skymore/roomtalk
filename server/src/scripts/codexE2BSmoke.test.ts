@@ -60,6 +60,7 @@ describe('buildCodexE2BSmokePlan', () => {
       CODEX_E2B_SMOKE_IMAGE_URL: imageUrl,
     });
 
+    assert.equal(plan.codexRunSettings.model, 'gpt-6.1-sol');
     assert.equal(plan.config.backend, 'codex-app-server');
     assert.equal(plan.config.runnerCommand, DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
     assert.equal(plan.config.sandboxProvider, 'e2b');

@@ -654,7 +654,7 @@ describe('MessageInput optimistic send flow', () => {
     expect(payload).toMatchObject({
       roomId: 'room-1',
       content: 'who are you',
-      codexModel: 'gpt-5.6-sol',
+      codexModel: 'gpt-6.1-sol',
       codexReasoningEffort: 'high',
       codexPermissionMode: 'plan',
       codexServiceTier: 'default',
@@ -863,7 +863,7 @@ describe('MessageInput optimistic send flow', () => {
     await waitFor(() => expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledWith(expect.objectContaining({
       roomId: 'room-1',
       content: 'use Bing instead',
-      codexModel: 'gpt-5.6-sol',
+      codexModel: 'gpt-6.1-sol',
       codeAgentMode: 'plan',
     })));
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();

@@ -157,6 +157,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     await pool?.end?.();
   });
 
+  const createFundedAssistantRun: PostgresStore['createAssistantRunWithMessage'] = async (placeholder, run) => {
+    if (!(await store.getAccountByClientId(run.requestedByClientId))) {
+      await store.createPasswordAccountForClient({ accountId: `account:${run.requestedByClientId}`, clientId: run.requestedByClientId, now: run.createdAt });
+    }
+    return store.createAssistantRunWithMessage(placeholder, run);
+  };
+
   it('builds one repeatable snapshot boundary and drops the retired version columns', async () => {
     const roomId = 'event-snapshot-room';
     assert.ok(await store.saveRoom(room(roomId)));
@@ -1845,7 +1852,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       availableAt: createdAt,
     };
 
-    const result = await store.createAssistantRunWithMessage(placeholder, run);
+    const result = await createFundedAssistantRun(placeholder, run);
     assert.ok(result);
     assert.equal((await store.readMessagesByRoom(roomId))[0]?.id, messageId);
     assert.equal((await store.getAssistantRun(runId))?.status, 'queued');
@@ -1896,7 +1903,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2118,9 +2125,9 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(disconnected?.displayName, undefined);
     assert.equal(await store.getAccountByGoogleSubject(providerSubject), null);
     assert.deepEqual(await store.getAccountRoles(accountId), ['admin']);
-    const entitlement = await store.getAccountEntitlementByClientId(clientId);
+    const entitlement = await store.getAccountEntitlementByClientId(clientId, createdAt);
     assert.equal(entitlement?.tier, 'pro');
-    assert.equal(entitlement?.creditBalanceUsd, 5);
+    assert.equal(entitlement?.creditBalanceUsd, 25);
     assert.equal((await pool.query(
       `SELECT COUNT(*) AS count
       FROM account_identity_events
@@ -2152,9 +2159,9 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     ]);
     assert.ok(retries.every(Boolean));
     assert.equal(retries[0]?.tier, 'priority');
-    assert.equal(retries[0]?.creditBalanceUsd, 20);
+    assert.equal(retries[0]?.creditBalanceUsd, 70);
     assert.equal(retries[0]?.queuePriority, 1);
-    assert.equal(retries[1]?.creditBalanceUsd, 20);
+    assert.equal(retries[1]?.creditBalanceUsd, 70);
     assert.equal((await pool.query(
       'SELECT COUNT(*) AS count FROM account_membership_events WHERE idempotency_key = $1',
       [change.idempotencyKey],
@@ -2191,6 +2198,35 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const rolledBack = await store.getAccountEntitlementByClientId(rollbackClientId);
     assert.equal(rolledBack?.tier, 'free');
     assert.equal(rolledBack?.creditBalanceUsd, 5);
+  });
+
+  it('renews paid allowances, tops up upgrades once, repays debt and enforces the -5 floor', async () => {
+    const accountId = 'credit-policy-account';
+    const clientId = 'credit-policy-client';
+    const now = '2026-07-15T12:00:00.000Z';
+    await store.createPasswordAccountForClient({ accountId, clientId, now });
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, now))?.creditBalanceUsd, 5);
+    assert.equal((await store.updateAccountMembership({ accountId, tier: 'pro', status: 'active', now }))?.creditBalanceUsd, 20);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, now))?.monthlyCreditAllowanceUsd, 20);
+    assert.equal((await store.updateAccountMembership({ accountId, tier: 'pro', status: 'active', now }))?.creditBalanceUsd, 20);
+    assert.equal((await store.updateAccountMembership({ accountId, tier: 'priority', status: 'active', now }))?.creditBalanceUsd, 50);
+    const usage = { id: 'policy-usage', clientId, source: 'code_agent_gateway' as const, costUsd: 52, provider: 'openrouter' as const, modelId: 'cheap', now };
+    assert.equal((await store.settleAccountAIUsage(usage))?.creditBalanceUsd, -2);
+    assert.equal((await store.settleAccountAIUsage(usage))?.duplicate, true);
+    // Concurrent completed calls cannot debit beyond the credit floor; full costs still enter usage history.
+    await Promise.all([store.settleAccountAIUsage({ ...usage, id: 'policy-usage-2', costUsd: 2 }), store.settleAccountAIUsage({ ...usage, id: 'policy-usage-3', costUsd: 2 })]);
+    const exhausted = await store.getAccountEntitlementByClientId(clientId, now);
+    assert.equal(exhausted?.creditBalanceUsd, -5);
+    assert.equal(exhausted?.lifetimeUsageUsd, 56);
+    const august = await store.getAccountEntitlementByClientId(clientId, '2026-08-01T00:00:00.000Z');
+    assert.equal(august?.creditBalanceUsd, 45);
+    assert.equal(august?.monthlyCreditRemainingUsd, 45);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, '2026-09-01T00:00:00.000Z'))?.creditBalanceUsd, 50);
+    await store.updateAccountMembership({ accountId, tier: 'priority', status: 'past_due', now: '2026-09-01T00:00:00.000Z' });
+    const october = await store.getAccountEntitlementByClientId(clientId, '2026-10-01T00:00:00.000Z');
+    assert.equal(october?.effectiveTier, 'free');
+    assert.equal(october?.monthlyCreditAllowanceUsd, 5);
+    assert.equal(october?.creditBalanceUsd, 5);
   });
 
   it('grants signed-in Free accounts five non-rollover dollars per UTC calendar month', async () => {
@@ -2240,7 +2276,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       `SELECT COUNT(*) AS count
       FROM account_credit_ledger
       WHERE account_id = $1
-        AND metadata->>'source' = 'free_monthly_allowance'`,
+        AND metadata->>'source' = 'monthly_allowance'`,
       [accountId],
     )).rows[0]?.count, '3');
   });
@@ -2291,7 +2327,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(adminPlaceholder, {
+    assert.ok(await createFundedAssistantRun(adminPlaceholder, {
       id: adminRunId,
       roomId: adminRoomId,
       requestedByClientId: 'platform-admin-client',
@@ -2391,6 +2427,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'active',
       now: createdAt,
     }));
+    await pool.query('UPDATE account_credit_balances SET available_usd = 0, monthly_credit_remaining_usd = 0 WHERE account_id = $1', [accountId]);
     // Concurrent billing webhook retries must both succeed without granting
     // the same credit twice.
     const grants = await Promise.all([
@@ -2417,7 +2454,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       idempotencyKey: 'assistant-run-membership-grant',
       now: createdAt,
     }), /another amount/);
-    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.creditBalanceUsd, 0.000015);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, createdAt))?.creditBalanceUsd, 0.000015);
 
     const placeholder = message(roomId, messageId, {
       clientId: 'ai_assistant',
@@ -2426,7 +2463,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: clientId,
@@ -2492,7 +2529,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(projected.run.creditAppliedUsd, 0.000015);
     assert.deepEqual(await store.projectAssistantRunTerminal(runId, execution.token), { outcome: 'stale' });
 
-    const entitlement = await store.getAccountEntitlementByClientId(clientId);
+    const entitlement = await store.getAccountEntitlementByClientId(clientId, createdAt);
     assert.equal(entitlement?.creditBalanceUsd, 0);
     assert.equal(entitlement?.lifetimeUsageUsd, 0.000015);
     assert.equal((await pool.query(
@@ -2501,7 +2538,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     )).rows[0]?.count, '1');
 
     const exhaustedRunId = 'assistant-run-membership-exhausted';
-    assert.ok(await store.createAssistantRunWithMessage(message(roomId, 'assistant-run-membership-message-exhausted', {
+    assert.ok(await createFundedAssistantRun(message(roomId, 'assistant-run-membership-message-exhausted', {
       clientId: 'ai_assistant',
       messageType: 'ai',
       content: '',
@@ -2519,7 +2556,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       createdAt,
       queuedAt: createdAt,
       updatedAt: createdAt,
-      requestPayload: assistantRequest(roomId, 'context-message-exhausted'),
+      requestPayload: { ...assistantRequest(roomId, 'context-message-exhausted'), model: { ...assistantRequest(roomId).model, pricing: { currency: 'USD', inputPerMillion: 0.5, outputPerMillion: 1 } } },
       generation: 0,
       attempt: 0,
       availableAt: createdAt,
@@ -2553,7 +2590,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     ]);
     assert.equal(gatewaySettlements.filter(settlement => settlement?.duplicate === false).length, 1);
     assert.equal(gatewaySettlements.filter(settlement => settlement?.duplicate === true).length, 1);
-    const afterGatewayUsage = await store.getAccountEntitlementByClientId(clientId);
+    const afterGatewayUsage = await store.getAccountEntitlementByClientId(clientId, createdAt);
     assert.equal(afterGatewayUsage?.creditBalanceUsd, 0.00001);
     assert.equal(afterGatewayUsage?.lifetimeUsageUsd, 0.000025);
     assert.deepEqual((await pool.query<{
@@ -2579,7 +2616,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
       [runId],
     )).rows[0]?.count, '1');
-    assert.equal((await store.getAccountEntitlementByClientId(clientId))?.lifetimeUsageUsd, 0.000025);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, createdAt))?.lifetimeUsageUsd, 0.000025);
     assert.equal((await pool.query(
       'SELECT COUNT(*) AS count FROM account_ai_usage_events WHERE assistant_run_id = $1',
       [gatewayUsage.id],
@@ -2599,7 +2636,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2704,7 +2741,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2800,7 +2837,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2865,7 +2902,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2915,7 +2952,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       status: 'streaming',
       aiModel: assistantMessageModel,
     });
-    assert.ok(await store.createAssistantRunWithMessage(placeholder, {
+    assert.ok(await createFundedAssistantRun(placeholder, {
       id: runId,
       roomId,
       requestedByClientId: 'event-test-owner',
@@ -2949,7 +2986,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
 
     const queuedMessageId = 'assistant-run-deleted-before-claim-message';
     const queuedRunId = 'assistant-run-deleted-before-claim';
-    assert.ok(await store.createAssistantRunWithMessage(message(roomId, queuedMessageId, {
+    assert.ok(await createFundedAssistantRun(message(roomId, queuedMessageId, {
       clientId: 'ai_assistant',
       messageType: 'ai',
       content: '',
@@ -2988,7 +3025,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     const messageId = 'recoverable-assistant-message';
     const runId = 'recoverable-assistant-run';
     assert.ok(await store.saveRoom(room(roomId)));
-    assert.ok(await store.createAssistantRunWithMessage(message(roomId, messageId, {
+    assert.ok(await createFundedAssistantRun(message(roomId, messageId, {
       clientId: 'ai_assistant',
       messageType: 'ai',
       content: '',

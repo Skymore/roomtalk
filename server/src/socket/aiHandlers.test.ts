@@ -207,6 +207,7 @@ const createHarness = (options: {
   const socket = new FakeSocket(options.headers);
   const io = new FakeIo();
   const store = {
+    getAccountEntitlementByClientId: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
     rooms: options.currentRoom === undefined
       ? [room()]
       : (options.currentRoom ? [options.currentRoom] : []),
@@ -472,7 +473,7 @@ const createHarness = (options: {
     resolveClientId: () => store.getClientId(),
   });
 
-  return { io, socket, store };
+  return { io, socket, store, executeNextRun };
 };
 
 describe('AI socket handlers', () => {
@@ -499,6 +500,18 @@ describe('AI socket handlers', () => {
       process.env.E2E_FAKE_AI = previousEnv.fakeAI;
     }
 
+  });
+
+  it('rejects a queued expensive run after credits are exhausted, without starting generation', async () => {
+    const { socket, store, executeNextRun } = createHarness({ autoRun: false });
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, () => {});
+    assert.equal(store.assistantRuns.length, 1);
+    const original = await store.getAccountEntitlementByClientId();
+    store.getAccountEntitlementByClientId = async () => ({ ...original, creditBalanceUsd: -5 });
+    await executeNextRun();
+    assert.equal(store.assistantRuns[0].terminalPayload.outcome, 'error');
+    assert.match(store.assistantRuns[0].terminalPayload.message.content, /-\$5 limit/);
+    assert.equal(store.assistantRuns[0].terminalPayload.message.cost, undefined);
   });
 
   it('persists a streaming placeholder before completing an AI response', async () => {

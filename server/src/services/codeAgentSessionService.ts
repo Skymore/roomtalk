@@ -52,6 +52,8 @@ import {
   CodeAgentRunnerErrorSummary,
   summarizeCodeAgentRunnerError,
 } from './codeAgentRunnerErrorSummary';
+import { getAIModelAccessError } from './accountEntitlements';
+import { REQUESTED_AI_MODEL_CATALOG, LEGACY_AI_MODEL_CATALOG } from './aiModels';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 import {
   codeAgentModeAllowsShell,
@@ -428,6 +430,19 @@ export class CodeAgentSessionService {
       input.codexRunSettings?.permissionMode,
       input.codexRunSettings?.serviceTier
     );
+    try {
+      const accessModel = isCodexBackend(turnBackend)
+        ? [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATALOG].find(model => model.id === codexRunSettings.model)
+          || { id: codexRunSettings.model }
+        : input.selectedModel;
+      const accessError = getAIModelAccessError(
+        await this.store.getAccountEntitlementByClientId(input.clientId), accessModel,
+      );
+      if (accessError) return rejectTurn(accessError, { reason: 'model_access_denied' });
+    } catch (error) {
+      this.logger.error('Unable to check code agent account entitlement', { error });
+      return rejectTurn('Account entitlement is temporarily unavailable', { reason: 'entitlement_unavailable' });
+    }
     const captureWorkspaceRevision = codeAgentModeAllowsWriteTools(turnMode.mode);
 
     let aiMessageId = '';

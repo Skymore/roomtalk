@@ -1739,10 +1739,12 @@ describe('API routes', () => {
   });
 
   it('generates AI role drafts and rejects invalid or failed generation requests', async () => {
+    await server.store.createPasswordAccountForClient({ accountId: 'role-account', clientId: 'client-1' });
+    await server.store.saveClientAuthToken({ clientId: 'client-1', tokenHash: hashClientAuthToken('role-token'), createdAt: new Date().toISOString() });
     const response = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', idea: '  Create a strict reviewer  ' }),
+      body: JSON.stringify({ clientId: 'client-1', clientAuthToken: 'role-token', idea: '  Create a strict reviewer  ' }),
     });
 
     assert.equal(response.status, 200);
@@ -1755,14 +1757,14 @@ describe('API routes', () => {
     const invalidResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', idea: ' ' }),
+      body: JSON.stringify({ clientId: 'client-1', clientAuthToken: 'role-token', idea: ' ' }),
     });
     assert.equal(invalidResponse.status, 400);
 
     const failedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-1', idea: 'fail generation' }),
+      body: JSON.stringify({ clientId: 'client-1', clientAuthToken: 'role-token', idea: 'fail generation' }),
     });
     assert.equal(failedResponse.status, 502);
     assert.deepEqual(await failedResponse.json(), { error: 'Failed to generate AI role draft' });
@@ -1776,13 +1778,14 @@ describe('API routes', () => {
     });
     assert.equal(missingClientResponse.status, 400);
 
-    // Any member (including users who only ever joined rooms) can generate; the
-    // limit is by source IP, so distinct clientIds from one IP share the quota.
+    // Funded accounts share the per-IP rate limit.
     for (let index = 0; index < 5; index += 1) {
+      await server.store.createPasswordAccountForClient({ accountId: `role-rate-account-${index}`, clientId: `client-rate-limited-${index}` });
+      await server.store.saveClientAuthToken({ clientId: `client-rate-limited-${index}`, tokenHash: hashClientAuthToken('role-token'), createdAt: new Date().toISOString() });
       const rateAllowedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId: `client-rate-limited-${index}`, idea: `Create role ${index}` }),
+        body: JSON.stringify({ clientId: `client-rate-limited-${index}`, clientAuthToken: 'role-token', idea: `Create role ${index}` }),
       });
       assert.equal(rateAllowedResponse.status, 200);
     }

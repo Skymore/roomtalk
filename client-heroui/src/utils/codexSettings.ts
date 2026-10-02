@@ -34,23 +34,25 @@ export interface CodexSpeedOption {
 }
 
 const ROOM_CODEX_SETTINGS_PREFIX = 'roomtalk:codex-settings:';
-const CODEX_SETTINGS_SCHEMA_VERSION = 3;
+const CODEX_SETTINGS_SCHEMA_VERSION = 4;
 const LEGACY_DEFAULT_CODEX_MODEL = 'gpt-5.5';
 const LEGACY_DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'xhigh';
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol';
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'high';
 export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'edit';
 export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
 export const CODEX_MODEL_OPTIONS: CodexModelOption[] = [
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', supportsFast: true },
+  { id: 'gpt-6-astra', label: 'GPT-6-Astra', supportsFast: true },
+  { id: 'gpt-6-sol', label: 'GPT-6-Sol', supportsFast: true },
+  { id: 'gpt-6-luna', label: 'GPT-6-Luna', supportsFast: true },
   { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', supportsFast: true },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', supportsFast: true },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', supportsFast: true },
   { id: 'gpt-5.5', label: 'GPT-5.5', supportsFast: true },
   { id: 'gpt-5.4', label: 'GPT-5.4', supportsFast: true },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', supportsFast: false },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', supportsFast: false },
 ];
 
 export const CODEX_REASONING_OPTIONS: CodexReasoningOption[] = [
@@ -189,8 +191,9 @@ export const getStoredRoomCodexSettings = (
       ? parsed.schemaVersion
       : 1;
     if (isRecord(parsed) && storedSchemaVersion < CODEX_SETTINGS_SCHEMA_VERSION) {
-      const usesLegacyModelDefaults = parsed.model === LEGACY_DEFAULT_CODEX_MODEL
-        && parsed.reasoningEffort === LEGACY_DEFAULT_CODEX_REASONING_EFFORT;
+      const usesLegacyModelDefaults = (parsed.model === LEGACY_DEFAULT_CODEX_MODEL
+        && parsed.reasoningEffort === LEGACY_DEFAULT_CODEX_REASONING_EFFORT)
+        || (parsed.model === 'gpt-5.6-sol' && parsed.reasoningEffort === 'high');
       const migrated = normalizeCodexRunSettings({
         ...parsed,
         ...(usesLegacyModelDefaults ? {

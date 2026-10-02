@@ -146,7 +146,7 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path, monk
     call = popen.calls[0]
     call_args = call["args"]
     assert call_args[:4] == ["codex", "exec", "--json", "--ephemeral"]
-    assert call_args[call_args.index("--model") + 1] == "gpt-5.6-sol"
+    assert call_args[call_args.index("--model") + 1] == "gpt-6.1-sol"
     assert "--ask-for-approval" not in call_args
     assert 'approval_policy="never"' in call_args
     assert 'model_reasoning_effort="high"' in call_args
@@ -323,7 +323,7 @@ def test_codex_cli_passes_requested_model_reasoning_and_speed(tmp_path: Path):
     run_request = parse_request(json.dumps(request(
         turnId="turn-codex",
         workspace=str(workspace),
-        codexModel="gpt-5.6-sol",
+        codexModel="gpt-6.1-sol",
         codexReasoningEffort="high",
         codexServiceTier="priority",
     )))
@@ -340,7 +340,7 @@ def test_codex_cli_passes_requested_model_reasoning_and_speed(tmp_path: Path):
     )
 
     call_args = popen.calls[0]["args"]
-    assert call_args[call_args.index("--model") + 1] == "gpt-5.6-sol"
+    assert call_args[call_args.index("--model") + 1] == "gpt-6.1-sol"
     assert 'model_reasoning_effort="high"' in call_args
     assert 'service_tier="priority"' in call_args
 

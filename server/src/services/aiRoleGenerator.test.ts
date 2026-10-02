@@ -4,15 +4,15 @@ import { createAIRoleDraftGenerator, parseAIRoleDraft } from './aiRoleGenerator'
 import { AIModelOption } from '../types';
 
 const model: AIModelOption = {
-  id: 'google/gemini-3.6-flash',
-  apiModel: 'google/gemini-3.6-flash',
+  id: 'google/gemini-3.8-flash',
+  apiModel: 'google/gemini-3.8-flash',
   provider: 'openrouter',
   label: 'Gemini 3.5 Flash',
   description: 'Google Gemini 3.5 Flash via OpenRouter',
 };
 
 describe('AI role generator', () => {
-  it('generates a structured draft with Gemini 3.6 Flash through OpenRouter', async () => {
+  it('generates a structured draft with Gemini 3.8 Flash through OpenRouter', async () => {
     const requests: any[] = [];
     const generateDraft = createAIRoleDraftGenerator({
       model,
@@ -35,9 +35,19 @@ describe('AI role generator', () => {
       name: 'Reviewer',
       systemPrompt: 'Review code rigorously.',
     });
-    assert.equal(requests[0].model, 'google/gemini-3.6-flash');
+    assert.equal(requests[0].model, 'google/gemini-3.8-flash');
     assert.equal(requests[0].messages[1].content, 'Create a code reviewer');
     assert.deepEqual(requests[0].response_format, { type: 'json_object' });
+  });
+
+  it('reports usage for the authenticated caller before returning the draft', async () => {
+    const reports: unknown[] = [];
+    const generateDraft = createAIRoleDraftGenerator({
+      model, onUsage: async (clientId, usage) => { reports.push({ clientId, usage }); },
+      getAIClientForModel: () => ({ provider: 'openrouter', client: { chat: { completions: { create: async () => ({ choices: [{ message: { content: '{"name":"Reviewer","systemPrompt":"Review code."}' } }], usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.001 } }) } } } as any }),
+    });
+    await generateDraft('Reviewer', 'account-client');
+    assert.deepEqual(reports, [{ clientId: 'account-client', usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.001 } }]);
   });
 
   it('rejects malformed or incomplete structured output', () => {

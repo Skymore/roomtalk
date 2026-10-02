@@ -12,7 +12,9 @@ import { validateStoredRoomEventPayload } from './roomEventPayload';
 import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
 import {
   AccountEntitlement,
-  FREE_MONTHLY_CREDIT_USD,
+  MONTHLY_CREDIT_USD,
+  CREDIT_OVERDRAFT_LIMIT_USD,
+  getAIModelAccessError,
   MembershipStatus,
   MembershipTier,
   resolveAssistantRunScheduling,
@@ -805,7 +807,7 @@ const mapAccountEntitlement = (row: AccountEntitlementRow): AccountEntitlement =
     creditState: creditUnlimited || creditBalanceUsd > 0 ? 'available' : 'exhausted',
     queuePriority: scheduling.queuePriority,
     creditUnlimited,
-    monthlyCreditAllowanceUsd: Number(row.monthly_credit_granted_usd) || 0,
+    monthlyCreditAllowanceUsd: creditUnlimited ? 0 : MONTHLY_CREDIT_USD[effectiveTier],
     monthlyCreditRemainingUsd: Number(row.monthly_credit_remaining_usd) || 0,
     ...(priorityOverride !== undefined ? { priorityOverride } : {}),
     ...(row.current_period_start ? { currentPeriodStart: toIsoString(row.current_period_start) } : {}),
@@ -4151,7 +4153,7 @@ export class PostgresStore implements DurableRoomStore {
           [run.requestedByClientId],
         );
         if (billingLink.rows[0]?.account_id) {
-          await this.reconcileMonthlyFreeCredits(
+          await this.reconcileMonthlyCredits(
             client,
             billingLink.rows[0].account_id,
             run.createdAt,
@@ -4189,6 +4191,9 @@ export class PostgresStore implements DurableRoomStore {
         const entitlement = entitlementResult.rows[0]
           ? mapAccountEntitlement(entitlementResult.rows[0])
           : null;
+        const request = run.requestPayload!;
+        const accessError = getAIModelAccessError(entitlement, request.model);
+        if (accessError) throw new Error(accessError);
         const scheduling = resolveAssistantRunScheduling(entitlement ? {
           accountId: entitlement.accountId,
           tier: entitlement.tier,
@@ -4548,7 +4553,7 @@ export class PostgresStore implements DurableRoomStore {
           const availableUsd = Number(balance.rows[0].available_usd) || 0;
           creditAppliedUsd = balance.rows[0].is_admin
             ? 0
-            : Math.min(availableUsd, totalUsd);
+            : Math.min(Math.max(0, availableUsd + CREDIT_OVERDRAFT_LIMIT_USD), totalUsd);
           const monthlyCreditAppliedUsd = Math.min(
             Number(balance.rows[0].monthly_credit_remaining_usd) || 0,
             creditAppliedUsd,
@@ -4582,7 +4587,7 @@ export class PostgresStore implements DurableRoomStore {
           if ((usage.rowCount || 0) === 1) {
             const updatedBalance = await client.query(
               `UPDATE account_credit_balances
-              SET available_usd = GREATEST(0, available_usd - $2),
+              SET available_usd = GREATEST(-5, available_usd - $2),
                 monthly_credit_remaining_usd = GREATEST(0, monthly_credit_remaining_usd - $4),
                 lifetime_usage_usd = lifetime_usage_usd + $3,
                 updated_at = clock_timestamp()
@@ -5669,7 +5674,7 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  private async reconcileMonthlyFreeCredits(
+  private async reconcileMonthlyCredits(
     client: PostgresClient,
     accountId: string,
     now: string,
@@ -5715,7 +5720,7 @@ export class PostgresStore implements DurableRoomStore {
 
     if (previousPeriodStart !== period.start) {
       if (remainingUsd > 0 && previousPeriodStart) {
-        availableUsd = Math.max(0, availableUsd - remainingUsd);
+        availableUsd -= remainingUsd;
         const expirationKey = `free-monthly-expiration:${accountId}:${previousPeriodStart}`;
         await client.query(
           `INSERT INTO account_credit_ledger (
@@ -5727,9 +5732,9 @@ export class PostgresStore implements DurableRoomStore {
             accountId,
             -remainingUsd,
             availableUsd,
-            'Unused monthly Free credits expired',
+            'Unused monthly credits expired',
             toJsonb({
-              source: 'free_monthly_allowance',
+              source: 'monthly_allowance',
               periodStart: previousPeriodStart,
             }),
             now,
@@ -5741,14 +5746,14 @@ export class PostgresStore implements DurableRoomStore {
       changed = true;
     }
 
-    const isFreeAccount = !row.is_admin
-      && resolveEffectiveMembershipTier(row.tier, row.status) === 'free';
-    if (isFreeAccount && grantedUsd < FREE_MONTHLY_CREDIT_USD) {
-      const grantUsd = FREE_MONTHLY_CREDIT_USD - grantedUsd;
+    const effectiveTier = resolveEffectiveMembershipTier(row.tier, row.status);
+    const allowanceUsd = row.is_admin ? 0 : MONTHLY_CREDIT_USD[effectiveTier];
+    if (grantedUsd < allowanceUsd) {
+      const grantUsd = allowanceUsd - grantedUsd;
       availableUsd += grantUsd;
       grantedUsd += grantUsd;
-      remainingUsd += grantUsd;
-      const grantKey = `free-monthly-grant:${accountId}:${period.start}`;
+      remainingUsd = Math.min(remainingUsd + grantUsd, Math.max(0, availableUsd));
+      const grantKey = `monthly-grant:${accountId}:${period.start}:${allowanceUsd}`;
       await client.query(
         `INSERT INTO account_credit_ledger (
           id, account_id, kind, amount_usd, balance_after_usd,
@@ -5759,9 +5764,9 @@ export class PostgresStore implements DurableRoomStore {
           accountId,
           grantUsd,
           availableUsd,
-          'Monthly Free account credits',
+          `Monthly ${effectiveTier} account credits`,
           toJsonb({
-            source: 'free_monthly_allowance',
+            source: 'monthly_allowance',
             periodStart: period.start,
             periodEnd: period.end,
           }),
@@ -5790,7 +5795,7 @@ export class PostgresStore implements DurableRoomStore {
     now = new Date().toISOString(),
   ): Promise<AccountEntitlement | null> {
     return this.transaction(async client => {
-      await this.reconcileMonthlyFreeCredits(client, accountId, now);
+      await this.reconcileMonthlyCredits(client, accountId, now);
       const result = await client.query<AccountEntitlementRow>(
         `SELECT membership.account_id,
           membership.tier,
@@ -5833,7 +5838,7 @@ export class PostgresStore implements DurableRoomStore {
         );
         const accountId = link.rows[0]?.account_id;
         if (!accountId) return null;
-        await this.reconcileMonthlyFreeCredits(client, accountId, now);
+        await this.reconcileMonthlyCredits(client, accountId, now);
         const result = await client.query<AccountEntitlementRow>(
           `SELECT membership.account_id,
             membership.tier,
@@ -6085,7 +6090,7 @@ export class PostgresStore implements DurableRoomStore {
           }
         }
 
-        await this.reconcileMonthlyFreeCredits(client, input.accountId, now);
+        await this.reconcileMonthlyCredits(client, input.accountId, now);
         const entitlementResult = await client.query<AccountEntitlementRow>(
           `SELECT membership.account_id,
             membership.tier,
@@ -6252,7 +6257,7 @@ export class PostgresStore implements DurableRoomStore {
       );
       const accountId = accountLink.rows[0]?.account_id;
       if (!accountId) return null;
-      await this.reconcileMonthlyFreeCredits(client, accountId, now);
+      await this.reconcileMonthlyCredits(client, accountId, now);
 
       const existing = await client.query<{
         account_id: string;
@@ -6333,7 +6338,7 @@ export class PostgresStore implements DurableRoomStore {
       const availableUsd = Number(entitlement.rows[0].available_usd) || 0;
       const creditAppliedUsd = entitlement.rows[0].is_admin
         ? 0
-        : Math.min(availableUsd, input.costUsd);
+        : Math.min(Math.max(0, availableUsd + CREDIT_OVERDRAFT_LIMIT_USD), input.costUsd);
       const monthlyCreditAppliedUsd = Math.min(
         Number(entitlement.rows[0].monthly_credit_remaining_usd) || 0,
         creditAppliedUsd,
@@ -6370,7 +6375,7 @@ export class PostgresStore implements DurableRoomStore {
       );
       const updatedBalance = await client.query<{ available_usd: number | string }>(
         `UPDATE account_credit_balances
-        SET available_usd = GREATEST(0, available_usd - $2),
+        SET available_usd = GREATEST(-5, available_usd - $2),
           monthly_credit_remaining_usd = GREATEST(0, monthly_credit_remaining_usd - $5),
           lifetime_usage_usd = lifetime_usage_usd + $3,
           updated_at = $4::timestamptz

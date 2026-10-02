@@ -83,9 +83,62 @@ describe('CodeAgentModelGateway', () => {
     server = null;
   });
 
+  it('rechecks current credits and membership before every provider request', async () => {
+    let balance = 0;
+    let tier: 'free' | 'pro' = 'free';
+    let calls = 0;
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway', tokenSecret: 'test-secret',
+      providerApiKeys: { openrouter: 'test-key' },
+      getAccountEntitlement: async () => ({ accountId: 'account', tier, status: 'active', effectiveTier: tier, creditBalanceUsd: balance, lifetimeUsageUsd: 0, creditState: balance > 0 ? 'available' : 'exhausted', queuePriority: 60, updatedAt: new Date().toISOString() }),
+      fetchFn: async () => { calls++; return new Response(JSON.stringify({ choices: [] }), { headers: { 'content-type': 'application/json' } }); },
+    });
+    server = await createTestServer(gateway);
+    const request = async (model: AIModelOption) => {
+      const token = gateway.issueTurnToken({ roomId: 'room', clientId: 'client', turnId: 'turn', mode: 'plan', model });
+      return fetch(`${server!.baseUrl}/api/code-agent/model-gateway/v1/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: model.apiModel, messages: [{ role: 'user', content: 'hi' }] }) });
+    };
+    const cheap: AIModelOption = { id: 'gpt-6-luna', apiModel: 'openai/gpt-6-luna', provider: 'openrouter', label: 'Luna', description: 'Test model', pricing: { currency: 'USD', inputPerMillion: 0.1, outputPerMillion: 0.5 } };
+    const astra: AIModelOption = { ...cheap, id: 'gpt-6-astra', apiModel: 'openai/gpt-6-astra', pricing: { currency: 'USD', inputPerMillion: 10, outputPerMillion: 50 } };
+    assert.equal((await request(cheap)).status, 200);
+    balance = -5;
+    assert.equal((await request(cheap)).status, 402);
+    balance = 50;
+    assert.equal((await request(astra)).status, 402);
+    tier = 'pro';
+    assert.equal((await request(astra)).status, 200);
+    balance = 0;
+    assert.equal((await request(astra)).status, 402);
+    assert.equal(calls, 2);
+  });
+
+  it('adapts current Claude requests and settles the provider reported cost', async () => {
+    let body: any;
+    let billedCost = 0;
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway', tokenSecret: 'test-secret', providerApiKeys: { anthropic: 'key' },
+      getAccountEntitlement: async () => ({ accountId: 'account', tier: 'pro', status: 'active', effectiveTier: 'pro', creditBalanceUsd: 20, lifetimeUsageUsd: 0, creditState: 'available', queuePriority: 20, updatedAt: new Date().toISOString() }),
+      settleAccountAIUsage: async input => { billedCost = input.costUsd; return null; },
+      fetchFn: async (_url, init) => { body = JSON.parse(String(init?.body)); return new Response(JSON.stringify({ content: [], usage: { input_tokens: 10, output_tokens: 5, cost: 0.0123 } }), { headers: { 'content-type': 'application/json' } }); },
+    });
+    const model: AIModelOption = { id: 'claude-fable-5.1', apiModel: 'claude-fable-5-1', provider: 'anthropic', label: 'Fable', description: 'Test model', pricing: { currency: 'USD', inputPerMillion: 10, outputPerMillion: 50 } };
+    const token = gateway.issueTurnToken({ roomId: 'room', clientId: 'client', turnId: 'turn', mode: 'plan', model });
+    server = await createTestServer(gateway);
+    const response = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: model.apiModel, temperature: 0.7, top_p: 0.9, top_k: 10, thinking: { type: 'disabled' }, tool_choice: { type: 'any' }, messages: [{ role: 'user', content: 'hi' }], max_tokens: 100 }) });
+    assert.equal(response.status, 200);
+    await response.text();
+    assert.equal(body.temperature, undefined);
+    assert.equal(body.top_p, undefined);
+    assert.equal(body.top_k, undefined);
+    assert.deepEqual(body.thinking, { type: 'adaptive' });
+    assert.deepEqual(body.tool_choice, { type: 'auto' });
+    assert.equal(billedCost, 0.0123);
+  });
+
   it('proxies OpenAI-compatible requests with provider credentials, not sandbox tokens', async () => {
     const calls: FetchCall[] = [];
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -131,6 +184,7 @@ describe('CodeAgentModelGateway', () => {
     const upstreamAborted = new Promise<void>(resolve => { aborted = resolve; });
     let releases = 0;
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -190,6 +244,7 @@ describe('CodeAgentModelGateway', () => {
     const roomSettlements: Array<Parameters<NonNullable<ConstructorParameters<typeof CodeAgentModelGateway>[0]['settleRoomAIUsage']>>[0]> = [];
     let releases = 0;
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -276,6 +331,7 @@ describe('CodeAgentModelGateway', () => {
     const observability = createMemoryObservability();
     let upstreamCalled = false;
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -320,6 +376,7 @@ describe('CodeAgentModelGateway', () => {
   it('accepts code-agent gateway bodies larger than the default Express JSON limit', async () => {
     const calls: FetchCall[] = [];
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -362,6 +419,7 @@ describe('CodeAgentModelGateway', () => {
   it('rejects requests for a model outside the per-turn token scope', async () => {
     let upstreamCalled = false;
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -392,6 +450,7 @@ describe('CodeAgentModelGateway', () => {
 
   it('enforces per-turn request limits and actual usage budgets', async () => {
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -426,6 +485,7 @@ describe('CodeAgentModelGateway', () => {
     let expensiveCalls = 0;
     const observability = createMemoryObservability();
     const expensiveGateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -483,6 +543,7 @@ describe('CodeAgentModelGateway', () => {
 
   it('allows unlimited per-turn requests when the limit is zero', async () => {
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -511,6 +572,7 @@ describe('CodeAgentModelGateway', () => {
   it('does not charge code-agent gateway budget without reported usage', async () => {
     let calls = 0;
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -553,6 +615,7 @@ describe('CodeAgentModelGateway', () => {
     let calls = 0;
     const encoder = new TextEncoder();
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
@@ -604,6 +667,7 @@ describe('CodeAgentModelGateway', () => {
     let calls = 0;
     const encoder = new TextEncoder();
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { anthropic: 'anthropic-provider-key' },
@@ -654,6 +718,7 @@ describe('CodeAgentModelGateway', () => {
   it('proxies Anthropic requests through x-api-key with scoped sandbox token auth', async () => {
     const calls: FetchCall[] = [];
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { anthropic: 'anthropic-provider-key' },
@@ -695,6 +760,7 @@ describe('CodeAgentModelGateway', () => {
   it('accepts Anthropic SDK paths when the sandbox proxy base URL already includes v1', async () => {
     const calls: FetchCall[] = [];
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { anthropic: 'anthropic-provider-key' },
@@ -737,6 +803,7 @@ describe('CodeAgentModelGateway', () => {
     let upstreamCalls = 0;
     const stateTtls: number[] = [];
     const gateway = new CodeAgentModelGateway({
+      getAccountEntitlement: async () => ({ accountId: 'test-account', tier: 'free' as const, status: 'active' as const, effectiveTier: 'free' as const, creditBalanceUsd: 5, lifetimeUsageUsd: 0, creditState: 'available' as const, queuePriority: 60, updatedAt: '2026-10-02T00:00:00.000Z' }),
       publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'test-secret',
       tokenTtlSeconds: 1,

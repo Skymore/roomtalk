@@ -15,7 +15,7 @@ describe('room Codex settings', () => {
 
   it('follows the Codex default model per room', () => {
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'edit',
       serviceTier: 'default',
@@ -24,26 +24,26 @@ describe('room Codex settings', () => {
 
   it('stores independent settings per room', () => {
     saveRoomCodexSettings('room-a', {
-      model: 'gpt-5.4-mini',
+      model: 'gpt-6-luna',
       reasoningEffort: 'low',
       permissionMode: 'edit',
       serviceTier: 'priority',
     });
     saveRoomCodexSettings('room-b', {
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
       serviceTier: 'priority',
     });
 
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-6-luna',
       reasoningEffort: 'low',
       permissionMode: 'edit',
-      serviceTier: 'default',
+      serviceTier: 'priority',
     });
     expect(getStoredRoomCodexSettings('room-b')).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
       serviceTier: 'priority',
@@ -59,11 +59,18 @@ describe('room Codex settings', () => {
     }, defaultCodexRunSettings());
 
     expect(updated).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'edit',
       serviceTier: 'default',
     });
+  });
+
+  it('migrates the previous default while retaining explicit older-model choices', () => {
+    localStorage.setItem('roomtalk:codex-settings:room-a', JSON.stringify({ schemaVersion: 3, model: 'gpt-5.6-sol', reasoningEffort: 'high', permissionMode: 'fullAccess', serviceTier: 'priority' }));
+    expect(getStoredRoomCodexSettings('room-a')).toMatchObject({ model: 'gpt-6.1-sol', reasoningEffort: 'high', permissionMode: 'fullAccess', serviceTier: 'priority' });
+    saveRoomCodexSettings('room-a', { model: 'gpt-5.6-sol', reasoningEffort: 'high', permissionMode: 'edit', serviceTier: 'default' });
+    expect(getStoredRoomCodexSettings('room-a').model).toBe('gpt-5.6-sol');
   });
 
   it('migrates legacy model defaults without changing the Codex approval preset', () => {
@@ -75,7 +82,7 @@ describe('room Codex settings', () => {
     }));
 
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'high',
       permissionMode: 'approveForMe',
       serviceTier: 'default',

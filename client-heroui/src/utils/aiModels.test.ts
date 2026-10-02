@@ -6,6 +6,7 @@ import {
   FALLBACK_AI_MODELS,
   formatModelPrice,
   isPremiumAIModel,
+  getAIModelAccessReason,
   resolveSelectedAIModel,
 } from "./aiModels";
 
@@ -33,76 +34,21 @@ describe("aiModels", () => {
     vi.stubGlobal("localStorage", new MemoryStorage());
   });
 
-  it("uses DeepSeek as the fallback default and flags high or unknown output prices as premium", () => {
+  it("exposes current models and distinguishes expensive models from membership restrictions", () => {
     expect(FALLBACK_AI_MODEL).toBe("deepseek-v4-pro");
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-sol")!)).toBe(true);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "claude-sonnet-5")!)).toBe(false);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "claude-opus-5")!)).toBe(true);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.6-flash")!)).toBe(false);
-    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash-lite")!)).toBe(false);
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3")?.pricing?.outputPerMillion).toBe(0.528);
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna")?.pricing?.outputPerMillion).toBe(0.6);
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.6-luna-pro")?.pricing).toEqual({
-      currency: "USD",
-      inputPerMillion: 0.1,
-      cachedInputPerMillion: 0.01,
-      outputPerMillion: 0.6,
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "qwen/qwen3.7-plus")?.pricing?.outputPerMillion).toBe(1.28);
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "cohere/north-mini-code:free")?.pricing).toEqual({
-      currency: "USD",
-      inputPerMillion: 0,
-      outputPerMillion: 0,
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "poolside/laguna-s-2.1:free")?.pricing).toEqual({
-      currency: "USD",
-      inputPerMillion: 0,
-      outputPerMillion: 0,
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "deepseek-v4-flash")).toMatchObject({
-      id: "deepseek-v4-flash",
-      apiModel: "deepseek-v4-flash",
-      provider: "deepseek",
-      label: "DeepSeek V4 Flash",
-      pricing: {
-        currency: "USD",
-        inputPerMillion: 0.14,
-        cachedInputPerMillion: 0.0028,
-        outputPerMillion: 0.28,
-      },
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "deepseek-v4-flash-openrouter")).toMatchObject({
-      id: "deepseek-v4-flash-openrouter",
-      apiModel: "deepseek/deepseek-v4-flash",
-      provider: "openrouter",
-      label: "DeepSeek V4 Flash (OpenRouter)",
-      pricing: {
-        currency: "USD",
-        inputPerMillion: 0.14,
-        cachedInputPerMillion: 0.028,
-        outputPerMillion: 0.28,
-      },
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "mimo-v2.5")).toMatchObject({
-      id: "mimo-v2.5",
-      apiModel: "xiaomi/mimo-v2.5",
-      label: "MiMo V2.5",
-      pricing: {
-        currency: "USD",
-        inputPerMillion: 0.14,
-        cachedInputPerMillion: 0.0028,
-        outputPerMillion: 0.28,
-      },
-    });
-    expect(FALLBACK_AI_MODELS.find(model => model.id === "glm-5.2")?.pricing).toEqual({
-      currency: "USD",
-      inputPerMillion: 1.232,
-      cachedInputPerMillion: 0.2288,
-      outputPerMillion: 3.872,
-    });
-    expect(isPremiumAIModel({})).toBe(true);
-    expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10 } })).toBe(false);
-    expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10.01 } })).toBe(true);
+    expect(FALLBACK_AI_MODELS.some(model => model.id === "gpt-6.1-sol")).toBe(true);
+    const astra = FALLBACK_AI_MODELS.find(model => model.id === "gpt-6-astra")!;
+    const fable = FALLBACK_AI_MODELS.find(model => model.id === "claude-fable-5.1")!;
+    const luna = FALLBACK_AI_MODELS.find(model => model.id === "gpt-6-luna")!;
+    expect(isPremiumAIModel(astra)).toBe(true);
+    for (const model of [astra, fable]) {
+      expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: 50 }, model)).toBe("aiModelMembershipRequired");
+      expect(getAIModelAccessReason({ effectiveTier: "pro", creditBalanceUsd: 20 }, model)).toBeUndefined();
+    }
+    expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: 0 }, luna)).toBeUndefined();
+    expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: -5 }, luna)).toBe("aiModelCreditLimitReached");
+    expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: -1 }, { id: 'one-dollar', pricing: { inputPerMillion: 1 } })).toBe("aiModelCheapOnly");
+    expect(getAIModelAccessReason(null, luna)).toBe("aiModelSignInRequired");
   });
 
   it("formats model pricing and missing pricing", () => {

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   BULLMQ_MAX_PRIORITY,
+  MONTHLY_CREDIT_USD,
+  getAIModelAccessError,
   normalizeQueuePriority,
   resolveAssistantRunScheduling,
 } from './accountEntitlements';
@@ -72,5 +74,36 @@ describe('account entitlement scheduling', () => {
       creditState: 'available',
       queuePriority: 1,
     });
+  });
+});
+
+describe('AI model access policy', () => {
+  const account = (balance: number, effectiveTier: 'free' | 'pro' | 'priority' = 'free') => ({
+    effectiveTier, creditBalanceUsd: balance,
+  });
+  const cheap = { id: 'gpt-6-luna', pricing: { inputPerMillion: 0.1 } };
+  it('sets monthly allowances to 5, 20, and 50 dollars', () => {
+    assert.deepEqual(MONTHLY_CREDIT_USD, { free: 5, pro: 20, priority: 50 });
+  });
+  it('requires sign-in and active membership for Astra and Fable, even with credits', () => {
+    assert.match(getAIModelAccessError(null, cheap)!, /Sign in/);
+    for (const id of ['gpt-6-astra', 'claude-fable-5.1']) {
+      const model = { id, pricing: { inputPerMillion: 10 } };
+      assert.match(getAIModelAccessError(account(50), model)!, /membership/);
+      assert.equal(getAIModelAccessError(account(20, 'pro'), model), undefined);
+      assert.equal(getAIModelAccessError(account(50, 'priority'), model), undefined);
+      assert.match(getAIModelAccessError(account(0, 'pro'), model)!, /exhausted/);
+    }
+  });
+  it('allows all other models with positive credits, and strictly cheap models until -5', () => {
+    assert.equal(getAIModelAccessError(account(0.000001), { id: 'opus', pricing: { inputPerMillion: 4 } }), undefined);
+    for (const balance of [0, -1, -4.999999]) {
+      assert.equal(getAIModelAccessError(account(balance), cheap), undefined);
+      assert.match(getAIModelAccessError(account(balance), { id: 'exact-dollar', pricing: { inputPerMillion: 1 } })!, /exhausted/);
+      assert.match(getAIModelAccessError(account(balance), { id: 'unknown-price' })!, /exhausted/);
+    }
+    assert.match(getAIModelAccessError(account(-5), cheap)!, /-\$5 limit/);
+    assert.match(getAIModelAccessError(account(-6), cheap)!, /-\$5 limit/);
+    assert.equal(getAIModelAccessError({ ...account(-5), creditUnlimited: true }, { id: 'gpt-6-astra' }), undefined);
   });
 });

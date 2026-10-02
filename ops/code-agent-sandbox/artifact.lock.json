@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-08-10-codex-retry-notification-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-10-02-models-v2",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.52",
+    "packageVersion": "0.1.53",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -25,11 +25,11 @@
       },
       "codex_cli": {
         "command": "python -m roomtalk_code_agent_runner.codex_cli",
-        "codexCliVersion": "0.145.0-alpha.4"
+        "codexCliVersion": "0.160.0"
       },
       "codex_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_app_server",
-        "codexCliVersion": "0.145.0-alpha.4",
+        "codexCliVersion": "0.160.0",
         "pythonSdkVersion": "0.1.0b3"
       },
       "opencode_acp": {

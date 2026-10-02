@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { Logger } from '../logger';
 import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
+import { normalizeCodexRunSettings, type CodexRunSettings } from '../services/codexRunSettings';
 import { resolveCodexCliRunnerConfig } from '../services/codexCliRunnerConfig';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
 import { resolveCodeAgentRuntimeConfig, CodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
@@ -21,6 +22,7 @@ type CodexE2BSmokePlan =
     run: true;
     config: CodeAgentRuntimeConfig;
     selectedModel: AIModelOption;
+    codexRunSettings: CodexRunSettings;
     authJsonPath: string;
     authSecretPath: string;
     refreshedAuthSecretPath: string;
@@ -83,6 +85,7 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
     run: true,
     config,
     selectedModel,
+    codexRunSettings: normalizeCodexRunSettings(env.CODEX_E2B_SMOKE_MODEL),
     authJsonPath,
     authSecretPath: `/tmp/roomtalk-codex/${sanitizePathPart(turnId)}-auth.json`,
     refreshedAuthSecretPath: `/tmp/roomtalk-codex/${sanitizePathPart(turnId)}-refreshed-auth.json`,
@@ -190,12 +193,16 @@ export const runCodexE2BSmoke = async (
       provider: plan.selectedModel.provider,
       modelId: plan.selectedModel.id,
       apiModel: plan.selectedModel.apiModel,
+      codexModel: plan.codexRunSettings.model,
+      codexReasoningEffort: plan.codexRunSettings.reasoningEffort,
+      codexPermissionMode: plan.codexRunSettings.permissionMode,
+      codexServiceTier: plan.codexRunSettings.serviceTier,
       workspace: handle.workspace,
       allowedPaths: plan.config.allowedPaths,
       images: plan.imageUrl ? [{ url: plan.imageUrl }] : undefined,
     }, {
       onEvent: async event => {
-        logger.info('Codex smoke runner event', { type: event.type });
+        logger.info('Codex smoke runner event', { type: event.type, ...(event.type === 'error' ? { error: event.message, code: event.code } : {}) });
       },
     }, {
       process: runnerProcess,

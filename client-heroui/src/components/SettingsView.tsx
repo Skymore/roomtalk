@@ -955,11 +955,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {t("membershipGuestHelp")}
                 </p>
               )}
-              {accountStatus?.entitlement?.effectiveTier === 'free'
+              {accountStatus?.entitlement
                 && !accountStatus.entitlement.creditUnlimited
                 && Number(accountStatus.entitlement.monthlyCreditAllowanceUsd) > 0 && (
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
-                  {t('membershipFreeMonthlyAllowance')}
+                  {t('membershipFreeMonthlyAllowance', { amount: accountStatus.entitlement.monthlyCreditAllowanceUsd })}
                 </p>
               )}
               {accountStatus?.entitlement?.creditState === 'exhausted'
