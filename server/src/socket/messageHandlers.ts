@@ -82,7 +82,7 @@ const isValidMessageProfile = (username: unknown, avatar: unknown): boolean => (
   ))
 );
 
-export function registerMessageHandlers({ io, socket, store, socketLogger, resolveClientId }: SocketConnectionContext) {
+export function registerMessageHandlers({ io, socket, store, socketLogger, resolveClientId, now: getNow }: SocketConnectionContext) {
   const allowMessageMutation = createSocketEventRateLimiter(30, 10_000);
   const allowA2UIAction = createSocketEventRateLimiter(60, 10_000);
   const reactionMutationQueues = new Map<string, Promise<void>>();
@@ -532,7 +532,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
       store,
       roomId: data.roomId,
       clientId,
-      action: { type: 'message.edit', message: targetMessage },
+      action: { type: 'message.edit', message: targetMessage, now: getNow?.() },
     });
     if (!auth.ok) {
       return callback?.({ success: false, error: auth.message });
@@ -665,7 +665,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger, resol
       store,
       roomId: data.roomId,
       clientId,
-      action: { type: 'message.delete', message: targetMessage },
+      action: { type: 'message.delete', message: targetMessage, now: getNow?.() },
     });
     if (!auth.ok) {
       return callback?.({ success: false, error: auth.message });

@@ -268,6 +268,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     store: store as any,
     socketLogger: logger as any,
     resolveClientId: () => store.getClientId(),
+    now: () => new Date('2026-05-03T00:00:10.000Z'),
   } as any);
 
   return { io, socket, store };
@@ -881,6 +882,16 @@ describe('message socket handlers', () => {
     assert.equal(ownerResponse?.success, true);
     assert.equal(ownerResponse?.updatedMessage?.content, 'owner edit');
     assert.deepEqual(ownerEditingOtherUser.store.editedMessages, [{ roomId: 'room-1', messageId: 'message-1', newContent: 'owner edit' }]);
+
+    const expired = createHarness();
+    expired.store.messages = [message({ timestamp: '2026-05-01T00:00:00.000Z' })];
+    let expiredResponse: unknown;
+    await expired.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'too late' }, (result: unknown) => {
+      expiredResponse = result;
+    });
+
+    assert.deepEqual(expiredResponse, { success: false, error: 'Messages can only be edited within 24 hours of being sent' });
+    assert.deepEqual(expired.store.editedMessages, []);
   });
 
   it('does not expose ghost edited state when message mutation fails', async () => {
@@ -1023,6 +1034,16 @@ describe('message socket handlers', () => {
     });
     assert.deepEqual(ownerResponse, { success: true });
     assert.deepEqual(ownerDeletingOtherUser.store.deletedMessages, [{ roomId: 'room-1', messageId: 'message-1' }]);
+
+    const expired = createHarness();
+    expired.store.messages = [message({ timestamp: '2026-05-01T00:00:00.000Z' })];
+    let expiredResponse: unknown;
+    await expired.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (result: unknown) => {
+      expiredResponse = result;
+    });
+
+    assert.deepEqual(expiredResponse, { success: false, error: 'Messages can only be deleted within 24 hours of being sent' });
+    assert.deepEqual(expired.store.deletedMessages, []);
   });
 
   it('does not expose a ghost deletion when message mutation fails', async () => {

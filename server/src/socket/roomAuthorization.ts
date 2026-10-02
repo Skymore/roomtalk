@@ -13,8 +13,8 @@ export type RoomActor = {
 
 export type RoomAuthorizationAction =
   | { type: 'message.post'; now?: Date }
-  | { type: 'message.edit'; message: Message }
-  | { type: 'message.delete'; message: Message }
+  | { type: 'message.edit'; message: Message; now?: Date }
+  | { type: 'message.delete'; message: Message; now?: Date }
   | { type: 'room.clearHistory'; confirmation?: string }
   | { type: 'room.manageSettings' }
   | { type: 'room.manageAdmins' }
@@ -41,6 +41,12 @@ const WEEKDAY_TO_NUMBER: Record<string, number> = {
 };
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+export const MESSAGE_MUTATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export const isMessageWithinMutationWindow = (message: Message, now = new Date()): boolean => {
+  const sentAt = Date.parse(message.timestamp);
+  return Number.isFinite(sentAt) && now.getTime() - sentAt <= MESSAGE_MUTATION_WINDOW_MS;
+};
 
 const parseMinutes = (value: string): number | null => {
   const match = TIME_PATTERN.exec(value);
@@ -229,15 +235,29 @@ export async function authorizeRoomAction(input: {
         ? { ok: true, actor }
         : { ok: false, code: 'posting_closed', message: posting.reason || 'Posting closed', actor };
     }
-    case 'message.edit':
+    case 'message.edit': {
+      if (input.action.message.roomId !== input.roomId) {
+        return { ok: false, code: 'forbidden', message: 'Message does not belong to this room', actor };
+      }
+      if (!isOwner && input.action.message.clientId !== input.clientId) {
+        return { ok: false, code: 'forbidden', message: 'You are not authorized to modify this message', actor };
+      }
+      if (!isMessageWithinMutationWindow(input.action.message, input.action.now)) {
+        return { ok: false, code: 'forbidden', message: 'Messages can only be edited within 24 hours of being sent', actor };
+      }
+      return { ok: true, actor };
+    }
     case 'message.delete': {
       if (input.action.message.roomId !== input.roomId) {
         return { ok: false, code: 'forbidden', message: 'Message does not belong to this room', actor };
       }
-      if (isOwner || input.action.message.clientId === input.clientId) {
-        return { ok: true, actor };
+      if (!isOwner && input.action.message.clientId !== input.clientId) {
+        return { ok: false, code: 'forbidden', message: 'You are not authorized to modify this message', actor };
       }
-      return { ok: false, code: 'forbidden', message: 'You are not authorized to modify this message', actor };
+      if (!isMessageWithinMutationWindow(input.action.message, input.action.now)) {
+        return { ok: false, code: 'forbidden', message: 'Messages can only be deleted within 24 hours of being sent', actor };
+      }
+      return { ok: true, actor };
     }
     case 'room.clearHistory': {
       if (!isOwner) {

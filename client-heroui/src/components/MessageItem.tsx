@@ -366,8 +366,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     && message.deliveryAction !== 'ask-ai'
     && Boolean(onRetryDelivery);
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
-  const canEditMessage = !isInteractionDisabled && !isQueuedInput && canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
-  const canDeleteMessage = !isInteractionDisabled && !isQueuedInput && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
+  const sentAt = Date.parse(message.timestamp);
+  const isWithinMutationWindow = Number.isFinite(sentAt) && Date.now() - sentAt <= 24 * 60 * 60 * 1000;
+  const canEditMessage = !isInteractionDisabled && !isQueuedInput && canBeEdited && isWithinMutationWindow && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
+  const canDeleteMessage = !isInteractionDisabled && !isQueuedInput && isWithinMutationWindow && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
   const { t, i18n } = useTranslation();
   const assistantDisplayName = isAI
     ? getCodeAgentAssistantDisplayName(message.username) || t('aiAssistantName')

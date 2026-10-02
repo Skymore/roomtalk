@@ -30,6 +30,7 @@ export interface SocketHandlerDeps {
   codeAgentSandboxService?: CodeAgentSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedStaticSiteService?: PublishedStaticSiteService;
+  now?: () => Date;
 }
 
 export interface SocketConnectionContext extends SocketHandlerDeps {

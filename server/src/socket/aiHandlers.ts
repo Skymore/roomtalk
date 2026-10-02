@@ -952,6 +952,7 @@ export function registerAIHandlers({
   onAssistantRunQueued,
   codeAgentSessionService,
   resolveClientId,
+  now: getNow,
 }: SocketConnectionContext) {
   const notifyMessageHistoryInvalidated = (roomId: string, reason: string) => {
     io.to(roomId).emit('message_history_invalidated', { roomId, reason });
@@ -1011,7 +1012,7 @@ export function registerAIHandlers({
         store,
         roomId,
         clientId,
-        action: { type: 'message.delete', message: retryTarget },
+        action: { type: 'message.delete', message: retryTarget, now: getNow?.() },
       });
       if (!retryAuth.ok) {
         callback?.({ success: false, error: retryAuth.message });
@@ -1029,7 +1030,7 @@ export function registerAIHandlers({
         store,
         roomId,
         clientId,
-        action: { type: 'message.edit', message: editTarget },
+        action: { type: 'message.edit', message: editTarget, now: getNow?.() },
       });
       if (!editAuth.ok) {
         callback?.({ success: false, error: editAuth.message });
@@ -1350,7 +1351,7 @@ export function registerAIHandlers({
           store,
           roomId: data.roomId,
           clientId,
-          action: { type: 'message.delete', message: retryTarget },
+          action: { type: 'message.delete', message: retryTarget, now: getNow?.() },
         });
         if (!retryAuth.ok) {
           callback?.({ success: false, error: retryAuth.message });
@@ -1616,7 +1617,7 @@ export function registerAIHandlers({
       store,
       roomId: data.roomId,
       clientId,
-      action: { type: 'message.edit', message: targetMessage },
+      action: { type: 'message.edit', message: targetMessage, now: getNow?.() },
     });
     if (!editAuth.ok) {
       callback?.({ success: false, error: editAuth.message });

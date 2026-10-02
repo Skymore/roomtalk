@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { canUseCodeAgentRoom, getPostingAvailability } from './roomAuthorization';
-import { Room, RoomPostingSchedule } from '../types';
+import { canUseCodeAgentRoom, getPostingAvailability, isMessageWithinMutationWindow } from './roomAuthorization';
+import { Message, Room, RoomPostingSchedule } from '../types';
 
 // 对拍向量:与 client-heroui/src/utils/postingSchedule.test.ts 使用同一组场景
 // (同一时刻、同一窗口)。客户端断言"距下一边界的时长",服务端断言"此刻是否开放",
@@ -25,6 +25,27 @@ const schedule = (overrides: Partial<RoomPostingSchedule> = {}): RoomPostingSche
 
 // 2026-06-08 is a Monday (day=1)
 const mondayUtc = (time: string) => new Date(`2026-06-08T${time}Z`);
+
+describe('isMessageWithinMutationWindow', () => {
+  const target = {
+    id: 'message-1',
+    clientId: 'client-1',
+    content: 'hello',
+    roomId: 'room-1',
+    timestamp: '2026-06-08T12:00:00.000Z',
+    messageType: 'text',
+  } as Message;
+
+  it('allows edits through the 24-hour boundary and rejects older messages', () => {
+    assert.equal(isMessageWithinMutationWindow(target, new Date('2026-06-09T11:59:59.999Z')), true);
+    assert.equal(isMessageWithinMutationWindow(target, new Date('2026-06-09T12:00:00.000Z')), true);
+    assert.equal(isMessageWithinMutationWindow(target, new Date('2026-06-09T12:00:00.001Z')), false);
+  });
+
+  it('rejects messages without a valid timestamp', () => {
+    assert.equal(isMessageWithinMutationWindow({ ...target, timestamp: 'invalid' }, new Date()), false);
+  });
+});
 
 describe('getPostingAvailability', () => {
   it('allows posting when no schedule is configured or it is disabled', () => {

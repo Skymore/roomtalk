@@ -471,6 +471,7 @@ const createHarness = (options: {
     onAssistantRunQueued: options.autoRun === false ? undefined : executeNextRun,
     codeAgentSessionService: options.codeAgentSessionService as any,
     resolveClientId: () => store.getClientId(),
+    now: () => new Date('2026-05-03T00:00:10.000Z'),
   });
 
   return { io, socket, store, executeNextRun };

@@ -673,7 +673,7 @@ describe('MessageItem replies', () => {
 
     rerender(
       <MessageItem
-        message={message}
+        message={{ ...message, timestamp: new Date().toISOString() }}
         roomPermissions={{
           roomId: 'room-1',
           clientId: 'viewer',
@@ -697,6 +697,26 @@ describe('MessageItem replies', () => {
     fireEvent.click(screen.getByLabelText('moreActions'));
     expect(await screen.findByText('editMessage')).toBeTruthy();
     expect(await screen.findByText('deleteMessage')).toBeTruthy();
+  });
+
+  it('hides editing and deletion after 24 hours', () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          clientId: 'viewer',
+          timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000 - 1).toISOString(),
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    expect(screen.queryByText('editMessage')).toBeNull();
+    expect(screen.queryByText('deleteMessage')).toBeNull();
   });
 
   it('shows queued state and routes queued message actions separately', async () => {
