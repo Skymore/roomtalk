@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import { CODE_AGENT_ACP_ARTIFACT_VERSION, availableCodeAgentBackends } from './codeAgentBackends';
 
 describe('availableCodeAgentBackends', () => {
+  it('keeps the verified ACP version aligned with the published artifact lock', () => {
+    const lock = JSON.parse(readFileSync(path.resolve(__dirname, '../../../ops/code-agent-sandbox/artifact.lock.json'), 'utf8'));
+    assert.equal(CODE_AGENT_ACP_ARTIFACT_VERSION, lock.artifactVersion);
+  });
+
   it('only advertises harnesses whose runtime dependencies are configured', () => {
     assert.deepEqual(
       availableCodeAgentBackends({ codexEnabled: false, acpEnabled: false }),
