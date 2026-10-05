@@ -480,8 +480,11 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               <div className="grid gap-3 sm:grid-cols-2">
                 <Select
                   size="sm"
+                  popoverProps={{ disableAnimation: true }}
                   label={t('selectCodexModel')}
                   data-testid="codex-model-select"
+                  isLoading={entitlement === undefined}
+                  isDisabled={entitlement === undefined}
                   disabledKeys={CODEX_MODEL_OPTIONS.filter(model => codexAccessReason(model.id)).map(model => model.id)}
                   selectedKeys={[codexRunSettingsDraft.model]}
                   onSelectionChange={handleCodexModelSelection}
@@ -509,6 +512,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 </Select>
                 <Select
                   size="sm"
+                  popoverProps={{ disableAnimation: true }}
                   label={t('selectCodexReasoning')}
                   data-testid="codex-reasoning-select"
                   selectedKeys={[codexRunSettingsDraft.reasoningEffort]}
@@ -534,6 +538,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 {isCodexAppServer ? (
                   <Select
                     size="sm"
+                    popoverProps={{ disableAnimation: true }}
                     label={t('selectCodexSpeed')}
                     data-testid="codex-speed-select"
                     selectedKeys={[codexRunSettingsDraft.serviceTier]}
@@ -565,8 +570,11 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             ) : (
               <Select
                 size="sm"
+                popoverProps={{ disableAnimation: true }}
                 label={t('selectAIModel')}
                 data-testid="ai-model-select"
+                isLoading={entitlement === undefined}
+                isDisabled={entitlement === undefined}
                 disabledKeys={aiModels.filter(model => modelAccessReason(model)).map(model => model.id)}
                 selectedKeys={[selectedAIModelDraft]}
                 onSelectionChange={(keys) => {
@@ -628,6 +636,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 </div>
                 <Select
                   size="sm"
+                  popoverProps={{ disableAnimation: true }}
                   aria-label={isCodexCodeAgent ? t('selectCodexPermission') : t('codeAgentModeControl')}
                   data-testid="code-agent-mode-select"
                   selectedKeys={[isCodexCodeAgent ? selectedCodexPermissionOption.id : codeAgentModeDraft]}
@@ -671,6 +680,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             {!isCodeAgentRoom && (
               <Select
                 size="sm"
+                popoverProps={{ disableAnimation: true }}
                 label={t('selectAIRole')}
                 selectedKeys={[selectedRoleIdDraft]}
                 onSelectionChange={(keys) => {

@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageInputAIControls } from './MessageInputAIControls';
 import type { AIRole } from '../utils/aiRoles';
 
-vi.mock('../utils/socket', () => ({ getClientAccountStatus: async () => ({ entitlement: { effectiveTier: 'priority', creditBalanceUsd: 50, creditUnlimited: true } }) }));
+const { getClientAccountStatusMock } = vi.hoisted(() => ({ getClientAccountStatusMock: vi.fn() }));
+vi.mock('../utils/socket', () => ({ getClientAccountStatus: getClientAccountStatusMock }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -131,6 +132,7 @@ const baseProps = {
 
 describe('MessageInputAIControls', () => {
   beforeEach(() => {
+    getClientAccountStatusMock.mockResolvedValue({ entitlement: { effectiveTier: 'priority', creditBalanceUsd: 50, creditUnlimited: true } });
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       value: vi.fn(() => ({
@@ -144,6 +146,28 @@ describe('MessageInputAIControls', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it.each([
+    { isCodeAgentRoom: false, testId: 'ai-model-select' },
+    { isCodeAgentRoom: true, testId: 'codex-model-select' },
+  ])('waits for credits before allowing $testId to open, including on reopen', async ({ isCodeAgentRoom, testId }) => {
+    let finishLoading!: (status: unknown) => void;
+    const pendingStatus = () => new Promise(resolve => { finishLoading = resolve; });
+    getClientAccountStatusMock.mockImplementationOnce(pendingStatus);
+    const props = { ...baseProps, isCodeAgentRoom, codeAgentBackend: 'codex-app-server' as const };
+    const { rerender } = render(<MessageInputAIControls {...props} isSettingsOpen />);
+
+    expect(screen.getByTestId(testId).dataset.disabled).toBe('true');
+    finishLoading({ entitlement: { effectiveTier: 'guest', creditBalanceUsd: 5 } });
+    await waitFor(() => expect(screen.getByTestId(testId).dataset.disabled).toBe('false'));
+
+    rerender(<MessageInputAIControls {...props} isSettingsOpen={false} />);
+    getClientAccountStatusMock.mockImplementationOnce(pendingStatus);
+    rerender(<MessageInputAIControls {...props} isSettingsOpen />);
+    expect(screen.getByTestId(testId).dataset.disabled).toBe('true');
+    finishLoading({ entitlement: { effectiveTier: 'guest', creditBalanceUsd: 4 } });
+    await waitFor(() => expect(screen.getByTestId(testId).dataset.disabled).toBe('false'));
   });
 
   it('applies code agent mode changes from the settings modal', () => {
@@ -194,7 +218,7 @@ describe('MessageInputAIControls', () => {
     expect(onCodeAgentModeChange).not.toHaveBeenCalled();
   });
 
-  it('applies Codex model and reasoning settings without showing the priced AI model picker', () => {
+  it('applies Codex model and reasoning settings without showing the priced AI model picker', async () => {
     const onCodexRunSettingsChange = vi.fn();
     const onSettingsClose = vi.fn();
     render(
@@ -216,6 +240,7 @@ describe('MessageInputAIControls', () => {
     expect(screen.getByTestId('codex-speed-select')).toBeTruthy();
     expect(screen.queryByTestId('ai-model-select')).toBeNull();
 
+    await waitFor(() => expect(screen.getByTestId('codex-model-select').dataset.disabled).toBe('false'));
     fireEvent.click(screen.getByTestId('change-selectCodexModel'));
     fireEvent.click(screen.getByTestId('change-selectCodexReasoning'));
     fireEvent.click(screen.getByTestId('change-selectCodexSpeed'));
