@@ -17,6 +17,13 @@ describe('account entitlement scheduling', () => {
     });
   });
 
+  it('allows funded guests while keeping the lowest queue priority', () => {
+    assert.deepEqual(resolveAssistantRunScheduling({ tier: 'guest', status: 'active', creditBalanceUsd: 5 }), { membershipTier: 'guest', creditState: 'available', queuePriority: 100 });
+    assert.equal(getAIModelAccessError({ effectiveTier: 'guest', creditBalanceUsd: 5 }, { id: 'gpt-6.1-sol' }), undefined);
+    assert.equal(getAIModelAccessError({ effectiveTier: 'guest', creditBalanceUsd: -4.99 }, { id: 'gpt-6-luna', pricing: { inputPerMillion: 0.1 } }), undefined);
+    assert.match(getAIModelAccessError({ effectiveTier: 'guest', creditBalanceUsd: -5 }, { id: 'gpt-6-luna', pricing: { inputPerMillion: 0.1 } })!, /limit/);
+  });
+
   it('degrades an account after its credits are exhausted', () => {
     const funded = resolveAssistantRunScheduling({
       accountId: 'account-1',
@@ -85,10 +92,11 @@ describe('AI model access policy', () => {
   it('sets monthly allowances to 5, 20, and 50 dollars', () => {
     assert.deepEqual(MONTHLY_CREDIT_USD, { free: 5, pro: 20, priority: 50 });
   });
-  it('requires sign-in and active membership for Astra and Fable, even with credits', () => {
-    assert.match(getAIModelAccessError(null, cheap)!, /Sign in/);
+  it('requires active membership for Astra and Fable, even with guest credits', () => {
+    assert.match(getAIModelAccessError(null, cheap)!, /temporarily unavailable/);
     for (const id of ['gpt-6-astra', 'claude-fable-5.1']) {
       const model = { id, pricing: { inputPerMillion: 10 } };
+      assert.match(getAIModelAccessError({ effectiveTier: 'guest', creditBalanceUsd: 5 }, model)!, /membership/);
       assert.match(getAIModelAccessError(account(50), model)!, /membership/);
       assert.equal(getAIModelAccessError(account(20, 'pro'), model), undefined);
       assert.equal(getAIModelAccessError(account(50, 'priority'), model), undefined);

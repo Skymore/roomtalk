@@ -4,10 +4,10 @@ export type SchedulingTier = 'guest' | MembershipTier;
 export type AccountCreditState = 'none' | 'available' | 'exhausted';
 
 export interface AccountEntitlement {
-  accountId: string;
-  tier: MembershipTier;
+  accountId?: string;
+  tier: SchedulingTier;
   status: MembershipStatus;
-  effectiveTier: MembershipTier;
+  effectiveTier: SchedulingTier;
   creditBalanceUsd: number;
   lifetimeUsageUsd: number;
   creditState: Exclude<AccountCreditState, 'none'>;
@@ -41,9 +41,9 @@ export const getAIModelAccessError = (
   model: { id: string; apiModel?: string; pricing?: { inputPerMillion: number } },
 ): string | undefined => {
   if (entitlement?.creditUnlimited) return;
-  if (!entitlement) return 'Sign in to use AI models';
+  if (!entitlement) return 'AI credits are temporarily unavailable';
   const membersOnly = /(?:gpt-6-astra|claude-fable)/.test(`${model.id} ${model.apiModel || ''}`);
-  if (membersOnly && entitlement.effectiveTier === 'free') {
+  if (membersOnly && entitlement.effectiveTier !== 'pro' && entitlement.effectiveTier !== 'priority') {
     return 'This model requires an active Pro or Priority membership';
   }
   if (entitlement.creditBalanceUsd <= -CREDIT_OVERDRAFT_LIMIT_USD) {
@@ -75,8 +75,8 @@ export const resolveEffectiveMembershipTier = (
 ): MembershipTier => status === 'active' ? tier : 'free';
 
 export const resolveAssistantRunScheduling = (input?: {
-  accountId: string;
-  tier: MembershipTier;
+  accountId?: string;
+  tier: SchedulingTier;
   status: MembershipStatus;
   creditBalanceUsd: number;
   priorityOverride?: number;
@@ -99,14 +99,14 @@ export const resolveAssistantRunScheduling = (input?: {
     };
   }
 
-  const membershipTier = resolveEffectiveMembershipTier(input.tier, input.status);
+  const membershipTier = input.tier === 'guest' ? 'guest' : resolveEffectiveMembershipTier(input.tier, input.status);
   const creditState = input.creditBalanceUsd > 0 ? 'available' : 'exhausted';
   const configuredPriority = input.priorityOverride !== undefined
     ? normalizeQueuePriority(input.priorityOverride)
     : PRIORITY_POLICY[membershipTier][creditState];
 
   return {
-    accountId: input.accountId,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
     membershipTier,
     creditState,
     queuePriority: configuredPriority,

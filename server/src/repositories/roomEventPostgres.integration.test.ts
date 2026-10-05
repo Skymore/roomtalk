@@ -2229,6 +2229,82 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal(october?.creditBalanceUsd, 5);
   });
 
+  it('persists guest credits, charges each source once, and renews without rollover', async () => {
+    const clientId = 'monthly-guest';
+    const now = '2026-07-15T12:00:00.000Z';
+    const grants = await Promise.all(Array.from({ length: 3 }, () => store.getAccountEntitlementByClientId(clientId, now)));
+    assert.ok(grants.every(value => value?.creditBalanceUsd === 5 && value.effectiveTier === 'guest'));
+    assert.equal(grants[0]?.accountId, undefined);
+    assert.equal(grants[0]?.queuePriority, 100);
+    assert.equal(await store.getAccountByClientId(clientId), null);
+    for (const source of ['assistant_run', 'code_agent_gateway', 'ai_role_draft'] as const) {
+      const input = { id: `guest-${source}`, clientId, source, costUsd: 1, provider: 'openrouter' as const, modelId: 'cheap', now };
+      const results = await Promise.all([store.settleAccountAIUsage(input), store.settleAccountAIUsage(input)]);
+      assert.equal(results.filter(value => value?.duplicate).length, 1);
+      assert.equal(results[0]?.membershipTier, 'guest');
+    }
+    const july = await store.getAccountEntitlementByClientId(clientId, now);
+    assert.equal(july?.creditBalanceUsd, 2);
+    assert.equal(july?.lifetimeUsageUsd, 3);
+    assert.equal((await store.getAccountEntitlementByClientId('another-guest', now))?.creditBalanceUsd, 5);
+    const august = await store.getAccountEntitlementByClientId(clientId, '2026-08-01T00:00:00.000Z');
+    assert.equal(august?.creditBalanceUsd, 5);
+    assert.equal(august?.lifetimeUsageUsd, 3);
+    assert.equal(august?.monthlyCreditRemainingUsd, 5);
+    const retry = await store.settleAccountAIUsage({ id: 'guest-assistant_run', clientId, source: 'assistant_run', costUsd: 1, provider: 'openrouter', modelId: 'cheap', now });
+    assert.equal(retry?.duplicate, true);
+    assert.equal(retry?.creditBalanceUsd, 5);
+    assert.equal((await pool.query('SELECT COUNT(*) AS count FROM guest_ai_usage_events')).rows[0].count, '3');
+  });
+
+  it('caps guest overdraft at -5 and repays it from the next monthly allowance', async () => {
+    const clientId = 'guest-overdraft';
+    const now = '2026-07-15T12:00:00.000Z';
+    const settlement = await store.settleAccountAIUsage({
+      id: 'guest-overdraft-usage', clientId, source: 'code_agent_gateway',
+      provider: 'openrouter', modelId: 'cheap', costUsd: 12, now,
+    });
+    assert.equal(settlement?.creditBalanceUsd, -5);
+    assert.equal(settlement?.creditAppliedUsd, 10);
+    const exhausted = await store.getAccountEntitlementByClientId(clientId, now);
+    assert.equal(exhausted?.creditState, 'exhausted');
+    assert.equal(exhausted?.lifetimeUsageUsd, 12);
+    const renewed = await store.getAccountEntitlementByClientId(clientId, '2026-08-01T00:00:00.000Z');
+    assert.equal(renewed?.creditBalanceUsd, 0);
+    assert.equal(renewed?.monthlyCreditRemainingUsd, 0);
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, '2026-09-01T00:00:00.000Z'))?.creditBalanceUsd, 5);
+  });
+
+  it('runs anonymous chat AI and deducts the terminal cost exactly once', async () => {
+    const now = new Date().toISOString();
+    const roomId = 'guest-ai-room';
+    const clientId = 'guest-ai-client';
+    const runId = 'guest-ai-run';
+    await store.saveRoom(room(roomId));
+    const placeholder = message(roomId, 'guest-ai-message', { clientId: 'ai_assistant', messageType: 'ai', content: '', status: 'streaming', aiModel: assistantMessageModel });
+    await store.createAssistantRunWithMessage(placeholder, {
+      id: runId, roomId, requestedByClientId: clientId, aiMessageId: placeholder.id,
+      status: 'queued', modelId: 'test-model', apiModel: 'test-model', provider: 'openai',
+      createdAt: now, queuedAt: now, updatedAt: now, requestPayload: assistantRequest(roomId),
+      generation: 0, attempt: 0, availableAt: now,
+    });
+    const queued = await store.getAssistantRun(runId);
+    assert.equal(queued?.membershipTier, 'guest');
+    assert.equal(queued?.creditState, 'available');
+    assert.equal(queued?.billingAccountId, undefined);
+    const execution = await store.claimAssistantRunById(runId, { workerId: 'guest-worker', now, leaseMs: 30_000 });
+    assert.ok(execution);
+    await store.stageAssistantRunTerminal(runId, execution.token, {
+      schemaVersion: 1, outcome: 'complete', message: { ...placeholder, content: 'answer', status: 'complete',
+        usage: { promptTokens: 200000, completionTokens: 50000, totalTokens: 250000, source: 'reported' },
+        cost: { currency: 'USD', inputUsd: 0.2, outputUsd: 0.05, totalUsd: 0.25, inputPerMillion: 1, outputPerMillion: 1, estimated: false } },
+    });
+    assert.equal((await store.projectAssistantRunTerminal(runId, execution.token)).outcome, 'applied');
+    assert.equal((await store.projectAssistantRunTerminal(runId, execution.token)).outcome, 'stale');
+    assert.equal((await store.getAccountEntitlementByClientId(clientId, now))?.creditBalanceUsd, 4.75);
+    assert.equal((await pool.query('SELECT COUNT(*) AS count FROM guest_ai_usage_events WHERE id = $1', [runId])).rows[0].count, '1');
+  });
+
   it('grants signed-in Free accounts five non-rollover dollars per UTC calendar month', async () => {
     const accountId = 'monthly-free-account';
     const clientId = 'monthly-free-client';
@@ -2237,7 +2313,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       clientId,
       now: '2026-07-15T12:00:00.000Z',
     }));
-    assert.equal(await store.getAccountEntitlementByClientId('monthly-free-guest', createdAt), null);
+    assert.equal((await store.getAccountEntitlementByClientId('monthly-free-guest', createdAt))?.creditBalanceUsd, 5);
 
     const july = await store.getAccountEntitlementByClientId(clientId, '2026-07-15T12:00:00.000Z');
     assert.equal(july?.creditBalanceUsd, 5);

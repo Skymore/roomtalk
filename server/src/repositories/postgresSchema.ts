@@ -2567,4 +2567,32 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD CONSTRAINT account_credit_ledger_balance_after_usd_check CHECK (balance_after_usd >= -5);
     `,
   },
+  {
+    id: '0031_guest_ai_credits',
+    sql: `
+      CREATE TABLE guest_credit_balances (
+        client_id TEXT PRIMARY KEY,
+        available_usd NUMERIC(18, 9) NOT NULL DEFAULT 0 CHECK (available_usd >= -5),
+        lifetime_usage_usd NUMERIC(18, 9) NOT NULL DEFAULT 0 CHECK (lifetime_usage_usd >= 0),
+        monthly_credit_period_start DATE,
+        monthly_credit_remaining_usd NUMERIC(18, 9) NOT NULL DEFAULT 0 CHECK (monthly_credit_remaining_usd >= 0),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE TABLE guest_ai_usage_events (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES guest_credit_balances(client_id),
+        cost_usd NUMERIC(18, 9) NOT NULL CHECK (cost_usd > 0),
+        credit_applied_usd NUMERIC(18, 9) NOT NULL CHECK (credit_applied_usd >= 0),
+        provider TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('assistant_run', 'code_agent_gateway', 'ai_role_draft')),
+        room_id TEXT,
+        turn_id TEXT,
+        message_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX idx_guest_ai_usage_events_client_created
+        ON guest_ai_usage_events (client_id, created_at DESC);
+    `,
+  },
 ];

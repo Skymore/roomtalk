@@ -232,10 +232,10 @@ export type ClientAccountInfo = {
 };
 
 export type AccountEntitlementInfo = {
-  accountId: string;
-  tier: 'free' | 'pro' | 'priority';
+  accountId?: string;
+  tier: 'guest' | 'free' | 'pro' | 'priority';
   status: 'active' | 'past_due' | 'cancelled';
-  effectiveTier: 'free' | 'pro' | 'priority';
+  effectiveTier: 'guest' | 'free' | 'pro' | 'priority';
   creditBalanceUsd: number;
   lifetimeUsageUsd: number;
   creditState: 'available' | 'exhausted';

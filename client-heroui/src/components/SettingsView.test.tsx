@@ -573,6 +573,20 @@ describe('SettingsView Codex connection controls', () => {
     expect(screen.getByText('membershipQueueLevelStandard')).toBeTruthy();
   });
 
+  it('shows monthly credits for anonymous guests without an account', async () => {
+    accountApiMock.getClientAccountStatus.mockResolvedValueOnce({
+      clientId: 'client-1', hasPassword: false, googleConfigured: false, account: null, roles: [],
+      entitlement: { tier: 'guest', status: 'active', effectiveTier: 'guest', creditBalanceUsd: 5,
+        lifetimeUsageUsd: 0, creditState: 'available', queuePriority: 100,
+        monthlyCreditAllowanceUsd: 5, updatedAt: '2026-10-05T00:00:00.000Z' },
+    });
+    render(<SettingsView {...baseProps} />);
+    expect(await screen.findByText('$5.00')).toBeTruthy();
+    expect(screen.getByText('membershipTierGuest')).toBeTruthy();
+    expect(screen.getByText('membershipQueueLevelLowest')).toBeTruthy();
+    expect(screen.getByText('membershipFreeMonthlyAllowance')).toBeTruthy();
+  });
+
   it('places high-frequency preferences before account login forms', () => {
     render(<SettingsView {...baseProps} />);
 

@@ -41,14 +41,16 @@ describe("aiModels", () => {
     const fable = FALLBACK_AI_MODELS.find(model => model.id === "claude-fable-5.1")!;
     const luna = FALLBACK_AI_MODELS.find(model => model.id === "gpt-6-luna")!;
     expect(isPremiumAIModel(astra)).toBe(true);
+    expect(getAIModelAccessReason({ effectiveTier: "guest", creditBalanceUsd: 5 }, { id: "gpt-6.1-sol" })).toBeUndefined();
     for (const model of [astra, fable]) {
+      expect(getAIModelAccessReason({ effectiveTier: "guest", creditBalanceUsd: 5 }, model)).toBe("aiModelMembershipRequired");
       expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: 50 }, model)).toBe("aiModelMembershipRequired");
       expect(getAIModelAccessReason({ effectiveTier: "pro", creditBalanceUsd: 20 }, model)).toBeUndefined();
     }
     expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: 0 }, luna)).toBeUndefined();
     expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: -5 }, luna)).toBe("aiModelCreditLimitReached");
     expect(getAIModelAccessReason({ effectiveTier: "free", creditBalanceUsd: -1 }, { id: 'one-dollar', pricing: { inputPerMillion: 1 } })).toBe("aiModelCheapOnly");
-    expect(getAIModelAccessReason(null, luna)).toBe("aiModelSignInRequired");
+    expect(getAIModelAccessReason(null, luna)).toBe("aiModelCreditsUnavailable");
   });
 
   it("formats model pricing and missing pricing", () => {

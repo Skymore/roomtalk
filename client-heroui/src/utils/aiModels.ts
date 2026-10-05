@@ -327,9 +327,9 @@ export const getAIModelAccessReason = (
 ): string | undefined => {
   if (entitlement === undefined) return 'loading';
   if (entitlement?.creditUnlimited) return;
-  if (!entitlement) return 'aiModelSignInRequired';
+  if (!entitlement) return 'aiModelCreditsUnavailable';
   if (/(?:gpt-6-astra|claude-fable)/.test(`${model.id} ${model.apiModel || ''}`)
-    && entitlement.effectiveTier === 'free') return 'aiModelMembershipRequired';
+    && entitlement.effectiveTier !== 'pro' && entitlement.effectiveTier !== 'priority') return 'aiModelMembershipRequired';
   if (entitlement.creditBalanceUsd <= -5) return 'aiModelCreditLimitReached';
   if (entitlement.creditBalanceUsd <= 0
     && !(typeof model.pricing?.inputPerMillion === 'number' && model.pricing.inputPerMillion < 1)) {

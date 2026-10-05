@@ -716,8 +716,8 @@ export interface AccountAIUsageInput {
 }
 
 export interface AccountAIUsageSettlement {
-  accountId: string;
-  membershipTier: MembershipTier;
+  accountId?: string;
+  membershipTier: SchedulingTier;
   costUsd: number;
   creditAppliedUsd: number;
   creditBalanceUsd: number;

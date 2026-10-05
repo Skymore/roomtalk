@@ -4192,7 +4192,7 @@ export class PostgresStore implements DurableRoomStore {
         );
         const entitlement = entitlementResult.rows[0]
           ? mapAccountEntitlement(entitlementResult.rows[0])
-          : null;
+          : await this.getGuestEntitlement(client, run.requestedByClientId, run.createdAt);
         const request = run.requestPayload!;
         const accessError = getAIModelAccessError(entitlement, request.model);
         if (accessError) throw new Error(accessError);
@@ -4609,6 +4609,16 @@ export class PostgresStore implements DurableRoomStore {
           );
           creditAppliedUsd = Number(previousUsage.rows[0]?.credit_applied_usd) || 0;
         }
+      }
+
+      if (totalUsd > 0 && runRow.membership_tier === 'guest') {
+        const settlement = await this.settleGuestAIUsage(client, {
+          id: runId, clientId: runRow.requested_by_client_id,
+          source: 'assistant_run', costUsd: totalUsd,
+          provider: runRow.provider, modelId: runRow.model_id,
+          roomId: runRow.room_id, messageId: runRow.ai_message_id,
+        }, new Date().toISOString());
+        creditAppliedUsd = settlement.creditAppliedUsd;
       }
 
       const costTotal = await client.query<{ total_usd: number | string }>(
@@ -5751,6 +5761,105 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  private async getGuestEntitlement(
+    client: PostgresClient,
+    clientId: string,
+    now: string,
+  ): Promise<AccountEntitlement> {
+    let period = getUtcMonthPeriod(now);
+    await client.query(
+      `INSERT INTO guest_credit_balances (client_id, updated_at)
+      VALUES ($1, $2::timestamptz) ON CONFLICT (client_id) DO NOTHING`,
+      [clientId, now],
+    );
+    const state = await client.query<{
+      available_usd: number | string;
+      lifetime_usage_usd: number | string;
+      monthly_credit_period_start: string | Date | null;
+      monthly_credit_remaining_usd: number | string;
+      updated_at: string | Date;
+    }>(
+      'SELECT * FROM guest_credit_balances WHERE client_id = $1 FOR UPDATE',
+      [clientId],
+    );
+    const row = state.rows[0];
+    if (row.monthly_credit_period_start && toDateOnly(row.monthly_credit_period_start) > period.start) {
+      period = getUtcMonthPeriod(`${toDateOnly(row.monthly_credit_period_start)}T00:00:00.000Z`);
+    }
+    let availableUsd = Number(row.available_usd);
+    let remainingUsd = Number(row.monthly_credit_remaining_usd);
+    if (!row.monthly_credit_period_start || toDateOnly(row.monthly_credit_period_start) !== period.start) {
+      availableUsd = availableUsd - remainingUsd + MONTHLY_CREDIT_USD.free;
+      remainingUsd = Math.min(MONTHLY_CREDIT_USD.free, Math.max(0, availableUsd));
+      await client.query(
+        `UPDATE guest_credit_balances SET available_usd = $2,
+          monthly_credit_period_start = $3::date, monthly_credit_remaining_usd = $4,
+          updated_at = $5::timestamptz WHERE client_id = $1`,
+        [clientId, availableUsd, period.start, remainingUsd, now],
+      );
+      row.updated_at = now;
+    }
+    return {
+      tier: 'guest', status: 'active', effectiveTier: 'guest',
+      creditBalanceUsd: availableUsd,
+      lifetimeUsageUsd: Number(row.lifetime_usage_usd),
+      creditState: availableUsd > 0 ? 'available' : 'exhausted',
+      queuePriority: 100,
+      monthlyCreditAllowanceUsd: MONTHLY_CREDIT_USD.free,
+      monthlyCreditRemainingUsd: remainingUsd,
+      monthlyCreditPeriodStart: period.start,
+      monthlyCreditPeriodEnd: period.end,
+      updatedAt: toIsoString(row.updated_at),
+    };
+  }
+
+  private async settleGuestAIUsage(
+    client: PostgresClient,
+    input: AccountAIUsageInput,
+    now: string,
+  ): Promise<AccountAIUsageSettlement> {
+    const entitlement = await this.getGuestEntitlement(client, input.clientId, now);
+    const existing = await client.query<{
+      client_id: string; source: string; provider: string; model_id: string;
+      cost_usd: number | string; credit_applied_usd: number | string;
+    }>('SELECT * FROM guest_ai_usage_events WHERE id = $1', [input.id]);
+    const row = existing.rows[0];
+    if (row) {
+      if (row.client_id !== input.clientId || row.source !== input.source
+        || row.provider !== input.provider || row.model_id !== input.modelId
+        || Math.abs(Number(row.cost_usd) - input.costUsd) >= 0.0000000005) {
+        throw new Error('Guest AI usage id is already bound to different usage');
+      }
+      return {
+        membershipTier: 'guest', costUsd: Number(row.cost_usd),
+        creditAppliedUsd: Number(row.credit_applied_usd),
+        creditBalanceUsd: entitlement.creditBalanceUsd, duplicate: true,
+      };
+    }
+    const creditAppliedUsd = Math.min(
+      Math.max(0, entitlement.creditBalanceUsd + CREDIT_OVERDRAFT_LIMIT_USD), input.costUsd,
+    );
+    await client.query(
+      `INSERT INTO guest_ai_usage_events
+        (id, client_id, cost_usd, credit_applied_usd, provider, model_id, source, room_id, turn_id, message_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)`,
+      [input.id, input.clientId, input.costUsd, creditAppliedUsd, input.provider, input.modelId,
+        input.source, input.roomId || null, input.turnId || null, input.messageId || null, now],
+    );
+    const updated = await client.query<{ available_usd: number | string }>(
+      `UPDATE guest_credit_balances SET available_usd = GREATEST(-5, available_usd - $2),
+        monthly_credit_remaining_usd = GREATEST(0, monthly_credit_remaining_usd - $3),
+        lifetime_usage_usd = lifetime_usage_usd + $4, updated_at = $5::timestamptz
+      WHERE client_id = $1 RETURNING available_usd`,
+      [input.clientId, creditAppliedUsd,
+        Math.min(entitlement.monthlyCreditRemainingUsd || 0, creditAppliedUsd), input.costUsd, now],
+    );
+    return {
+      membershipTier: 'guest', costUsd: input.costUsd, creditAppliedUsd,
+      creditBalanceUsd: Number(updated.rows[0].available_usd), duplicate: false,
+    };
+  }
+
   private async reconcileMonthlyCredits(
     client: PostgresClient,
     accountId: string,
@@ -5914,7 +6023,7 @@ export class PostgresStore implements DurableRoomStore {
           [clientId],
         );
         const accountId = link.rows[0]?.account_id;
-        if (!accountId) return null;
+        if (!accountId) return this.getGuestEntitlement(client, clientId, now);
         await this.reconcileMonthlyCredits(client, accountId, now);
         const result = await client.query<AccountEntitlementRow>(
           `SELECT membership.account_id,
@@ -6333,7 +6442,9 @@ export class PostgresStore implements DurableRoomStore {
         [input.clientId],
       );
       const accountId = accountLink.rows[0]?.account_id;
-      if (!accountId) return null;
+      if (!accountId) return this.settleGuestAIUsage(client, input, now);
+      const previousGuestUsage = await client.query('SELECT id FROM guest_ai_usage_events WHERE id = $1', [input.id]);
+      if (previousGuestUsage.rows[0]) return this.settleGuestAIUsage(client, input, now);
       await this.reconcileMonthlyCredits(client, accountId, now);
 
       const existing = await client.query<{
@@ -7082,7 +7193,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, client_presence_events, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_identity_events, account_role_events, account_roles, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE ai_stream_owner_leases, github_connections, codex_connections, outbox_events, room_event_pending_changes, room_events, room_event_streams, client_presence_events, guest_ai_usage_events, guest_credit_balances, account_ai_usage_events, assistant_runs, room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, account_identity_events, account_role_events, account_roles, account_membership_events, account_credit_ledger, account_credit_balances, account_memberships, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
