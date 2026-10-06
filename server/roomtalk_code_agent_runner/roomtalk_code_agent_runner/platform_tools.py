@@ -671,7 +671,7 @@ def _list_static_site_versions(args: argparse.Namespace, env: dict[str, str]) ->
 def _get_room_context_from_broker(socket_path: str, path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(30)
+            client.settimeout(60 if path == '/personal-search' else 30)
             client.connect(socket_path)
             request = {"path": path, **({"method": method, "body": body} if method != "GET" else {})}
             client.sendall((json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))

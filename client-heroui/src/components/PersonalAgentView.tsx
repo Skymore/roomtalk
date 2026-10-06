@@ -135,7 +135,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
     setProfileDraft(previous => previous ? { ...previous, ...changes } : previous);
   };
 
-  if (isLoading) return <div className="flex h-full w-full items-center justify-center"><Spinner label={t('loading')} color="secondary" /></div>;
+  if (isLoading) return <div className="flex h-full w-full items-center justify-center"><Spinner label={t('personalAgentLoading')} color="secondary" /></div>;
   if (!snapshot || !profileDraft) return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
       <span className="text-4xl" aria-hidden="true">🦊</span>
@@ -181,7 +181,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
         {tab === 'files' && <PersonalAgentFiles key={clientId} clientId={clientId} initialFileId={fileId} showError={showError} />}
         {tab === 'tracking' && <PersonalAgentTracking key={clientId} clientId={clientId} showError={showError} showSuccess={showSuccess} onTask={setTaskId} />}
 
-        {tab === 'chats' && <div className="flex min-h-48 items-center justify-center"><Spinner label={t('loading')}/></div>}
+        {tab === 'chats' && <div className="flex min-h-48 items-center justify-center"><Spinner label={t('personalAgentLoading')}/></div>}
 
         {tab === 'ideas' && <PersonalAgentIdeas key={clientId} clientId={clientId} ideas={snapshot.ideas} rooms={rooms} isConnected={isConnected}
           onRoomSelect={onRoomSelect} onIdeasChange={ideas => setSnapshot(previous => previous ? { ...previous, ideas } : previous)}

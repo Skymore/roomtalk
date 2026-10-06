@@ -91,3 +91,9 @@
 - OAuth：Chrome 登录了实际 RoomTalk 项目；回调与五项范围已准备为未提交的表单。创建密钥/扩大敏感访问的 Computer Use 动作确认仍待用户回复，未保存、未启用 Google API，也未读取真实邮箱。
 
 - 字段复查：采用 ui.tsx Field 的外置小标签、白色输入框、浅边框和圆角；新增记忆使用源版单行 Field/42px Remember 按钮。仅作用于个人助理，普通聊天表单不变。20 项组件回归与生产构建通过；手机联合表单流程再次复查。
+
+## v7 真实集成复核
+
+- v6 已部署后，真实 Codex 调用 `roomtalk search web` 返回 `room_context_broker_path_denied`。原因是运行器私有 Unix socket 代理遗漏了 search/choices 路径和 PATCH 放行；并非 Parallel 搜索不可用。已补齐两条路径，搜索等待时间覆盖原版 45 秒期限。43 项运行器测试通过，包含真实私有 socket 的 search/choices CLI 转发；不能用先前的 CLI help 检查代替实际调用。
+- 新对话原先残留普通房间的空状态。已按 chat.tsx 移植欢迎文案和 Hacker News、copilotkit.ai、网站监控三个入口。
+- 本轮 v6 镜像 `sha256:d000cb7d00c83f4e5c65a47acc63d277309b8b69b21ce2b3c0dc152946892932` 部署健康，本地及两个公网状态均 ready；v7 运行器升级为 0.1.69，后续真实调用结果单独记录。

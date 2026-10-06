@@ -137,6 +137,7 @@ interface MessageListProps {
   onSendPersonalChoice?:PersonalChoiceSender;
   onOpenPersonalWorkspace?:PersonalWorkspaceOpener;
   onRetryPersonalMessage?:(message:Message)=>void;
+  onSendPersonalPrompt?:(content:string)=>void;
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
@@ -188,6 +189,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onSendPersonalChoice,
   onOpenPersonalWorkspace,
   onRetryPersonalMessage,
+  onSendPersonalPrompt,
   onOpenWorkspaceArtifact,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -1369,7 +1371,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
               </div>
             )}
-            {!isLoading && messages.length === 0 && (
+            {!isLoading && messages.length === 0 && presentation === 'personal-agent' && (
+              <div className="flex flex-1 shrink-0 flex-col items-center justify-center gap-[15px] py-[34px] text-center">
+                <p className="max-w-[350px] text-[28px] leading-tight tracking-[-1px]">{t('personalChatWelcome')}</p>
+                <p className="max-w-[320px] text-sm leading-[23px] text-default-500">{t('personalChatWelcomeHint')}</p>
+                <div className="mt-[14px] flex w-full max-w-[360px] flex-col gap-2">
+                  <Button className="h-[42px] rounded-[24px] bg-[#f1f2f3] text-[#11191c] dark:bg-default-100 dark:text-default-800" isDisabled={!canUseRetainedRoomAccess || !onSendPersonalPrompt} onPress={()=>onSendPersonalPrompt?.('Check out Hacker News for cool stuff')}>{t('personalChatHackerNews')}</Button>
+                  <Button className="h-[42px] rounded-[24px] bg-[#f1f2f3] text-[#11191c] dark:bg-default-100 dark:text-default-800" isDisabled={!canUseRetainedRoomAccess || !onSendPersonalPrompt} onPress={()=>onSendPersonalPrompt?.('Summarize copilotkit.ai')}>{t('personalChatSummarize')}</Button>
+                  <Button className="h-[42px] rounded-[24px] bg-[#f1f2f3] text-[#11191c] dark:bg-default-100 dark:text-default-800" isDisabled={!onOpenPersonalWorkspace} onPress={()=>onOpenPersonalWorkspace?.('goals')}>{t('personalChatWatchWebsite')}</Button>
+                </div>
+              </div>
+            )}
+            {!isLoading && messages.length === 0 && presentation !== 'personal-agent' && (
               <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
                 <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#5e5d59] dark:text-[#8f8d86]" />
                 <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>

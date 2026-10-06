@@ -8,6 +8,13 @@ const FALLBACK_LANGUAGE = 'en';
 const resources: Record<string, { translation: Record<string, string> }> = {
   en: {
     translation: {
+      "personalAgentLoading": "Loading…",
+      "personalChatWelcome": "A little help. A lot more room for life.",
+      "personalChatWelcomeHint": "Tell me what’s on your mind. I can make a plan, work with your apps, and use my computer to help.",
+      "personalChatHackerNews": "Find cool things on Hacker News",
+      "personalChatSummarize": "Summarize copilotkit.ai",
+      "personalChatWatchWebsite": "Keep an eye on a website",
+
       "personalToolSourcesFound_one": "Found {{count}} source",
       "personalToolMailFound_one": "Found {{atLeast}}{{count}} email",
       "personalToolMailMessages_one": "Email · {{count}} message",
@@ -1523,6 +1530,13 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   zh: {
     translation: {
+      "personalAgentLoading": "正在加载…",
+      "personalChatWelcome": "帮你一点，生活多一点空间。",
+      "personalChatWelcomeHint": "说说你在想什么。我可以制定计划、使用你的应用，也可以用我的电脑帮忙。",
+      "personalChatHackerNews": "发现 Hacker News 上的有趣内容",
+      "personalChatSummarize": "总结 copilotkit.ai",
+      "personalChatWatchWebsite": "关注一个网站",
+
       "personalToolMailPaused": "邮件读取已暂停",
       "personalToolMailSearching": "正在检查收件箱…",
       "personalToolMailReading": "正在读取邮件…",
@@ -3038,6 +3052,13 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   hi: {
     translation: {
+      "personalAgentLoading": "लोड हो रहा है…",
+      "personalChatWelcome": "थोड़ी मदद। जीवन के लिए बहुत अधिक जगह।",
+      "personalChatWelcomeHint": "बताइए आपके मन में क्या है। मैं योजना बना सकता हूँ, आपके ऐप्स के साथ काम कर सकता हूँ और अपने कंप्यूटर से मदद कर सकता हूँ।",
+      "personalChatHackerNews": "Hacker News पर दिलचस्प चीज़ें खोजें",
+      "personalChatSummarize": "copilotkit.ai का सारांश",
+      "personalChatWatchWebsite": "किसी वेबसाइट पर नज़र रखें",
+
       "personalToolMailPaused": "ईमेल पढ़ना रुका",
       "personalToolMailSearching": "इनबॉक्स जाँचा जा रहा है…",
       "personalToolMailReading": "ईमेल पढ़ा जा रहा है…",
@@ -4555,6 +4576,13 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
 resources.ja = {
   translation: {
+      "personalAgentLoading": "読み込み中…",
+      "personalChatWelcome": "少しの手助けで、暮らしにもっと余裕を。",
+      "personalChatWelcomeHint": "気になっていることを教えてください。計画を立てたり、アプリや私のコンピューターを使ってお手伝いできます。",
+      "personalChatHackerNews": "Hacker News の面白い記事を探す",
+      "personalChatSummarize": "copilotkit.ai を要約",
+      "personalChatWatchWebsite": "ウェブサイトを見守る",
+
       "personalToolMailPaused": "メールの読み取りを一時停止",
       "personalToolMailSearching": "受信箱を確認中…",
       "personalToolMailReading": "メールを読み取り中…",
@@ -6039,6 +6067,13 @@ resources.ja = {
 
 resources.ko = {
   translation: {
+      "personalAgentLoading": "불러오는 중…",
+      "personalChatWelcome": "작은 도움으로 삶에 더 많은 여유를.",
+      "personalChatWelcomeHint": "무슨 생각을 하고 있는지 알려 주세요. 계획을 세우고 앱과 제 컴퓨터를 사용해 도와드릴 수 있어요.",
+      "personalChatHackerNews": "Hacker News에서 흥미로운 내용 찾기",
+      "personalChatSummarize": "copilotkit.ai 요약",
+      "personalChatWatchWebsite": "웹사이트 지켜보기",
+
       "personalToolMailPaused": "이메일 읽기 일시 중지",
       "personalToolMailSearching": "받은편지함 확인 중…",
       "personalToolMailReading": "이메일 읽는 중…",

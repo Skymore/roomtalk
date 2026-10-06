@@ -56,7 +56,7 @@ export const PersonalAgentMemory:React.FC<{clientId:string;rooms:Room[];onRoomSe
   };
   return <section className="space-y-4 rounded-2xl border border-[#eeeef0] bg-[#ffffff] p-5 sm:p-6 dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-memory-library">
     <h3 className="text-base font-semibold">{t('personalAgentMemory')}</h3><p className="text-sm text-default-500">{t('personalMemoryInspect')}</p>
-    {loading && <Spinner size="sm" label={t('loading')}/> }
+    {loading && <Spinner size="sm" label={t('personalAgentLoading')}/> }
     {entries.map(entry=><MemoryRow key={entry.id} entry={entry} mutate={mutate} busy={busy} />)}
     {entries.length<total && <Button variant="light" isLoading={busy} onPress={()=>{setBusy(true);void readPersonalAgentMemories(clientId,'',entries.length).then(found=>{setEntries(previous=>[...previous,...found.memories]);setTotal(found.total);}).catch(failure=>showError(failure.message)).finally(()=>setBusy(false));}}>{t('loadMore')}</Button>}
     <Input variant="bordered" labelPlacement="outside" label={t('personalMemoryRememberAboutMe')} value={text} onValueChange={setText} placeholder={t('personalMemoryExample')} maxLength={8000} />

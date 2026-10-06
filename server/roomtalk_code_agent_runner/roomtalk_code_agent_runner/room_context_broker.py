@@ -16,7 +16,7 @@ from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 ROOM_CONTEXT_SOCKET_ENV = "ROOMTALK_ROOM_CONTEXT_SOCKET"
 MAX_BROKER_REQUEST_BYTES = 14 * 1024 * 1024
 MAX_BROKER_RESPONSE_BYTES = 25 * 1024 * 1024
-_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$|^/personal-watches(?:\?.*)?$|^/personal-notifications(?:\?.*)?$|^/personal-ideas(?:\?.*)?$|^/personal-browser(?:\?.*)?$|^/personal-google(?:\?.*)?$|^/personal-computer(?:\?.*)?$|^/personal-task(?:\?.*)?$|^/personal-files(?:\?.*)?$|^/personal-results(?:\?.*)?$|^/personal-goals(?:\?.*)?$|^/personal-memory(?:/records(?:\?.*)?)?$")
+_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$|^/personal-search$|^/personal-choices$|^/personal-watches(?:\?.*)?$|^/personal-notifications(?:\?.*)?$|^/personal-ideas(?:\?.*)?$|^/personal-browser(?:\?.*)?$|^/personal-google(?:\?.*)?$|^/personal-computer(?:\?.*)?$|^/personal-task(?:\?.*)?$|^/personal-files(?:\?.*)?$|^/personal-results(?:\?.*)?$|^/personal-goals(?:\?.*)?$|^/personal-memory(?:/records(?:\?.*)?)?$")
 
 
 class RoomContextBrokerError(Exception):
@@ -35,7 +35,7 @@ def _fetch_room_context(url: str, token: str, *, method: str = "GET", body: dict
         "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
     })
     try:
-        with urllib_request.urlopen(request, timeout=30) as response:
+        with urllib_request.urlopen(request, timeout=55 if url.endswith('/personal-search') else 30) as response:
             raw = response.read(MAX_BROKER_RESPONSE_BYTES + 1)
     except urllib_error.HTTPError as exc:
         try:
@@ -82,7 +82,7 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
                 raise RoomContextBrokerError("Unsupported room context broker path", code="room_context_broker_path_denied")
             method = request.get("method", "GET")
             body = request.get("body")
-            if method != "GET" and not (method == "PATCH" and path in ("/personal-memory", "/personal-memory/records", "/personal-goals", "/personal-results", "/personal-files", "/personal-task", "/personal-computer", "/personal-google", "/personal-browser", "/personal-ideas", "/personal-watches", "/personal-notifications") and isinstance(body, dict)):
+            if method != "GET" and not (method == "PATCH" and path in ("/personal-search", "/personal-choices", "/personal-memory", "/personal-memory/records", "/personal-goals", "/personal-results", "/personal-files", "/personal-task", "/personal-computer", "/personal-google", "/personal-browser", "/personal-ideas", "/personal-watches", "/personal-notifications") and isinstance(body, dict)):
                 raise RoomContextBrokerError("Unsupported room context broker operation", code="room_context_broker_operation_denied")
             server = self.server
             assert isinstance(server, _BrokerServer)

@@ -58,6 +58,34 @@ def test_suggestions_cli_uses_private_broker_and_preserves_source_and_page(monke
         broker.close()
 
 
+def test_search_and_choices_cli_cross_the_private_unix_broker(tmp_path: Path, monkeypatch, capsys):
+    calls = []
+    def upstream(request, timeout):
+        calls.append((request.full_url, request.method, json.loads(request.data) if request.data else None, timeout))
+        assert request.headers['Authorization'] == 'Bearer private-tool-token'
+        return FakeResponse({'results': [{'url': 'https://github.com/CopilotKit/openmuse'}], 'warnings': [], 'truncated': False})
+    monkeypatch.setattr(room_context_broker.urllib_request, 'urlopen', upstream)
+    env = {'ROOMTALK_ROOM_CONTEXT_URL': 'https://roomtalk.example/api/code-agent/room-context', 'ROOMTALK_ROOM_CONTEXT_TOKEN': 'private-tool-token', 'ROOMTALK_CODE_AGENT_CLI_ACCESS': 'full-access'}
+    broker = room_context_broker.RoomContextBroker(env, 'source-search').start()
+    monkeypatch.setenv('ROOMTALK_ROOM_CONTEXT_SOCKET', env['ROOMTALK_ROOM_CONTEXT_SOCKET'])
+    try:
+        assert platform_tools.main(['search', 'web', '--objective', 'Find OpenMuse', '--query', 'CopilotKit OpenMuse', '--json']) == 0
+        assert calls[-1][1:] == ('PATCH', {'objective': 'Find OpenMuse', 'search_queries': ['CopilotKit OpenMuse']}, 55)
+        assert calls[-1][0].endswith('/personal-search')
+        assert 'private-tool-token' not in capsys.readouterr().out
+        assert platform_tools.main(['choices', 'current', '--json']) == 0
+        assert calls[-1][0].endswith('/personal-choices')
+        assert calls[-1][1] == 'GET'
+        source = tmp_path / 'choices.json'
+        source.write_text(json.dumps({'objective': 'Plan the day', 'choices': [{'id': 'plan', 'title': 'Plan'}]}))
+        assert platform_tools.main(['choices', 'present', '--file', str(source), '--json']) == 0
+        assert calls[-1][0].endswith('/personal-choices')
+        assert calls[-1][1] == 'PATCH'
+        assert 'private-tool-token' not in capsys.readouterr().out
+    finally:
+        broker.close()
+
+
 def test_broker_keeps_token_outside_cli_and_proxies_allowed_read(tmp_path: Path, monkeypatch):
     requested: dict[str, str] = {}
 

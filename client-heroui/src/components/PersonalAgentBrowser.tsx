@@ -95,7 +95,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
               const rect = event.currentTarget.getBoundingClientRect();
               const width = frame.viewport?.width || 1280, height = frame.viewport?.height || 800;
               void update({ action: 'click', x: Math.min(width - 1, Math.max(0, Math.floor((event.clientX - rect.left) * width / rect.width))), y: Math.min(height - 1, Math.max(0, Math.floor((event.clientY - rect.top) * height / rect.height))) });
-            }} /> : <p className="p-8 text-center text-sm text-default-500" role="status">{loading ? t('loading') : t('personalBrowserReconnect')}</p>}
+            }} /> : <p className="p-8 text-center text-sm text-default-500" role="status">{loading ? t('personalAgentLoading') : t('personalBrowserReconnect')}</p>}
         </div>
         {Boolean(frame?.downloads?.length) && <section className="space-y-2 rounded-xl border border-default-200 p-3"><h3 className="text-sm font-medium">{t('personalBrowserDownloads')}</h3>{frame?.downloads?.map(file => <div key={file.id} className="flex items-center justify-between gap-2"><span className="min-w-0 break-all text-xs">{file.name}</span><Button size="sm" variant="flat" isDisabled={loading || savedDownloads.includes(file.id)} onPress={()=>void update({action:'import_pdf',id:file.id})}>{t(savedDownloads.includes(file.id) ? 'personalBrowserPdfSaved' : 'personalBrowserImportPdf')}</Button></div>)}</section>}
         <form className="flex gap-2" onSubmit={event => { event.preventDefault(); const value = text; void update({ action: 'text', text: value }).then(success => { if (success) setText(current => current === value ? '' : current); }); }}>
