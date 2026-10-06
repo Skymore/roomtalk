@@ -203,6 +203,7 @@ export interface Room {
   codeAgentBackend?: CodeAgentBackend;
   personalAgentOwnerId?: string;
   personalAgentThreadKind?: 'main' | 'task';
+  personalAgentArchivedAt?: string;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
   updatedAt?: string;

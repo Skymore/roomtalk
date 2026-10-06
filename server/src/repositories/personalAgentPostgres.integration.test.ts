@@ -52,6 +52,7 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
       assert.equal(Object.prototype.hasOwnProperty.call(event.payload.roomRow, 'personal_agent_owner_id'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(event.payload.roomRow, 'personal_agent_thread_kind'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(event.payload.roomRow, 'personal_agent_goal_id'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(event.payload.roomRow, 'personal_agent_archived_at'), false);
     }
     const restarted = new PostgresStore(pool, logger as any);
     assert.equal((await restarted.getPersonalAgentProfile(owner))!.mainRoomId, first.mainRoomId);
@@ -74,6 +75,39 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     ]);
     assert.equal(results.filter(Boolean).length, 1);
     assert.notEqual((await store.getPersonalAgentProfile(owner))!.updatedAt, profile.updatedAt);
+  });
+
+  it('keeps renamed and archived conversations durable without losing history, memory, or immutable events', async () => {
+    const profile = await store.ensurePersonalAgentProfile(owner);
+    const room = await store.createPersonalAgentThread(owner, 'Archive test');
+    const note = await store.savePersonalAgentMemory({ id: randomUUID(), clientId: owner, kind: 'topic',
+      title: 'Archive handoff', content: 'Keep this topic decision', source: 'Remembered in conversation',
+      sourceRoomId: room.id, createdAt: now, updatedAt: now });
+    await store.appendMessage({ id: randomUUID(), clientId: owner, roomId: room.id, content: 'Keep this history', timestamp: now, messageType: 'text' });
+    assert.equal(await store.updatePersonalAgentThread('another-owner', room.id, { archived: true }), null);
+    assert.equal(await store.updatePersonalAgentThread(owner, profile.mainRoomId, { archived: true }), null);
+    const renamed = await store.updatePersonalAgentThread(owner, room.id, { name: '旅行计划' });
+    assert.equal(renamed!.name, '旅行计划');
+    const archived = await store.updatePersonalAgentThread(owner, room.id, { archived: true });
+    assert.ok(archived!.personalAgentArchivedAt);
+    const atArchive = await store.readRoomEvents(room.id, { afterSeq: 0 });
+    assert.equal(atArchive.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentArchivedAt, archived!.personalAgentArchivedAt);
+    const restarted = new PostgresStore(pool, logger as any);
+    assert.equal((await restarted.readPersonalAgentRooms(owner)).find(item => item.id === room.id)!.personalAgentArchivedAt, archived!.personalAgentArchivedAt);
+    // Runtime status updates must not resurrect an archived conversation.
+    await store.saveRoom({ ...renamed!, codeAgentStatus: 'running' });
+    assert.equal((await store.getRoomById(room.id))!.personalAgentArchivedAt, archived!.personalAgentArchivedAt);
+    const restored = await restarted.updatePersonalAgentThread(owner, room.id, { archived: false });
+    assert.equal(restored!.name, '旅行计划');
+    assert.equal(restored!.personalAgentArchivedAt, undefined);
+    assert.equal(restored!.codeAgentStatus, 'running');
+    assert.equal((await restarted.readMessagesByRoom(room.id))[0].content, 'Keep this history');
+    assert.equal((await restarted.getPersonalAgentProfile(owner))!.memory, profile.memory);
+    assert.deepEqual((await restarted.readPersonalAgentMemories(owner, { query: 'Archive handoff' })).memories, [note]);
+    await restarted.deletePersonalAgentMemory(owner, note!.id, note!.updatedAt);
+    const eventsAfterRestore = await restarted.readRoomEvents(room.id, { afterSeq: 0 });
+    assert.deepEqual(eventsAfterRestore.events.slice(0, atArchive.events.length), atArchive.events);
+    assert.equal(eventsAfterRestore.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentArchivedAt, undefined);
   });
 
   it('shares searchable memory across conversations with owner isolation, pagination and versioned corrections', async () => {

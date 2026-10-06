@@ -98,6 +98,19 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     return res.status(201).json({ room });
   }));
 
+  app.patch('/api/personal-agent/threads/:id', withProfile(async (req, res, profile) => {
+    if (req.params.id === profile.mainRoomId) return res.status(400).json({ error: 'Your main conversation is always available' });
+    const updates: { name?: string; archived?: boolean } = {};
+    if (req.body?.name !== undefined) updates.name = textField(req.body.name, 'name', 100);
+    if (req.body?.archived !== undefined) {
+      if (typeof req.body.archived !== 'boolean') throw new RangeError('Invalid archived value');
+      updates.archived = req.body.archived;
+    }
+    if (!Object.keys(updates).length) throw new RangeError('Provide a conversation name or archived value');
+    const room = await store.updatePersonalAgentThread!(profile.clientId, req.params.id, updates);
+    return room ? res.json({ room }) : res.status(404).json({ error: 'Conversation not found' });
+  }));
+
   app.post('/api/personal-agent/goals', withProfile(async (req, res, profile) => {
     const goal = parseGoal(req.body || {});
     goal.clientId = profile.clientId;

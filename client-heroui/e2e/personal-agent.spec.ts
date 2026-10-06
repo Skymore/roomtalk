@@ -124,6 +124,41 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
 
+  // Organizing a topic keeps the same room, transcript, shared memory and main chat.
+  const topicCard = page.getByTestId('personal-agent-chat-card').filter({ hasText: 'Plan my week' });
+  await topicCard.getByRole('button', { name: 'Rename', exact: true }).click();
+  await page.getByLabel('Task name', { exact: true }).fill('My weekly plan');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  const renamedCard = page.getByTestId('personal-agent-chat-card').filter({ hasText: 'My weekly plan' });
+  await expect(renamedCard).toBeVisible();
+  await page.getByRole('textbox', { name: 'Search conversations', exact: true }).fill('no matching topic');
+  await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
+  await page.getByRole('textbox', { name: 'Search conversations', exact: true }).fill('WEEKLY');
+  await expect(renamedCard).toBeVisible();
+  await renamedCard.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Talk to your agent', exact: true })).toBeVisible();
+  await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await expect(renamedCard).toBeVisible();
+  await page.screenshot({ path: '/tmp/roomtalk-personal-chats-archive-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-chats-archive-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await renamedCard.getByRole('button').filter({ hasText: 'My weekly plan' }).click();
+  await expect(page.getByTestId('personal-agent-message').filter({ hasText: /fake runner received the task/ })).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('roomtalk_current_room')!).id)).toBe(topicRoomId);
+  await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await renamedCard.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show active', exact: true }).click();
+  await expect(renamedCard).toBeVisible();
+  await page.reload();
+  await expect(renamedCard).toBeVisible();
+
   await page.getByRole('button', { name: 'New task', exact: true }).click();
   await page.getByLabel('Task name', { exact: true }).fill('Interrupt a task');
   await page.getByRole('button', { name: 'Start task', exact: true }).click();
@@ -165,6 +200,10 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
     return (await response.json()).codeAgentStatus;
   }).toBe('running');
   await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Chats', exact: true }).click();
+  const workingCard = page.getByTestId('personal-agent-chat-card').filter({ hasText: goalRun.room.name });
+  await workingCard.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(workingCard).toHaveCount(0);
   await page.getByRole('button', { name: 'Activity', exact: true }).click();
   await expect(page.getByRole('button').filter({ hasText: goalRun.room.name }).first()).toContainText('Working');
   await page.reload();
@@ -196,6 +235,10 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
     await otherPage.getByRole('button', { name: 'Set password', exact: true }).click();
     await expect(otherPage.getByText('User ID password saved.', { exact: true })).toBeVisible();
     const otherToken = await otherPage.evaluate(() => localStorage.getItem('clientAuthToken'));
+    const deniedEdit = await request.patch(`${serverURL}/api/personal-agent/threads/${topicRoomId}`, {
+      headers: accountHeaders(otherId, otherToken!), data: { name: 'Stolen topic', archived: true },
+    });
+    expect(deniedEdit.status()).toBe(404);
     const metadata = await request.get(`${serverURL}/api/clients/${otherId}/rooms/${snapshot.profile.mainRoomId}`, { headers: { 'X-Client-Id': otherId, 'X-Client-Auth-Token': otherToken! } });
     expect(metadata.status()).toBe(404);
     const denied = await request.get(`${serverURL}/api/rooms/${snapshot.profile.mainRoomId}/messages?clientId=${encodeURIComponent(otherId)}`, { headers: { 'X-Client-Id': otherId, 'X-Client-Auth-Token': otherToken! } });

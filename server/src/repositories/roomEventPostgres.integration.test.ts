@@ -3272,7 +3272,8 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT,
         ADD COLUMN IF NOT EXISTS personal_agent_owner_id TEXT,
         ADD COLUMN IF NOT EXISTS personal_agent_thread_kind TEXT,
-        ADD COLUMN IF NOT EXISTS personal_agent_goal_id TEXT`);
+        ADD COLUMN IF NOT EXISTS personal_agent_goal_id TEXT,
+        ADD COLUMN IF NOT EXISTS personal_agent_archived_at TIMESTAMPTZ`);
       await migrationPool.query(`ALTER TABLE room_messages
         ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
@@ -3342,7 +3343,8 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       await migrationPool.query(`ALTER TABLE rooms
         DROP COLUMN personal_agent_owner_id,
         DROP COLUMN personal_agent_thread_kind,
-        DROP COLUMN personal_agent_goal_id`);
+        DROP COLUMN personal_agent_goal_id,
+        DROP COLUMN personal_agent_archived_at`);
       for (const migration of POSTGRES_MIGRATIONS.slice(aggregateMigrationIndex)) {
         await migrationPool.query(migration.sql);
       }

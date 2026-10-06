@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getPersonalAgent, runPersonalAgentGoal, updatePersonalAgentGoal } from './personalAgent';
+import { getPersonalAgent, runPersonalAgentGoal, updatePersonalAgentGoal, updatePersonalAgentThread } from './personalAgent';
 
 describe('personalAgent API', () => {
   afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
@@ -17,6 +17,9 @@ describe('personalAgent API', () => {
     await runPersonalAgentGoal('client-1', 'goal-1');
     expect(fetchMock.mock.calls[2][0]).toContain('/api/personal-agent/goals/goal-1/run');
     expect(fetchMock.mock.calls[2][1].method).toBe('POST');
+    await updatePersonalAgentThread('client-1', 'task/1', { archived: true });
+    expect(fetchMock.mock.calls[3][0]).toContain('/api/personal-agent/threads/task%2F1');
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'PATCH', body: JSON.stringify({ clientId: 'client-1', archived: true }) });
   });
 
   it('preserves an account sign-in error status for the guest UI', async () => {

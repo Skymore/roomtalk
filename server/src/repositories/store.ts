@@ -779,6 +779,7 @@ export interface DurableRoomStore {
   deletePersonalAgentMemory?(clientId: string, id: string, expectedUpdatedAt: string): Promise<boolean>;
   readPersonalAgentRooms?(clientId: string): Promise<Room[]>;
   createPersonalAgentThread?(clientId: string, name: string): Promise<Room>;
+  updatePersonalAgentThread?(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }): Promise<Room | null>;
   readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
   savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
   deletePersonalAgentGoal?(clientId: string, goalId: string): Promise<boolean>;
@@ -1022,6 +1023,11 @@ export class CompositeRoomStore implements RoomStore {
   createPersonalAgentThread(clientId: string, name: string) {
     if (!this.durableStore.createPersonalAgentThread) throw new Error('Personal agents require PostgreSQL');
     return this.durableStore.createPersonalAgentThread(clientId, name);
+  }
+
+  updatePersonalAgentThread(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }) {
+    if (!this.durableStore.updatePersonalAgentThread) throw new Error('Personal agents require PostgreSQL');
+    return this.durableStore.updatePersonalAgentThread(clientId, roomId, updates);
   }
 
   readPersonalAgentGoals(clientId: string) {

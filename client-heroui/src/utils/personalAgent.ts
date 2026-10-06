@@ -65,6 +65,9 @@ export const updatePersonalAgentProfile = (
 
 export const createPersonalAgentThread = (clientId: string, name: string) => request<{ room: Room }>(clientId, '/threads', 'POST', { name });
 
+export const updatePersonalAgentThread = (clientId: string, id: string, updates: { name?: string; archived?: boolean }) =>
+  request<{ room: Room }>(clientId, `/threads/${encodeURIComponent(id)}`, 'PATCH', updates);
+
 export const createPersonalAgentGoal = (clientId: string, goal: PersonalAgentGoalInput) => request<{ goal: PersonalAgentGoal }>(clientId, '/goals', 'POST', goal);
 
 export const updatePersonalAgentGoal = (

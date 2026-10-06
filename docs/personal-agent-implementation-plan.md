@@ -93,3 +93,25 @@ Every turn loads current preferences and matching excerpts; full entries are ret
 - The E2B artifact was rebuilt and published, and production pins updated. Append-only migration `0033_personal_agent_memory_library` was applied, including full access for existing personal rooms.
 - Production was built from `4f3d7109`, retaining its two existing local presence changes. Image: `sha256:137459045effc0bc418b49ee180874843718621e03d90b4ce6c4bab39e4fdd6d`. App, AI Worker, PostgreSQL, Redis, object storage and both Tunnel services are healthy; loopback and both public `/api/status` endpoints returned HTTP 200 and `ready: true`.
 - Four real sandbox turns using an existing Codex subscription verified remembering a topic with provenance, retrieving its value in a new conversation without supplying that value in the prompt, correcting the same entry without duplicates, and forgetting it. All turns completed and tool results matched PostgreSQL. After execution leases were released, temporary goals, conversations, sandboxes and probe memories were removed, preserving existing profile data.
+
+
+## OpenMuse module sequence
+
+Finish and verify one releasable module per iteration. Keep RoomTalk account ownership, PostgreSQL, durable turns and its executor; do not import OpenMuse's gateway or managed-thread dependencies. Structured memory and the independent conversation UI are the existing foundation.
+
+| Order | Module | Existing foundation and next work |
+| --- | --- | --- |
+| 1 | Conversation management | Stable main conversation and side chats; search, rename, archive and restore |
+| 2 | Conversational goals and background tasks | Existing goal forms and durable queues; create, inspect, modify and cancel from chat with real execution status |
+| 3 | Memory organization | Preference/fact/topic entries, retrieval, provenance and version checks; improve topic handoff and duplicate/conflicting information |
+| 4 | Rich results | Existing file links and previews; usable plan, document and web-result cards |
+| 5 | Browser and takeover | Present browsing and takeover in the personal UI using the existing execution environment |
+| 6 | Suggestions and tracking | Source-backed suggestions with accept/dismiss, condition checks, deduplicated changes and notification preferences |
+
+### Module 1: conversation management
+
+Reference: [OpenMuse side-chat management](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/mobile/src/threads.tsx), with a stable main conversation, renaming, archiving and restoring. `PersonalAgentChats` owns the conversation panel, search and per-conversation rename and archive/restore buttons without workspace controls.
+
+Append-only migration `0034_personal_agent_conversation_archive` persists archive metadata. Only the authenticated owner's side chats can be changed; the main conversation cannot be archived or renamed through this endpoint. Archiving preserves messages, sandbox execution and shared memory, and does not cancel goal schedules. Activity still shows background work; memory sources and original room links remain usable. Restore keeps the room ID. Durable events capture the archive after-image without rewriting old events, and runtime status updates preserve archive metadata.
+
+Validation: server API, real PostgreSQL, historical migrations, event contracts and repository tests passed 120/120; focused client tests passed 11/11, with both production builds, i18n checks and affected ESLint passing. The complete Personal Agent Chrome Playwright flow passed: rename, search, archive, reload, restore, reopen the same transcript, and finish a running goal after archiving it. Another account receives 404 on mutation. Release verification is recorded separately. This module does not change runner tools or sandbox inputs, so the existing verified E2B artifact is retained.

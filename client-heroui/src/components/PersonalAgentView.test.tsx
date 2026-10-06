@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonalAgentView } from './PersonalAgentView';
 import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 
 const api = vi.hoisted(() => ({
-  getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(),
+  getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
   createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
   readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
 }));
@@ -18,7 +18,7 @@ vi.mock('@heroui/react', () => ({
   Button: ({ children, onPress, isDisabled, type = 'button', ...props }: Record<string, any>) => <button type={type} disabled={isDisabled} onClick={onPress} aria-label={props['aria-label']}>{children}</button>,
   Chip: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   Spinner: ({ label }: { label: string }) => <span>{label}</span>,
-  Input: ({ label, value, onValueChange, type }: Record<string, any>) => <label>{label}<input aria-label={label} value={value} type={type} onChange={event => onValueChange(event.target.value)} /></label>,
+  Input: ({ label, value, onValueChange, type, ...props }: Record<string, any>) => <label>{label}<input aria-label={label || props['aria-label']} value={value} type={type} onChange={event => onValueChange(event.target.value)} /></label>,
   Textarea: ({ label, value, onValueChange }: Record<string, any>) => <label>{label}<textarea aria-label={label} value={value} onChange={event => onValueChange(event.target.value)} /></label>,
   Modal: ({ children, isOpen }: Record<string, any>) => isOpen ? <div role="dialog">{children}</div> : null,
   ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -67,6 +67,52 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentStartTask' }));
     await waitFor(() => expect(callbacks.onRoomSelect).toHaveBeenCalledWith(room));
     expect(api.createPersonalAgentThread).toHaveBeenCalledWith('client-1', 'Trip planning');
+  });
+
+  it('searches, renames, archives and restores a topic while keeping the main chat available', async () => {
+    const room = { ...snapshot.rooms[0], id: 'task-1', name: 'Trip planning', personalAgentThreadKind: 'task' as const };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, rooms: [...snapshot.rooms, room] });
+    let current = room;
+    api.updatePersonalAgentThread.mockImplementation(async (_client: string, _id: string, updates: { name?: string; archived?: boolean }) => {
+      current = { ...current, ...(updates.name ? { name: updates.name } : {}),
+        ...(updates.archived !== undefined ? { personalAgentArchivedAt: updates.archived ? '2026-10-06T12:00:00Z' : undefined } : {}) };
+      return { room: current };
+    });
+    const callbacks = props();
+    render(<PersonalAgentView {...callbacks} />);
+    await screen.findByTestId('personal-agent-chat-card');
+    fireEvent.change(screen.getByLabelText('personalAgentSearchChats'), { target: { value: 'unmatched' } });
+    expect(screen.queryByTestId('personal-agent-chat-card')).toBeNull();
+    expect(screen.getByText('personalAgentNoMatchingChats')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('personalAgentSearchChats'), { target: { value: 'TRIP' } });
+    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByText('personalAgentRenameChat'));
+    fireEvent.change(screen.getByLabelText('personalAgentTaskName'), { target: { value: 'Summer trip' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'save' }));
+    await screen.findByText('Summer trip');
+    expect(api.updatePersonalAgentThread).toHaveBeenCalledWith('client-1', 'task-1', { name: 'Summer trip' });
+    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByText('personalAgentArchiveChat'));
+    await waitFor(() => expect(screen.queryByTestId('personal-agent-chat-card')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentArchivedChats' }));
+    await screen.findByText('Summer trip');
+    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByText('personalAgentRestoreChat'));
+    await screen.findByText('personalAgentNoMatchingChats');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentShowActiveChats' }));
+    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByRole('button', { name: /Summer trip/ }));
+    expect(callbacks.onRoomSelect).toHaveBeenCalledWith(expect.objectContaining({ id: room.id, name: 'Summer trip', personalAgentArchivedAt: undefined }));
+    expect(callbacks.showSuccess).toHaveBeenCalledWith('personalAgentConversationRestored');
+    expect(screen.getByRole('button', { name: 'personalAgentOpenMainChat' })).toBeTruthy();
+  });
+
+  it('keeps a conversation visible when archiving fails', async () => {
+    const room = { ...snapshot.rooms[0], id: 'task-1', name: 'Trip planning', personalAgentThreadKind: 'task' as const };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, rooms: [...snapshot.rooms, room] });
+    api.updatePersonalAgentThread.mockRejectedValue(new Error('Unable to archive'));
+    const callbacks = props();
+    render(<PersonalAgentView {...callbacks} />);
+    await screen.findByText('Trip planning');
+    fireEvent.click(screen.getByText('personalAgentArchiveChat'));
+    await waitFor(() => expect(callbacks.showError).toHaveBeenCalledWith('Unable to archive'));
+    expect(screen.getByText('Trip planning')).toBeTruthy();
   });
 
   it('pauses goals and opens their real execution room', async () => {

@@ -89,6 +89,7 @@ type RoomRow = {
   personal_agent_owner_id?: string | null;
   personal_agent_thread_kind?: 'main' | 'task' | null;
   personal_agent_goal_id?: string | null;
+  personal_agent_archived_at?: string | Date | null;
   password_hash?: string | null;
   posting_schedule?: unknown;
   type?: RoomType | null;
@@ -378,7 +379,7 @@ type AccountEntitlementRow = {
   updated_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, personal_agent_owner_id, personal_agent_thread_kind, personal_agent_goal_id, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, personal_agent_owner_id, personal_agent_thread_kind, personal_agent_goal_id, personal_agent_archived_at, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position, reactions';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at, nickname';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -497,6 +498,7 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.personal_agent_owner_id) room.personalAgentOwnerId = row.personal_agent_owner_id;
   if (row.personal_agent_thread_kind) room.personalAgentThreadKind = row.personal_agent_thread_kind;
   if (row.personal_agent_goal_id) room.personalAgentGoalId = row.personal_agent_goal_id;
+  if (row.personal_agent_archived_at) room.personalAgentArchivedAt = toIsoString(row.personal_agent_archived_at);
   const postingSchedule = parseJsonValue<RoomPostingSchedule>(row.posting_schedule);
   if (postingSchedule) room.postingSchedule = postingSchedule;
   if (row.type && row.type !== 'chat') room.type = row.type;
@@ -1266,6 +1268,19 @@ export class PostgresStore implements DurableRoomStore {
       id: nanoid(), name, description: '', creatorId: clientId, personalAgentOwnerId: clientId,
       personalAgentThreadKind: 'task', createdAt: new Date().toISOString(),
     }));
+  }
+
+  async updatePersonalAgentThread(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }): Promise<Room | null> {
+    return this.transaction(async client => {
+      const result = await client.query<RoomRow>(
+        `UPDATE rooms SET name = COALESCE($3::text, name),
+          personal_agent_archived_at = CASE WHEN $4::boolean IS NULL THEN personal_agent_archived_at
+            WHEN $4 THEN COALESCE(personal_agent_archived_at, clock_timestamp()) ELSE NULL END
+        WHERE id = $1 AND personal_agent_owner_id = $2 AND personal_agent_thread_kind = 'task'
+        RETURNING ${ROOM_COLUMNS}`, [roomId, clientId, updates.name ?? null, updates.archived ?? null],
+      );
+      return result.rows[0] ? mapRoom(result.rows[0]) : null;
+    });
   }
 
   async readPersonalAgentGoals(clientId: string): Promise<PersonalAgentGoal[]> {

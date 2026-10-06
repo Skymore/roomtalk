@@ -2682,4 +2682,36 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       UPDATE rooms SET code_agent_mode = 'fullAccess' WHERE personal_agent_owner_id IS NOT NULL;
     `,
   },
+  {
+    id: '0034_personal_agent_conversation_archive',
+    sql: `
+      ALTER TABLE rooms ADD COLUMN personal_agent_archived_at TIMESTAMPTZ;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_archive_check CHECK (
+        personal_agent_archived_at IS NULL OR
+        (personal_agent_owner_id IS NOT NULL AND personal_agent_thread_kind = 'task')
+      );
+
+      CREATE OR REPLACE FUNCTION capture_personal_agent_room_event_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE metadata JSONB;
+      BEGIN
+        IF NEW.event_type = 'room.updated' THEN
+          SELECT jsonb_build_object(
+            'personal_agent_owner_id', personal_agent_owner_id,
+            'personal_agent_thread_kind', personal_agent_thread_kind,
+            'personal_agent_goal_id', personal_agent_goal_id,
+            'personal_agent_archived_at', personal_agent_archived_at
+          ) INTO metadata FROM rooms WHERE id = NEW.room_id AND personal_agent_owner_id IS NOT NULL;
+          IF metadata IS NOT NULL THEN
+            NEW.payload := jsonb_set(NEW.payload, '{roomRow}', (NEW.payload->'roomRow') || metadata);
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER rooms_personal_agent_archive_event
+        AFTER UPDATE ON rooms FOR EACH ROW
+        WHEN (NEW.personal_agent_archived_at IS DISTINCT FROM OLD.personal_agent_archived_at)
+        EXECUTE FUNCTION queue_active_room_change();
+    `,
+  },
 ];

@@ -1,5 +1,6 @@
 import React from 'react';
 import { PersonalAgentMemory } from './PersonalAgentMemory';
+import { PersonalAgentChats } from './PersonalAgentChats';
 import { Button, Chip, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Spinner, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -7,7 +8,7 @@ import { getCodexConnectionStatus, type CodexConnectionStatus } from '../utils/c
 import { formatDate } from '../utils/formatters';
 import { getRoomActivityAt, pickNewerRoom, sortRoomsByLastActivityDesc } from '../utils/roomState';
 import {
-  createPersonalAgentGoal, createPersonalAgentThread, deletePersonalAgentGoal, getPersonalAgent,
+  createPersonalAgentGoal, deletePersonalAgentGoal, getPersonalAgent,
   runPersonalAgentGoal, updatePersonalAgentGoal, updatePersonalAgentProfile,
   type PersonalAgentGoal, type PersonalAgentGoalInput, type PersonalAgentProfile, type PersonalAgentSnapshot,
 } from '../utils/personalAgent';
@@ -50,8 +51,6 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   const [requiresSignIn, setRequiresSignIn] = React.useState(false);
   const [isBusy, setIsBusy] = React.useState(false);
   const [tab, setTab] = React.useState<AgentTab>('chats');
-  const [isThreadModalOpen, setIsThreadModalOpen] = React.useState(false);
-  const [threadName, setThreadName] = React.useState('');
   const [isGoalModalOpen, setIsGoalModalOpen] = React.useState(false);
   const [editingGoal, setEditingGoal] = React.useState<PersonalAgentGoal | null>(null);
   const [goalDraft, setGoalDraft] = React.useState<PersonalAgentGoalInput>(newGoal);
@@ -88,7 +87,6 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
     return updated ? pickNewerRoom(updated, room) : room;
   })), [roomUpdates, snapshot]);
   const mainRoom = rooms.find(room => room.id === snapshot?.profile.mainRoomId);
-  const taskRooms = rooms.filter(room => room.id !== snapshot?.profile.mainRoomId);
   const workingCount = rooms.filter(room => room.codeAgentStatus === 'running').length;
   const isConnected = connection?.status === 'connected';
 
@@ -143,27 +141,11 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           {tabs.map(item => <Button key={item.key} size="sm" variant={tab === item.key ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-current={tab === item.key ? 'page' : undefined} startContent={<Icon icon={item.icon} className="h-4 w-4" />}>{t(item.label)}</Button>)}
         </nav>
 
-        {tab === 'chats' && <div className="space-y-6">
-          <section className={`${panelClass} p-6 sm:p-8`}>
-            <Icon icon="lucide:message-circle" className="mb-4 h-7 w-7 text-secondary" />
-            <h3 className="font-serif text-2xl">{t('personalAgentMainChat')}</h3>
-            <p className={`mt-2 max-w-xl text-sm leading-6 ${mutedClass}`}>{t('personalAgentMainChatDescription')}</p>
-            <Button color="secondary" className="mt-5" isDisabled={!mainRoom} onPress={() => { if (mainRoom) onRoomSelect(mainRoom); }} endContent={<Icon icon="lucide:arrow-right" className="h-4 w-4" />}>{t('personalAgentOpenMainChat')}</Button>
-          </section>
-          <section>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold">{t('personalAgentTaskChats')}</h3>
-              <Button size="sm" variant="flat" color="secondary" onPress={() => { setThreadName(''); setIsThreadModalOpen(true); }} startContent={<Icon icon="lucide:plus" className="h-4 w-4" />}>{t('personalAgentNewTask')}</Button>
-            </div>
-            {taskRooms.length === 0 ? <p className={`${panelClass} p-6 text-sm ${mutedClass}`}>{t('personalAgentNoTasks')}</p> : <div className="grid gap-3 sm:grid-cols-2">
-              {taskRooms.map(room => <button key={room.id} type="button" className={`${panelClass} p-4 text-left transition-colors hover:border-secondary`} onClick={() => onRoomSelect(room)}>
-                <span className="block truncate text-sm font-medium">{room.name}</span>
-                <span className={`mt-2 flex items-center gap-1.5 text-xs ${mutedClass}`}><Icon icon={room.codeAgentStatus === 'running' ? 'lucide:loader-circle' : 'lucide:message-square'} className={`h-3.5 w-3.5 ${room.codeAgentStatus === 'running' ? 'animate-spin' : ''}`} />{t(roomStatusKey(room))}</span>
-                <span className={`mt-1 block text-xs ${mutedClass}`}>{formatDate(getRoomActivityAt(room), i18n.language)}</span>
-              </button>)}
-            </div>}
-          </section>
-        </div>}
+        {tab === 'chats' && <PersonalAgentChats clientId={clientId} rooms={rooms} mainRoom={mainRoom}
+          onRoomSelect={onRoomSelect} onRoomUpdated={room => setSnapshot(previous => previous ? {
+            ...previous, rooms: previous.rooms.some(item => item.id === room.id)
+              ? previous.rooms.map(item => item.id === room.id ? room : item) : [...previous.rooms, room],
+          } : previous)} showSuccess={showSuccess} showError={showError} />}
 
         {tab === 'goals' && <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -213,13 +195,6 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           <Button type="submit" color="secondary" isLoading={isBusy} isDisabled={!profileDraft.name.trim() || !profileDraft.avatar.trim()}>{t('save')}</Button>
         </form></>}
       </div>
-
-      <Modal isOpen={isThreadModalOpen} onOpenChange={setIsThreadModalOpen}>
-        <ModalContent><ModalHeader>{t('personalAgentNewTask')}</ModalHeader><ModalBody><Input autoFocus label={t('personalAgentTaskName')} value={threadName} maxLength={80} onValueChange={setThreadName} /></ModalBody><ModalFooter>
-          <Button variant="light" onPress={() => setIsThreadModalOpen(false)}>{t('cancel')}</Button>
-          <Button color="secondary" isLoading={isBusy} isDisabled={!threadName.trim()} onPress={() => { void mutate(async () => { const { room } = await createPersonalAgentThread(clientId, threadName.trim()); setIsThreadModalOpen(false); onRoomSelect(room); }); }}>{t('personalAgentStartTask')}</Button>
-        </ModalFooter></ModalContent>
-      </Modal>
 
       <Modal isOpen={isGoalModalOpen} onOpenChange={setIsGoalModalOpen} scrollBehavior="inside">
         <ModalContent><ModalHeader>{t(editingGoal ? 'personalAgentEditGoal' : 'personalAgentNewGoal')}</ModalHeader><ModalBody className="gap-4">

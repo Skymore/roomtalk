@@ -215,6 +215,7 @@ export interface Room {
   personalAgentOwnerId?: string;
   personalAgentThreadKind?: 'main' | 'task';
   personalAgentGoalId?: string;
+  personalAgentArchivedAt?: string;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
   type?: RoomType;

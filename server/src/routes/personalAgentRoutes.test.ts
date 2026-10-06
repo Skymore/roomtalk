@@ -22,10 +22,11 @@ afterEach(async () => { await Promise.all(closes.splice(0).map(close => close())
 async function startServer() {
   const profiles = new Map([['owner', { ...profile }], ['other', { ...profile, clientId: 'other', mainRoomId: 'other-main' }]]);
   const goals = new Map<string, PersonalAgentGoal>();
+  const rooms = new Map<string, Room>([[privateRoom.id, { ...privateRoom }]]);
   const store = {
     getAccountByClientId: async (clientId: string) => clientId === 'guest' ? null : { primaryClientId: clientId },
     ensurePersonalAgentProfile: async (clientId: string) => profiles.get(clientId),
-    readPersonalAgentRooms: async (clientId: string) => clientId === 'owner' ? [privateRoom] : [],
+    readPersonalAgentRooms: async (clientId: string) => [...rooms.values()].filter(room => room.personalAgentOwnerId === clientId),
     readPersonalAgentGoals: async (clientId: string) => [...goals.values()].filter(goal => goal.clientId === clientId),
     updatePersonalAgentProfile: async (clientId: string, updates: Partial<PersonalAgentProfile>) => {
       const updated = { ...profiles.get(clientId)!, ...updates };
@@ -33,7 +34,17 @@ async function startServer() {
     },
     savePersonalAgentGoal: async (goal: PersonalAgentGoal) => { goals.set(goal.id, goal); return goal; },
     deletePersonalAgentGoal: async (clientId: string, id: string) => goals.get(id)?.clientId === clientId && goals.delete(id),
-    createPersonalAgentThread: async (clientId: string, name: string) => ({ ...privateRoom, id: 'task', name, creatorId: clientId, personalAgentOwnerId: clientId, personalAgentThreadKind: 'task' }),
+    createPersonalAgentThread: async (clientId: string, name: string) => {
+      const room: Room = { ...privateRoom, id: 'task', name, creatorId: clientId, personalAgentOwnerId: clientId, personalAgentThreadKind: 'task' };
+      rooms.set(room.id, room); return room;
+    },
+    updatePersonalAgentThread: async (clientId: string, id: string, updates: { name?: string; archived?: boolean }) => {
+      const room = rooms.get(id);
+      if (!room || room.personalAgentOwnerId !== clientId || room.personalAgentThreadKind !== 'task') return null;
+      const updated = { ...room, ...(updates.name ? { name: updates.name } : {}),
+        ...(updates.archived !== undefined ? { personalAgentArchivedAt: updates.archived ? now : undefined } : {}) };
+      rooms.set(id, updated); return updated;
+    },
   };
   const app = express(); app.use(express.json());
   registerPersonalAgentRoutes(app, {
@@ -86,6 +97,28 @@ describe('personal agent API', () => {
     assert.equal((await request('/api/personal-agent/goals', 'owner', 'POST', { title: 'Bad', prompt: 'Run', time: '25:00' })).status, 400);
     assert.equal((await request('/api/personal-agent/profile', 'owner', 'PUT', { memory: 'x'.repeat(16001) })).status, 400);
     assert.equal(profiles.get('owner')!.memory, '');
+  });
+
+  it('renames, archives and restores only owned side conversations, preserving the main chat', async () => {
+    const { request } = await startServer();
+    const created = await request('/api/personal-agent/threads', 'owner', 'POST', { name: 'Trip planning' });
+    const { room } = await created.json();
+    const path = `/api/personal-agent/threads/${room.id}`;
+    assert.equal((await request(path, 'other', 'PATCH', { name: 'Stolen' })).status, 404);
+    const renamed = await request(path, 'owner', 'PATCH', { name: '  Summer trip  ' });
+    assert.equal((await renamed.json()).room.name, 'Summer trip');
+    const archived = (await (await request(path, 'owner', 'PATCH', { archived: true })).json()).room;
+    assert.ok(archived.personalAgentArchivedAt);
+    assert.equal(archived.name, 'Summer trip');
+    const snapshot = await (await request('/api/personal-agent?clientId=owner')).json();
+    assert.ok(snapshot.rooms.find((item: Room) => item.id === room.id).personalAgentArchivedAt);
+    const restored = (await (await request(path, 'owner', 'PATCH', { archived: false })).json()).room;
+    assert.equal(restored.id, room.id);
+    assert.equal(restored.personalAgentArchivedAt, undefined);
+    assert.equal((await request(`/api/personal-agent/threads/${privateRoom.id}`, 'owner', 'PATCH', { archived: true })).status, 400);
+    for (const body of [{}, { name: '' }, { name: 'x'.repeat(101) }, { archived: 'true' }]) {
+      assert.equal((await request(path, 'owner', 'PATCH', body)).status, 400);
+    }
   });
 });
 
