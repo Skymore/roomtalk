@@ -113,6 +113,11 @@ jobs:
         run: npm run test:e2e:postgres
         working-directory: client-heroui
       - if: matrix.suite == 'codex'
+        run: node --test ../server/roomtalk_code_agent_runner/tests/personal_browser.test.cjs
+        working-directory: client-heroui
+        env:
+          NODE_PATH: ${{ github.workspace }}/client-heroui/node_modules
+      - if: matrix.suite == 'codex'
         run: npm run test:e2e:codex
         working-directory: client-heroui
       - uses: actions/upload-artifact@v4

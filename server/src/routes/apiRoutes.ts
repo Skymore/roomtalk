@@ -1,3 +1,4 @@
+import { PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
 import { getAIModelAccessError } from '../services/accountEntitlements';
 import { AI_ROLE_GENERATOR_MODEL_ID, REQUESTED_AI_MODEL_CATALOG } from '../services/aiModels';
@@ -60,6 +61,7 @@ const normalizeRoomNickname = (value: string): string | null => {
 };
 
 interface ApiRouteOptions {
+  personalAgentBrowser?: PersonalAgentBrowserService;
   personalAgentCancelGoal?: (goal: PersonalAgentGoal, expectedUpdatedAt?: string) => Promise<PersonalAgentGoal>;
   personalAgentStartGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
   store: RoomStore;
@@ -566,6 +568,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   registerPersonalAgentRoutes(app, {
     store, logger: routeLogger,
     results: new PersonalAgentResultService(store, mediaObjectStorage, routeLogger),
+    browser: options.personalAgentBrowser,
     getClientId: req => getQueryClientId(req) || getBodyClientId(req),
     authorizeClientRequest,
     startGoal: options.personalAgentStartGoal,

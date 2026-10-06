@@ -429,3 +429,26 @@ def test_personal_result_saves_existing_binary_and_reopens_persisted_file(tmp_pa
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
     assert platform_tools.main(["result", "save", "--file", str(source), "--kind", "document", "--title", "Report", "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_personal_browser_commands_use_the_private_broker_without_printing_credentials(monkeypatch, capsys):
+    calls = []
+    def request(path, env, *, method="GET", body=None):
+        calls.append((path, method, body))
+        return {"success": True, "text": "Observed actual page", "session": {"url": "https://example.org"}}
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", request)
+    assert platform_tools.main(["browser", "open", "--url", "https://example.org", "--json"]) == 0
+    assert calls[-1] == ("/personal-browser", "PATCH", {"action": "open", "url": "https://example.org"})
+    assert json.loads(capsys.readouterr().out)["tool"] == "PersonalBrowser"
+    assert platform_tools.main(["browser", "fill", "--selector", "input", "--text", "", "--json"]) == 0
+    assert calls[-1][2] == {"action": "fill", "selector": "input", "text": ""}
+    capsys.readouterr()
+    assert platform_tools.main(["browser", "scroll", "--delta-y", "600", "--json"]) == 0
+    assert calls[-1][2] == {"action": "scroll", "deltaY": 600}
+    capsys.readouterr()
+    assert platform_tools.main(["browser", "list", "--room-id", "private", "--offset", "10", "--json"]) == 0
+    assert calls[-1] == ("/personal-browser?limit=50&offset=10&roomId=private", "GET", None)
+    capsys.readouterr()
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    assert platform_tools.main(["browser", "open", "--url", "https://example.org", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"

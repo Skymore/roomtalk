@@ -500,3 +500,116 @@ test('replays private plan, document and interactive web cards and downloads per
   expect((await request.get(`${serverURL}/api/personal-agent/results/${records[0].result.id}/content?clientId=${clientId}`)).status()).toBe(401);
   await expect(page.getByRole('button', { name: /Overview|Artifacts|Changes|Codex|Permission|Context|Cost/ })).toHaveCount(0);
 });
+
+test('shares a real browser with user takeover, sourced replay and restored login state', async ({ page, context, request }) => {
+  test.setTimeout(120_000);
+  const { createServer } = await import('node:http');
+  let clicks = 0, loginName = '', signedInVisits = 0;
+  const fixture = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    if (url.pathname === '/clicked') { clicks++; res.end('ok'); return; }
+    if (url.pathname === '/login') { loginName = url.searchParams.get('name') || ''; res.writeHead(302, { 'Set-Cookie': 'session=confirmed; HttpOnly; Path=/', Location: '/' }); res.end(); return; }
+    const signedIn = req.headers.cookie?.includes('session=confirmed');
+    if (signedIn) signedInVisits++;
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<!doctype html><title>${url.pathname === '/other' ? 'Second page' : 'Confirmed browser page'}</title><style>body{margin:0;font:20px sans-serif}h1{position:absolute;left:40px;top:20px}#counter{position:absolute;left:40px;top:100px;width:160px;height:50px}input{position:absolute;left:40px;top:180px;width:220px;height:40px}p{position:absolute;left:40px;top:250px}</style><h1>Actual shared browser</h1><button id="counter" onclick="this.textContent=Number(this.textContent)+1;fetch('/clicked')">0</button><form action="/login"><input name="name" aria-label="Name"><button style="display:none">Submit</button></form><p>${signedIn ? 'Signed in' : 'Signed out'}</p>`);
+  });
+  await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve));
+  const address = fixture.address(); if (!address || typeof address === 'string') throw new Error('Browser fixture did not listen');
+  const url = `http://127.0.0.1:${address.port}/`;
+  try {
+    const clientId = await seedClient(context, uniqueName('browser-owner'));
+    await page.addInitScript(() => { window.open = () => null; });
+    await openRoomsPage(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+    await page.getByLabel('User ID password', { exact: true }).first().fill('Personal-browser-test-2026');
+    await page.getByRole('button', { name: 'Set password', exact: true }).click();
+    await expect(page.getByText('User ID password saved.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Connect Codex', exact: true }).click();
+    await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 15000 });
+    await openPersonalAgent(page);
+    const token = await page.evaluate(() => localStorage.getItem('clientAuthToken')!);
+    const headers = accountHeaders(clientId, token);
+    await page.getByRole('button', { name: 'New task', exact: true }).click();
+    await page.getByLabel('Task name', { exact: true }).fill('Shared browsing');
+    await page.getByRole('button', { name: 'Start task', exact: true }).click();
+    await expect(page.getByTestId('personal-agent-conversation').getByText('Shared browsing', { exact: true })).toBeVisible();
+    const roomId = await page.evaluate(() => JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+    // Start Chromium through the same user control path before the short fake
+    // model turn. Cold browser startup must not race its fixed event script.
+    await page.getByRole('button', { name: 'Browser', exact: true }).click();
+    await expect(page.getByRole('dialog').getByTestId('personal-browser-screen').locator('img')).toBeVisible({ timeout: 20000 });
+    await page.getByRole('dialog').getByRole('button', { name: 'Return to chat', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    let previousTurnId = '';
+    async function browserAgentAction(action: Record<string, unknown>) {
+      let turnId = '';
+      await page.getByTestId('message-editor').fill(`Browser operation ${action.action}`);
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      await expect.poll(async () => {
+        const messages = await (await request.get(`${serverURL}/api/rooms/${roomId}/messages?clientId=${clientId}`, { headers })).json() as Message[];
+        turnId = messages.filter(message => message.turnId).at(-1)?.turnId || '';
+        return Boolean(turnId) && turnId !== previousTurnId;
+      }).toBe(true);
+      const claims = { v: 1, jti: randomUUID(), roomId, clientId, turnId, mode: 'fullAccess', exp: Math.floor(Date.now() / 1000) + 60 };
+      const payload = Buffer.from(JSON.stringify(claims, Object.keys(claims).sort())).toString('base64url');
+      const authorization = `Bearer ${payload}.${createHmac('sha256', 'e2e-personal-result-context-secret').update(payload).digest('base64url')}`;
+      const response = await request.patch(`${serverURL}/api/code-agent/room-context/personal-browser`, { headers: { authorization }, data: action });
+      expect(response.ok(), await response.text()).toBe(true);
+      previousTurnId = turnId;
+      const observed = await response.json();
+      expect(observed.session.encryptedState).toBeUndefined(); expect(observed.storageState).toBeUndefined();
+      await expectCompletedTurn(request, clientId, token, roomId);
+      return observed;
+    }
+    const observed = await browserAgentAction({ action: 'open', url });
+    expect(observed.text).toContain('Actual shared browser');
+    expect(observed.observation.url).toBe(url);
+    const visit = page.getByTestId('personal-browser-visit').first();
+    await expect(visit.getByText(url, { exact: true })).toBeVisible();
+    await page.reload(); await expect(visit.getByText(url, { exact: true })).toBeVisible();
+    await visit.getByRole('button', { name: 'Take control', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    const image = dialog.getByTestId('personal-browser-screen').locator('img');
+    await expect(image).toBeVisible({ timeout: 20000 });
+    expect((await request.post(`${serverURL}/api/personal-agent/browser/${roomId}/take-control`, { headers, data: {} })).status()).toBe(409);
+    const clickAt = async (x: number, y: number) => {
+      const rect = await image.boundingBox(); if (!rect) throw new Error('Actual browser screenshot missing');
+      await page.mouse.click(rect.x + x * rect.width / 1280, rect.y + y * rect.height / 800);
+    };
+    await clickAt(120, 125); await expect.poll(() => clicks).toBe(1);
+    await expect(dialog.getByRole('button', { name: 'Enter', exact: true })).toBeEnabled();
+    await clickAt(150, 200);
+    await expect(dialog.getByLabel('Text for the selected field')).toBeEnabled();
+    await dialog.getByLabel('Text for the selected field').fill('confirmed-user');
+    await dialog.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(dialog.getByLabel('Text for the selected field')).toHaveValue('');
+    await dialog.getByRole('button', { name: 'Enter', exact: true }).click();
+    await expect.poll(() => loginName).toBe('confirmed-user'); await expect.poll(() => signedInVisits).toBeGreaterThan(0);
+    await expect(dialog.getByLabel('Page address')).toBeEnabled();
+    await dialog.getByLabel('Page address').fill(`${url}other`);
+    await dialog.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(dialog.getByText('Second page', { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Zoom out', exact: true })).toBeVisible();
+    expect(await dialog.getByTestId('personal-browser-screen').evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+    await clickAt(100, 125);
+    await expect.poll(() => clicks).toBe(2);
+    await page.screenshot({ path: '/tmp/roomtalk-personal-browser-control-mobile.png', fullPage: true });
+    await dialog.getByRole('button', { name: 'Return to chat', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(visit.getByText(url, { exact: true })).toBeVisible();
+    await browserAgentAction({ action: 'close' });
+    const beforeReopen = signedInVisits;
+    await page.getByRole('button', { name: 'Browser', exact: true }).click();
+    await expect(image).toBeVisible({ timeout: 20000 });
+    await expect(dialog.getByText('Second page', { exact: true })).toBeVisible();
+    await expect.poll(() => signedInVisits).toBeGreaterThan(beforeReopen);
+    await dialog.getByRole('button', { name: 'Return to chat', exact: true }).click();
+    expect((await request.get(`${serverURL}/api/personal-agent/browser-observations/${observed.observation.id}/image?clientId=${clientId}`)).status()).toBe(401);
+    expect((await request.get(`${serverURL}/api/personal-agent/browser-observations/${observed.observation.id}/image`, { headers })).status()).toBe(200);
+  } finally { await new Promise<void>(resolve => fixture.close(() => resolve())); }
+});

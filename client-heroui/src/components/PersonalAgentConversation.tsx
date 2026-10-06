@@ -1,4 +1,5 @@
 import React from 'react';
+import { PersonalAgentBrowserControl } from './PersonalAgentBrowser';
 import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -24,6 +25,7 @@ export const PersonalAgentConversation: React.FC<{
   const [text, setText] = React.useState('');
   const [sending, setSending] = React.useState(false);
   const [stopping, setStopping] = React.useState(false);
+  const [browserOpen, setBrowserOpen] = React.useState(false);
   const [attachments, setAttachments] = React.useState<Message[]>([]);
   const list = React.useRef<MessageListHandle>(null);
   const editor = React.useRef<HTMLDivElement>(null);
@@ -105,7 +107,7 @@ export const PersonalAgentConversation: React.FC<{
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e9e5da] text-xl dark:bg-[#34332f]">{profile?.avatar || '✦'}</span>
         <span className="min-w-0"><span className="block truncate font-medium">{profile?.name || t('personalAgent')}</span>{room.personalAgentThreadKind !== 'main' && <span className="block truncate text-xs text-default-500">{room.name}</span>}</span>
       </button>
-      <div className="w-10" />
+      <Button isIconOnly variant="light" aria-label={t('personalBrowser')} isDisabled={!canSend || running} onPress={() => setBrowserOpen(true)}><Icon icon="lucide:globe" className="h-5 w-5" /></Button>
     </header>
     <div className="relative flex min-h-0 flex-1 flex-col px-1 pt-4 sm:px-6">
       <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent"
@@ -126,5 +128,6 @@ export const PersonalAgentConversation: React.FC<{
         {(!running || text.trim()) && <Button isIconOnly radius="full" color="secondary" aria-label={t('sendMessage')} isLoading={sending} isDisabled={!canSend || !text.trim()} onPress={() => void send()}><Icon icon="lucide:arrow-up" className="h-5 w-5" /></Button>}
       </div>
     </div>
+    <PersonalAgentBrowserControl clientId={clientId} roomId={room.id} isOpen={browserOpen} onClose={() => setBrowserOpen(false)} />
   </section>;
 };

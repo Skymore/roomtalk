@@ -1,3 +1,6 @@
+import { E2EPersonalBrowserSandbox } from './scripts/e2ePersonalBrowserSandbox';
+import { PersonalAgentBrowserService } from './services/personalAgentBrowser';
+import { registerPersonalAgentBrowserContextRoutes } from './routes/personalAgentBrowserContextRoutes';
 import { PERSONAL_RESULT_API_PATH, PersonalAgentResultService } from './services/personalAgentResults';
 import { registerPersonalAgentResultContextRoutes } from './routes/personalAgentResultContextRoutes';
 // 导入日志类
@@ -506,7 +509,7 @@ const codeAgentSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRunti
     lifecycle: codeAgentRuntimeConfig.e2bLifecycle,
     logger: codeAgentLogger,
   })
-  : new FakeCodeAgentSandboxService();
+  : process.env.E2E_TEST_MODE === 'true' ? new E2EPersonalBrowserSandbox() : new FakeCodeAgentSandboxService();
 const defaultCodeAgentIdleSandboxTtlMs = 2 * 60 * 1000;
 const codeAgentIdleSandboxTtlMs = parsePositiveIntegerEnv(
   'CODE_AGENT_IDLE_SANDBOX_TTL_MS',
@@ -883,7 +886,13 @@ if (codeAgentModelGateway) {
   );
 }
 
+const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBrowserService(
+  store, codeAgentSandboxService, codeAgentSandboxLifecycle, mediaObjectStorage,
+  new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),
+) : undefined;
+
 registerApiRoutes(app, {
+  personalAgentBrowser,
   store,
   io,
   redisClient,
@@ -932,6 +941,10 @@ registerCodeAgentRoomContextRoutes(app, {
   service: codeAgentRoomContextService,
   logger: codeAgentLogger,
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
+});
+
+if (personalAgentBrowser) registerPersonalAgentBrowserContextRoutes(app, {
+  store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
 });
 
 registerPersonalAgentResultContextRoutes(app, {

@@ -42,6 +42,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "browser":
+            _require_write_access(env)
+            result = _personal_browser(args, env)
         elif args.command == "result":
             if args.result_command in ("save", "get"):
                 _require_write_access(env)
@@ -104,6 +107,21 @@ def _build_parser() -> argparse.ArgumentParser:
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    browser = subparsers.add_parser("browser", help="Read and operate your personal agent's actual shared browser.")
+    browser_sub = browser.add_subparsers(dest="browser_command", required=True)
+    for action in ("open", "read", "click", "fill", "text", "key", "scroll", "close", "list"):
+        command = browser_sub.add_parser(action)
+        command.add_argument("--json", action="store_true")
+        if action == "open": command.add_argument("--url", required=True)
+        if action in ("click", "fill"): command.add_argument("--selector", required=True)
+        if action in ("fill", "text"): command.add_argument("--text", required=True)
+        if action == "key": command.add_argument("--key", required=True)
+        if action == "scroll": command.add_argument("--delta-y", type=int, required=True)
+        if action == "list":
+            command.add_argument("--room-id")
+            command.add_argument("--limit", type=int, default=50)
+            command.add_argument("--offset", type=int, default=0)
 
     room = subparsers.add_parser("room", help="Read the current RoomTalk room context.")
     room_subparsers = room.add_subparsers(dest="room_command", required=True)
@@ -299,6 +317,19 @@ def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str,
     else:
         result = _read_room_context_path("/personal-memory", env)
     return {**result, "tool": "PersonalMemory"}
+
+
+def _personal_browser(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.browser_command == "list":
+        query = {"limit": args.limit, "offset": args.offset}
+        if args.room_id: query["roomId"] = args.room_id
+        result = _read_room_context_path("/personal-browser?" + urllib_parse.urlencode(query), env)
+    else:
+        body = {"action": args.browser_command}
+        for key in ("url", "selector", "text", "key", "delta_y"):
+            if hasattr(args, key): body["deltaY" if key == "delta_y" else key] = getattr(args, key)
+        result = _read_room_context_path("/personal-browser", env, method="PATCH", body=body)
+    return {**result, "tool": "PersonalBrowser"}
 
 
 def _read_room_context_path(path: str, env: dict[str, str], *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:

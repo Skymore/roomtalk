@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -774,6 +774,9 @@ export interface IdempotentMessageAppendResult {
 }
 
 export interface DurableRoomStore {
+  getPersonalAgentBrowserSession?(clientId: string, roomId: string): Promise<PersonalAgentBrowserSession | null>;
+  savePersonalAgentBrowser?(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation): Promise<boolean>;
+  readPersonalAgentBrowserObservations?(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }): Promise<{ observations: PersonalAgentBrowserObservation[]; total: number }>;
   savePersonalAgentResult?(result: PersonalAgentResult): Promise<PersonalAgentResult | null>;
   readPersonalAgentResults?(clientId: string, options?: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number }): Promise<{ results: PersonalAgentResult[]; total: number }>;
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
@@ -1007,6 +1010,21 @@ export class CompositeRoomStore implements RoomStore {
 
   updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string) {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
+  }
+
+  getPersonalAgentBrowserSession(clientId: string, roomId: string) {
+    if (!this.durableStore.getPersonalAgentBrowserSession) throw new Error('Personal browsing requires PostgreSQL');
+    return this.durableStore.getPersonalAgentBrowserSession(clientId, roomId);
+  }
+
+  savePersonalAgentBrowser(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation) {
+    if (!this.durableStore.savePersonalAgentBrowser) throw new Error('Personal browsing requires PostgreSQL');
+    return this.durableStore.savePersonalAgentBrowser(session, leaseTurnId, observation);
+  }
+
+  readPersonalAgentBrowserObservations(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }) {
+    if (!this.durableStore.readPersonalAgentBrowserObservations) throw new Error('Personal browsing requires PostgreSQL');
+    return this.durableStore.readPersonalAgentBrowserObservations(clientId, options);
   }
 
   savePersonalAgentResult(result: PersonalAgentResult) {

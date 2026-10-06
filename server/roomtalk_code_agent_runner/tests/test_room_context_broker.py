@@ -257,3 +257,26 @@ def test_large_personal_result_uses_active_private_broker_without_printing_token
         assert "secret-turn-token" not in capsys.readouterr().out
     finally:
         broker.close()
+
+
+def test_browser_cli_uses_live_private_broker_without_exposing_turn_token(monkeypatch, capsys):
+    requests = []
+    def fake_fetch(url, token, *, method="GET", body=None):
+        requests.append((url, token, method, body))
+        return {"text": "Actual browser page"} if method == "PATCH" else {"observations": []}
+    monkeypatch.setattr(room_context_broker, "_fetch_room_context", fake_fetch)
+    env = {"ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context", "ROOMTALK_ROOM_CONTEXT_TOKEN": "private-browser-turn-token",
+        "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}"}
+    broker = room_context_broker.start_room_context_broker(env, "browser-turn")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_SOCKET", env["ROOMTALK_ROOM_CONTEXT_SOCKET"])
+    try:
+        assert platform_tools.main(["browser", "open", "--url", "https://example.org", "--json"]) == 0
+        assert requests[0] == ("https://room.example/api/code-agent/room-context/personal-browser", "private-browser-turn-token", "PATCH", {"action": "open", "url": "https://example.org"})
+        assert "private-browser-turn-token" not in capsys.readouterr().out
+        assert platform_tools.main(["browser", "list", "--room-id", "private", "--json"]) == 0
+        assert requests[1][2] == "GET"
+        assert "/personal-browser?" in requests[1][0]
+        assert "roomId=private" in requests[1][0]
+        assert "private-browser-turn-token" not in capsys.readouterr().out
+    finally:
+        broker.close()

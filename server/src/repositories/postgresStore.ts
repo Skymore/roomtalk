@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -1231,6 +1231,46 @@ export class PostgresStore implements DurableRoomStore {
       [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null],
     );
     return result.rows[0] ? mapPersonalAgentProfile(result.rows[0]) : null;
+  }
+
+  async getPersonalAgentBrowserSession(clientId: string, roomId: string): Promise<PersonalAgentBrowserSession | null> {
+    const found = await this.pool.query('SELECT * FROM personal_agent_browser_sessions WHERE client_id=$1 AND room_id=$2', [clientId,roomId]);
+    const row = found.rows[0];
+    return row ? { id: row.id, clientId: row.client_id, roomId: row.room_id, url: row.url, title: row.title,
+      encryptedState: row.encrypted_state || undefined, updatedAt: toIsoString(row.updated_at) } : null;
+  }
+
+  async savePersonalAgentBrowser(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation): Promise<boolean> {
+    return this.transaction(async client => {
+      const owned = await client.query(`SELECT room.id FROM rooms room
+        JOIN code_agent_room_leases lease ON lease.room_id=room.id AND lease.turn_id=$3
+        WHERE room.id=$1 AND room.personal_agent_owner_id=$2 AND room.creator_id=$2
+          AND lease.expires_at>clock_timestamp() FOR UPDATE OF room`, [session.roomId,session.clientId,leaseTurnId]);
+      if (!owned.rows[0]) return false;
+      if (observation) {
+        if (observation.clientId !== session.clientId || observation.roomId !== session.roomId || observation.turnId !== leaseTurnId) return false;
+        const turn = await client.query("SELECT id FROM room_agent_turns WHERE id=$1 AND room_id=$2 AND status='running'", [observation.turnId,session.roomId]);
+        if (!turn.rows[0]) return false;
+      }
+      await client.query(`INSERT INTO personal_agent_browser_sessions (room_id,id,client_id,url,title,encrypted_state,updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,clock_timestamp()) ON CONFLICT (room_id) DO UPDATE SET
+          id=EXCLUDED.id,url=EXCLUDED.url,title=EXCLUDED.title,encrypted_state=EXCLUDED.encrypted_state,updated_at=EXCLUDED.updated_at`,
+        [session.roomId,session.id,session.clientId,session.url,session.title,session.encryptedState || null]);
+      if (observation) await client.query(`INSERT INTO personal_agent_browser_observations (id,client_id,room_id,turn_id,url,title,object_key)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)`, [observation.id,observation.clientId,observation.roomId,observation.turnId,observation.url,observation.title,observation.objectKey]);
+      return true;
+    });
+  }
+
+  async readPersonalAgentBrowserObservations(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }): Promise<{ observations: PersonalAgentBrowserObservation[]; total: number }> {
+    const where = `client_id=$1 AND ($2::text IS NULL OR room_id=$2) AND ($3::text IS NULL OR turn_id=$3) AND ($4::text IS NULL OR id=$4)`;
+    const params = [clientId,options.roomId || null,options.turnId || null,options.id || null];
+    const [rows, count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_browser_observations WHERE ${where} ORDER BY created_at DESC,id LIMIT $5 OFFSET $6`, [...params,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_browser_observations WHERE ${where}`, params),
+    ]);
+    return { observations: rows.rows.map(row => ({ id: row.id,clientId: row.client_id,roomId: row.room_id,turnId: row.turn_id,
+      url: row.url,title: row.title,objectKey: row.object_key,createdAt: toIsoString(row.created_at) })),total: Number(count.rows[0].total) };
   }
 
   async savePersonalAgentResult(result: PersonalAgentResult): Promise<PersonalAgentResult | null> {
@@ -2511,7 +2551,8 @@ export class PostgresStore implements DurableRoomStore {
           FROM room_agent_turns
           WHERE room_id = $1
             AND workspace_checkpoint->>'objectKey' IS NOT NULL
-          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1`,
+          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1
+          UNION SELECT object_key FROM personal_agent_browser_observations WHERE room_id = $1`,
           [roomId],
         );
         orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);
@@ -2521,6 +2562,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId],
         );
         await client.query('DELETE FROM code_agent_workspace_revisions WHERE room_id = $1', [roomId]);
+        await client.query('DELETE FROM personal_agent_browser_sessions WHERE room_id = $1', [roomId]);
         await client.query('DELETE FROM room_agent_turns WHERE room_id = $1', [roomId]);
         const result = await client.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
         const removed = result.rowCount || 0;
@@ -7331,7 +7373,8 @@ export class PostgresStore implements DurableRoomStore {
           FROM room_agent_turns
           WHERE room_id = $1
             AND workspace_checkpoint->>'objectKey' IS NOT NULL
-          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1`,
+          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1
+          UNION SELECT object_key FROM personal_agent_browser_observations WHERE room_id = $1`,
           [roomId],
         );
         orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);

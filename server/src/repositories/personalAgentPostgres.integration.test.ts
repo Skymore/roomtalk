@@ -361,4 +361,48 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.ok(removed.includes(objectKey));
   });
 
+  it('fences browser observations, protects login profiles and keeps visits immutable across restart', async () => {
+    const room = await store.createPersonalAgentThread(owner, 'Browser provenance');
+    const turnId = randomUUID(), startedAt = new Date().toISOString();
+    await store.upsertRoomAgentTurn({ id: turnId, roomId: room.id, status: 'running', startedAt, backend: 'codex-app-server', assistantName: 'Codex', updatedAt: startedAt });
+    const lease = (await store.acquireCodeAgentRoomLease(room.id, turnId, 'browser-test', startedAt, 60000))!;
+    const session = { id: randomUUID(), clientId: owner, roomId: room.id, url: 'https://example.org/first', title: 'First page', encryptedState: 'encrypted-profile-fixture', updatedAt: startedAt };
+    const visit = { id: randomUUID(), clientId: owner, roomId: room.id, turnId, url: session.url, title: session.title, objectKey: `personal-agent-browser/${room.id}/first.jpg`, createdAt: startedAt };
+    assert.equal(await store.savePersonalAgentBrowser(session, turnId, visit), true);
+    const restarted = new PostgresStore(pool, logger as any);
+    assert.equal((await restarted.getPersonalAgentBrowserSession(owner, room.id))!.encryptedState, session.encryptedState);
+    assert.equal(await restarted.getPersonalAgentBrowserSession('other', room.id), null);
+    assert.equal((await restarted.readPersonalAgentBrowserObservations('other', { roomId: room.id })).total, 0);
+    assert.equal(await store.savePersonalAgentBrowser({ ...session, clientId: 'other' }, turnId, { ...visit, id: randomUUID() }), false);
+    assert.equal(await store.savePersonalAgentBrowser(session, 'old-turn', { ...visit, id: randomUUID() }), false);
+    assert.equal(await store.savePersonalAgentBrowser({ ...session, url: 'https://example.org/second' }, turnId), true);
+    assert.equal((await restarted.readPersonalAgentBrowserObservations(owner, { id: visit.id })).observations[0].url, 'https://example.org/first');
+    await store.updatePersonalAgentThread(owner, room.id, { archived: true });
+    assert.equal((await restarted.readPersonalAgentBrowserObservations(owner, { roomId: room.id })).total, 1);
+    await store.releaseCodeAgentRoomLease(room.id, turnId, 'browser-test', lease.fence);
+    assert.equal(await store.savePersonalAgentBrowser(session, turnId, { ...visit, id: randomUUID() }), false);
+    const removed: string[] = [];
+    const cleanup = new PostgresStore(pool, logger as any, { deleteMediaObject: async (key: string) => { removed.push(key); } } as any);
+    await cleanup.clearRoomMessages(room.id);
+    assert.equal(await cleanup.getPersonalAgentBrowserSession(owner, room.id), null);
+    assert.equal((await cleanup.readPersonalAgentBrowserObservations(owner, { roomId: room.id })).total, 0);
+    assert.ok(removed.includes(visit.objectKey));
+  });
+
+  it('uses the existing durable room lease to exclude agent and user browser writes', async () => {
+    const room = await store.createPersonalAgentThread(owner, 'Browser control');
+    const controlId = `browser-control:${randomUUID()}`, startedAt = new Date().toISOString();
+    const control = (await store.acquireCodeAgentRoomLease(room.id, controlId, 'manual-browser', startedAt, 90000))!;
+    assert.equal(await store.acquireCodeAgentRoomLease(room.id, randomUUID(), 'agent', startedAt, 60000), null);
+    assert.equal(await store.renewCodeAgentRoomLease(room.id, controlId, 'other', startedAt, 90000, control.fence), null);
+    const session = { id: randomUUID(), clientId: owner, roomId: room.id, url: 'https://example.org/manual', title: 'Manual page', encryptedState: 'encrypted-state', updatedAt: startedAt };
+    assert.equal(await store.savePersonalAgentBrowser(session, controlId), true);
+    assert.ok(await store.renewCodeAgentRoomLease(room.id, controlId, 'manual-browser', startedAt, 90000, control.fence));
+    assert.equal(await store.releaseCodeAgentRoomLease(room.id, controlId, 'manual-browser', control.fence), true);
+    assert.equal(await store.savePersonalAgentBrowser(session, controlId), false);
+    assert.ok(await store.acquireCodeAgentRoomLease(room.id, randomUUID(), 'agent', startedAt, 60000));
+    await store.deleteRoom(room.id, owner);
+    assert.equal(await store.getPersonalAgentBrowserSession(owner, room.id), null);
+  });
+
 });

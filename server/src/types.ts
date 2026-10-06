@@ -259,6 +259,27 @@ export interface PersonalAgentMemory {
   updatedAt: string;
 }
 
+export interface PersonalAgentBrowserSession {
+  id: string;
+  clientId: string;
+  roomId: string;
+  url: string;
+  title: string;
+  encryptedState?: string;
+  updatedAt: string;
+}
+
+export interface PersonalAgentBrowserObservation {
+  id: string;
+  clientId: string;
+  roomId: string;
+  turnId: string;
+  url: string;
+  title: string;
+  objectKey: string;
+  createdAt: string;
+}
+
 export interface PersonalAgentResult {
   id: string;
   clientId: string;

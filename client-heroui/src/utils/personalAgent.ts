@@ -137,3 +137,28 @@ export const readPersonalAgentResultFile = async (clientId: string, id: string):
   }
   return response.blob();
 };
+
+export interface PersonalBrowserObservation {
+  id: string; roomId: string; turnId: string; url: string; title: string; createdAt: string;
+}
+export interface PersonalBrowserControl { id: string; fence: number }
+export interface PersonalBrowserFrame {
+  session: { id: string; roomId: string; url: string; title: string; updatedAt: string };
+  screenshot?: string; viewport?: { width: number; height: number }; closed: boolean;
+}
+export const readPersonalBrowserObservations = (clientId: string, roomId: string, turnId: string, offset = 0) =>
+  request<{ observations: PersonalBrowserObservation[]; total: number }>(clientId, `/browser-observations?roomId=${encodeURIComponent(roomId)}&turnId=${encodeURIComponent(turnId)}&limit=10&offset=${offset}`);
+export const takePersonalBrowserControl = (clientId: string, roomId: string) =>
+  request<{ control: PersonalBrowserControl }>(clientId, `/browser/${encodeURIComponent(roomId)}/take-control`, 'POST');
+export const releasePersonalBrowserControl = (clientId: string, roomId: string, control: PersonalBrowserControl) =>
+  request<{ released: boolean }>(clientId, `/browser/${encodeURIComponent(roomId)}/release-control`, 'POST', { control });
+export const actInPersonalBrowser = (clientId: string, roomId: string, control: PersonalBrowserControl, action: Record<string, unknown>) =>
+  request<PersonalBrowserFrame>(clientId, `/browser/${encodeURIComponent(roomId)}/control`, 'PATCH', { control, ...action });
+export const readPersonalBrowserImage = async (clientId: string, id: string): Promise<Blob> => {
+  const token = localStorage.getItem('clientAuthToken')?.trim();
+  const response = await fetch(apiPath(`/api/personal-agent/browser-observations/${encodeURIComponent(id)}/image`), {
+    cache: 'no-store', headers: { 'X-Client-Id': clientId, ...(token ? { 'X-Client-Auth-Token': token } : {}) },
+  });
+  if (!response.ok) { const payload = await response.json(); throw new Error(payload?.error || 'Browser image unavailable'); }
+  return response.blob();
+};

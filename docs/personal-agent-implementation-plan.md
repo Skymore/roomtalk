@@ -105,7 +105,7 @@ Finish and verify one releasable module per iteration. Keep RoomTalk account own
 | 2 | Conversational goals and background tasks | Complete: shared scheduling, chat tools, milestones, actual execution status, cancellation and outcome completion; verified with real Codex |
 | 3 | Memory organization | Complete: topic handoff, duplicate-title checks, reviewed merge, retained provenance and conversation binding; verified with real Codex |
 | 4 | Rich results | Complete and deployed: persistent plan, document and web cards with previews, downloads and cross-conversation retrieval |
-| 5 | Browser and takeover | Present browsing and takeover in the personal UI using the existing execution environment |
+| 5 | Browser and takeover | Implemented: actual Chromium, shared user control, immutable sourced screenshots and encrypted login state; release validation in progress |
 | 6 | Suggestions and tracking | Source-backed suggestions with accept/dismiss, condition checks, deduplicated changes and notification preferences |
 
 ### Module 1: conversation management
@@ -159,3 +159,12 @@ Validation: 260 server/API/repository/real PostgreSQL/session/event tests; 14 cl
 Release verification: the existing Codex subscription completed two actual turns, saving a plan, valid PDF and self-contained interactive HTML. MuPDF read the PDF, and actual Chromium verified the page button. After destroying the source E2B sandbox, file bytes remained unchanged. A new conversation received only result IDs, retrieved the plan and PDF, read their withheld confirmation codes and saved a revised plan without changing the original. Both temporary goals, conversations, sandboxes and all four private objects were removed. Production App, AI Worker and dependencies are healthy; loopback and both public endpoints are ready. Image `sha256:e38f77ed37e02e3176096347d5e3b6913c09db3f0d6d7e6a4954258cb57908ed` preserves existing presence work.
 
 CI fixes: result-card tests isolate asynchronous Iconify loading to avoid callbacks after jsdom teardown. Existing workspace browser tests expand completed tool history before checking it instead of depending on a transient running state. All 105 client test files, 1,142 assertions and the three related Chrome flows passed locally. These test/documentation changes require no application or E2B rebuild.
+
+
+### Module 5: Browser and takeover
+
+Follow OpenMuse's [browser source card](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/mobile/src/browser-tool-card.tsx), [takeover console](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/server/src/browser-console.ts) and [Playwright worker](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/worker/src/browser.ts). Actual Chromium runs in the existing room E2B sandbox. Agent `roomtalk browser` actions and the independent user console share the same session; the existing execution lease serializes ownership. The console supports page clicks, text, keys, scroll and mobile zoom.
+
+Append-only migration `0039_personal_agent_browser` stores immutable source URL/title/screenshot records per agent turn. Authenticated screenshot reads replay the original observation. Cookies, localStorage and IndexedDB are encrypted with the existing Codex cipher and restored when reopening a context. Clearing/deleting source history cleans screenshot objects and login state. No provider selection or approval UI is introduced.
+
+Validation: actual Chromium engine; 32 Python CLI/broker tests; 5 browser service/API tests; 149 existing repository/session tests; 18 client tests; both builds and affected ESLint passed. All five Personal Agent Chrome flows passed using actual PostgreSQL, Redis, object storage and Chromium with simulated model turns. Runner 0.1.60 and E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` are published; direct template checks verified actual Chromium, screenshot bytes and browser CLI commands. Actual Codex and production release evidence are recorded separately.

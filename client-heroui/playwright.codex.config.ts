@@ -36,6 +36,7 @@ export default defineConfig({
     {
       command: [
         `PORT=${serverPort}`,
+        ...(chromiumExecutablePath ? [`E2E_CHROMIUM_EXECUTABLE_PATH=${shellQuote(chromiumExecutablePath)}`] : []),
         'NODE_ENV=development',
         'DISABLE_LOCAL_MEDIA_STORAGE=false',
         `CLIENT_URL=${clientURL}`,

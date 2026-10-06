@@ -111,7 +111,7 @@ CLI 支持 `roomtalk memory list/search/save/forget`；更新和删除携带读�
 | 2 | 对话中的目标与后台任务 | 已完成：共用日程、聊天工具、里程碑、真实执行状态、取消和成果完成；已用真实 Codex 验证 |
 | 3 | 记忆整理 | 已完成：主题交接、同名重复校验、审阅合并、来源保留和聊天关联；真实 Codex 已验证 |
 | 4 | 结果卡片 | 已完成并部署：持久计划、文档和网页卡片，支持预览、下载和跨聊天读取 |
-| 5 | 浏览器与接管 | 复用现有执行环境，以个人界面展示浏览过程和接管入口 |
+| 5 | 浏览器与接管 | 已实现：实际 Chromium、同会话接管、不可变来源截图、加密登录状态；正在发布验证 |
 | 6 | 主动建议与持续追踪 | 基于实际来源生成建议，支持接受/忽略；条件检查、变化去重与通知偏好 |
 
 ### 模块 1：聊天管理
@@ -165,3 +165,12 @@ CLI 支持 `roomtalk memory list/search/save/forget`；更新和删除携带读�
 发布验证：已有 Codex 订阅完成两个真实回合，保存计划、有效 PDF 和自包含交互网页；PDF 经 MuPDF 读取，网页经实际 Chromium 点击验证。销毁来源 E2B 沙箱后，文件字节保持一致。新聊天只接收结果 ID，实际取回计划和 PDF、读取未提供给新提示的确认码并保存修改版；原版不变。两个临时目标、聊天、沙箱及四个私有对象均已清理。生产 App/AI Worker 与依赖健康，本地及两个公网 ready；镜像 `sha256:e38f77ed37e02e3176096347d5e3b6913c09db3f0d6d7e6a4954258cb57908ed` 保留原有 presence 工作。
 
 CI 修复：结果卡片单测隔离 Iconify 异步图标加载，避免 jsdom 关闭后的回调异常；旧工作区浏览器测试在完成后展开工具记录再检查，避免依赖短暂的运行中状态。客户端完整 105 个文件、1,142 项断言和相关 Chrome 三项流程通过；此修复只改测试和文档，无需重建应用或 E2B 模板。
+
+
+### 模块 5：浏览器与接管
+
+参考 OpenMuse 的 [来源卡片](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/mobile/src/browser-tool-card.tsx)、[用户接管控制台](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/server/src/browser-console.ts) 和 [实际 Playwright 浏览器](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/worker/src/browser.ts)。同一个 RoomTalk E2B 环境维护实际 Chromium 会话，代理通过 `roomtalk browser` 操作；用户在独立浏览器弹层接管同一页面、点击、输入、按键、滚动和缩放。使用既有房间执行 lease，让代理和用户依次操作。
+
+迁移 `0039_personal_agent_browser` 持久化每次代理操作的来源 URL、标题和截图；回放使用当时记录，不替换成之后的网页。登录 cookies、localStorage 和 IndexedDB 使用既有 Codex 加密密钥保存，关闭浏览器后重新打开时恢复。截图通过账号认证接口读取，清空聊天或删除房间会移除相应来源对象和登录状态。界面保留简单聊天入口，无执行器选择或权限审批。
+
+验证：真实 Chromium 引擎检查、Python CLI/broker 32 项、浏览器服务/API 5 项、既有 PostgreSQL 仓储及回合 149 项、客户端 18 项、双方构建和相关 ESLint 通过。完整 Chrome 个人 Agent 5 个流程通过；浏览器流程使用实际 PostgreSQL、Redis、对象存储及 Chromium，模型回合为模拟 runner。Runner 0.1.60 和 E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` 已发布并直接验证实际 Chromium、截图与 CLI 命令。真实 Codex 与发布结果另行记录。

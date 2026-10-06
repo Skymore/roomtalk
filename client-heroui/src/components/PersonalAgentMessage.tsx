@@ -1,4 +1,5 @@
 import React from 'react';
+import { PersonalAgentBrowserVisits } from './PersonalAgentBrowser';
 import { PersonalAgentResults } from './PersonalAgentResults';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -28,6 +29,7 @@ export const PersonalAgentTurn: React.FC<{ clientId: string; canInteract?: boole
   return <div className="space-y-3" data-testid="personal-agent-turn">
     {messages.filter(message => message.messageType === 'text' || message.messageType === 'media').map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
     {(final ? [final] : answers).map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
+    <PersonalAgentBrowserVisits clientId={clientId} turn={turn} canInteract={canInteract} />
     <PersonalAgentResults clientId={clientId} turn={turn} canInteract={canInteract} />
     {turn.status === 'running' && <p className="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 py-2 text-sm text-default-500" role="status"><Icon icon="lucide:ellipsis" className="h-5 w-5 motion-safe:animate-pulse" />{t('personalAgentThinking')}</p>}
     {turn.status === 'error' && answers.length === 0 && <p className="mx-auto max-w-3xl text-sm text-danger" role="alert">{t('personalAgentTaskFailed')}</p>}

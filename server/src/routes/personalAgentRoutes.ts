@@ -1,3 +1,4 @@
+import { PersonalAgentBrowserError, PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
@@ -9,6 +10,7 @@ import { savePersonalAgentGoal } from '../services/personalAgentGoals';
 export interface PersonalAgentRouteOptions {
   store: RoomStore;
   results?: PersonalAgentResultService;
+  browser?: PersonalAgentBrowserService;
   logger: Logger;
   getClientId: (req: Request) => string | null;
   authorizeClientRequest: (req: Request, res: Response, clientId: string, endpoint: string) => Promise<boolean>;
@@ -38,6 +40,7 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     } catch (error) {
       if (error instanceof PersonalAgentGoalConflictError) return res.status(409).json({ error: error.message });
       if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: error.existingMemory ? 'personal_memory_duplicate' : 'personal_memory_conflict', ...(error.existingMemory ? { existingMemory: error.existingMemory } : {}) });
+      if (error instanceof PersonalAgentBrowserError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof RangeError) return res.status(400).json({ error: error.message });
       options.logger.error('Personal agent request failed', { error, clientId, endpoint: req.path });
       return res.status(500).json({ error: 'Unable to update your personal agent' });
@@ -64,6 +67,34 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     res.setHeader('Content-Type', found.result.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(found.result.filename)}`);
     return res.send(found.body);
+  }));
+
+  app.get('/api/personal-agent/browser-observations', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    return res.json(await options.browser.list(profile.clientId, req.query));
+  }));
+  app.get('/api/personal-agent/browser-observations/:id/image', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(await options.browser.image(profile.clientId, req.params.id));
+  }));
+  app.get('/api/personal-agent/browser/:roomId', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    return res.json(await options.browser.current(profile.clientId, req.params.roomId));
+  }));
+  app.post('/api/personal-agent/browser/:roomId/take-control', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    return res.json(await options.browser.takeControl(profile.clientId, req.params.roomId));
+  }));
+  app.patch('/api/personal-agent/browser/:roomId/control', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    return res.json(await options.browser.manual(profile.clientId, req.params.roomId, req.body?.control, req.body || {}));
+  }));
+  app.post('/api/personal-agent/browser/:roomId/release-control', withProfile(async (req, res, profile) => {
+    if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
+    return res.json(await options.browser.releaseControl(profile.clientId, req.params.roomId, req.body?.control));
   }));
 
   app.get('/api/personal-agent/memories', withProfile(async (req, res, profile) =>
