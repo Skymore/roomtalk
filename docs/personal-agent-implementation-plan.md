@@ -105,7 +105,7 @@ Finish and verify one releasable module per iteration. Keep RoomTalk account own
 | 2 | Conversational goals and background tasks | Complete: shared scheduling, chat tools, milestones, actual execution status, cancellation and outcome completion; verified with real Codex |
 | 3 | Memory organization | Complete: topic handoff, duplicate-title checks, reviewed merge, retained provenance and conversation binding; verified with real Codex |
 | 4 | Rich results | Complete and deployed: persistent plan, document and web cards with previews, downloads and cross-conversation retrieval |
-| 5 | Browser and takeover | Implemented: actual Chromium, shared user control, immutable sourced screenshots and encrypted login state; release validation in progress |
+| 5 | Browser and takeover | Deployed: actual Chromium, shared user control, immutable sourced screenshots and encrypted login state; actual Codex verified |
 | 6 | Suggestions and tracking | Source-backed suggestions with accept/dismiss, condition checks, deduplicated changes and notification preferences |
 
 ### Module 1: conversation management
@@ -167,4 +167,16 @@ Follow OpenMuse's [browser source card](https://github.com/CopilotKit/openmuse/b
 
 Append-only migration `0039_personal_agent_browser` stores immutable source URL/title/screenshot records per agent turn. Authenticated screenshot reads replay the original observation. Cookies, localStorage and IndexedDB are encrypted with the existing Codex cipher and restored when reopening a context. Clearing/deleting source history cleans screenshot objects and login state. No provider selection or approval UI is introduced.
 
-Validation: actual Chromium engine; 32 Python CLI/broker tests; 5 browser service/API tests; 149 existing repository/session tests; 18 client tests; both builds and affected ESLint passed. All five Personal Agent Chrome flows passed using actual PostgreSQL, Redis, object storage and Chromium with simulated model turns. Runner 0.1.60 and E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` are published; direct template checks verified actual Chromium, screenshot bytes and browser CLI commands. Actual Codex and production release evidence are recorded separately.
+Validation: actual Chromium engine; 32 Python CLI/broker tests; 5 browser service/API tests; 15 actual PostgreSQL tests; 149 existing repository/session tests; 18 client tests; both builds and affected ESLint passed. All five Personal Agent Chrome flows passed using actual PostgreSQL, Redis, object storage and Chromium with simulated model turns. Runner 0.1.60 and E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` are published; direct template checks verified actual Chromium, screenshot bytes and browser CLI commands. Actual Codex and production release evidence are recorded separately.
+
+
+### Module 6 implementation reference (pending)
+
+OpenMuse [engine/service.ts](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/server/src/engine/service.ts) generates source-backed ideas, including plans for unfinished goals without milestones. Accepted ideas associate a task; dismissed or already-handled sources are excluded. RoomTalk will use its existing personal goals, memories and results, with evidence, editable acceptance, dismissal and idempotent task admission, without importing sample mailbox data or adding third-party accounts.
+
+Tracking supports page changes, text presence and USD price thresholds. Record the first baseline, then notify only on a changed page or a false-to-true condition transition; unchanged outcomes remain quiet. Preserve actual source URLs/check times, handle failures separately from changes, and support bounded backoff and pause/resume. Follow [BackgroundUpdates](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/mobile/src/background-updates.tsx) for concise read/dismissible chat updates and background-update preferences. Use existing PostgreSQL execution queues and the browser environment; compare normalized page text directly rather than adding hashing/signature machinery.
+
+
+Module 5 release verification: App and AI Worker are healthy on image `sha256:107a55843d87c5fb36aedf2221764fd055271c8e67d530b0c16ad647daa38e93`; migration `0039_personal_agent_browser` and browser-v1 artifact pins are active. Two actual fullAccess `codex-app-server` turns opened a real HTTP page, shared user input in the same browser, recovered the withheld value in the next model turn and confirmed persistence after reload. Closing and reopening Chromium restored that value from the encrypted profile. Original visit sources remain unchanged. Temporary goals, rooms, sandboxes and six screenshot objects were removed; no fixtures or active leases remain. Mobile zoomed clicks passed. Loopback and both public `/api/status` endpoints return HTTP 200 with `ready: true`.
+
+Module 5 CI correction: the old SQL contract simulator lacked the new browser-session cleanup statement, failing two historical clear/media-cleanup tests. The simulator now recognizes it; all 43 store-contract tests pass, alongside 15 actual PostgreSQL tests. This is test-only and requires no rebuild of the verified runtime.

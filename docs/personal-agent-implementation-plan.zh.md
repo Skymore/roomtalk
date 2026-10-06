@@ -111,7 +111,7 @@ CLI 支持 `roomtalk memory list/search/save/forget`；更新和删除携带读�
 | 2 | 对话中的目标与后台任务 | 已完成：共用日程、聊天工具、里程碑、真实执行状态、取消和成果完成；已用真实 Codex 验证 |
 | 3 | 记忆整理 | 已完成：主题交接、同名重复校验、审阅合并、来源保留和聊天关联；真实 Codex 已验证 |
 | 4 | 结果卡片 | 已完成并部署：持久计划、文档和网页卡片，支持预览、下载和跨聊天读取 |
-| 5 | 浏览器与接管 | 已实现：实际 Chromium、同会话接管、不可变来源截图、加密登录状态；正在发布验证 |
+| 5 | 浏览器与接管 | 已完成并部署：实际 Chromium、同会话接管、不可变来源截图、加密登录状态；真实 Codex 已验证 |
 | 6 | 主动建议与持续追踪 | 基于实际来源生成建议，支持接受/忽略；条件检查、变化去重与通知偏好 |
 
 ### 模块 1：聊天管理
@@ -173,4 +173,16 @@ CI 修复：结果卡片单测隔离 Iconify 异步图标加载，避免 jsdom �
 
 迁移 `0039_personal_agent_browser` 持久化每次代理操作的来源 URL、标题和截图；回放使用当时记录，不替换成之后的网页。登录 cookies、localStorage 和 IndexedDB 使用既有 Codex 加密密钥保存，关闭浏览器后重新打开时恢复。截图通过账号认证接口读取，清空聊天或删除房间会移除相应来源对象和登录状态。界面保留简单聊天入口，无执行器选择或权限审批。
 
-验证：真实 Chromium 引擎检查、Python CLI/broker 32 项、浏览器服务/API 5 项、既有 PostgreSQL 仓储及回合 149 项、客户端 18 项、双方构建和相关 ESLint 通过。完整 Chrome 个人 Agent 5 个流程通过；浏览器流程使用实际 PostgreSQL、Redis、对象存储及 Chromium，模型回合为模拟 runner。Runner 0.1.60 和 E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` 已发布并直接验证实际 Chromium、截图与 CLI 命令。真实 Codex 与发布结果另行记录。
+验证：真实 Chromium 引擎检查、Python CLI/broker 32 项、浏览器服务/API 5 项、实际 PostgreSQL 15 项、既有仓储及回合 149 项、客户端 18 项、双方构建和相关 ESLint 通过。完整 Chrome 个人 Agent 5 个流程通过；浏览器流程使用实际 PostgreSQL、Redis、对象存储及 Chromium，模型回合为模拟 runner。Runner 0.1.60 和 E2B `roomtalk-code-agent-2026-10-06-personal-browser-v1` 已发布并直接验证实际 Chromium、截图与 CLI 命令。真实 Codex 与发布结果另行记录。
+
+
+### 模块 6 实现依据（待实现）
+
+OpenMuse 的 [engine/service.ts](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/server/src/engine/service.ts) 从实际来源生成建议，其中没有里程碑的未完成目标会得到制定计划的建议；接受建议会关联执行任务，已接受、已忽略或已处理的来源不会重复生成。RoomTalk 初期使用已有个人目标、记忆和结果来源，不接入演示邮箱或新增第三方账号。建议应展示理由与来源，用户可修改任务文字后接受，或忽略；重复接受必须返回同一任务。
+
+同一源码的持续追踪支持页面变化、包含指定文字以及美元价格阈值。首次观察作为基线；文字/价格条件由未满足变为满足才提醒，同一结果不重复提醒，重新变为不满足后可以再次触发。保留实际页面来源和检查时间，检查失败不当作页面变化；沿用有界退避和明确暂停/恢复。通知参考 [BackgroundUpdates](https://github.com/CopilotKit/openmuse/blob/73a714963b57e5cd1747fd3fbc6833e09a36b81a/apps/mobile/src/background-updates.tsx) 的简短聊天更新，提供已读/关闭与背景更新偏好。使用现有 PostgreSQL 队列和浏览器执行环境，页面指纹采用规范化文字比较，无需新增哈希或签名系统。
+
+
+模块 5 发布验证：生产 App 和 AI Worker 使用镜像 `sha256:107a55843d87c5fb36aedf2221764fd055271c8e67d530b0c16ad647daa38e93`，迁移 `0039_personal_agent_browser` 和 browser-v1 artifact 已生效。已有订阅在 `codex-app-server` 下完成两个真实 fullAccess 回合：创建并打开实际 HTTP 页面；用户接管输入一个未写入下一次提示的值；下一回合从同一浏览器读回该值并重新加载确认；关闭后以数据库中的加密状态恢复浏览器仍读到该值。旧来源 URL 保持不变。已移除临时目标、聊天、沙箱和六张来源截图，确认无剩余 fixture 或活动 lease。手机缩放后点击验证通过；本地及两个公网 `/api/status` 均为 HTTP 200、`ready: true`。
+
+模块 5 CI 修复：旧 SQL 仓储模拟器未识别新增的浏览器状态清理语句，导致清空历史/媒体清理的两项旧测试失败；已补齐测试模拟器，43 项仓储契约测试通过，实际 PostgreSQL 15 项已通过。此修复只有测试，不需重建已验证的运行版本。
