@@ -3260,10 +3260,13 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       }
       // This fixture intentionally stops before the 0009 cutover, while the
       // current PostgresStore selects every additive room column. Add only the
-      // later nullable projection column needed to exercise that old boundary.
+      // later nullable projection columns needed to exercise that old boundary.
       await migrationPool.query(`ALTER TABLE rooms
         ADD COLUMN IF NOT EXISTS code_agent_last_turn_id TEXT,
-        ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT`);
+        ADD COLUMN IF NOT EXISTS code_agent_workspace_revision_id TEXT,
+        ADD COLUMN IF NOT EXISTS personal_agent_owner_id TEXT,
+        ADD COLUMN IF NOT EXISTS personal_agent_thread_kind TEXT,
+        ADD COLUMN IF NOT EXISTS personal_agent_goal_id TEXT`);
       await migrationPool.query(`ALTER TABLE room_messages
         ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
@@ -3328,6 +3331,12 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         [roomId, JSON.stringify({ contextMessages: [message(roomId, 'legacy-context')] }), createdAt],
       );
 
+      // These columns only let the current store seed the historical fixture.
+      // Remove them so 0032 still creates and validates its actual schema.
+      await migrationPool.query(`ALTER TABLE rooms
+        DROP COLUMN personal_agent_owner_id,
+        DROP COLUMN personal_agent_thread_kind,
+        DROP COLUMN personal_agent_goal_id`);
       for (const migration of POSTGRES_MIGRATIONS.slice(aggregateMigrationIndex)) {
         await migrationPool.query(migration.sql);
       }
