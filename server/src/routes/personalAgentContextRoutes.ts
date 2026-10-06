@@ -1,3 +1,4 @@
+import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory } from '../services/personalAgentMemory';
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
@@ -13,7 +14,7 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
   roomContext: CodeAgentRoomContextService;
   logger: Logger;
 }) => {
-  const run = async (req: Request, res: Response, write: boolean) => {
+  const run = async (req: Request, res: Response, write: boolean, library = false) => {
     const token = (req.header('authorization') || '').match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
     const claims: CodeAgentRoomContextTokenClaims | null = token ? options.roomContext.verifyTurnToken(token) : null;
     if (!claims) {
@@ -32,6 +33,14 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
       if (write && !codeAgentModeAllowsWriteTools(claims.mode)) {
         throw new CodeAgentRoomContextError('This agent mode cannot update personal memory', 403, 'personal_memory_read_only');
       }
+      if (library) {
+        if (!write) return res.json(await readPersonalMemories(options.store, claims.clientId, req.query));
+        if (req.body?.action === 'forget') return res.json(await forgetPersonalMemory(options.store, claims.clientId, req.body.id, req.body.expectedUpdatedAt));
+        if (req.body?.action !== 'save') throw new RangeError('Invalid memory action');
+        return res.json({ memory: await savePersonalMemory(options.store, claims.clientId, req.body, {
+          label: 'Remembered in conversation', roomId: claims.roomId, turnId: claims.turnId,
+        }) });
+      }
       let profile;
       if (write) {
         const memory = req.body?.memory;
@@ -48,6 +57,8 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
       }
       res.json({ memory: profile.memory, updatedAt: profile.updatedAt });
     } catch (error) {
+      if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: 'personal_memory_conflict' });
+      if (error instanceof RangeError) return res.status(400).json({ error: error.message, code: 'personal_memory_invalid' });
       if (error instanceof CodeAgentRoomContextError) {
         res.status(error.statusCode).json({ error: error.message, code: error.code });
         return;
@@ -57,6 +68,8 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
     }
   };
   const path = `${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}${PERSONAL_AGENT_MEMORY_API_SUFFIX}`;
+  app.get(`${path}/records`, (req, res) => run(req, res, false, true));
+  app.patch(`${path}/records`, (req, res) => run(req, res, true, true));
   app.get(path, (req, res) => run(req, res, false));
   app.patch(path, (req, res) => run(req, res, true));
 };

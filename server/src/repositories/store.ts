@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -774,6 +774,9 @@ export interface DurableRoomStore {
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
   ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
   updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
+  readPersonalAgentMemories?(clientId: string, options?: { query?: string; kind?: string; limit?: number; offset?: number }): Promise<{ memories: PersonalAgentMemory[]; total: number }>;
+  savePersonalAgentMemory?(memory: PersonalAgentMemory, expectedUpdatedAt?: string): Promise<PersonalAgentMemory | null>;
+  deletePersonalAgentMemory?(clientId: string, id: string, expectedUpdatedAt: string): Promise<boolean>;
   readPersonalAgentRooms?(clientId: string): Promise<Room[]>;
   createPersonalAgentThread?(clientId: string, name: string): Promise<Room>;
   readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
@@ -997,6 +1000,19 @@ export class CompositeRoomStore implements RoomStore {
 
   updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string) {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
+  }
+
+  readPersonalAgentMemories(clientId: string, options?: { query?: string; kind?: string; limit?: number; offset?: number }) {
+    return this.durableStore.readPersonalAgentMemories?.(clientId, options) || Promise.resolve({ memories: [], total: 0 });
+  }
+
+  savePersonalAgentMemory(memory: PersonalAgentMemory, expectedUpdatedAt?: string) {
+    if (!this.durableStore.savePersonalAgentMemory) throw new Error('Personal memory requires PostgreSQL');
+    return this.durableStore.savePersonalAgentMemory(memory, expectedUpdatedAt);
+  }
+
+  deletePersonalAgentMemory(clientId: string, id: string, expectedUpdatedAt: string) {
+    return this.durableStore.deletePersonalAgentMemory?.(clientId, id, expectedUpdatedAt) || Promise.resolve(false);
   }
 
   readPersonalAgentRooms(clientId: string) {

@@ -90,11 +90,11 @@ export class PersonalAgentScheduler {
       personalAgentThreadKind: 'task',
       personalAgentGoalId: goal.id,
       codeAgentAccess: 'owner',
-      codeAgentMode: mainRoom.codeAgentMode || this.options.mode || 'edit',
+      codeAgentMode: 'fullAccess',
     };
     const settings = normalizeCodexRunSettings(
       this.options.codexRunSettings?.model, this.options.codexRunSettings?.reasoningEffort,
-      this.options.codexRunSettings?.permissionMode || room.codeAgentMode, this.options.codexRunSettings?.serviceTier,
+      'fullAccess', this.options.codexRunSettings?.serviceTier,
     );
     const message = {
       ...createUserMessage({ id: this.createId(), clientId: goal.clientId, roomId: room.id, content: goal.prompt, now }),

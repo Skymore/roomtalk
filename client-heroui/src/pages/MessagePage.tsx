@@ -44,6 +44,7 @@ import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
 import { CodeAgentRoomView } from "../components/CodeAgentRoomView";
+import { PersonalAgentConversation } from '../components/PersonalAgentConversation';
 import { PersonalAgentView } from "../components/PersonalAgentView";
 import { StatusMessage } from "../components/StatusMessage";
 import { useRoomSession } from "../hooks/useRoomSession";
@@ -1365,11 +1366,17 @@ export const MessagePage: React.FC = () => {
           return <WelcomeView onEnterRooms={() => handleViewChange("rooms")} />;
         }
 
+        if (currentRoom.personalAgentOwnerId) return <PersonalAgentConversation key={currentRoom.id}
+          room={currentRoom} clientId={clientId} username={username} roomPermissions={roomPermissions}
+          isRoomSessionReady={isCurrentRoomSessionReady} canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+          ensureRoomSessionReady={ensureRoomSessionReadyForOperation} messageSyncRequestId={roomSession.messageSyncRequestId}
+          onRoomUpdated={applyServerRoom} onRoomDeleted={applyRoomRemoval} onRoomAccessDenied={applyRoomRemoval}
+          showError={setError} onBack={() => { clearRoomUrlParam(); handleViewChange('personal'); }} />;
+
         const codeAgentBackend = getCodeAgentBackend(currentRoom, featureFlags.codeAgent.defaultBackend);
         if (codeAgentBackend) {
           return (
             <CodeAgentRoomView
-              personalAgent={Boolean(currentRoom.personalAgentOwnerId)}
               currentRoom={currentRoom}
               memberCount={memberCount}
               isRestoringRoom={isCurrentRoomSessionRestoring}
@@ -1384,7 +1391,7 @@ export const MessagePage: React.FC = () => {
               clientId={clientId}
               backend={codeAgentBackend}
               defaultBackend={featureFlags.codeAgent.defaultBackend}
-              availableBackends={currentRoom.personalAgentOwnerId ? ['codex-app-server'] : getCodeAgentAvailableBackends(featureFlags)}
+              availableBackends={getCodeAgentAvailableBackends(featureFlags)}
               availableModes={getCodeAgentAvailableModes(featureFlags)}
               defaultMode={getCodeAgentDefaultMode(featureFlags)}
               handleCopyToClipboard={handleCopyToClipboard}
@@ -1448,7 +1455,7 @@ export const MessagePage: React.FC = () => {
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f5f4ed] text-[#141413] dark:bg-[#141413] dark:text-[#faf9f5]"> {/* 确保根容器是 flex 列且占满屏幕高度 */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <DesktopSidebar
+        {view !== 'personal' && !(view === 'chat' && currentRoom?.personalAgentOwnerId) && <DesktopSidebar
           clientId={clientId}
           username={username}
           view={view}
@@ -1471,7 +1478,7 @@ export const MessagePage: React.FC = () => {
           isCodeAgentEnabled={featureFlags.codeAgent.enabled}
           codeAgentDefaultBackend={featureFlags.codeAgent.defaultBackend}
           onModalTaskStart={clearStatusForTask}
-        />
+        />}
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
         <main aria-labelledby="main-view-title" className="flex min-h-0 min-w-0 flex-1 overflow-hidden md:min-w-[480px]">
@@ -1483,7 +1490,7 @@ export const MessagePage: React.FC = () => {
       <StatusMessage error={error} success={success} setError={setError} />
 
       {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
-      <BottomNav view={view} setView={handleViewChange} currentRoom={currentRoom} />
+      {view !== 'personal' && !(view === 'chat' && currentRoom?.personalAgentOwnerId) && <BottomNav view={view} setView={handleViewChange} currentRoom={currentRoom} />}
 
       {/* 加入房间确认弹窗 - 恢复之前的属性传递 */}
       {roomToJoin && (

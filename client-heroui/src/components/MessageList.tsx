@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react';
 import { cancelQueuedCodeAgentInput, clientId, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, restoreCodeAgentCheckpoint, sendMessage, sendSticker, setMessageReaction, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, MessageReactionType, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
+import { PersonalAgentMessage, PersonalAgentTurn } from './PersonalAgentMessage';
 import { AgentTurnItem } from './AgentTurnItem';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
@@ -124,7 +125,7 @@ interface MessageListProps {
   roomPermissions?: RoomPermissions | null;
   bottomInsetPx?: number;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
-  presentation?: 'chat' | 'code-agent';
+  presentation?: 'chat' | 'code-agent' | 'personal-agent';
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
@@ -271,7 +272,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const workspaceRoot = workspaceSnapshot?.workspaceRoot ?? null;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
-  const aiRequestRoomKind: AIRequestRoomKind = presentation === 'code-agent' ? 'codeAgent' : 'chat';
+  const aiRequestRoomKind: AIRequestRoomKind = presentation !== 'chat' ? 'codeAgent' : 'chat';
   const getAIRequestSettingsForRoom = useCallback(() => (
     getRoomAIRequestSettingsForKind(roomId, aiRequestRoomKind)
   ), [aiRequestRoomKind, roomId]);
@@ -1195,7 +1196,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // ... loading/empty states ...
   // ... return statement with JSX ...
 
-  const renderMessage = useCallback((message: Message, turnGrouped = false) => (
+  const renderMessage = useCallback((message: Message, turnGrouped = false) => presentation === 'personal-agent' ? (
+    <PersonalAgentMessage key={message.id} message={message} onRetry={handleRetryDelivery} onOpenFile={onOpenWorkspaceFile} canInteract={canUseRetainedRoomAccess} />
+  ) : (
     <MessageItem
       key={turnGrouped ? undefined : message.id}
       message={message}
@@ -1224,7 +1227,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       isInteractionDisabled={!canUseRetainedRoomAccess}
       ensureRoomOperationReady={ensureRoomOperationReady}
     />
-  ), [aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
+  ), [presentation, aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
     handleCancelQueuedMessage, handleOpenDeleteModal, handleOpenEditModal, handleRefreshAI, handleRetryDelivery,
     handleSetReaction, handleSteerQueuedMessage, handleUserAction, onOpenWorkspaceFile, onReply,
     roleMemberByClientId, roomCreatorId, roomPermissions, toolResultPairing.resultByCallId, workspaceRoot]);
@@ -1232,7 +1235,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   return (
     <>
-      {presentation !== 'code-agent' && (
+      {presentation === 'chat' && (
       <div className="absolute right-3 top-3 z-20 flex max-w-[min(28rem,calc(100%-1.5rem))] flex-col items-end gap-1.5">
         <div className="flex items-center gap-1.5">
           <Dropdown placement="bottom-end">
@@ -1324,7 +1327,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           aria-live={isMessageLogLive ? 'polite' : 'off'}
           aria-relevant="additions"
           aria-busy={isLoading}
-          className={`relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 ${presentation === 'code-agent' ? 'pt-3' : 'pt-14'}`}
+          className={`relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 ${presentation !== 'chat' ? 'pt-3' : 'pt-14'}`}
           onScroll={handleScroll}
         >
           <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full shrink-0 flex-col">
@@ -1360,6 +1363,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
                   if (item.kind === 'agent-turn') {
+                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} turn={item.turn} messages={item.messages} renderMessage={renderMessage} />;
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}
@@ -1384,12 +1388,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             <div ref={messagesEndRef} />
           </div>
         </div>
-        {presentation === 'code-agent' && pendingQueueMessages.length > 0 && (
+        {presentation !== 'chat' && pendingQueueMessages.length > 0 && (
           <div
             data-testid="code-agent-pending-queue"
             className="z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto bg-[#f5f4ed]/95 px-4 pb-2 pt-2 backdrop-blur dark:bg-[#141413]/95"
           >
-            {pendingQueueMessages.map(message => (
+            {pendingQueueMessages.map(message => presentation === 'personal-agent' ? renderMessage(message) : (
               <MessageItem
                 key={`pending:${message.id}`}
                 message={message}

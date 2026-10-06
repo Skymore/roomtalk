@@ -1168,6 +1168,7 @@ export function registerRoomHandlers({
     const hasCodeAgentAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentAccess');
     if (auth.actor.room.personalAgentOwnerId && (
       (hasCodeAgentAccessUpdate && data.codeAgentAccess !== 'owner')
+      || (Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentMode') && data.codeAgentMode !== 'fullAccess')
       || (Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentBackend') && data.codeAgentBackend !== 'codex-app-server')
     )) {
       callback?.({ success: false, error: 'Personal agent conversations use the private Codex workspace' });

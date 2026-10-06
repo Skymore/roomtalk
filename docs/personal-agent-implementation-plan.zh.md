@@ -2,12 +2,12 @@
 
 [English](personal-agent-implementation-plan.md)
 
-状态：已完成并部署
-更新：2026-10-05
+状态：首发已部署，独立界面和记忆库升级验证中
+更新：2026-10-06
 
 ## 产品范围
 
-在 RoomTalk 增加独立的个人 Agent 入口。第一版每个登录账号一个 Agent，采用 Muse 的长期主聊天、专题聊天、头像状态、目标追踪和活动记录布局。执行器固定为 `codex-app-server`，复用现有 E2B 工作区、回合、审批、队列、文件和成果能力。
+在 RoomTalk 增加独立的个人 Agent 入口。第一版每个登录账号一个 Agent，采用 Muse 的长期主聊天、专题聊天、头像状态、目标追踪和活动记录布局。执行器固定为 `codex-app-server`，复用 E2B 执行、回合、队列和文件。个人 Agent 固定完全访问，个人界面不显示模型选择、权限模式或工具审批。
 
 本次完成后部署现有本地生产服务，并验证公网实际行为。本版不引入 OpenMuse/CopilotKit Gateway，也不增加邮箱、支付、连接器市场或其他运行后端。
 
@@ -39,7 +39,7 @@
 - 桌面侧栏和手机底栏增加“个人 Agent”。
 - 个人首页显示头像、名字、当前工作状态与主聊天入口。
 - 聊天、目标、活动、记忆/设置分区保持简洁；专题聊天可重新打开。
-- 文件和成果沿用当前工作区面板；开发工具收到高级入口。
+- 独立 `PersonalAgentConversation` 不渲染 `CodeAgentRoomView`，隐藏普通房间导航和工作区面板。对话气泡、简短进度、发送/停止、附件和结果链接组成聊天页；停止保留草稿。
 - 所有按钮连接真实持久化或运行能力，反馈沿用 `StatusMessage`。
 
 ## 实施步骤
@@ -77,3 +77,16 @@
 - 生产 template/artifact pin 均为 `roomtalk-code-agent-2026-10-05-personal-memory-v1`；engine source pin 保持 `0b5e44eb29ad1bec89b2143737f6917aafa79359`。
 - 使用已有 Codex 订阅连接完成真实 `codex-app-server` 回合：沙箱执行 `roomtalk memory get/set`，读回与 PostgreSQL 记忆一致；回合及最终消息为 `complete`。等待执行 lease 释放后，已删除临时目标/任务/沙箱，并通过 CAS 移除测试记忆，保留原有内容。
 - 完成推送通过服务测试验证多设备扇出与所有者隔离；本次没有验证物理设备上的通知展示。
+
+## 2026-10-06 独立 UI 与 OpenMuse 记忆库升级
+
+已查看 [Muse 官方设计页](https://introducing.muse.ai/) 的活动、目标和结果截图，并检查两套 OpenMuse 源码：
+
+- [CopilotKit/OpenMuse](https://github.com/CopilotKit/openmuse/tree/73a714963b57e5cd1747fd3fbc6833e09a36b81a)：`remember_fact` 保存用户明确提供或确认的偏好，保留来源和时间，同一账号共享。
+- [diggerhq/OpenMuse](https://github.com/diggerhq/openmuse/blob/2fff664dac90f8d24b67b754912485106660c034/scripts/templates/memory.ts)：个人 profile 保存跨话题偏好；topics 保存概要、决策、来源、完成和待办，版本检查防止并行覆盖。
+
+追加 `0033_personal_agent_memory_library`，PostgreSQL 是记忆权威。条目分为偏好、确认的信息、话题笔记，保存来源对话/回合与时间。用户可以搜索、分页查看、修正、忘记，并打开仍存在的来源对话。原有“关于你”内容保留，个人资料和条目编辑都检查最后读取的更新时间。
+
+每次执行读取最新资料、常用偏好和当前任务匹配的摘要，完整条目由 agent 按需查询。采用支持中文的关键词检索，无需额外 embedding API key；没有宣称向量语义检索。正常 Codex 回合保存用户确认的长期信息，沉淀长话题的决策和后续工作；修改前检索已有条目，冲突后重读，只有工具成功才报告已记住。忘记后不从旧聊天擅自重建。
+
+CLI 支持 `roomtalk memory list/search/save/forget`；更新和删除携带读取时间，来源由服务端生成。broker 验证账号、私密聊天和当前执行 lease。runner 为 `0.1.56`，E2B artifact 为 `roomtalk-code-agent-2026-10-06-personal-memory-library-v1`。

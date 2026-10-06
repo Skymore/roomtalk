@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { PersonalAgentGoalConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
+import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory } from '../services/personalAgentMemory';
 import { nextPersonalAgentGoalRunAt } from '../services/personalAgentSchedule';
 
 export interface PersonalAgentRouteOptions {
@@ -55,7 +56,7 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (!store.ensurePersonalAgentProfile) return res.status(503).json({ error: 'Personal agents are unavailable' });
       return await handler(req, res, await store.ensurePersonalAgentProfile(clientId));
     } catch (error) {
-      if (error instanceof PersonalAgentGoalConflictError) return res.status(409).json({ error: error.message });
+      if (error instanceof PersonalAgentGoalConflictError || error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message });
       if (error instanceof RangeError) return res.status(400).json({ error: error.message });
       options.logger.error('Personal agent request failed', { error, clientId, endpoint: req.path });
       return res.status(500).json({ error: 'Unable to update your personal agent' });
@@ -69,6 +70,15 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     return res.json({ profile, rooms, goals });
   }));
 
+  app.get('/api/personal-agent/memories', withProfile(async (req, res, profile) =>
+    res.json(await readPersonalMemories(store, profile.clientId, req.query))));
+  app.post('/api/personal-agent/memories', withProfile(async (req, res, profile) =>
+    res.status(201).json({ memory: await savePersonalMemory(store, profile.clientId, { ...req.body, id: undefined }, { label: 'Added by you' }) })));
+  app.patch('/api/personal-agent/memories/:id', withProfile(async (req, res, profile) =>
+    res.json({ memory: await savePersonalMemory(store, profile.clientId, { ...req.body, id: req.params.id }, { label: 'Edited by you' }) })));
+  app.delete('/api/personal-agent/memories/:id', withProfile(async (req, res, profile) =>
+    res.json(await forgetPersonalMemory(store, profile.clientId, req.params.id, req.body?.expectedUpdatedAt))));
+
   app.put('/api/personal-agent/profile', withProfile(async (req, res, profile) => {
     const updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>> = {};
     for (const [key, limit] of [['name', 100], ['avatar', 64], ['instructions', 8000], ['memory', 16000]] as const) {
@@ -76,7 +86,10 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
         updates[key] = textField(req.body[key], key, limit, key === 'instructions' || key === 'memory');
       }
     }
-    const updated = await store.updatePersonalAgentProfile!(profile.clientId, updates);
+    const expectedUpdatedAt = req.body?.expectedUpdatedAt;
+    if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(expectedUpdatedAt)))) throw new RangeError('Invalid expectedUpdatedAt');
+    const updated = await store.updatePersonalAgentProfile!(profile.clientId, updates, expectedUpdatedAt);
+    if (!updated) throw new PersonalAgentMemoryConflict('Your preferences changed. Refresh before saving.');
     return res.json({ profile: updated });
   }));
 

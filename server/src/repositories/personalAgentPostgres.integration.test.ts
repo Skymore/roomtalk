@@ -76,6 +76,31 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.notEqual((await store.getPersonalAgentProfile(owner))!.updatedAt, profile.updatedAt);
   });
 
+  it('shares searchable memory across conversations with owner isolation, pagination and versioned corrections', async () => {
+    const profile = await store.ensurePersonalAgentProfile(owner);
+    const thread = await store.createPersonalAgentThread(owner, 'Side conversation');
+    assert.equal(thread.codeAgentMode, 'fullAccess');
+    assert.equal((await store.getRoomById(profile.mainRoomId))!.codeAgentMode, 'fullAccess');
+    const entry = await store.savePersonalAgentMemory({ id: randomUUID(), clientId: owner, kind: 'preference',
+      title: '语言与计划', content: '用中文回答，预算为 100% 确认值', source: 'Remembered in conversation',
+      sourceRoomId: thread.id, sourceTurnId: 'test-turn', createdAt: now, updatedAt: now });
+    assert.ok(entry);
+    assert.equal((await store.readPersonalAgentMemories(owner, { query: '中文' })).total, 1);
+    assert.equal((await store.readPersonalAgentMemories(owner, { query: '100%' })).total, 1);
+    assert.equal((await store.readPersonalAgentMemories(owner, { query: '100_' })).total, 0);
+    assert.equal((await store.readPersonalAgentMemories('another-owner')).total, 0);
+    assert.equal(await store.savePersonalAgentMemory({ ...entry, clientId: 'another-owner', content: 'Overwrite' }, entry.updatedAt), null);
+    const concurrent = await Promise.all(['中文和英文', '中文和日文'].map(content => store.savePersonalAgentMemory({ ...entry, content }, entry.updatedAt)));
+    assert.equal(concurrent.filter(Boolean).length, 1);
+    assert.equal(await store.deletePersonalAgentMemory(owner, entry.id, entry.updatedAt), false);
+    const current = (await new PostgresStore(pool, logger as any).readPersonalAgentMemories(owner, { limit: 1 })).memories[0];
+    assert.equal(current.sourceRoomId, thread.id);
+    assert.equal((await store.readPersonalAgentMemories(owner, { offset: 1 })).memories.length, 0);
+    assert.equal(await store.deletePersonalAgentMemory('another-owner', current.id, current.updatedAt), false);
+    assert.equal(await store.deletePersonalAgentMemory(owner, current.id, current.updatedAt), true);
+    assert.equal((await store.readPersonalAgentMemories(owner)).total, 0);
+  });
+
   it('atomically admits exactly one scheduled run with a durable prompt and survives process recreation', async () => {
     const goal: PersonalAgentGoal = {
       id: randomUUID(), clientId: owner, title: 'Daily report', prompt: 'Prepare the report',

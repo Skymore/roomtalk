@@ -1,4 +1,5 @@
 import React from 'react';
+import { PersonalAgentMemory } from './PersonalAgentMemory';
 import { Button, Chip, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Spinner, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +18,7 @@ interface PersonalAgentViewProps {
   roomUpdates: Room[];
   onRoomSelect: (room: Room) => void;
   onOpenConnections: () => void;
+  onBack?: () => void;
   showSuccess: (message: string) => void;
   showError: (message: string) => void;
 }
@@ -32,13 +34,13 @@ const tabs: { key: AgentTab; icon: string; label: string }[] = [
 const panelClass = 'rounded-2xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
 const mutedClass = 'text-[#5e5d59] dark:text-[#b0aea5]';
 const roomStatusKey = (room: Room) => room.codeAgentStatus === 'running'
-  ? 'personalAgentWorking' : room.codeAgentStatus === 'error' ? 'personalAgentNeedsAttention' : 'personalAgentReady';
+  ? 'personalAgentWorking' : room.codeAgentStatus === 'error' ? 'personalAgentNeedsAttention' : 'personalAgentConversationUpdated';
 const newGoal = (): PersonalAgentGoalInput => ({
   title: '', prompt: '', schedule: 'manual', time: '09:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
 
 export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
-  clientId, roomUpdates, onRoomSelect, onOpenConnections, showSuccess, showError,
+  clientId, roomUpdates, onRoomSelect, onOpenConnections, onBack, showSuccess, showError,
 }) => {
   const { t, i18n } = useTranslation();
   const [snapshot, setSnapshot] = React.useState<PersonalAgentSnapshot | null>(null);
@@ -121,33 +123,23 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
 
   return (
     <div className="h-full w-full overflow-y-auto" data-testid="personal-agent-view">
-      <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-8 sm:py-9">
+      <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-8 sm:py-9">
+        <div className="flex items-center justify-between"><Button size="sm" variant="light" onPress={onBack} startContent={<Icon icon="lucide:arrow-left" />}>RoomTalk</Button><Button isIconOnly variant="light" aria-label={t('settings')} onPress={onOpenConnections}><Icon icon="lucide:settings" className="h-5 w-5" /></Button></div>
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#e8e6dc] text-3xl dark:bg-[#30302e]" aria-hidden="true">{snapshot.profile.avatar}</span>
+            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#e8e6dc] text-3xl dark:bg-[#30302e]" aria-hidden="true">{snapshot.profile.avatar}</span>
             <div>
               <p className={`text-xs font-medium ${mutedClass}`}>{t('personalAgent')}</p>
               <h2 className="font-serif text-3xl">{snapshot.profile.name}</h2>
-              <p className={`mt-1 flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${workingCount ? 'animate-pulse bg-secondary' : isConnected ? 'bg-success' : 'bg-default-400'}`} />
-                {workingCount ? t('personalAgentWorkingCount', { count: workingCount }) : isConnected ? t('personalAgentReadyToHelp') : t(connection?.status === 'pending' ? 'codexConnectionStatusConnecting' : 'personalAgentConnectCodex')}
-              </p>
+              {workingCount > 0 && <p className={`mt-1 text-sm ${mutedClass}`}>{t('personalAgentWorkingCount', { count: workingCount })}</p>}
             </div>
           </div>
           <Button size="sm" variant="flat" onPress={() => { void refresh(); }} startContent={<Icon icon="lucide:refresh-cw" className="h-4 w-4" />}>{t('refresh')}</Button>
         </header>
 
-        <section className={`${panelClass} flex flex-wrap items-center justify-between gap-3 px-4 py-3`} aria-label={t('personalAgentModelSource')}>
-          <div className="flex items-center gap-2 text-sm">
-            <Icon icon="lucide:sparkles" className="h-4 w-4 text-secondary" />
-            <span>{t('personalAgentCodexSubscription')}</span>
-            <Chip size="sm" variant="flat" color={isConnected ? 'success' : 'default'}>{t(isConnected ? 'codexConnectionStatusConnected' : connection?.status === 'reauth_required' ? 'codexConnectionStatusReauthRequired' : connection?.status === 'pending' ? 'codexConnectionStatusConnecting' : connection ? 'codexConnectionStatusDisconnected' : 'personalAgentConnectionUnknown')}</Chip>
-          </div>
-          <Button size="sm" variant="light" color="secondary" onPress={onOpenConnections}>{t(isConnected ? 'personalAgentManageConnection' : 'personalAgentConnectCodex')}</Button>
-          {!isConnected && <p className={`w-full text-xs ${mutedClass}`}>{t('personalAgentConnectionHint')}</p>}
-        </section>
+        {!isConnected && <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-default-100 p-4"><p className="flex-1 text-sm text-default-600">{t('personalAgentConnectionHint')}</p><Button size="sm" color="secondary" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button></div>}
 
-        <nav className="flex gap-1 overflow-x-auto border-b border-[#dedbd0] pb-2 dark:border-[#30302e]" aria-label={t('personalAgentSections')}>
+        <nav className="flex gap-1 overflow-x-auto rounded-full bg-default-100 p-1" aria-label={t('personalAgentSections')}>
           {tabs.map(item => <Button key={item.key} size="sm" variant={tab === item.key ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-current={tab === item.key ? 'page' : undefined} startContent={<Icon icon={item.icon} className="h-4 w-4" />}>{t(item.label)}</Button>)}
         </nav>
 
@@ -204,8 +196,8 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           </button>)}
         </section>}
 
-        {tab === 'memory' && <form className={`${panelClass} space-y-5 p-5 sm:p-6`} onSubmit={event => { event.preventDefault(); void mutate(async () => {
-          const { profile } = await updatePersonalAgentProfile(clientId, profileDraft);
+        {tab === 'memory' && <><PersonalAgentMemory clientId={clientId} rooms={rooms} onRoomSelect={onRoomSelect} showError={showError} showSuccess={showSuccess} /><form className={`${panelClass} space-y-5 p-5 sm:p-6`} onSubmit={event => { event.preventDefault(); void mutate(async () => {
+          const { profile } = await updatePersonalAgentProfile(clientId, profileDraft, profileDraft.updatedAt);
           profileDirty.current = false;
           setSnapshot(previous => previous ? { ...previous, profile } : previous);
           setProfileDraft(profile);
@@ -217,9 +209,9 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
             <Input label={t('personalAgentAvatar')} value={profileDraft.avatar} maxLength={64} isRequired onValueChange={avatar => editProfile({ avatar })} />
           </div>
           <Textarea label={t('personalAgentInstructions')} description={t('personalAgentInstructionsDescription')} value={profileDraft.instructions} minRows={4} maxLength={8000} onValueChange={instructions => editProfile({ instructions })} />
-          <Textarea label={t('personalAgentMemory')} description={t('personalAgentMemoryFieldDescription')} value={profileDraft.memory} minRows={6} maxLength={16000} onValueChange={memory => editProfile({ memory })} />
+          <Textarea label={t('personalAgentAboutYou')} description={t('personalAgentMemoryFieldDescription')} value={profileDraft.memory} minRows={6} maxLength={16000} onValueChange={memory => editProfile({ memory })} />
           <Button type="submit" color="secondary" isLoading={isBusy} isDisabled={!profileDraft.name.trim() || !profileDraft.avatar.trim()}>{t('save')}</Button>
-        </form>}
+        </form></>}
       </div>
 
       <Modal isOpen={isThreadModalOpen} onOpenChange={setIsThreadModalOpen}>

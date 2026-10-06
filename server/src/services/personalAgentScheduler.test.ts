@@ -75,13 +75,13 @@ describe('personal agent scheduler', () => {
     assert.equal(store.messages.length, 1);
   });
 
-  it('persists the main room mode in both queued execution and Codex permission settings', async () => {
+  it('always uses full access even when a historical main room has a different mode', async () => {
     const store = new ScheduleStore();
     store.mainMode = 'plan';
     await createScheduler(store, async () => {}).tick();
-    assert.equal(store.rooms[0].codeAgentMode, 'plan');
-    assert.equal(store.messages[0].codeAgentQueuedInput?.requestedMode, 'plan');
-    assert.equal(store.messages[0].codeAgentQueuedInput?.codexPermissionMode, 'plan');
+    assert.equal(store.rooms[0].codeAgentMode, 'fullAccess');
+    assert.equal(store.messages[0].codeAgentQueuedInput?.requestedMode, 'fullAccess');
+    assert.equal(store.messages[0].codeAgentQueuedInput?.codexPermissionMode, 'fullAccess');
   });
 
   it('keeps the admitted prompt when wake fails and resumes it after restarting without creating another task', async () => {

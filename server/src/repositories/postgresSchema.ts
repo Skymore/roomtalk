@@ -2663,4 +2663,23 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         BEFORE INSERT ON room_events FOR EACH ROW EXECUTE FUNCTION capture_personal_agent_room_event_metadata();
     `,
   },
+  {
+    id: '0033_personal_agent_memory_library',
+    sql: `
+      CREATE TABLE personal_agent_memories (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('preference', 'fact', 'topic')),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+        content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 8000),
+        source TEXT NOT NULL,
+        source_room_id TEXT,
+        source_turn_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX personal_agent_memories_owner_updated ON personal_agent_memories(client_id, updated_at DESC, id);
+      UPDATE rooms SET code_agent_mode = 'fullAccess' WHERE personal_agent_owner_id IS NOT NULL;
+    `,
+  },
 ];

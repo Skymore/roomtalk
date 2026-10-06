@@ -1291,7 +1291,8 @@ describe('CodeAgentSessionService', () => {
       store, runner, backend: 'hermes-agent', ids: Array.from({ length: 20 }, (_, index) => `personal-${index}`),
       onPersonalAgentTurnCompleted: async (room, message) => { notifications.push({ room, message }); },
     });
-    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel, requestedMode: 'plan' });
+    assert.equal(runner.requests[0].mode, 'fullAccess');
     assert.match(runner.requests[0].prompt, /Answer in Chinese/);
     assert.match(runner.requests[0].prompt, /I work in Seattle/);
     assert.equal(store.messages.get('room-1')!.find(message => message.id === originalPrompt.id)!.content, 'Plan my day');

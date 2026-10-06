@@ -417,7 +417,7 @@ export class CodeAgentSessionService {
       return rejectTurn('An agent task is already running in this workspace', { reason: 'room_already_running' });
     }
 
-    const turnMode = this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
+    const turnMode = room!.personalAgentOwnerId ? { ok: true as const, mode: 'fullAccess' as const } : this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
     if (!turnMode.ok) {
       return rejectTurn(turnMode.error, { reason: 'mode_rejected', requestedMode: input.requestedMode ?? room!.codeAgentMode });
     }
@@ -429,7 +429,7 @@ export class CodeAgentSessionService {
     const codexRunSettings = normalizeCodexRunSettings(
       input.codexRunSettings?.model,
       input.codexRunSettings?.reasoningEffort,
-      input.codexRunSettings?.permissionMode,
+      room!.personalAgentOwnerId ? 'fullAccess' : input.codexRunSettings?.permissionMode,
       input.codexRunSettings?.serviceTier
     );
     try {
@@ -899,8 +899,13 @@ export class CodeAgentSessionService {
         if (!profile || profile.clientId !== input.clientId) {
           throw new Error('Personal agent profile is unavailable for this workspace');
         }
+        const [preferences, relevant] = await Promise.all([
+          this.store.readPersonalAgentMemories?.(profile.clientId, { kind: 'preference', limit: 20 }),
+          this.store.readPersonalAgentMemories?.(profile.clientId, { query: promptContext.prompt.slice(0, 500), limit: 12 }),
+        ]);
+        const memories = [...new Map([...(preferences?.memories || []), ...(relevant?.memories || [])].map(memory => [memory.id, memory])).values()];
         runnerRequest.prompt = buildPersonalAgentPrompt(
-          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)),
+          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories,
         );
         assertTurnWithinDeadline();
       }

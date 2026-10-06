@@ -2179,6 +2179,11 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       /different change/,
     );
 
+    // Either concurrent request can win. Collide with the committed event,
+    // rather than assuming the first request's id was the one persisted.
+    const committedEvent = await pool.query<{ id: string }>(
+      'SELECT id FROM account_membership_events WHERE idempotency_key = $1', [change.idempotencyKey],
+    );
     const rollbackAccountId = 'atomic-membership-rollback-account';
     const rollbackClientId = 'atomic-membership-rollback-client';
     assert.ok(await store.createPasswordAccountForClient({
@@ -2189,6 +2194,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     await assert.rejects(
       store.applyAccountMembershipChange({
         ...change,
+        id: committedEvent.rows[0].id,
         idempotencyKey: 'atomic-membership-rollback',
         accountId: rollbackAccountId,
         creditGrantUsd: 5,

@@ -384,3 +384,18 @@ def test_background_shell_command_is_not_exposed(capsys):
 
     assert exc.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_memory_library_save_search_and_forget_send_scoped_operations(tmp_path, monkeypatch, capsys):
+    from roomtalk_code_agent_runner import platform_tools
+    calls = []
+    monkeypatch.setenv('ROOMTALK_CODE_AGENT_MODE', 'fullAccess')
+    monkeypatch.setattr(platform_tools, '_read_room_context_path', lambda path, env, **kwargs: calls.append((path, kwargs)) or {'success': True})
+    entry = tmp_path / 'entry.json'
+    entry.write_text('{"kind":"preference","title":"Language","content":"中文"}', encoding='utf-8')
+    assert platform_tools.main(['memory', 'save', '--file', str(entry), '--json']) == 0
+    assert platform_tools.main(['memory', 'search', '--query', '中文', '--kind', 'preference', '--json']) == 0
+    assert platform_tools.main(['memory', 'forget', '--id', 'entry', '--expected-updated-at', '2026-10-06T01:00:00Z', '--json']) == 0
+    assert calls[0] == ('/personal-memory/records', {'method': 'PATCH', 'body': {'kind': 'preference', 'title': 'Language', 'content': '中文', 'action': 'save'}})
+    assert '%E4%B8%AD%E6%96%87' in calls[1][0]
+    assert calls[2][1]['body']['action'] == 'forget'

@@ -5,7 +5,7 @@ import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { PersonalAgentProfile } from '../types';
+import { PersonalAgentMemory, PersonalAgentProfile } from '../types';
 import { CodeAgentRoomContextService } from '../services/codeAgentRoomContext';
 import { registerPersonalAgentContextRoutes } from './personalAgentContextRoutes';
 
@@ -16,8 +16,10 @@ describe('personal agent memory broker', () => {
   let active: boolean;
   let personalOwner: string | undefined;
   let profile: PersonalAgentProfile;
+  let memories: PersonalAgentMemory[];
   beforeEach(async () => {
     active = true;
+    memories = [];
     personalOwner = 'owner';
     profile = { clientId: 'owner', name: 'Muse', avatar: 'M', instructions: '', memory: 'Seattle', mainRoomId: 'room',
       createdAt: '2026-10-05T12:00:00.000Z', updatedAt: '2026-10-05T12:00:00.000Z' };
@@ -26,6 +28,18 @@ describe('personal agent memory broker', () => {
         creatorId: 'owner', type: 'codeAgent', personalAgentOwnerId: personalOwner }; },
       async hasActiveCodeAgentRoomLease(_room: string, _now: string, turn: string) { return active && turn === 'turn'; },
       async getPersonalAgentProfile() { return profile; },
+      async readPersonalAgentMemories() { return { memories, total: memories.length }; },
+      async savePersonalAgentMemory(entry: PersonalAgentMemory, expected?: string) {
+        const existing = memories.find(item => item.id === entry.id);
+        if (expected && existing?.updatedAt !== expected) return null;
+        const saved = { ...entry, updatedAt: expected ? '2026-10-06T02:00:00.000Z' : entry.updatedAt };
+        memories = [...memories.filter(item => item.id !== entry.id), saved]; return saved;
+      },
+      async deletePersonalAgentMemory(_owner: string, id: string, expected: string) {
+        const existing = memories.find(item => item.id === id);
+        if (existing?.updatedAt !== expected) return false;
+        memories = memories.filter(item => item.id !== id); return true;
+      },
       async updatePersonalAgentProfile(_owner: string, update: { memory: string }, expected: string) {
         if (expected !== profile.updatedAt) return null;
         profile = { ...profile, ...update, updatedAt: '2026-10-05T12:01:00.000Z' };
@@ -67,4 +81,25 @@ describe('personal agent memory broker', () => {
     assert.equal((await fetch(url, { headers: tokenHeaders() })).status, 403);
     assert.equal(profile.memory, 'Seattle');
   });
+  it('records conversation provenance, refuses stale corrections and forgets only during an active writable turn', async () => {
+    const path = `${url}/records`;
+    const headers = tokenHeaders();
+    const body = { action: 'save', kind: 'topic', title: '旅行安排', content: '已确认周五出发' };
+    const createdResponse = await fetch(path, { method: 'PATCH', headers, body: JSON.stringify(body) });
+    assert.equal(createdResponse.status, 200);
+    const created = (await createdResponse.json() as { memory: PersonalAgentMemory }).memory;
+    assert.equal(created.clientId, 'owner'); assert.equal(created.sourceRoomId, 'room'); assert.equal(created.sourceTurnId, 'turn');
+    const updatedBody = { ...body, id: created.id, expectedUpdatedAt: created.updatedAt, content: '改为周六出发' };
+    assert.equal((await fetch(path, { method: 'PATCH', headers, body: JSON.stringify(updatedBody) })).status, 200);
+    assert.equal((await fetch(path, { method: 'PATCH', headers, body: JSON.stringify(updatedBody) })).status, 409);
+    const current = (await (await fetch(`${path}?query=${encodeURIComponent('旅行')}`, { headers })).json() as { memories: PersonalAgentMemory[] }).memories[0];
+    const forget = JSON.stringify({ action: 'forget', id: current.id, expectedUpdatedAt: current.updatedAt });
+    assert.equal((await fetch(path, { method: 'PATCH', headers: tokenHeaders('plan'), body: forget })).status, 403);
+    active = false;
+    assert.equal((await fetch(path, { method: 'PATCH', headers, body: forget })).status, 403);
+    active = true;
+    assert.equal((await fetch(path, { method: 'PATCH', headers, body: forget })).status, 200);
+    assert.equal(memories.length, 0);
+  });
+
 });

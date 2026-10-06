@@ -243,6 +243,19 @@ export interface PersonalAgentProfile {
   updatedAt: string;
 }
 
+export interface PersonalAgentMemory {
+  id: string;
+  clientId: string;
+  kind: 'preference' | 'fact' | 'topic';
+  title: string;
+  content: string;
+  source: string;
+  sourceRoomId?: string;
+  sourceTurnId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PersonalAgentGoal {
   id: string;
   clientId: string;

@@ -8,7 +8,7 @@ import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 const api = vi.hoisted(() => ({
   getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(),
   createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
-  runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
+  readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
 }));
 vi.mock('../utils/personalAgent', () => api);
 vi.mock('../utils/codexConnection', () => api);
@@ -41,6 +41,7 @@ describe('PersonalAgentView', () => {
     vi.clearAllMocks();
     localStorage.clear();
     api.getPersonalAgent.mockResolvedValue(snapshot);
+    api.readPersonalAgentMemories.mockResolvedValue({ memories: [], total: 0 });
     api.getCodexConnectionStatus.mockResolvedValue({ status: 'connected' });
   });
   afterEach(cleanup);
@@ -51,7 +52,7 @@ describe('PersonalAgentView', () => {
     await screen.findByText('Muse');
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentOpenMainChat' }));
     expect(callbacks.onRoomSelect).toHaveBeenCalledWith(snapshot.rooms[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'personalAgentManageConnection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings' }));
     expect(callbacks.onOpenConnections).toHaveBeenCalled();
   });
 
@@ -89,19 +90,19 @@ describe('PersonalAgentView', () => {
     render(<PersonalAgentView {...callbacks} />);
     await screen.findByText('Muse');
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
-    fireEvent.change(screen.getByLabelText('personalAgentMemory'), { target: { value: 'I prefer Chinese.' } });
+    fireEvent.change(screen.getByLabelText('personalAgentAboutYou'), { target: { value: 'I prefer Chinese.' } });
     fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
     await waitFor(() => expect(api.getPersonalAgent).toHaveBeenCalledTimes(2));
-    expect((screen.getByLabelText('personalAgentMemory') as HTMLTextAreaElement).value).toBe('I prefer Chinese.');
+    expect((screen.getByLabelText('personalAgentAboutYou') as HTMLTextAreaElement).value).toBe('I prefer Chinese.');
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
-    await waitFor(() => expect(api.updatePersonalAgentProfile).toHaveBeenCalledWith('client-1', expect.objectContaining({ memory: 'I prefer Chinese.' })));
+    await waitFor(() => expect(api.updatePersonalAgentProfile).toHaveBeenCalledWith('client-1', expect.objectContaining({ memory: 'I prefer Chinese.' }), snapshot.profile.updatedAt));
     expect(callbacks.showSuccess).toHaveBeenCalledWith('personalAgentProfileSaved');
   });
 
   it('does not show an unavailable connection as connected or allow a goal run', async () => {
     api.getCodexConnectionStatus.mockRejectedValue(new Error('unavailable'));
     render(<PersonalAgentView {...props()} />);
-    await screen.findByText('personalAgentConnectionUnknown');
+    await screen.findByText('personalAgentConnectAccount');
     expect(screen.queryByText('personalAgentReadyToHelp')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentGoals' }));
     expect((screen.getByRole('button', { name: 'personalAgentRunNow' }) as HTMLButtonElement).disabled).toBe(true);
@@ -113,7 +114,7 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
     api.getPersonalAgent.mockResolvedValue({ ...snapshot, profile: { ...snapshot.profile, memory: 'A newly remembered preference.' } });
     fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
-    await waitFor(() => expect((screen.getByLabelText('personalAgentMemory') as HTMLTextAreaElement).value).toBe('A newly remembered preference.'));
+    await waitFor(() => expect((screen.getByLabelText('personalAgentAboutYou') as HTMLTextAreaElement).value).toBe('A newly remembered preference.'));
   });
 
   it('guides guest accounts to sign in when private provisioning fails', async () => {

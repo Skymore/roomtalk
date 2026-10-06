@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -524,6 +524,13 @@ const mapPersonalAgentProfile = (row: Record<string, any>): PersonalAgentProfile
   mainRoomId: row.main_room_id || '',
   createdAt: toIsoString(row.created_at),
   updatedAt: toIsoString(row.updated_at),
+});
+
+const mapPersonalAgentMemory = (row: Record<string, any>): PersonalAgentMemory => ({
+  id: row.id, clientId: row.client_id, kind: row.kind, title: row.title, content: row.content,
+  source: row.source, ...(row.source_room_id ? { sourceRoomId: row.source_room_id } : {}),
+  ...(row.source_turn_id ? { sourceTurnId: row.source_turn_id } : {}),
+  createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
 });
 
 const mapPersonalAgentGoal = (row: Record<string, any>): PersonalAgentGoal => ({
@@ -1213,6 +1220,39 @@ export class PostgresStore implements DurableRoomStore {
     return result.rows[0] ? mapPersonalAgentProfile(result.rows[0]) : null;
   }
 
+  async readPersonalAgentMemories(clientId: string, options: { query?: string; kind?: string; limit?: number; offset?: number } = {}): Promise<{ memories: PersonalAgentMemory[]; total: number }> {
+    const terms = (options.query || '').trim().split(/\s+/).filter(Boolean).slice(0, 12);
+    const patterns = terms.map(term => `%${term.replace(/[\\%_]/g, '\\$&')}%`);
+    const where = `client_id = $1 AND ($2::text IS NULL OR kind = $2)
+      AND (cardinality($3::text[]) = 0 OR (title || ' ' || content) ILIKE ANY($3::text[]))`;
+    const [result, count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_memories WHERE ${where} ORDER BY updated_at DESC, id
+        LIMIT $4 OFFSET $5`, [clientId, options.kind || null, patterns, options.limit ?? 50, options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_memories WHERE ${where}`, [clientId, options.kind || null, patterns]),
+    ]);
+    return { memories: result.rows.map(mapPersonalAgentMemory), total: Number(count.rows[0].total) };
+  }
+
+  async savePersonalAgentMemory(memory: PersonalAgentMemory, expectedUpdatedAt?: string): Promise<PersonalAgentMemory | null> {
+    const values = [memory.id, memory.clientId, memory.kind, memory.title, memory.content, memory.source,
+      memory.sourceRoomId ?? null, memory.sourceTurnId ?? null];
+    const result = expectedUpdatedAt
+      ? await this.pool.query(`UPDATE personal_agent_memories SET kind = $3, title = $4, content = $5,
+          source = $6, source_room_id = $7, source_turn_id = $8,
+          updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
+        WHERE id = $1 AND client_id = $2 AND date_trunc('milliseconds', updated_at) = $9::timestamptz RETURNING *`, [...values, expectedUpdatedAt])
+      : await this.pool.query(`INSERT INTO personal_agent_memories
+          (id, client_id, kind, title, content, source, source_room_id, source_turn_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`, values);
+    return result.rows[0] ? mapPersonalAgentMemory(result.rows[0]) : null;
+  }
+
+  async deletePersonalAgentMemory(clientId: string, id: string, expectedUpdatedAt: string): Promise<boolean> {
+    const result = await this.pool.query(`DELETE FROM personal_agent_memories WHERE client_id = $1 AND id = $2
+      AND date_trunc('milliseconds', updated_at) = $3::timestamptz`, [clientId, id, expectedUpdatedAt]);
+    return (result.rowCount || 0) > 0;
+  }
+
   async readPersonalAgentRooms(clientId: string): Promise<Room[]> {
     const result = await this.pool.query<RoomRow>(
       `SELECT ${ROOM_COLUMNS} FROM rooms WHERE personal_agent_owner_id = $1
@@ -1290,7 +1330,7 @@ export class PostgresStore implements DurableRoomStore {
         personal_agent_owner_id, personal_agent_thread_kind, personal_agent_goal_id)
       VALUES ($1, $2, $3, $4, $5, $5, 'codeAgent', 'codex-app-server', 'owner', $6, 'none', 'idle', $4, $7, $8)
       RETURNING ${ROOM_COLUMNS}`,
-      [room.id, room.name, room.description || '', room.creatorId, room.createdAt, room.codeAgentMode || 'edit', room.personalAgentThreadKind || 'task', room.personalAgentGoalId ?? null],
+      [room.id, room.name, room.description || '', room.creatorId, room.createdAt, 'fullAccess', room.personalAgentThreadKind || 'task', room.personalAgentGoalId ?? null],
     );
     await client.query("INSERT INTO room_members (room_id, client_id, role, joined_at) VALUES ($1, $2, 'owner', $3)", [room.id, room.creatorId, room.createdAt]);
     return mapRoom(result.rows[0]);
