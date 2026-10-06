@@ -1217,6 +1217,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [], rowCount: 1 };
     }
 
+    if (/DELETE FROM personal_agent_browser_sessions WHERE room_id = \$1/.test(compactSql)) {
+      return { rows: [], rowCount: 0 };
+    }
+
     if (/DELETE FROM code_agent_workspace_revisions WHERE room_id = \$1/.test(compactSql)) {
       return { rows: [], rowCount: 0 };
     }
