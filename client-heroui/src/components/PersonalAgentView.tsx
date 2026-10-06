@@ -130,8 +130,8 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
 
         {!isConnected && <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-default-100 p-4"><p className="flex-1 text-sm text-default-600">{t('personalAgentConnectionHint')}</p><Button size="sm" color="secondary" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button></div>}
 
-        <nav className="flex gap-1 overflow-x-auto rounded-full bg-default-100 p-1" aria-label={t('personalAgentSections')}>
-          {tabs.map(item => <Button key={item.key} size="sm" variant={tab === item.key ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-current={tab === item.key ? 'page' : undefined} startContent={<Icon icon={item.icon} className="h-4 w-4" />}>{t(item.label)}</Button>)}
+        <nav className="grid grid-cols-3 gap-1 rounded-2xl bg-default-100 p-1 sm:flex sm:rounded-full" aria-label={t('personalAgentSections')}>
+          {tabs.map(item => <Button key={item.key} className="min-w-0" size="sm" variant={tab === item.key ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-current={tab === item.key ? 'page' : undefined} startContent={<Icon icon={item.icon} className="h-4 w-4" />}>{t(item.label)}</Button>)}
         </nav>
 
         {tab !== 'activity' && <PersonalAgentUpdates key={`${clientId}:banner`} clientId={clientId} rooms={rooms} mode="banner" enabled={snapshot.profile.showUpdates !== false}

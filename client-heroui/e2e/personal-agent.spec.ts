@@ -93,6 +93,7 @@ test('tracks a real page, deduplicates updates, pauses and preserves read/prefer
     await page.reload(); await page.getByRole('button', { name: 'Tracking', exact: true }).click();
     await expect(page.getByTestId('personal-watch-card').getByRole('button', { name: 'Check now', exact: true })).toBeDisabled();
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('button', { name: 'Memory', exact: true })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: '/tmp/roomtalk-personal-tracking-mobile.png', fullPage: true });
     await page.getByRole('button', { name: 'Memory', exact: true }).click();
