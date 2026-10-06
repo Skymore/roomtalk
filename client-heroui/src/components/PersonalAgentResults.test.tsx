@@ -8,6 +8,7 @@ import type { RoomAgentTurn } from '../utils/types';
 const api = vi.hoisted(() => ({ readPersonalAgentResults: vi.fn(), readPersonalAgentResultFile: vi.fn(), translate: (key: string) => key }));
 vi.mock('../utils/personalAgent', () => api);
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: api.translate }) }));
+vi.mock('@iconify/react', () => ({ Icon: ({ icon }: { icon: string }) => <span data-icon={icon} /> }));
 vi.mock('./MarkdownContent', () => ({ MarkdownContent: ({ content }: { content: string }) => <div>{content}</div> }));
 const turn: RoomAgentTurn = { id: 'turn', roomId: 'room', status: 'complete', startedAt: '2026-10-06T10:00:00Z', updatedAt: '2026-10-06T10:01:00Z', backend: 'codex-app-server', assistantName: 'Codex' };
 const result: PersonalAgentResult = { id: 'saved', roomId: 'room', turnId: 'turn', kind: 'plan', title: 'Confirmed plan', summary: 'Real next steps', filename: 'plan.md', mimeType: 'text/markdown', byteSize: 40, createdAt: turn.startedAt };

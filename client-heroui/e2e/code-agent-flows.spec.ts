@@ -100,10 +100,11 @@ test('exposes the stop control while a code agent turn is running', async ({ pag
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
   await expectMessage(page, prompt).toBeVisible();
 
-  await expectCodeAgentToolCall(page);
   await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('message-item').filter({ hasText: 'Coco Agent fake runner received the task.' })).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Expand earlier work', exact: true }).click();
+  await expectCodeAgentToolCall(page);
 });
 
 test('edits a code agent prompt and starts a new code agent turn', async ({ page, context, request }) => {
@@ -127,6 +128,7 @@ test('edits a code agent prompt and starts a new code agent turn', async ({ page
   // Edit-and-run truncates the previous answer before starting the replacement
   // turn, so only the new canonical answer should remain in the message log.
   await expect(page.getByTestId('message-item').filter({ hasText: 'Coco Agent fake runner received the task.' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Expand earlier work', exact: true }).click();
   await expectCodeAgentToolCall(page);
   expect(dialogs).toEqual([]);
 });
