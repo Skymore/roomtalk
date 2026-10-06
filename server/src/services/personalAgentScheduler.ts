@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Logger } from '../logger';
 import { PersonalAgentIdeaConflictError, RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentMode, PersonalAgentGoal, Room } from '../types';
+import { AIModelOption, CodeAgentMode, PersonalAgentGoal, Room, Message, PersonalAgentNotification } from '../types';
 import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CodexRunSettings, normalizeCodexRunSettings } from './codexRunSettings';
 import { createRoomRecord, createUserMessage } from './messageDomain';
@@ -15,6 +15,7 @@ export interface PersonalAgentSchedulerOptions {
   pollIntervalMs?: number;
   now?: () => Date;
   createId?: () => string;
+  onNotification?:(notice:PersonalAgentNotification)=>Promise<void>;
   onRunQueued?: (room: Room) => Promise<void> | void;
 }
 
@@ -60,6 +61,16 @@ export class PersonalAgentScheduler {
     return result;
   }
 
+  async delegate(clientId:string,input:{kind:'plan'|'document'|'finance'|'agent';prompt:string;title?:string;goalId?:string;input:{csv?:string;messageId?:string}}):Promise<{room:Room}>{
+    const instruction=[input.prompt,'',`This is a delegated ${input.kind} task. Read roomtalk task get --json for the persisted task input.`,
+      input.kind==='finance'?'Use the complete imported CSV from task.input.csv. Save a finance result from those actual rows; do not invent transactions.':
+      input.kind==='document'?'Read the chosen email with roomtalk google message --id <task.input.messageId> --json, import the actual PDF, ask for missing personal details, and prepare the filled copy and reply for review.':
+      'Save a practical plan and reusable result for the requested outcome.'].join('\n');
+    const {room,message}=await this.prepareTask(clientId,input.title ?? input.prompt.slice(0,100),instruction,input.goalId);
+    const saved=await this.store.startPersonalAgentTask!({roomId:room.id,clientId,kind:input.kind,prompt:input.prompt,input:input.input,createdAt:message.timestamp},room,message);
+    await this.wakeTask(saved);return {room:saved};
+  }
+
   async acceptIdea(clientId: string, id: string, prompt: string, expectedUpdatedAt: string) {
     const idea = (await this.store.readPersonalAgentIdeas!(clientId,{id,limit:1})).ideas[0];
     if (!idea) throw new PersonalAgentIdeaConflictError('Suggestion not found');
@@ -73,6 +84,14 @@ export class PersonalAgentScheduler {
   private async runTick(): Promise<void> {
     // This also recovers a committed prompt when the prior App died before it
     // could wake the code-agent queue. Execution itself owns the existing lease.
+    const reviews=await this.store.readPersonalAgentReviewContinuations?.() || [];
+    for(const review of reviews){
+      const content=`The reviewed action ${review.id} is ${review.data.status}. ${review.data.result || review.data.error || 'No external action was taken.'} Read roomtalk google actions --json for its saved receipt. Continue the saved task from this outcome. Do not execute this reviewed action again; an uncertain outcome must be reconciled by the user before another attempt.`;
+      const message=this.createQueuedMessage(review.clientId,String(review.data.sourceRoomId),content);
+      const room=await this.store.continuePersonalAgentReview!(review,message);
+      if(room)await this.options.onRunQueued?.(room);
+      else if(this.options.onNotification){const notice=await this.store.readPersonalAgentNotification!(review.clientId,`review:${review.id}`);if(notice)await this.options.onNotification(notice);}
+    }
     await this.sessions.resumeQueuedTurns();
     const goals = await this.store.readDuePersonalAgentGoals?.(this.now().toISOString(), 20) || [];
     for (const goal of goals) {
@@ -115,23 +134,19 @@ export class PersonalAgentScheduler {
       codeAgentAccess: 'owner',
       codeAgentMode: 'fullAccess',
     };
-    const settings = normalizeCodexRunSettings(
-      this.options.codexRunSettings?.model, this.options.codexRunSettings?.reasoningEffort,
-      'fullAccess', this.options.codexRunSettings?.serviceTier,
-    );
-    const message = {
-      ...createUserMessage({ id: this.createId(), clientId: clientId, roomId: room.id, content: prompt, now }),
-      codeAgentQueuedInput: {
-        state: 'queued' as const, queuedAt: now.toISOString(), updatedAt: now.toISOString(),
-        selectedModel: this.options.selectedModel,
-        codexModel: settings.model, codexReasoningEffort: settings.reasoningEffort,
-        codexPermissionMode: settings.permissionMode, codexServiceTier: settings.serviceTier,
-        requestedMode: room.codeAgentMode, serverOrigin: this.options.serverOrigin,
-      },
-    };
-    return {room,message};
+    return {room,message:this.createQueuedMessage(clientId,room.id,prompt)};
   }
-  private async wakeTask(room: Room) {
+  createQueuedMessage(clientId:string,roomId:string,prompt:string):Message {
+    const now=this.now();
+    const settings=normalizeCodexRunSettings(this.options.codexRunSettings?.model,this.options.codexRunSettings?.reasoningEffort,'fullAccess',this.options.codexRunSettings?.serviceTier);
+    return {
+      ...createUserMessage({id:this.createId(),clientId,roomId,content:prompt,now}),
+      codeAgentQueuedInput:{state:'queued',queuedAt:now.toISOString(),updatedAt:now.toISOString(),selectedModel:this.options.selectedModel,
+        codexModel:settings.model,codexReasoningEffort:settings.reasoningEffort,codexPermissionMode:settings.permissionMode,codexServiceTier:settings.serviceTier,
+        requestedMode:'fullAccess',serverOrigin:this.options.serverOrigin},
+    };
+  }
+  async wakeTask(room: Room) {
     try {
       await this.options.onRunQueued?.(room);
       await this.sessions.resumeQueuedTurns();

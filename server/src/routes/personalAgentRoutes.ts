@@ -1,9 +1,18 @@
+import {OpenBotAdapter} from '../services/personalAgentOpenBot';
+import { PersonalAgentComputerService,PersonalComputerError } from '../services/personalAgentComputer';
+import { z } from 'openmuse-zod';
+import { PersonalAgentGoogleService } from '../services/personalAgentGoogle';
+import { PersonalGoogleError } from '../services/personalAgentGoogleAuth';
+import { GoogleApiError, RecurringEventError } from '../services/personalAgentGoogleClient';
+import { PersonalAgentTaskService,PersonalAgentTaskError } from '../services/personalAgentTasks';
+import { PersonalAgentFileService, PersonalAgentFileError } from '../services/personalAgentFiles';
+import { PdfError } from '../services/personalAgentPdf';
 import { PersonalAgentTrackingError, PersonalAgentTrackingService } from '../services/personalAgentTracking';
 import { PersonalAgentNotificationService } from '../services/personalAgentNotifications';
 import { PersonalAgentIdeaService, PersonalAgentIdeaError, personalIdeaPrompt, personalIdeaRevision } from '../services/personalAgentIdeas';
 import { PersonalAgentBrowserError, PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
-import { Express, Request, Response } from 'express';
+import express, { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import { PersonalAgentGoalConflictError, PersonalAgentIdeaConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
@@ -13,6 +22,10 @@ import { savePersonalAgentGoal } from '../services/personalAgentGoals';
 export interface PersonalAgentRouteOptions {
   store: RoomStore;
   results?: PersonalAgentResultService;
+  files?: PersonalAgentFileService;
+  google?: PersonalAgentGoogleService;
+  computer?: PersonalAgentComputerService;
+  tasks?: PersonalAgentTaskService;
   browser?: PersonalAgentBrowserService;
   ideas?: PersonalAgentIdeaService;
   tracking?: PersonalAgentTrackingService;
@@ -21,6 +34,7 @@ export interface PersonalAgentRouteOptions {
   logger: Logger;
   getClientId: (req: Request) => string | null;
   authorizeClientRequest: (req: Request, res: Response, clientId: string, endpoint: string) => Promise<boolean>;
+  reviewDecided?:()=>Promise<void>;
   cancelGoal?: (goal: PersonalAgentGoal, expectedUpdatedAt?: string) => Promise<PersonalAgentGoal>;
   startGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
 }
@@ -45,6 +59,12 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (!store.ensurePersonalAgentProfile) return res.status(503).json({ error: 'Personal agents are unavailable' });
       return await handler(req, res, await store.ensurePersonalAgentProfile(clientId));
     } catch (error) {
+      if (error instanceof PersonalComputerError)return res.status(error.status).json({error:error.message});
+      if (error instanceof z.ZodError) return res.status(422).json({error:error.issues.map(issue=>issue.message).join('; ')});
+      if (error instanceof PersonalGoogleError || error instanceof GoogleApiError || error instanceof RecurringEventError) return res.status(error.status).json({error:error.message});
+      if (error instanceof PersonalAgentTaskError) return res.status(error.statusCode).json({error:error.message});
+      if (error instanceof PdfError) return res.status(error.status).json({ error: error.message });
+      if (error instanceof PersonalAgentFileError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof PersonalAgentTrackingError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof PersonalAgentIdeaError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof PersonalAgentIdeaConflictError) return res.status(409).json({ error: error.message });
@@ -60,9 +80,94 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   app.get('/api/personal-agent', withProfile(async (_req, res, profile) => {
     const [rooms, goals, ideas] = await Promise.all([
       store.readPersonalAgentRooms!(profile.clientId), store.readPersonalAgentGoals!(profile.clientId),
-      options.ideas?.refresh(profile.clientId),
+      options.ideas?.refresh(profile.clientId).then(()=>options.ideas!.list(profile.clientId,{status:'all'})),
     ]);
     return res.json({ profile, rooms, goals, ideas: ideas?.ideas || [] });
+  }));
+
+  app.get('/api/personal-agent/google/callback', async (req,res) => {
+    res.setHeader('Cache-Control','no-store');
+    if (req.query.error) return res.status(400).type('html').send('<h1>Google connection cancelled</h1><p>Return to RoomTalk.</p>');
+    try {
+      if (!options.google) throw new PersonalGoogleError('Google is unavailable',503);
+      if (typeof req.query.state !== 'string' || typeof req.query.code !== 'string') throw new PersonalGoogleError('Google callback is incomplete',400);
+      await options.google.auth.callback(req.query.state,req.query.code);
+      return res.type('html').send('<h1>Google is connected</h1><p>Return to RoomTalk and refresh your personal assistant.</p>');
+    } catch (error) {
+      return res.status(error instanceof PersonalGoogleError ? error.status : 502).type('text').send(error instanceof PersonalGoogleError ? error.message : 'Google could not complete sign-in. Connect again.');
+    }
+  });
+  const google = () => {if (!options.google) throw new PersonalGoogleError('Google is unavailable',503); return options.google;};
+  app.get('/api/personal-agent/openbot',withProfile(async(_req,res)=>res.json(await new OpenBotAdapter().probe())));
+  app.get('/api/personal-agent/google',withProfile(async (_req,res,profile)=>res.json(await google().auth.status(profile.clientId))));
+  app.post('/api/personal-agent/google/connect',withProfile(async (req,res,profile)=>res.json(await google().auth.connect(profile.clientId,req.body?.capability === 'write'))));
+  app.post('/api/personal-agent/google/disconnect',withProfile(async (_req,res,profile)=>{await google().auth.disconnect(profile.clientId);return res.json({disconnected:true});}));
+  app.get('/api/personal-agent/mail',withProfile(async (req,res,profile)=>res.json(await google().mail(profile.clientId,typeof req.query.q === 'string' ? req.query.q : undefined))));
+  app.get('/api/personal-agent/mail/threads/:id',withProfile(async (req,res,profile)=>res.json(await google().thread(profile.clientId,req.params.id))));
+  app.post('/api/personal-agent/mail/attachments',withProfile(async (req,res,profile)=>res.status(201).json(await google().importAttachment(profile.clientId,textField(req.body?.reference,'attachment reference',4000)))));
+  app.get('/api/personal-agent/calendars',withProfile(async (_req,res,profile)=>res.json(await google().calendars(profile.clientId))));
+  app.get('/api/personal-agent/calendar/events',withProfile(async (req,res,profile)=>res.json(await google().events(profile.clientId,req.query))));
+  app.get('/api/personal-agent/drafts',withProfile(async (_req,res,profile)=>res.json(await google().drafts(profile.clientId))));
+  app.post('/api/personal-agent/drafts',withProfile(async (req,res,profile)=>res.status(201).json(await google().saveDraft(profile.clientId,req.body))));
+  app.get('/api/personal-agent/activity',withProfile(async(_req,res,profile)=>res.json(await google().activity(profile.clientId))));
+  app.get('/api/personal-agent/actions',withProfile(async (_req,res,profile)=>res.json(await google().actions(profile.clientId))));
+  app.post('/api/personal-agent/actions',withProfile(async (req,res,profile)=>res.status(201).json(await google().propose(profile.clientId,req.body))));
+  app.post('/api/personal-agent/actions/:id/decide',withProfile(async (req,res,profile)=>{
+    const input = z.object({expectedUpdatedAt:z.string(),decision:z.enum(['approve','deny'])}).parse(req.body);
+    const result=await google().decide(profile.clientId,req.params.id,input.expectedUpdatedAt,input.decision);
+    await options.reviewDecided?.().catch(error=>options.logger.warn('Reviewed action saved; task wake will recover on the scheduler tick',{error}));return res.json(result);
+  }));
+
+  app.get('/api/personal-agent/computer',withProfile(async(req,res,profile)=>{
+    res.setHeader('Cache-Control','private, no-store');
+    if(!options.computer)return res.status(503).json({error:'Computer service is unavailable'});
+    return res.json(await options.computer.read(profile.clientId,req.query));
+  }));
+  app.post('/api/personal-agent/computer',withProfile(async(req,res,profile)=>{
+    res.setHeader('Cache-Control','private, no-store');
+    if(!options.computer)return res.status(503).json({error:'Computer service is unavailable'});
+    return res.json(await options.computer.write(profile.clientId,req.body));
+  }));
+
+  app.post('/api/personal-agent/tasks',withProfile(async(req,res,profile)=>{
+    if(!options.tasks)return res.status(503).json({error:'Task execution is unavailable'});
+    return res.status(201).json(await options.tasks.delegate(profile.clientId,req.body));
+  }));
+
+  app.get('/api/personal-agent/tasks/:roomId',withProfile(async(req,res,profile)=>{
+    if(!options.tasks)return res.status(503).json({error:'Tasks are unavailable'});
+    return res.json(await options.tasks.detail(profile.clientId,req.params.roomId,req.query.beforeMessageId));
+  }));
+  app.post('/api/personal-agent/tasks/:roomId/control',withProfile(async(req,res,profile)=>{
+    if(!options.tasks)return res.status(503).json({error:'Tasks are unavailable'});
+    return res.json(await options.tasks.control(profile.clientId,req.params.roomId,req.body || {}));
+  }));
+  app.post('/api/personal-agent/tasks/:roomId/inputs/:id',withProfile(async(req,res,profile)=>{
+    if(!options.tasks)return res.status(503).json({error:'Tasks are unavailable'});
+    return res.json(await options.tasks.answer(profile.clientId,req.params.roomId,req.params.id,req.body || {}));
+  }));
+
+  app.get('/api/personal-agent/files', withProfile(async (req,res,profile) => {
+    if (!options.files) return res.status(503).json({ error: 'Personal files are unavailable' });
+    return res.json(await options.files.list(profile.clientId,req.query));
+  }));
+  app.post('/api/personal-agent/files', express.raw({ type: 'application/pdf',limit: '10mb' }), withProfile(async (req,res,profile) => {
+    if (!options.files) return res.status(503).json({ error: 'Personal files are unavailable' });
+    if (!Buffer.isBuffer(req.body) || typeof req.query.name !== 'string') throw new RangeError('Choose a PDF file with a filename');
+    return res.status(201).json(await options.files.import(profile.clientId,req.query.name,req.body));
+  }));
+  app.get('/api/personal-agent/files/:id/content', withProfile(async (req,res,profile) => {
+    if (!options.files) return res.status(503).json({ error: 'Personal files are unavailable' });
+    const found = await options.files.get(profile.clientId,req.params.id);
+    res.setHeader('Content-Type','application/pdf');
+    res.setHeader('Cache-Control','private, no-store');
+    res.setHeader('X-Content-Type-Options','nosniff');
+    res.setHeader('Content-Disposition',`inline; filename*=UTF-8''${encodeURIComponent(found.file.name)}`);
+    return res.send(found.body);
+  }));
+  app.post('/api/personal-agent/files/:id/fill', withProfile(async (req,res,profile) => {
+    if (!options.files) return res.status(503).json({ error: 'Personal files are unavailable' });
+    return res.status(201).json(await options.files.fill(profile.clientId,req.params.id,req.body?.fields));
   }));
 
   app.get('/api/personal-agent/watches', withProfile(async (req,res,profile) => {
@@ -96,7 +201,8 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   }));
   app.post('/api/personal-agent/ideas/refresh', withProfile(async (_req, res, profile) => {
     if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
-    return res.json(await options.ideas.refresh(profile.clientId));
+    await options.ideas.refresh(profile.clientId);
+    return res.json(await options.ideas.list(profile.clientId,{status:'all'}));
   }));
   app.patch('/api/personal-agent/ideas/:id', withProfile(async (req, res, profile) => {
     if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
@@ -123,6 +229,19 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     return res.send(found.body);
   }));
 
+  app.get('/api/personal-agent/browsers',withProfile(async(_req,res,profile)=>{
+    if(!options.browser)return res.status(503).json({error:'Personal browser is unavailable'});
+    return res.json(await options.browser.sessions(profile.clientId));
+  }));
+  app.post('/api/personal-agent/browsers',withProfile(async(req,res,profile)=>{
+    if(!options.browser)return res.status(503).json({error:'Personal browser is unavailable'});
+    return res.status(201).json(await options.browser.create(profile.clientId,req.body || {}));
+  }));
+  app.get('/api/personal-agent/browser/:roomId/preview',withProfile(async(req,res,profile)=>{
+    if(!options.browser)return res.status(503).json({error:'Personal browser is unavailable'});
+    res.setHeader('Cache-Control','private,no-store');res.type('image/jpeg');
+    return res.send(await options.browser.preview(profile.clientId,req.params.roomId));
+  }));
   app.get('/api/personal-agent/browser-observations', withProfile(async (req, res, profile) => {
     if (!options.browser) return res.status(503).json({ error: 'Personal browser is unavailable' });
     return res.json(await options.browser.list(profile.clientId, req.query));
@@ -163,7 +282,7 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     res.json(await forgetPersonalMemory(store, profile.clientId, req.params.id, req.body?.expectedUpdatedAt))));
 
   app.put('/api/personal-agent/profile', withProfile(async (req, res, profile) => {
-    const updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>> = {};
+    const updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled' | 'tone'>> = {};
     for (const [key, limit] of [['name', 100], ['avatar', 64], ['instructions', 8000], ['memory', 16000]] as const) {
       if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) {
         updates[key] = textField(req.body[key], key, limit, key === 'instructions' || key === 'memory');
@@ -173,6 +292,11 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (typeof req.body[key] !== 'boolean') throw new RangeError(`Invalid ${key}`);
       updates[key]=req.body[key];
     }
+    if(req.body?.tone !== undefined){
+      if(!['warm','concise','thoughtful'].includes(req.body.tone))throw new RangeError('Invalid tone');
+      updates.tone=req.body.tone;
+    }
+    if(updates.avatar !== undefined && !['sky','sand','lilac'].includes(updates.avatar))throw new RangeError('Choose sky, sand or lilac avatar');
     const expectedUpdatedAt = req.body?.expectedUpdatedAt;
     if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(expectedUpdatedAt)))) throw new RangeError('Invalid expectedUpdatedAt');
     const updated = await store.updatePersonalAgentProfile!(profile.clientId, updates, expectedUpdatedAt);
@@ -206,7 +330,9 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   app.patch('/api/personal-agent/goals/:id', withProfile(async (req, res, profile) => {
     const existing = (await store.readPersonalAgentGoals!(profile.clientId)).find(goal => goal.id === req.params.id);
     if (!existing) return res.status(404).json({ error: 'Goal not found' });
-    return res.json({ goal: await savePersonalAgentGoal(store, profile.clientId, req.body || {}, existing) });
+    const goal=await savePersonalAgentGoal(store, profile.clientId, req.body || {}, existing);
+    await options.tasks?.pauseGoal(goal);
+    return res.json({goal});
   }));
 
   app.post('/api/personal-agent/goals/:id/cancel', withProfile(async (req, res, profile) => {

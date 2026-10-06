@@ -5,6 +5,7 @@ export interface PersonalAgentProfile {
   clientId: string;
   name: string;
   avatar: string;
+  tone?: 'warm' | 'concise' | 'thoughtful';
   instructions: string;
   memory: string;
   mainRoomId: string;
@@ -21,6 +22,7 @@ export interface PersonalAgentGoal {
   clientId: string;
   title: string;
   prompt: string;
+  category?: string;
   schedule: PersonalAgentSchedule;
   time: string;
   timezone: string;
@@ -44,7 +46,7 @@ export interface PersonalAgentIdea {
   reason: string;
   prompt: string;
   automatic: boolean;
-  source: { kind: 'goal' | 'memory' | 'result' | 'browser'; id: string; title: string; excerpt: string; recordedAt: string; roomId?: string; turnId?: string; url?: string };
+  source: { kind: 'goal' | 'memory' | 'result' | 'browser' | 'mail'; id: string; title: string; excerpt: string; recordedAt: string; roomId?: string; turnId?: string; url?: string };
   status: 'new' | 'accepted' | 'dismissed';
   acceptedRoomId?: string;
   createdAt: string;
@@ -58,7 +60,7 @@ export interface PersonalAgentSnapshot {
   ideas: PersonalAgentIdea[];
 }
 
-export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt' | 'milestones'>;
+export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt' | 'milestones' | 'category'>;
 
 const request = async <T>(clientId: string, path: string, method = 'GET', data?: Record<string, unknown>): Promise<T> => {
   const token = localStorage.getItem('clientAuthToken')?.trim();
@@ -81,7 +83,7 @@ export const getPersonalAgent = (clientId: string) => request<PersonalAgentSnaps
 
 export const updatePersonalAgentProfile = (
   clientId: string,
-  profile: Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>,
+  profile: Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled' | 'tone'>,
   expectedUpdatedAt?: string,
 ) => request<{ profile: PersonalAgentProfile }>(clientId, '/profile', 'PUT', { ...profile, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 
@@ -132,7 +134,8 @@ export interface PersonalAgentResult {
   id: string;
   roomId: string;
   turnId: string;
-  kind: 'plan' | 'document' | 'web';
+  kind: 'plan' | 'document' | 'web' | 'comparison' | 'finance';
+  data?: Record<string, unknown>;
   title: string;
   summary: string;
   filename: string;
@@ -155,11 +158,13 @@ export const readPersonalAgentResultFile = async (clientId: string, id: string):
 };
 
 export interface PersonalBrowserObservation {
-  id: string; roomId: string; turnId: string; url: string; title: string; createdAt: string;
+  id: string; roomId: string; turnId: string; sessionId?:string;browserRoomId?:string;url: string; title: string; createdAt: string;
 }
 export interface PersonalBrowserControl { id: string; fence: number }
 export interface PersonalBrowserFrame {
-  session: { id: string; roomId: string; url: string; title: string; updatedAt: string };
+  downloads?: {id:string; name:string; byteSize:number; url:string}[];
+  file?: PersonalAgentFile;
+  session: {id:string;roomId:string;url:string;title:string;updatedAt:string;status?:'active'|'closed'|'error';previewUrl?:string};
   screenshot?: string; viewport?: { width: number; height: number }; closed: boolean;
 }
 export const readPersonalBrowserObservations = (clientId: string, roomId: string, turnId: string, offset = 0) =>
@@ -170,6 +175,12 @@ export const releasePersonalBrowserControl = (clientId: string, roomId: string, 
   request<{ released: boolean }>(clientId, `/browser/${encodeURIComponent(roomId)}/release-control`, 'POST', { control });
 export const actInPersonalBrowser = (clientId: string, roomId: string, control: PersonalBrowserControl, action: Record<string, unknown>) =>
   request<PersonalBrowserFrame>(clientId, `/browser/${encodeURIComponent(roomId)}/control`, 'PATCH', { control, ...action });
+export const readPersonalBrowserPreview=async(clientId:string,url:string):Promise<Blob>=>{
+  const token=localStorage.getItem('clientAuthToken')?.trim();
+  const response=await fetch(apiPath(url),{cache:'no-store',headers:{'X-Client-Id':clientId,...(token?{'X-Client-Auth-Token':token}:{})}});
+  if(!response.ok)throw new Error('Preview unavailable. Open the browser to reconnect.');
+  return response.blob();
+};
 export const readPersonalBrowserImage = async (clientId: string, id: string): Promise<Blob> => {
   const token = localStorage.getItem('clientAuthToken')?.trim();
   const response = await fetch(apiPath(`/api/personal-agent/browser-observations/${encodeURIComponent(id)}/image`), {
@@ -185,23 +196,89 @@ export const acceptPersonalAgentIdea = (clientId: string, idea: PersonalAgentIde
 export const dismissPersonalAgentIdea = (clientId: string, idea: PersonalAgentIdea) =>
   request<{ idea: PersonalAgentIdea }>(clientId, `/ideas/${encodeURIComponent(idea.id)}`, 'PATCH', { action: 'dismiss', expectedUpdatedAt: idea.updatedAt });
 
-export const readPersonalAgentIdeas = (clientId: string, offset = 0) => request<{ ideas: PersonalAgentIdea[]; total: number }>(clientId, `/ideas?status=new&limit=50&offset=${offset}`);
+export const readPersonalAgentIdeas = (clientId: string, offset = 0) => request<{ ideas: PersonalAgentIdea[]; total: number }>(clientId, `/ideas?status=all&limit=50&offset=${offset}`);
 
 export interface PersonalAgentWatch {
   id: string; roomId: string; title: string; url: string;
   condition: 'change' | 'contains' | 'price_below'; value: string; intervalMinutes: number;
-  status: 'active' | 'paused'; checks: number; failures: number;
+  status: 'active' | 'paused' | 'stopped'; checks: number; failures: number;
   nextCheckAt?: string; lastCheckedAt?: string; lastUrl?: string; lastTitle?: string; lastExcerpt?: string;
   error?: string; createdAt: string; updatedAt: string;
 }
 export interface PersonalAgentNotification {
-  id: string; kind: 'task_complete' | 'task_error' | 'watch_match' | 'watch_error'; title: string; body: string;
+  id: string; kind: 'task_complete' | 'task_error' | 'task_input' | 'task_review' | 'watch_match' | 'watch_error'; title: string; body: string;
   roomId?: string; watchId?: string; source?: {url: string; title: string; excerpt: string; checkedAt: string};
   readAt?: string; createdAt: string;
 }
 export const readPersonalAgentWatches = (clientId: string, offset = 0) => request<{watches: PersonalAgentWatch[]; total: number}>(clientId, `/watches?limit=50&offset=${offset}`);
 export const createPersonalAgentWatch = (clientId: string, body: Pick<PersonalAgentWatch,'title'|'url'|'condition'|'value'|'intervalMinutes'>) => request<{watch: PersonalAgentWatch}>(clientId, '/watches', 'POST', body);
-export const controlPersonalAgentWatch = (clientId: string, watch: PersonalAgentWatch, action: 'pause'|'resume'|'check') => request<{watch: PersonalAgentWatch}>(clientId, `/watches/${encodeURIComponent(watch.id)}`, 'PATCH', {action,expectedUpdatedAt:watch.updatedAt});
+export const controlPersonalAgentWatch = (clientId: string, watch: PersonalAgentWatch, action: 'pause'|'resume'|'check'|'stop') => request<{watch: PersonalAgentWatch}>(clientId, `/watches/${encodeURIComponent(watch.id)}`, 'PATCH', {action});
 export const removePersonalAgentWatch = (clientId: string, id: string) => request<{removed: boolean}>(clientId, `/watches/${encodeURIComponent(id)}`, 'DELETE');
 export const readPersonalAgentNotifications = (clientId: string, unread = false, offset = 0) => request<{notifications: PersonalAgentNotification[]; total: number; unread: number}>(clientId, `/notifications?unread=${unread}&limit=50&offset=${offset}`);
 export const markPersonalAgentNotificationRead = (clientId: string, id: string) => request<{notification: PersonalAgentNotification}>(clientId, `/notifications/${encodeURIComponent(id)}/read`, 'POST');
+
+export interface PersonalAgentFile {
+  id: string; name: string; byteSize: number; pageCount: number;
+  fields: { name: string; value: string; type: 'text' | 'checkbox' | 'unsupported' }[];
+  source: string; parentId?: string; createdAt: string;
+}
+export const readPersonalAgentFiles = (clientId: string, offset = 0,id?:string) =>
+  request<{ files: PersonalAgentFile[]; total: number }>(clientId, `/files?limit=50&offset=${offset}${id?`&id=${encodeURIComponent(id)}`:''}`);
+export const fillPersonalAgentFile = (clientId: string,id: string,fields: Record<string,string | boolean>) =>
+  request<{ file: PersonalAgentFile }>(clientId, `/files/${encodeURIComponent(id)}/fill`,'POST',{ fields });
+export const importPersonalAgentFile = async (clientId: string,file: File): Promise<{ file: PersonalAgentFile }> => {
+  const response = await fetch(apiPath(`/api/personal-agent/files?name=${encodeURIComponent(file.name)}`), {
+    method: 'POST',headers: { 'Content-Type': 'application/pdf','X-Client-Id': clientId,'X-Client-Auth-Token': localStorage.getItem('clientAuthToken') || '' },body: file,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Unable to import PDF');
+  return payload;
+};
+export const readPersonalAgentFile = async (clientId: string,id: string): Promise<Blob> => {
+  const response = await fetch(apiPath(`/api/personal-agent/files/${encodeURIComponent(id)}/content`), {
+    cache: 'no-store',headers: { 'X-Client-Id': clientId,'X-Client-Auth-Token': localStorage.getItem('clientAuthToken') || '' },
+  });
+  if (!response.ok) { const payload = await response.json(); throw new Error(payload.error || 'Unable to read PDF'); }
+  return response.blob();
+};
+
+export interface PersonalAgentInputRequest {
+  id:string; roomId:string; turnId:string; question:string; fields:{name:string;type:'text'|'checkbox'}[];
+  fileId?:string; answer?:{text:string;fields:Record<string,string|boolean>}; createdAt:string; answeredAt?:string;
+}
+export interface PersonalAgentTaskDetail {
+  task?:{prompt:string;kind:'plan'|'document'|'finance'|'agent'|'monitor'};
+  watch?:PersonalAgentWatch;
+  files?:PersonalAgentFile[];browsers?:PersonalBrowserFrame['session'][];
+  room:Room; turns:import('./types').RoomAgentTurn[]; messages:import('./types').Message[]; hasMore:boolean; requests:PersonalAgentInputRequest[];actions:PersonalGoogleAction[];
+}
+export const delegatePersonalAgentTask=(clientId:string,input:{kind:'plan'|'document'|'finance'|'agent';prompt:string;title?:string;goalId?:string;input:{csv?:string;messageId?:string}})=>request<{room:Room}>(clientId,'/tasks','POST',input);
+export const readPersonalAgentTask = (clientId:string,roomId:string,beforeMessageId?:string) => request<PersonalAgentTaskDetail>(clientId,`/tasks/${encodeURIComponent(roomId)}${beforeMessageId?`?beforeMessageId=${encodeURIComponent(beforeMessageId)}`:''}`);
+export const controlPersonalAgentTask=(clientId:string,roomId:string,action:'pause'|'resume'|'cancel'|'retry')=>request<{room:Room}>(clientId,`/tasks/${encodeURIComponent(roomId)}/control`,'POST',{action});
+export const answerPersonalAgentTaskInput = (clientId:string,roomId:string,id:string,answer:NonNullable<PersonalAgentInputRequest['answer']>) => request<{request:PersonalAgentInputRequest}>(clientId,`/tasks/${encodeURIComponent(roomId)}/inputs/${encodeURIComponent(id)}`,'POST',answer);
+
+export interface PersonalMail {
+  id: string; threadId: string; from: string; sender: string; to: string[]; subject: string;
+  body: string; date: string; unread: boolean; label: string; attachments: string[];
+}
+export interface PersonalCalendarEvent {
+  id: string; calendarId: string; title: string; start: string; end: string; allDay: boolean;
+  timeZone: string; location: string; description: string; attendees: string[];
+}
+export interface PersonalEmailDraft {
+  id?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string;
+  attachmentIds: string[]; threadId?: string; replyToMessageId?: string; updatedAt?: string;
+}
+export interface PersonalGoogleAction {
+  id: string; title: string; kind: 'email.send' | 'calendar.create' | 'calendar.update' | 'calendar.delete';
+  data: Record<string,unknown>; account: string; status: string; createdAt:string;updatedAt: string;
+  sourceRoomId?:string;sourceTurnId?:string;
+  target?: PersonalCalendarEvent; result?: string; error?: string; expiresAt: string;
+}
+export interface PersonalGoogleStatus {
+  configured: boolean; connected: boolean; account?: string; canSend: boolean; canEditCalendar: boolean;
+}
+export interface PersonalCalendarChoice { id: string; name: string; timeZone: string; accessRole: string; }
+export const personalGoogleRequest = <T>(clientId: string,path: string,method = 'GET',data?: Record<string,unknown>) => request<T>(clientId,path,method,data);
+
+export { request as requestPersonalAgent };

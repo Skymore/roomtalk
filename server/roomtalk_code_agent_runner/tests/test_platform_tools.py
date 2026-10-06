@@ -11,6 +11,45 @@ import pytest
 from roomtalk_code_agent_runner import platform_tools
 
 
+def test_personal_computer_receipts_keep_operation_ids_and_save_actual_images(tmp_path: Path, monkeypatch, capsys):
+    import base64
+    calls = []
+    image = bytes([255, 216, 255, 224, 1, 2, 3])
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    def request(path, env, **kwargs):
+        calls.append((path, kwargs))
+        if kwargs.get("body", {}).get("operation") == "desktop":
+            return {"data": base64.b64encode(image).decode(), "receipt": {"id": "saved", "status": "interrupted"}, "warning": "Outcome is unknown"}
+        return {"status": "succeeded", "stdout": "real output"}
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", request)
+    assert platform_tools.main(["computer", "run", "--command", "printf actual", "--operation-id", "same-command", "--json"]) == 0
+    assert calls[-1] == ("/personal-computer", {"method": "PATCH", "body": {"operation": "run", "operationId": "same-command", "command": "printf actual", "cwd": "/workspace"}})
+    capsys.readouterr()
+    action = tmp_path / "action.json"
+    action.write_text('{"action":"key","text":"Return"}', encoding="utf-8")
+    target = tmp_path / "actual.jpg"
+    assert platform_tools.main(["computer", "desktop", "--file", str(action), "--operation-id", "submit-once", "--output", str(target), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["receipt"]["status"] == "interrupted"
+    assert result["inspectWith"] == "view_image"
+    assert "data" not in result
+    assert target.read_bytes() == image
+    assert calls[-1][1]["body"]["operationId"] == "submit-once"
+    assert calls[-1][1]["body"]["action"] == {"action": "key", "text": "Return"}
+
+
+def test_personal_computer_plan_mode_can_read_but_cannot_operate(monkeypatch, capsys):
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    calls = []
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append(path) or {"status": "stopped"})
+    assert platform_tools.main(["computer", "status", "--json"]) == 0
+    assert calls == ["/personal-computer?operation=status"]
+    capsys.readouterr()
+    assert platform_tools.main(["computer", "start", "--json"]) == 1
+    assert len(calls) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
 def test_personal_memory_set_refuses_plan_mode(tmp_path: Path, monkeypatch, capsys):
     source = tmp_path / "memory.txt"
     source.write_text("Seattle", encoding="utf-8")
@@ -451,4 +490,98 @@ def test_personal_browser_commands_use_the_private_broker_without_printing_crede
     capsys.readouterr()
     monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
     assert platform_tools.main(["browser", "open", "--url", "https://example.org", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_personal_file_import_fill_and_get_use_confirmed_values_and_hide_binary(tmp_path, monkeypatch, capsys):
+    import base64
+    source = tmp_path / "form.pdf"
+    source.write_bytes(b"%PDF-1.7 actual file bytes")
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    calls = []
+    def request(path, env, **kwargs):
+        calls.append((path, kwargs))
+        if "content=true" in path:
+            return {"success": True, "file": {"id": "saved"}, "content": base64.b64encode(source.read_bytes()).decode()}
+        return {"success": True, "file": {"id": "saved"}, "files": [], "total": 0}
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", request)
+    assert platform_tools.main(["file", "import", "--file", str(source), "--json"]) == 0
+    assert base64.b64decode(calls[-1][1]["body"]["content"]) == source.read_bytes()
+    assert json.loads(capsys.readouterr().out)["tool"] == "PersonalFile"
+    assert platform_tools.main(["file", "fill", "--id", "saved", "--fields-json", '{"Name":"Confirmed User","Agree":true}', "--json"]) == 0
+    assert calls[-1][1]["body"]["fields"] == {"Name": "Confirmed User", "Agree": True}
+    capsys.readouterr()
+    target = tmp_path / "reopened.pdf"
+    assert platform_tools.main(["file", "get", "--id", "saved", "--output", str(target), "--json"]) == 0
+    assert target.read_bytes() == source.read_bytes()
+    assert "content" not in json.loads(capsys.readouterr().out)
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    assert platform_tools.main(["file", "fill", "--id", "saved", "--fields-json", '{}', "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_independent_browser_sessions_use_scoped_broker(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "write")
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append((path, kwargs)) or {"success": True, "session": {"id": "actual-session"}})
+    assert platform_tools.main(["browser", "create", "--url", "https://example.org", "--json"]) == 0
+    assert calls[-1][1]["body"] == {"action": "create", "url": "https://example.org"}
+    assert json.loads(capsys.readouterr().out)["session"]["id"] == "actual-session"
+    assert platform_tools.main(["browser", "sessions", "--json"]) == 0
+    assert calls[-1][0] == "/personal-browser?operation=sessions"
+    capsys.readouterr()
+    assert platform_tools.main(["browser", "read", "--session-id", "actual-session", "--json"]) == 0
+    assert calls[-1][1]["body"] == {"action": "read", "sessionId": "actual-session"}
+    capsys.readouterr()
+
+
+def test_personal_task_delegation_and_controls_use_private_broker(tmp_path: Path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "write")
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append((path, kwargs)) or {"room": {"id": "saved-task"}})
+    source = tmp_path / "task.json"
+    payload = {"prompt": "Analyze imported transactions", "kind": "finance", "input": {"csv": "date,description,amount\n2026-10-01,Actual food,10"}}
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    assert platform_tools.main(["task", "delegate", "--file", str(source), "--json"]) == 0
+    assert calls[-1] == ("/personal-task", {"method": "PATCH", "body": {"operation": "delegate", "data": payload}})
+    assert json.loads(capsys.readouterr().out)["room"]["id"] == "saved-task"
+    assert platform_tools.main(["task", "list", "--json"]) == 0
+    assert calls[-1][0] == "/personal-task?operation=list"
+    capsys.readouterr()
+    assert platform_tools.main(["task", "get", "--id", "saved-task", "--json"]) == 0
+    assert calls[-1][0] == "/personal-task?operation=get&id=saved-task"
+    capsys.readouterr()
+    for action in ("pause", "resume", "retry", "cancel"):
+        assert platform_tools.main(["task", "control", "--id", "saved-task", "--action", action, "--json"]) == 0
+        assert calls[-1][1]["body"] == {"operation": "control", "id": "saved-task", "action": action}
+        capsys.readouterr()
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    before = len(calls)
+    for args in (["task", "delegate", "--file", str(source)], ["task", "control", "--id", "saved-task", "--action", "pause"]):
+        assert platform_tools.main([*args, "--json"]) == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+    assert len(calls) == before
+
+
+def test_personal_task_and_google_commands_use_scoped_broker(tmp_path: Path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "write")
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append((path, kwargs)) or {"saved": True})
+    source = tmp_path / "payload.json"
+    source.write_text(json.dumps({"question": "Missing name"}), encoding="utf-8")
+    assert platform_tools.main(["task", "request-input", "--file", str(source), "--json"]) == 0
+    assert calls[-1] == ("/personal-task", {"method": "PATCH", "body": {"question": "Missing name"}})
+    assert json.loads(capsys.readouterr().out)["tool"] == "PersonalTask"
+    assert platform_tools.main(["google", "mail", "--query", "from:user@example.com", "--json"]) == 0
+    assert calls[-1][0] == "/personal-google?operation=mail&query=from%3Auser%40example.com"
+    capsys.readouterr()
+    source.write_text(json.dumps({"to": ["recipient@example.com"], "subject": "Draft", "body": "Message"}), encoding="utf-8")
+    assert platform_tools.main(["google", "save-draft", "--file", str(source), "--json"]) == 0
+    assert calls[-1][1]["body"]["operation"] == "save-draft"
+    assert calls[-1][1]["body"]["data"]["subject"] == "Draft"
+    capsys.readouterr()
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    before = len(calls)
+    assert platform_tools.main(["google", "propose", "--file", str(source), "--json"]) == 1
+    assert len(calls) == before
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"

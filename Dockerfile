@@ -53,7 +53,7 @@ ARG CODEX_CLI_NPM_VERSION=0.160.0
 
 # Codex agent turns run inside the E2B sandbox template. The app host keeps a
 # small Codex CLI install only for the subscription device-auth handshake.
-RUN apk add --no-cache util-linux \
+RUN apk add --no-cache util-linux docker-cli \
   && npm install -g @openai/codex@${CODEX_CLI_NPM_VERSION} \
   && npm cache clean --force \
   && test -x /usr/bin/script \

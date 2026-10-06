@@ -19,6 +19,7 @@ export function registerPersonalAgentTrackingContextRoutes(app: Express, options
       const room=await options.store.getRoomById(claims.roomId);
       if(!room||room.creatorId!==claims.clientId||room.personalAgentOwnerId!==claims.clientId)throw new CodeAgentRoomContextError('Tracking belongs to its personal agent owner',403,'personal_watch_access_denied');
       if(!await options.store.hasActiveCodeAgentRoomLease!(room.id,new Date().toISOString(),claims.turnId))throw new CodeAgentRoomContextError('This agent turn ended',403,'personal_watch_turn_ended');
+      if(write && room.personalAgentTaskControl)throw new CodeAgentRoomContextError('This task is paused or cancelled',409,'personal_task_paused');
       if(!write)return res.json(updates ? await options.notifications.list(claims.clientId,req.query) : await options.tracking.list(claims.clientId,req.query));
       if(!codeAgentModeAllowsWriteTools(claims.mode))throw new CodeAgentRoomContextError('This mode cannot change tracking',403,'personal_watch_read_only');
       const body=req.body || {};

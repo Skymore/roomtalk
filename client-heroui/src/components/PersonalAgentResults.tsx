@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Spinner } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
+import { PersonalAgentStructuredResult } from './PersonalAgentStructuredResult';
 import { MarkdownContent } from './MarkdownContent';
 import { readPersonalAgentResultFile, readPersonalAgentResults, type PersonalAgentResult } from '../utils/personalAgent';
 import type { RoomAgentTurn } from '../utils/types';
@@ -61,16 +62,12 @@ export const PersonalAgentResults: React.FC<{ clientId: string; turn: RoomAgentT
     finally { if (mounted.current) setBusy(''); }
   };
   return <div className="mx-auto w-full max-w-3xl space-y-3 px-1">
-    {results.map(result => <article key={result.id} className="rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-4 dark:border-[#3d3d3a] dark:bg-[#252522]" data-testid="personal-result-card">
-      <div className="flex items-start gap-3">
-        <span className="rounded-xl bg-[#ece8e0] p-3 dark:bg-[#34332f]"><Icon icon={result.kind === 'web' ? 'lucide:globe' : result.kind === 'plan' ? 'lucide:list-checks' : 'lucide:file-text'} className="h-5 w-5" /></span>
-        <div className="min-w-0 flex-1"><p className="text-xs text-default-500">{t(`personalResultKind_${result.kind}`)}</p><h3 className="break-words text-base font-medium">{result.title}</h3><p className="mt-1 break-all text-xs text-default-500">{result.filename}</p></div>
-      </div>
-      {result.summary && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-default-600">{result.summary}</p>}
-      <div className="mt-3 flex flex-wrap gap-2">
+    {results.map(result => <article key={result.id} className="space-y-3 rounded-[22px] bg-[#f0f1f2] p-[18px] dark:bg-[#292b2d]" data-testid="personal-result-card">
+      {result.kind!=='finance' && <><div className="flex items-start justify-between gap-3"><h3 className="break-words text-base font-semibold">{result.title}</h3><span className="shrink-0 rounded-full bg-default-100 px-2 py-1 text-xs text-default-500">{t(`personalResultKind_${result.kind}`)}</span></div>{result.summary && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-default-600">{result.summary}</p>}</>}
+      {result.data?<div className="mt-3"><PersonalAgentStructuredResult clientId={clientId} result={result}/></div>:<div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" color="secondary" variant="flat" isDisabled={!canInteract || Boolean(busy)} isLoading={busy === result.id} onPress={() => void open(result)}>{t('personalResultOpen')}</Button>
         <Button size="sm" variant="light" isDisabled={!canInteract || Boolean(busy)} onPress={() => void open(result, true)} startContent={<Icon icon="lucide:download" />}>{t('personalResultDownload')}</Button>
-      </div>
+      </div>}
     </article>)}
     {results.length < total && <Button size="sm" variant="light" isDisabled={!canInteract || Boolean(busy)} onPress={() => {
       setBusy('more'); void readPersonalAgentResults(clientId, turn.roomId, turn.id, results.length)
@@ -81,7 +78,8 @@ export const PersonalAgentResults: React.FC<{ clientId: string; turn: RoomAgentT
     <Modal isOpen={Boolean(preview)} onClose={() => setPreview(undefined)} size="4xl" scrollBehavior="inside" classNames={{ base: 'max-h-[90dvh] bg-white dark:bg-[#252522]' }}>
       <ModalContent>{preview && <><ModalHeader className="min-w-0 break-words">{preview.result.title}</ModalHeader>
         <ModalBody>
-          {preview.result.kind === 'web' ? <iframe title={preview.result.title} srcDoc={privateWebPreview(preview.text || '')} sandbox="allow-scripts" referrerPolicy="no-referrer" className="h-[60dvh] min-h-72 w-full rounded-xl border border-default-200 bg-white" />
+          {preview.result.data ? <PersonalAgentStructuredResult clientId={clientId} result={preview.result} />
+            : preview.result.kind === 'web' ? <iframe title={preview.result.title} srcDoc={privateWebPreview(preview.text || '')} sandbox="allow-scripts" referrerPolicy="no-referrer" className="h-[60dvh] min-h-72 w-full rounded-xl border border-default-200 bg-white" />
             : preview.result.mimeType === 'text/markdown' ? <MarkdownContent content={preview.text || ''} />
             : preview.text !== undefined ? <pre className="whitespace-pre-wrap break-words text-sm leading-7">{preview.text}</pre>
             : preview.result.mimeType === 'application/pdf' && preview.url ? <iframe title={preview.result.title} src={preview.url} className="h-[60dvh] w-full rounded-xl border border-default-200" />

@@ -1,3 +1,7 @@
+import {readPersonalTaskSteps} from '../utils/personalTaskSteps';
+import {PersonalAgentTaskReceipt} from './PersonalAgentTaskReceipt';
+import {DesktopToolCard} from './personalComputer/DesktopToolCard';
+import type {PersonalDesktopStep} from '../utils/personalDesktopSteps';
 import React from 'react';
 import { PersonalAgentBrowserVisits } from './PersonalAgentBrowser';
 import { PersonalAgentResults } from './PersonalAgentResults';
@@ -22,13 +26,15 @@ export const PersonalAgentMessage: React.FC<{ message: Message; onRetry?: (messa
   </div>;
 };
 
-export const PersonalAgentTurn: React.FC<{ clientId: string; canInteract?: boolean; turn: RoomAgentTurn; messages: Message[]; renderMessage: (message: Message) => React.ReactNode }> = ({ clientId, canInteract = true, turn, messages, renderMessage }) => {
+export const PersonalAgentTurn: React.FC<{ clientId: string; canInteract?: boolean; desktopSteps?:PersonalDesktopStep[];liveDesktopStepId?:string;onOpenComputer?:()=>void;turn: RoomAgentTurn; messages: Message[]; renderMessage: (message: Message) => React.ReactNode }> = ({ clientId, canInteract = true, turn, messages, renderMessage, desktopSteps=[],liveDesktopStepId,onOpenComputer }) => {
   const { t } = useTranslation();
   const answers = messages.filter(message => message.messageType === 'ai' && message.content.trim());
   const final = turn.finalMessageId ? answers.find(message => message.id === turn.finalMessageId) : undefined;
   return <div className="space-y-3" data-testid="personal-agent-turn">
     {messages.filter(message => message.messageType === 'text' || message.messageType === 'media').map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
     {(final ? [final] : answers).map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
+    {canInteract && readPersonalTaskSteps(messages).map(step=><PersonalAgentTaskReceipt key={step.id} clientId={clientId} step={step}/>)}
+    {canInteract && desktopSteps.map(step=><DesktopToolCard key={step.id} clientId={clientId} step={step} live={step.id===liveDesktopStepId} onOpen={onOpenComputer}/>)}
     <PersonalAgentBrowserVisits clientId={clientId} turn={turn} canInteract={canInteract} />
     <PersonalAgentResults clientId={clientId} turn={turn} canInteract={canInteract} />
     {turn.status === 'running' && <p className="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 py-2 text-sm text-default-500" role="status"><Icon icon="lucide:ellipsis" className="h-5 w-5 motion-safe:animate-pulse" />{t('personalAgentThinking')}</p>}

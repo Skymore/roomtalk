@@ -3,6 +3,7 @@ import path from 'node:path';
 import { RoomStore } from '../repositories/store';
 import { PersonalAgentResult } from '../types';
 import { MediaObjectStorage } from './mediaObjectStorage';
+import { analyzeSpending } from './personalAgentFinance';
 import { Logger } from '../logger';
 
 export const PERSONAL_RESULT_MAX_BYTES = 4 * 1024 * 1024;
@@ -13,7 +14,7 @@ const text = (value: unknown, field: string, limit: number, empty = false) => {
   return value.trim();
 };
 const mimeTypes: Record<string, string> = {
-  '.md': 'text/markdown', '.txt': 'text/plain', '.csv': 'text/csv', '.html': 'text/html', '.htm': 'text/html',
+  '.json': 'application/json', '.md': 'text/markdown', '.txt': 'text/plain', '.csv': 'text/csv', '.html': 'text/html', '.htm': 'text/html',
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -40,7 +41,9 @@ export class PersonalAgentResultService {
 
   async save(source: { clientId: string; roomId: string; turnId: string }, input: Record<string, unknown>) {
     const kind = input.kind;
-    if (kind !== 'plan' && kind !== 'document' && kind !== 'web') throw new RangeError('Invalid result kind');
+    if (!['plan','document','web','comparison','finance'].includes(String(kind))) throw new RangeError('Invalid result kind');
+    if (kind === 'finance' && path.extname(String(input.filename)).toLowerCase() !== '.csv') throw new RangeError('Finance results need the original transaction CSV');
+    if (kind === 'comparison' && path.extname(String(input.filename)).toLowerCase() !== '.json') throw new RangeError('Comparison results need a JSON object');
     const filename = text(input.filename, 'filename', 200);
     if (/[\\/\x00-\x1f]/.test(filename) || filename === '.' || filename === '..') throw new RangeError('Provide a filename without directory components');
     const extension = path.extname(filename).toLowerCase();
@@ -55,8 +58,20 @@ export class PersonalAgentResultService {
       if (body.length > 512 * 1024) throw new RangeError('Text results are limited to 512 KiB');
       try { new TextDecoder('utf-8', { fatal: true }).decode(body); } catch { throw new RangeError('Text results must use UTF-8'); }
     }
+    let data: Record<string, unknown> | undefined;
+    if (kind === 'finance' || kind === 'comparison') {
+      try {
+        const decoded = new TextDecoder('utf-8', { fatal: true }).decode(body);
+        if (kind === 'finance') data = analyzeSpending(decoded);
+        else {
+          const value = JSON.parse(decoded);
+          if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Comparison must contain an object');
+          data = value;
+        }
+      } catch (error) { throw new RangeError(error instanceof Error ? error.message : 'Invalid structured result'); }
+    }
     const id = randomUUID();
-    const result: PersonalAgentResult = { ...source, id, kind, filename, mimeType, byteSize: body.length,
+    const result: PersonalAgentResult = { ...source, id, kind: kind as PersonalAgentResult['kind'], ...(data ? { data } : {}), filename, mimeType, byteSize: body.length,
       title: text(input.title, 'title', 200), summary: text(input.summary ?? '', 'summary', 1000, true),
       objectKey: `personal-agent-results/${source.roomId}/${id}`, createdAt: new Date().toISOString() };
     await this.storage.putMediaObject({ objectKey: result.objectKey, body, mimeType, byteSize: body.length });

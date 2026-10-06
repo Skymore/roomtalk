@@ -7,13 +7,14 @@ import { actInPersonalBrowser, takePersonalBrowserControl, releasePersonalBrowse
   type PersonalBrowserControl, type PersonalBrowserFrame, type PersonalBrowserObservation } from '../utils/personalAgent';
 import type { RoomAgentTurn } from '../utils/types';
 
-export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: string; isOpen: boolean; onClose: () => void }> = ({ clientId, roomId, isOpen, onClose }) => {
+export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: string; initialUrl?:string; isOpen: boolean; onClose: () => void }> = ({ clientId, roomId, initialUrl, isOpen, onClose }) => {
   const { t } = useTranslation();
   const [frame, setFrame] = React.useState<PersonalBrowserFrame>();
   const [error, setError] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [address, setAddress] = React.useState('');
   const [text, setText] = React.useState('');
+  const [savedDownloads,setSavedDownloads] = React.useState<string[]>([]);
   const [zoomed, setZoomed] = React.useState(false);
   const control = React.useRef<PersonalBrowserControl | undefined>(undefined);
   const busy = React.useRef(false);
@@ -38,6 +39,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
       const observed = await pending;
       if (!live.current || generation.current !== currentGeneration) return false;
       setFrame(observed); setError('');
+      if (action.action === 'import_pdf' && observed.file) setSavedDownloads(previous=>[...previous,String(action.id)]);
       if (!addressEdited.current) setAddress(observed.session.url === 'about:blank' ? '' : observed.session.url);
       return true;
     } catch (failure) {
@@ -48,11 +50,11 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
   React.useEffect(() => {
     if (!isOpen) return;
     let active = true;
-    const effectGeneration = generation.current + 1; generation.current = effectGeneration; busy.current = false; live.current = true; setFrame(undefined); setError(''); setLoading(true); setAddress(''); setText(''); setZoomed(false); addressEdited.current = false;
+    const effectGeneration = generation.current + 1; generation.current = effectGeneration; busy.current = false; live.current = true; setFrame(undefined); setSavedDownloads([]); setError(''); setLoading(true); setAddress(''); setText(''); setZoomed(false); addressEdited.current = false;
     void takePersonalBrowserControl(clientId, roomId).then(async saved => {
       if (!active) { await releasePersonalBrowserControl(clientId, roomId, saved.control); return; }
       control.current = saved.control;
-      await update({ action: 'read' });
+      await update(initialUrl ? {action:'open',url:initialUrl} : { action: 'read' });
     }).catch(failure => { if (active) setError(failure instanceof Error ? failure.message : String(failure)); })
       .finally(() => { if (active) setLoading(false); });
     const timer = window.setInterval(() => { if (!document.hidden) void update({ action: 'read' }, true); }, 2500);
@@ -61,7 +63,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
       const held = control.current; control.current = undefined;
       if (held) void releasePersonalBrowserControl(clientId, roomId, held).catch(() => {});
     };
-  }, [clientId, roomId, isOpen, update]);
+  }, [clientId, roomId, isOpen, update, initialUrl]);
   const close = async () => {
     if (loading) return;
     try { await inFlight.current; } catch { /* Release still works after a failed preview. */ }
@@ -95,6 +97,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
               void update({ action: 'click', x: Math.min(width - 1, Math.max(0, Math.floor((event.clientX - rect.left) * width / rect.width))), y: Math.min(height - 1, Math.max(0, Math.floor((event.clientY - rect.top) * height / rect.height))) });
             }} /> : <p className="p-8 text-center text-sm text-default-500" role="status">{loading ? t('loading') : t('personalBrowserReconnect')}</p>}
         </div>
+        {Boolean(frame?.downloads?.length) && <section className="space-y-2 rounded-xl border border-default-200 p-3"><h3 className="text-sm font-medium">{t('personalBrowserDownloads')}</h3>{frame?.downloads?.map(file => <div key={file.id} className="flex items-center justify-between gap-2"><span className="min-w-0 break-all text-xs">{file.name}</span><Button size="sm" variant="flat" isDisabled={loading || savedDownloads.includes(file.id)} onPress={()=>void update({action:'import_pdf',id:file.id})}>{t(savedDownloads.includes(file.id) ? 'personalBrowserPdfSaved' : 'personalBrowserImportPdf')}</Button></div>)}</section>}
         <form className="flex gap-2" onSubmit={event => { event.preventDefault(); const value = text; void update({ action: 'text', text: value }).then(success => { if (success) setText(current => current === value ? '' : current); }); }}>
           <Input aria-label={t('personalBrowserText')} placeholder={t('personalBrowserText')} value={text} onValueChange={setText} isDisabled={!available} autoComplete="off" />
           <Button type="submit" isDisabled={!available || !text}>{t('sendMessage')}</Button>
@@ -163,6 +166,6 @@ export const PersonalAgentBrowserVisits: React.FC<{ clientId: string; turn: Room
       </div>}
     </>}
     {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
-    <PersonalAgentBrowserControl clientId={clientId} roomId={turn.roomId} isOpen={open} onClose={() => setOpen(false)} />
+    <PersonalAgentBrowserControl clientId={clientId} roomId={latest?.browserRoomId || turn.roomId} isOpen={open} onClose={() => setOpen(false)} />
   </div>;
 };

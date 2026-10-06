@@ -148,6 +148,7 @@ class CodexAppServerJsonRpcMapper:
     command_output_parts: dict[str, list[str]] = field(default_factory=dict)
     file_change_output_parts: dict[str, list[str]] = field(default_factory=dict)
     ignored_item_types: dict[str, int] = field(default_factory=dict)
+    plan_update_sequence: int = 0
     usage: dict[str, Any] | None = None
 
     def map_notification(self, message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -219,6 +220,24 @@ class CodexAppServerJsonRpcMapper:
                 "turnId": self.turn_id,
                 "usage": self.usage,
             }]
+
+        if method == "turn/plan/updated":
+            plan = params.get("plan")
+            if not isinstance(plan, list):
+                return []
+            self.plan_update_sequence += 1
+            item_id = f"codex_plan_{self.turn_id}_{self.plan_update_sequence}"
+            steps = [{"step": str(entry.get("step") or ""),
+                      "status": "in_progress" if entry.get("status") == "inProgress" else str(entry.get("status") or "pending")}
+                     for entry in plan if isinstance(entry, dict)]
+            args = {"plan": steps}
+            if isinstance(params.get("explanation"), str):
+                args["explanation"] = params["explanation"]
+            return [{"schemaVersion": SCHEMA_VERSION, "type": "tool_call", "id": item_id,
+                     "name": "update_plan", "args": args, "messageId": f"codex_app_tool_{item_id}"},
+                    {"schemaVersion": SCHEMA_VERSION, "type": "tool_result", "id": item_id,
+                     "name": "update_plan", "success": True, "output": "Plan updated",
+                     "messageId": f"codex_app_tool_result_{item_id}"}]
 
         if method == "item/plan/delta":
             delta = str(params.get("delta") or "").strip()
@@ -309,6 +328,27 @@ class CodexAppServerJsonRpcMapper:
                     "delta": delta,
                 }]
             return []
+
+        if item_type == "imageView":
+            image_path = str(item.get("path") or "")
+            if not completed:
+                return [{
+                    "schemaVersion": SCHEMA_VERSION,
+                    "type": "tool_call",
+                    "id": item_id,
+                    "name": "view_image",
+                    "args": {"path": image_path},
+                    "messageId": f"codex_app_tool_{item_id}",
+                }]
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_result",
+                "id": item_id,
+                "name": "view_image",
+                "success": True,
+                "output": _normalize_workspace_text(self.workspace, f"Viewed image: {image_path}"),
+                "messageId": f"codex_app_tool_result_{item_id}",
+            }]
 
         if item_type == "commandExecution" and not completed:
             command = str(item.get("command") or "")
@@ -520,6 +560,7 @@ def _thread_start_params(request: RunnerRequest, env: dict[str, str], workspace:
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
         "ephemeral": False,
+        "config": {"tools.update_plan.enabled": True},
         **_thread_permission_params(request, env, permission.sandbox),
         "approvalPolicy": permission.approval_policy,
         "approvalsReviewer": permission.approvals_reviewer,
@@ -531,6 +572,7 @@ def _thread_resume_params(request: RunnerRequest, env: dict[str, str], workspace
     permission = _codex_app_server_permissions(request)
     return {
         "threadId": request.session_id,
+        "config": {"tools.update_plan.enabled": True},
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
         **_thread_permission_params(request, env, permission.sandbox),

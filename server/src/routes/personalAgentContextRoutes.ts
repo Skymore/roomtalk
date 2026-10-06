@@ -30,6 +30,7 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
       if (!await options.store.hasActiveCodeAgentRoomLease?.(claims.roomId, new Date().toISOString(), claims.turnId)) {
         throw new CodeAgentRoomContextError('Personal memory requires an active agent turn', 403, 'personal_memory_turn_ended');
       }
+      if(write && room.personalAgentTaskControl)throw new CodeAgentRoomContextError('This task is paused or cancelled',409,'personal_task_paused');
       if (write && !codeAgentModeAllowsWriteTools(claims.mode)) {
         throw new CodeAgentRoomContextError('This agent mode cannot update personal memory', 403, 'personal_memory_read_only');
       }

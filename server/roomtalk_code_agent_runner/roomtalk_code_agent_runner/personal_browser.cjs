@@ -4,6 +4,9 @@
 // the live page. Remote page code never executes in the RoomTalk client.
 const net = require('node:net');
 const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
+const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 const socketPath = process.env.ROOMTALK_BROWSER_SOCKET || '/tmp/roomtalk-personal-browser.sock';
 const viewport = { width: 1280, height: 800 };
@@ -13,6 +16,24 @@ async function serve() {
   let browser, context, page, sessionId;
   let queue = Promise.resolve();
   const statuses = new WeakMap();
+  const downloads = new Map();
+  const pendingDownloads = new Set();
+  const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'roomtalk-personal-pdf-'));
+  function watch(opened) {
+    opened.setDefaultTimeout(10_000);
+    opened.on('dialog', dialog => void dialog.dismiss());
+    opened.on('download', download => {
+      const task = (async () => {
+        const id = randomUUID(), name = path.basename(download.suggestedFilename());
+        const target = path.join(downloadDir, id);
+        await download.saveAs(target);
+        const size = fs.statSync(target).size;
+        if (!name.toLowerCase().endsWith('.pdf') || !size || size > 10 * 1024 * 1024) { fs.rmSync(target, {force:true}); return; }
+        downloads.set(id, {id, name, byteSize:size, url:download.url(), path:target});
+      })().catch(() => {});
+      pendingDownloads.add(task); task.finally(() => pendingDownloads.delete(task));
+    });
+  }
   async function start(storageState) {
     if (context) return;
     browser = await chromium.launch({ headless: true, channel: 'chromium', args: ['--no-sandbox'],
@@ -25,20 +46,22 @@ async function serve() {
       const frame = response.frame();
       if (frame === frame.page().mainFrame()) statuses.set(frame.page(), response.status());
     });
+    context.on('page', opened => { page = opened; watch(opened); });
     page = await context.newPage();
-    context.on('page', opened => { page = opened; opened.setDefaultTimeout(10_000); opened.on('dialog', dialog => void dialog.dismiss()); });
-    page.setDefaultTimeout(10_000);
-    page.on('dialog', dialog => void dialog.dismiss());
   }
   async function observe() {
     if (!page || page.isClosed()) page = context.pages().findLast(candidate => !candidate.isClosed()) || await context.newPage();
+    await Promise.all([...pendingDownloads]);
     const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
-    return { httpStatus: statuses.get(page), url: page.url(), title: (await page.title()).slice(0, 300), text: text.slice(0, 30_000), truncated: text.length > 30_000,
-      viewport, screenshot: (await page.screenshot({ type: 'jpeg', quality: 65, timeout: 10_000 })).toString('base64'),
+    const screenshot = (await page.screenshot({ type: 'jpeg', quality: 65, timeout: 10_000 })).toString('base64');
+    await Promise.all([...pendingDownloads]);
+    return { downloads: [...downloads.values()].map(({path: _path,...metadata}) => metadata), httpStatus: statuses.get(page), url: page.url(), title: (await page.title()).slice(0, 300), text: text.slice(0, 30_000), truncated: text.length > 30_000,
+      viewport, screenshot,
       storageState: await context.storageState({ indexedDB: true }) };
   }
   async function execute(input) {
     if (context && input.sessionId !== sessionId) { await browser.close(); browser = context = page = undefined; }
+    if (sessionId && sessionId !== input.sessionId) { for (const file of downloads.values()) fs.rmSync(file.path,{force:true}); downloads.clear(); }
     sessionId = input.sessionId;
     if (input.action === 'close') {
       const storageState = context ? await context.storageState({ indexedDB: true }) : input.storageState;
@@ -62,6 +85,12 @@ async function serve() {
     else if (input.action === 'text') await page.keyboard.insertText(input.text);
     else if (input.action === 'key') await page.keyboard.press(input.key);
     else if (input.action === 'scroll') await page.mouse.wheel(0, input.deltaY);
+    else if (input.action === 'import_pdf') {
+      await Promise.all([...pendingDownloads]);
+      const file = downloads.get(input.id);
+      if (!file) throw new Error('Downloaded PDF is no longer available');
+      return {...await observe(), download: {id:file.id, name:file.name, url:file.url, content:fs.readFileSync(file.path).toString('base64')}};
+    }
     else if (input.action !== 'read') throw new Error('Unknown browser action');
     return observe();
   }
@@ -82,7 +111,7 @@ async function serve() {
   });
   server.on('error', error => { if (error.code !== 'EADDRINUSE') console.error('Browser service could not listen'); process.exit(1); });
   server.listen(socketPath, () => fs.chmodSync(socketPath, 0o600));
-  async function stop() { server.close(); if (browser) await browser.close().catch(() => {}); fs.rmSync(socketPath, { force: true }); process.exit(0); }
+  async function stop() { server.close(); if (browser) await browser.close().catch(() => {}); fs.rmSync(socketPath, { force: true }); fs.rmSync(downloadDir,{recursive:true,force:true}); process.exit(0); }
   process.on('SIGTERM', () => void stop());
   process.on('SIGINT', () => void stop());
 }
@@ -94,7 +123,7 @@ function send(input) {
     connection.setTimeout(40_000, () => connection.destroy(new Error('Browser action timed out')));
     connection.setEncoding('utf8');
     connection.on('connect', () => connection.write(JSON.stringify(input) + '\n'));
-    connection.on('data', chunk => { data += chunk; if (data.length > 8 * 1024 * 1024) connection.destroy(new Error('Browser response exceeds its limit')); });
+    connection.on('data', chunk => { data += chunk; if (data.length > 18 * 1024 * 1024) connection.destroy(new Error('Browser response exceeds its limit')); });
     connection.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Browser returned no observation')); } });
     connection.on('error', reject);
   });

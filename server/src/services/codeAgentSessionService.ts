@@ -413,6 +413,10 @@ export class CodeAgentSessionService {
       return rejectTurn(validation.error || 'code-agent turn rejected', { reason: 'room_validation_failed' });
     }
 
+    if (room!.personalAgentTaskControl) {
+      return rejectTurn('Resume the task before continuing. Cancelled tasks cannot continue.', { reason: 'personal_task_stopped' });
+    }
+
     if (this.activeTurns.has(input.roomId)) {
       return rejectTurn('An agent task is already running in this workspace', { reason: 'room_already_running' });
     }

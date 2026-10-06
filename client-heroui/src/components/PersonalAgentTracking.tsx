@@ -1,17 +1,42 @@
-import React from 'react';
-import { Button, Input, Select, SelectItem, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from '@heroui/react';
-import { useTranslation } from 'react-i18next';
-import { PersonalAgentBrowserControl } from './PersonalAgentBrowser';
-import { readPersonalAgentWatches, createPersonalAgentWatch, controlPersonalAgentWatch, removePersonalAgentWatch, type PersonalAgentWatch } from '../utils/personalAgent';
+/*
+MIT License
 
-export const PersonalAgentTracking: React.FC<{clientId: string; showError: (message: string)=>void; showSuccess: (message: string)=>void}> = ({clientId,showError,showSuccess}) => {
+Copyright (c) 2026 OpenMuse contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ported from OpenMuse GoalsScreen tracking list, MonitorForm and MonitorCard in agent-ui.tsx (73a7149).
+*/
+import React from 'react';
+import {Button,Input,Modal,ModalContent,ModalHeader,ModalBody} from '@heroui/react';
+import {Icon} from '@iconify/react';
+import {useTranslation} from 'react-i18next';
+import {readPersonalAgentWatches,createPersonalAgentWatch,controlPersonalAgentWatch,type PersonalAgentWatch} from '../utils/personalAgent';
+export const PersonalAgentTracking:React.FC<{clientId:string;showError:(message:string)=>void;showSuccess:(message:string)=>void;onTask:(id:string)=>void}>=({clientId,showError,onTask})=>{
   const {t}=useTranslation();
   const [watches,setWatches]=React.useState<PersonalAgentWatch[]>([]),[total,setTotal]=React.useState(0);
   const [loading,setLoading]=React.useState(false),[busy,setBusy]=React.useState<string>(),[creating,setCreating]=React.useState(false);
-  const [browser,setBrowser]=React.useState<PersonalAgentWatch>();
-  const [removing,setRemoving]=React.useState<PersonalAgentWatch>();
+  const [selected,setSelected]=React.useState<string>();
+  const [showAll,setShowAll]=React.useState(false);
+  const [error,setError]=React.useState('');
   const [title,setTitle]=React.useState(''),[url,setUrl]=React.useState(''),[condition,setCondition]=React.useState<PersonalAgentWatch['condition']>('change');
-  const [value,setValue]=React.useState(''),[interval,setInterval]=React.useState('30');
+  const [value,setValue]=React.useState(''),[interval,setInterval]=React.useState('15');
   const live=React.useRef(true),pending=React.useRef(false),loaded=React.useRef(50);loaded.current=Math.max(50,watches.length);
   React.useEffect(()=>{live.current=true;return()=>{live.current=false}},[]);
   const refresh=React.useCallback(async (offset=0,background=false)=>{
@@ -26,50 +51,37 @@ export const PersonalAgentTracking: React.FC<{clientId: string; showError: (mess
     finally{pending.current=false;if(live.current&&!background)setLoading(false)}
   },[clientId,showError]);
   React.useEffect(()=>{void refresh();const timer=window.setInterval(()=>{if(!document.hidden&&!pending.current)void refresh(0,true)},15000);return()=>window.clearInterval(timer)},[refresh]);
-  const act=async(watch:PersonalAgentWatch,action:'pause'|'resume'|'check')=>{
-    if(busy)return;setBusy(watch.id);
-    try {const saved=await controlPersonalAgentWatch(clientId,watch,action);if(!live.current)return;
-      setWatches(previous=>previous.map(item=>item.id===watch.id ? saved.watch : item));showSuccess(t(action==='check' ? 'personalWatchCheckRequested' : action==='pause' ? 'personalWatchPausedNotice' : 'personalWatchResumedNotice'));
-    }catch(error){if(live.current)showError(error instanceof Error ? error.message : String(error));}finally{if(live.current)setBusy(undefined)}
+  const watch=watches.find(item=>item.id===selected);
+  const act=async(watch:PersonalAgentWatch,action:'pause'|'resume'|'check'|'stop')=>{
+    if(busy)return;setBusy(watch.id);setError('');
+    try{const saved=await controlPersonalAgentWatch(clientId,watch,action);if(live.current)setWatches(previous=>previous.map(item=>item.id===watch.id?saved.watch:item));}
+    catch(error){if(live.current)setError(error instanceof Error?error.message:String(error));}finally{if(live.current)setBusy(undefined);}
   };
-  return <section className="space-y-4" aria-label={t('personalAgentTracking')}>
-    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-default-500">{t('personalWatchDescription')}</p>
-      <div className="flex gap-2"><Button size="sm" variant="light" isLoading={loading} onPress={()=>void refresh()}>{t('refresh')}</Button>
-        <Button size="sm" color="secondary" onPress={()=>{setTitle('');setUrl('');setValue('');setCondition('change');setInterval('30');setCreating(true)}}>{t('personalWatchAdd')}</Button></div></div>
-    {!loading&&!watches.length&&<p className="rounded-2xl bg-default-50 p-6 text-center text-sm text-default-500">{t('personalWatchEmpty')}</p>}
-    {watches.map(watch=><article key={watch.id} data-testid="personal-watch-card" className="space-y-3 rounded-2xl border border-default-200 bg-white p-5 dark:bg-[#252522]">
-      <div className="flex justify-between gap-3"><h3 className="break-words font-medium">{watch.title}</h3><span className="shrink-0 text-xs text-default-500">{t(watch.status==='active' ? 'personalWatchActive' : 'personalWatchPaused')}</span></div>
-      <p className="break-all text-xs text-default-500">{watch.url}</p>
-      <p className="text-sm text-default-600">{t(watch.condition==='change' ? 'personalWatchChange' : watch.condition==='contains' ? 'personalWatchContainsSummary' : 'personalWatchPriceSummary',{value:watch.value})}</p>
-      {watch.lastCheckedAt&&<p className="text-xs text-default-500">{t('personalWatchLastChecked',{time:new Date(watch.lastCheckedAt).toLocaleString()})}</p>}
-      {watch.error&&<p className="rounded-xl bg-warning-50 p-3 text-sm text-warning-800">{watch.error}<span className="mt-1 block text-xs">{t(watch.status==='paused' ? 'personalWatchFailurePaused' : 'personalWatchRetryScheduled')}</span></p>}
-      {watch.lastExcerpt!==undefined&&<details className="rounded-xl bg-default-50 p-3 text-xs text-default-500"><summary className="cursor-pointer">{t('personalWatchLastSource')}</summary>
-        <p className="mt-2 whitespace-pre-wrap break-words">{watch.lastExcerpt}</p>{watch.lastUrl&&<p className="mt-2 break-all">{watch.lastUrl}</p>}</details>}
-      <div className="flex flex-wrap gap-2"><Button size="sm" variant="light" isDisabled={Boolean(busy)||loading} onPress={()=>void act(watch,watch.status==='active' ? 'pause' : 'resume')}>{t(watch.status==='active' ? 'personalAgentPause' : 'personalAgentResume')}</Button>
-        <Button size="sm" variant="light" isDisabled={Boolean(busy)||loading||watch.status!=='active'} onPress={()=>void act(watch,'check')}>{t('personalWatchCheckNow')}</Button>
-        <Button size="sm" variant="light" onPress={()=>setBrowser(watch)}>{t('personalWatchOpenPage')}</Button>
-        <Button size="sm" variant="light" isDisabled={Boolean(busy)} onPress={()=>setRemoving(watch)}>{t('delete')}</Button></div>
-    </article>)}
-    {watches.length<total&&<Button variant="light" isLoading={loading} onPress={()=>void refresh(watches.length)}>{t('loadMore')}</Button>}
-    <Modal isOpen={creating} onClose={()=>{if(!busy)setCreating(false)}}><ModalContent><form onSubmit={event=>{event.preventDefault();if(busy)return;setBusy('create');
-      void createPersonalAgentWatch(clientId,{title,url,condition,value,intervalMinutes:Number(interval)}).then(saved=>{
-        if(!live.current)return;setWatches(previous=>previous.some(watch=>watch.id===saved.watch.id) ? previous : [saved.watch,...previous]);setCreating(false);void refresh();showSuccess(t('personalWatchSaved'));
-      }).catch(error=>{if(live.current)showError(error.message)}).finally(()=>{if(live.current)setBusy(undefined)});
-    }}><ModalHeader>{t('personalWatchAdd')}</ModalHeader><ModalBody>
-      <Input label={t('personalWatchTitle')} value={title} onValueChange={setTitle} maxLength={100} isRequired isDisabled={Boolean(busy)} />
-      <Input label={t('personalWatchURL')} value={url} onValueChange={setUrl} type="url" maxLength={2000} isRequired isDisabled={Boolean(busy)} />
-      <Select label={t('personalWatchCondition')} selectedKeys={[condition]} onSelectionChange={keys=>setCondition(Array.from(keys)[0] as PersonalAgentWatch['condition'])} isDisabled={Boolean(busy)}>
-        <SelectItem key="change">{t('personalWatchChange')}</SelectItem><SelectItem key="contains">{t('personalWatchContains')}</SelectItem><SelectItem key="price_below">{t('personalWatchPrice')}</SelectItem></Select>
-      {condition!=='change'&&<Input label={t(condition==='contains' ? 'personalWatchText' : 'personalWatchPriceValue')} value={value} onValueChange={setValue} type={condition==='price_below' ? 'number' : 'text'} min="0.01" step="0.01" isRequired isDisabled={Boolean(busy)} />}
-      <Select label={t('personalWatchInterval')} selectedKeys={[interval]} onSelectionChange={keys=>setInterval(String(Array.from(keys)[0]))} isDisabled={Boolean(busy)}>
-        {['5','30','60','360','1440'].map(minutes=><SelectItem key={minutes}>{t('personalWatchMinutes',{count:Number(minutes)})}</SelectItem>)}</Select>
-      <p className="text-xs text-default-500">{t('personalWatchBrowserHint')}</p>
-    </ModalBody><ModalFooter><Button variant="light" isDisabled={Boolean(busy)} onPress={()=>setCreating(false)}>{t('cancel')}</Button>
-      <Button type="submit" color="secondary" isLoading={busy==='create'} isDisabled={!title.trim()||!url.trim()||(condition!=='change'&&!value.trim())}>{t('personalWatchStart')}</Button></ModalFooter></form></ModalContent></Modal>
-    <Modal isOpen={Boolean(removing)} onClose={()=>{if(!busy)setRemoving(undefined)}}><ModalContent><ModalHeader>{t('personalWatchRemove')}</ModalHeader><ModalBody><p>{t('personalWatchRemoveHint',{title:removing?.title})}</p></ModalBody><ModalFooter>
-      <Button variant="light" isDisabled={Boolean(busy)} onPress={()=>setRemoving(undefined)}>{t('cancel')}</Button><Button color="danger" isLoading={Boolean(busy)} onPress={()=>{
-        if(!removing||busy)return;const watch=removing;setBusy(watch.id);void removePersonalAgentWatch(clientId,watch.id).then(()=>{if(live.current){setWatches(previous=>previous.filter(item=>item.id!==watch.id));setRemoving(undefined);void refresh()}}).catch(error=>{if(live.current)showError(error.message)}).finally(()=>{if(live.current)setBusy(undefined)});
-      }}>{t('delete')}</Button></ModalFooter></ModalContent></Modal>
-    {browser&&<PersonalAgentBrowserControl key={browser.roomId} clientId={clientId} roomId={browser.roomId} isOpen onClose={()=>{setBrowser(undefined);void refresh()}} />}
+  return <section className="space-y-2" aria-label={t('personalAgentTracking')}>
+    <div className="flex items-center justify-between"><h3 className="flex items-center gap-2 text-lg font-semibold text-[#189a58]"><span className="h-4 w-4 rounded-full border-[5px] border-[#d9f1e2] bg-[#24a46b]"/>{t('personalAgentTracking')}</h3><Button size="sm" startContent={<Icon icon="lucide:plus"/>} onPress={()=>{setTitle('');setUrl('');setValue('');setCondition('change');setInterval('15');setError('');setCreating(true);}}>{t('personalWatchTrack')}</Button></div>
+    {(showAll?watches:watches.slice(0,3)).map(item=><button key={item.id} type="button" data-testid="personal-watch-card" aria-label={t('personalWatchOpen',{title:item.title})} className="flex w-full items-center gap-3 py-3 text-left" onClick={()=>{setSelected(item.id);setError('');}}><Icon icon="lucide:square" className="h-5 w-5 shrink-0 text-default-400"/><span className="min-w-0 flex-1"><span className="block">{item.title}</span><span className="mt-1 line-clamp-1 block text-sm text-default-500">{item.status==='active'?t('personalWatchChecking',{minutes:item.intervalMinutes}):t(item.status==='stopped'?'personalWatchStopped':'personalWatchPaused')}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/></button>)}
+    {!loading && !watches.length && <p className="py-3 text-sm text-default-500">{t('personalWatchSourceEmpty')}</p>}
+    {total>3 && <Button size="sm" isLoading={loading} onPress={()=>{setShowAll(!showAll);if(!showAll && watches.length<total)void refresh(watches.length);}}>{t(showAll?'personalWatchShowLess':'personalWatchShowMore',{count:total-3})}</Button>}
+    {showAll && watches.length<total && <Button size="sm" isLoading={loading} onPress={()=>void refresh(watches.length)}>{t('loadMore')}</Button>}
+    <Modal isOpen={creating} onClose={()=>setCreating(false)} scrollBehavior="inside"><ModalContent><ModalHeader>{t('personalWatchCreateTitle')}</ModalHeader><ModalBody className="pb-6"><form className="space-y-4" onSubmit={event=>{event.preventDefault();if(busy)return;const minutes=Number(interval);if(!Number.isInteger(minutes)||minutes<1||minutes>10080){setError(t('personalWatchIntervalError'));return;}setBusy('create');setError('');
+      void createPersonalAgentWatch(clientId,{title:title.trim(),url:url.trim(),condition,value,intervalMinutes:minutes}).then(saved=>{if(live.current){setWatches(previous=>[saved.watch,...previous]);setTotal(total=>total+1);setCreating(false);}}).catch(error=>{if(live.current)setError(error.message);}).finally(()=>{if(live.current)setBusy(undefined);});
+    }}>
+      <Input label={t('personalWatchSourceTitle')} placeholder={t('personalWatchExample')} value={title} onValueChange={setTitle} maxLength={160}/>
+      <Input label={t('personalWatchSourceURL')} value={url} onValueChange={setUrl} maxLength={4096} autoCapitalize="none" autoCorrect="off" placeholder="https://example.com/product"/>
+      <fieldset className="space-y-2"><legend className="mb-2 text-xs text-default-500">{t('personalWatchNotifyWhen')}</legend><div className="flex flex-wrap gap-2">{(['change','contains','price_below'] as const).map(item=><Button key={item} size="sm" color={condition===item?'secondary':'default'} aria-pressed={condition===item} onPress={()=>setCondition(item)}>{t(item==='change'?'personalWatchSourceChange':item==='contains'?'personalWatchSourceContains':'personalWatchSourcePrice')}</Button>)}</div></fieldset>
+      {condition!=='change' && <Input label={t(condition==='contains'?'personalWatchSourceText':'personalWatchSourcePriceValue')} value={value} onValueChange={setValue}/>}<Input label={t('personalWatchSourceInterval')} value={interval} onValueChange={setInterval} inputMode="numeric"/>
+      <p className="text-xs text-default-500">{t('personalWatchSourceHint')}</p>{error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      <Button type="submit" color="secondary" isLoading={busy==='create'} isDisabled={!title.trim()||!url.trim()||(condition!=='change'&&!value.trim())}>{t('personalWatchStart')}</Button>
+    </form></ModalBody></ModalContent></Modal>
+    <Modal isOpen={Boolean(watch)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent><ModalHeader>{watch?.title}</ModalHeader><ModalBody className="pb-6">{watch && <div className="space-y-3 rounded-2xl border border-default-200 p-4">
+      <div className="flex justify-between gap-3"><h3 className="font-semibold">{watch.title}</h3><span className="rounded-full bg-[#d7e9fa] px-2 py-1 text-xs dark:bg-[#263744]">{t(watch.status==='active'?'personalWatchActive':watch.status==='stopped'?'personalWatchStopped':'personalWatchPaused')}</span></div><p className="break-all text-xs text-default-500">{watch.url}</p>
+      <p className="text-sm">{t(watch.condition==='change'?'personalWatchChange':watch.condition==='contains'?'personalWatchContainsSummary':'personalWatchPriceSummary',{value:watch.value})}</p>
+      <p className="text-xs text-default-500">{t('personalWatchSourceChecks',{minutes:watch.intervalMinutes,count:watch.checks})}</p><p className="text-xs text-default-500">{t('personalWatchLastChecked',{time:watch.lastCheckedAt?new Date(watch.lastCheckedAt).toLocaleString():'—'})}</p>
+      {watch.status==='active' && <p className="text-xs text-default-500">{t('personalWatchSourceNext',{time:watch.nextCheckAt?new Date(watch.nextCheckAt).toLocaleString():'—'})}</p>}
+      {watch.lastExcerpt && <p className="line-clamp-5 whitespace-pre-wrap break-words text-sm text-default-500">{watch.lastExcerpt}</p>}
+      {(error || watch.error) && <p role="alert" className="text-sm text-danger">{error || watch.error}</p>}
+      {watch.status!=='stopped' && <div className="flex flex-wrap gap-2"><Button size="sm" isLoading={Boolean(busy)} onPress={()=>void act(watch,watch.status==='active'?'pause':'resume')}>{t(watch.status==='active'?'personalAgentPause':'personalAgentResume')}</Button><Button size="sm" isLoading={Boolean(busy)} onPress={()=>void act(watch,'check')}>{t('personalWatchCheckNow')}</Button><Button size="sm" color="danger" isLoading={Boolean(busy)} onPress={()=>void act(watch,'stop')}>{t('personalWatchStop')}</Button></div>}
+      <Button size="sm" variant="light" onPress={()=>{setSelected(undefined);onTask(watch.roomId);}}>{t('personalUpdateViewTask')}</Button>
+    </div>}</ModalBody></ModalContent></Modal>
   </section>;
 };

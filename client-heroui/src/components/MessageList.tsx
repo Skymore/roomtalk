@@ -1,3 +1,4 @@
+import {readPersonalDesktopSteps} from '../utils/personalDesktopSteps';
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
 import { cancelQueuedCodeAgentInput, clientId, deleteMessage, editMessage, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, restoreCodeAgentCheckpoint, sendMessage, sendSticker, setMessageReaction, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
@@ -126,6 +127,7 @@ interface MessageListProps {
   bottomInsetPx?: number;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
   presentation?: 'chat' | 'code-agent' | 'personal-agent';
+  onOpenPersonalComputer?:()=>void;
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
@@ -173,6 +175,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onCodeAgentModeChange,
   onCodeAgentBackendChange,
   onOpenWorkspaceFile,
+  onOpenPersonalComputer,
   onOpenWorkspaceArtifact,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -335,6 +338,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (codeAgentRoom?.codeAgentStatus !== 'running') return undefined;
     return [...messages].reverse().find(message => message.turnId)?.turnId;
   }, [codeAgentRoom?.codeAgentStatus, messages]);
+  const desktopSteps=React.useMemo(()=>presentation==='personal-agent'?readPersonalDesktopSteps(messages):[],[messages,presentation]);
   const timelineItems = React.useMemo(
     () => buildMessageTimeline(displayMessages, agentTurns, activeTurnId),
     [activeTurnId, agentTurns, displayMessages],
@@ -1363,7 +1367,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
                   if (item.kind === 'agent-turn') {
-                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} renderMessage={renderMessage} />;
+                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} desktopSteps={desktopSteps.filter(step=>step.turnId===item.turn.id)} liveDesktopStepId={desktopSteps.at(-1)?.id} onOpenComputer={onOpenPersonalComputer} renderMessage={renderMessage} />;
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}

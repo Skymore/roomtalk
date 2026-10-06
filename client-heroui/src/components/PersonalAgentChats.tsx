@@ -1,100 +1,68 @@
+/*
+MIT License
+
+Copyright (c) 2026 OpenMuse contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ported from OpenMuse ThreadsSheet in threads.tsx (73a7149).
+*/
 import React from 'react';
-import { Button, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
-import { Icon } from '@iconify/react';
-import { useTranslation } from 'react-i18next';
-import { createPersonalAgentThread, updatePersonalAgentThread } from '../utils/personalAgent';
-import { formatDate } from '../utils/formatters';
-import { getRoomActivityAt } from '../utils/roomState';
-import type { Room } from '../utils/types';
-
+import {Button,Input,Modal,ModalBody,ModalContent,ModalHeader} from '@heroui/react';
+import {Icon} from '@iconify/react';
+import {useTranslation} from 'react-i18next';
+import {createPersonalAgentThread,updatePersonalAgentThread} from '../utils/personalAgent';
+import type {Room} from '../utils/types';
+interface ChatAction { ():Promise<void> }
 interface PersonalAgentChatsProps {
-  clientId: string;
-  rooms: Room[];
-  mainRoom?: Room;
-  onRoomSelect: (room: Room) => void;
-  onRoomUpdated: (room: Room) => void;
-  showSuccess: (message: string) => void;
-  showError: (message: string) => void;
+  clientId:string;rooms:Room[];mainRoom?:Room;selectedRoomId?:string|null;isOpen:boolean;onClose:()=>void;
+  onRoomSelect:(room:Room)=>void;onRoomUpdated:(room:Room)=>void;
+  onNavigate:(section:'calendar'|'files'|'apps')=>void;onDelegate:()=>void;onComputer:()=>void;onRefresh:()=>void;onBack?:()=>void;
+  showSuccess:(message:string)=>void;showError:(message:string)=>void;
 }
-interface ChatAction { (): Promise<void> }
-
-const panelClass = 'rounded-2xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
-const mutedClass = 'text-[#5e5d59] dark:text-[#b0aea5]';
-
-export const PersonalAgentChats: React.FC<PersonalAgentChatsProps> = ({ clientId, rooms, mainRoom, onRoomSelect, onRoomUpdated, showSuccess, showError }) => {
-  const { t, i18n } = useTranslation();
-  const [query, setQuery] = React.useState('');
-  const [archived, setArchived] = React.useState(false);
-  const [limit, setLimit] = React.useState(20);
-  const [isModalOpen, setIsModalOpen] = React.useState(false);
-  const [editing, setEditing] = React.useState<Room | null>(null);
-  const [name, setName] = React.useState('');
-  const [isBusy, setIsBusy] = React.useState(false);
-  const matchingRooms = rooms.filter(room => room.id !== mainRoom?.id && room.personalAgentThreadKind === 'task'
-    && Boolean(room.personalAgentArchivedAt) === archived && room.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-
-  const mutate = async (action: ChatAction) => {
-    if (isBusy) return;
-    setIsBusy(true);
-    try { await action(); } catch (error) { showError(error instanceof Error ? error.message : t('personalAgentUpdateFailed')); }
-    finally { setIsBusy(false); }
-  };
-  const openName = (room?: Room) => { setEditing(room ?? null); setName(room?.name ?? ''); setIsModalOpen(true); };
-  const saveName = () => { void mutate(async () => {
-    if (editing) {
-      const { room } = await updatePersonalAgentThread(clientId, editing.id, { name: name.trim() });
-      onRoomUpdated(room);
-      showSuccess(t('personalAgentConversationRenamed'));
-    } else {
-      const { room } = await createPersonalAgentThread(clientId, name.trim());
-      onRoomUpdated(room);
-      onRoomSelect(room);
-    }
-    setIsModalOpen(false);
-  }); };
-  const setRoomArchived = (room: Room) => { void mutate(async () => {
-    const { room: updated } = await updatePersonalAgentThread(clientId, room.id, { archived: !room.personalAgentArchivedAt });
-    onRoomUpdated(updated);
-    showSuccess(t(updated.personalAgentArchivedAt ? 'personalAgentConversationArchived' : 'personalAgentConversationRestored'));
-  }); };
-
-  return <div className="space-y-6">
-    <section className={`${panelClass} p-6 sm:p-8`}>
-      <Icon icon="lucide:message-circle" className="mb-4 h-7 w-7 text-secondary" />
-      <h3 className="font-serif text-2xl">{t('personalAgentMainChat')}</h3>
-      <p className={`mt-2 max-w-xl text-sm leading-6 ${mutedClass}`}>{t('personalAgentMainChatDescription')}</p>
-      <Button color="secondary" className="mt-5" isDisabled={!mainRoom} onPress={() => { if (mainRoom) onRoomSelect(mainRoom); }} endContent={<Icon icon="lucide:arrow-right" className="h-4 w-4" />}>{t('personalAgentOpenMainChat')}</Button>
-    </section>
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold">{t('personalAgentTaskChats')}</h3>
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="light" onPress={() => { setArchived(!archived); setLimit(20); }} aria-pressed={archived}>{t(archived ? 'personalAgentShowActiveChats' : 'personalAgentArchivedChats')}</Button>
-          <Button size="sm" variant="flat" color="secondary" onPress={() => openName()} startContent={<Icon icon="lucide:plus" className="h-4 w-4" />}>{t('personalAgentNewTask')}</Button>
-        </div>
-      </div>
-      <Input aria-label={t('personalAgentSearchChats')} placeholder={t('personalAgentSearchChats')} value={query} onValueChange={value => { setQuery(value); setLimit(20); }} startContent={<Icon icon="lucide:search" className="h-4 w-4 text-default-500" />} />
-      {archived && <p className={`text-xs ${mutedClass}`}>{t('personalAgentArchiveDescription')}</p>}
-      {matchingRooms.length === 0 ? <p className={`${panelClass} p-6 text-sm ${mutedClass}`}>{t(query.trim() ? 'personalAgentNoMatchingChats' : archived ? 'personalAgentNoArchivedChats' : 'personalAgentNoTasks')}</p> : <div className="grid gap-3 sm:grid-cols-2">
-        {matchingRooms.slice(0, limit).map(room => <article key={room.id} data-testid="personal-agent-chat-card" className={`${panelClass} space-y-3 p-4`}>
-          <button type="button" className="block w-full min-w-0 text-left" onClick={() => onRoomSelect(room)}>
-            <span className="block truncate text-sm font-medium">{room.name}</span>
-            <span className={`mt-2 flex items-center gap-1.5 text-xs ${mutedClass}`}><Icon icon={room.codeAgentStatus === 'running' ? 'lucide:loader-circle' : 'lucide:message-square'} className={`h-3.5 w-3.5 ${room.codeAgentStatus === 'running' ? 'animate-spin' : ''}`} />{t(room.codeAgentStatus === 'running' ? 'personalAgentWorking' : room.codeAgentStatus === 'error' ? 'personalAgentNeedsAttention' : 'personalAgentConversationUpdated')}</span>
-            <span className={`mt-1 block text-xs ${mutedClass}`}>{formatDate(getRoomActivityAt(room), i18n.language)}</span>
-          </button>
-          <div className="flex justify-end gap-1">
-            <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => openName(room)}>{t('personalAgentRenameChat')}</Button>
-            <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => setRoomArchived(room)} startContent={<Icon icon={archived ? 'lucide:archive-restore' : 'lucide:archive'} className="h-3.5 w-3.5" />}>{t(archived ? 'personalAgentRestoreChat' : 'personalAgentArchiveChat')}</Button>
-          </div>
-        </article>)}
-      </div>}
-      {matchingRooms.length > limit && <Button size="sm" variant="light" onPress={() => setLimit(limit + 20)}>{t('personalAgentMoreChats')}</Button>}
-    </section>
-    <Modal isOpen={isModalOpen} onOpenChange={setIsModalOpen}>
-      <ModalContent><ModalHeader>{t(editing ? 'personalAgentRenameChat' : 'personalAgentNewTask')}</ModalHeader><ModalBody><Input autoFocus label={t('personalAgentTaskName')} value={name} maxLength={100} onValueChange={setName} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && name.trim()) { event.preventDefault(); saveName(); } }} /></ModalBody><ModalFooter>
-        <Button variant="light" onPress={() => setIsModalOpen(false)}>{t('cancel')}</Button>
-        <Button color="secondary" isLoading={isBusy} isDisabled={!name.trim()} onPress={saveName}>{t(editing ? 'save' : 'personalAgentStartTask')}</Button>
-      </ModalFooter></ModalContent>
-    </Modal>
-  </div>;
+export const PersonalAgentChats:React.FC<PersonalAgentChatsProps>=({clientId,rooms,mainRoom,selectedRoomId,isOpen,onClose,onRoomSelect,onRoomUpdated,onNavigate,onDelegate,onComputer,onRefresh,onBack,showSuccess,showError})=>{
+  const {t}=useTranslation();
+  const [archived,setArchived]=React.useState(false),[editing,setEditing]=React.useState<string>(),[name,setName]=React.useState(''),[limit,setLimit]=React.useState(20),[busy,setBusy]=React.useState(false);
+  const threads=rooms.filter(room=>room.id!==mainRoom?.id && room.personalAgentThreadKind==='task' && !room.personalAgentTaskKind && !room.personalAgentGoalId && Boolean(room.personalAgentArchivedAt)===archived);
+  const mutate=async(action:ChatAction)=>{setBusy(true);try{await action();setEditing(undefined);}catch(error){showError(error instanceof Error?error.message:t('personalAgentUpdateFailed'));}finally{setBusy(false);}};
+  const select=(room:Room)=>{onRoomSelect(room);onClose();};
+  return <Modal isOpen={isOpen} onClose={onClose} placement="top" scrollBehavior="inside" size="lg" classNames={{base:'max-h-[90dvh] bg-white dark:bg-[#252522]'}}><ModalContent><ModalHeader>{t('personalAgentConversations')}</ModalHeader><ModalBody><div className="space-y-4 pb-6">
+    <button type="button" className="flex items-center gap-3 py-3 text-left" disabled={!mainRoom} onClick={()=>{if(mainRoom)select(mainRoom);}}><Icon icon="lucide:message-circle" className="h-5 w-5"/><span><span className="block text-sm font-semibold">{t('personalAgentMainChat')}</span><span className="text-xs text-default-500">{t('personalAgentMainChatDescription')}</span></span></button>
+    <Button color="secondary" isLoading={busy} startContent={<Icon icon="lucide:plus"/>} onPress={()=>{void mutate(async()=>{const {room}=await createPersonalAgentThread(clientId,t('personalAgentSideChat'));onRoomUpdated(room);select(room);});}}>{t('personalAgentNewSideChat')}</Button>
+    <div className="flex items-center justify-between pt-3"><h3 className="text-base font-semibold">{t('personalAgentSideChats')}</h3><Button size="sm" variant="light" onPress={()=>{setArchived(!archived);setLimit(20);}}>{t(archived?'personalAgentShowActiveChats':'personalAgentArchivedChats')}</Button></div>
+    {threads.slice(0,limit).map(room=><article key={room.id} data-testid="personal-agent-chat-card" className="space-y-3 border-b border-default-200 py-3">
+      <button type="button" aria-label={`${t('personalAgentOpenConversation')}: ${room.name}`} aria-current={room.id===selectedRoomId?'true':undefined} className="flex w-full items-center gap-3 text-left" onClick={()=>select(room)}><Icon icon="lucide:message-circle" className="h-5 w-5 shrink-0"/><span className="break-words text-sm">{room.name}</span></button>
+      {editing===room.id && <Input label={t('personalAgentConversationName')} value={name} onValueChange={setName} maxLength={100}/>}
+      <div className="flex gap-2"><Button size="sm" variant="flat" isDisabled={busy || (editing===room.id && !name.trim())} onPress={()=>{if(editing===room.id){void mutate(async()=>{const {room:updated}=await updatePersonalAgentThread(clientId,room.id,{name:name.trim()});onRoomUpdated(updated);showSuccess(t('personalAgentConversationRenamed'));});}else{setEditing(room.id);setName(room.name);}}}>{t(editing===room.id?'personalAgentSaveName':'personalAgentRenameChat')}</Button>
+        <Button size="sm" variant="light" isDisabled={busy} startContent={<Icon icon="lucide:archive"/>} onPress={()=>{void mutate(async()=>{const {room:updated}=await updatePersonalAgentThread(clientId,room.id,{archived:!room.personalAgentArchivedAt});onRoomUpdated(updated);showSuccess(t(updated.personalAgentArchivedAt?'personalAgentConversationArchived':'personalAgentConversationRestored'));});}}>{t(archived?'personalAgentRestoreChat':'personalAgentArchiveChat')}</Button></div>
+    </article>)}
+    {!threads.length && <p className="text-sm text-default-500">{t(archived?'personalAgentNoArchivedChats':'personalAgentSideChatHint')}</p>}
+    {threads.length>limit && <Button size="sm" variant="light" onPress={()=>setLimit(limit+20)}>{t('personalAgentMoreChats')}</Button>}
+    <p className="text-xs text-default-500">{t('personalAgentSharedMemoryHint')}</p>
+    <div className="border-t border-default-200 pt-3">{[
+      {key:'delegate',title:'personalDelegateTask',icon:'lucide:plus',action:onDelegate},
+      {key:'computer',title:'personalAgentComputer',icon:'lucide:monitor',action:onComputer},
+      {key:'calendar',title:'personalGoogleCalendar',icon:'lucide:calendar-days',action:()=>onNavigate('calendar')},
+      {key:'files',title:'personalAgentFiles',icon:'lucide:file-text',action:()=>onNavigate('files')},
+      {key:'apps',title:'personalAgentAppsSettings',icon:'lucide:settings',action:()=>onNavigate('apps')},
+    ].map(item=><button key={item.key} type="button" className="flex w-full items-center gap-3 py-3 text-left text-sm" onClick={()=>{onClose();item.action();}}><Icon icon={item.icon} className="h-5 w-5"/>{t(item.title)}</button>)}</div>
+    <Button size="sm" variant="light" startContent={<Icon icon="lucide:refresh-cw"/>} onPress={onRefresh}>{t('personalAgentRefreshWorkspace')}</Button>
+    {onBack && <Button size="sm" variant="light" onPress={()=>{onClose();onBack();}} startContent={<Icon icon="lucide:arrow-left"/>}>RoomTalk</Button>}
+  </div></ModalBody></ModalContent></Modal>;
 };

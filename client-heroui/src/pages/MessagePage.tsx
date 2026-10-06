@@ -151,8 +151,11 @@ export const MessagePage: React.FC = () => {
   const [view, setView] = useState<AppView>(() => {
     if (new URLSearchParams(window.location.search).get("personal") === "1") return "personal";
     const storedView = getStoredView();
+    if(storedView === "chat" && getStoredRoom()?.personalAgentOwnerId)return "personal";
     return storedView === "saved" && isDesktopLayout() ? "rooms" : storedView;
   });
+  const [personalChatId,setPersonalChatId] = useState<string | null>(() => localStorage.getItem('roomtalk.personalAgent.activeChat') || (getStoredView() === 'chat' && getStoredRoom()?.personalAgentOwnerId ? getStoredRoom()!.id : null));
+  const [personalChatSelection,setPersonalChatSelection] = useState(0);
   const viewRef = useRef<AppView>(view);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -325,6 +328,7 @@ export const MessagePage: React.FC = () => {
 
   useEffect(() => {
     currentRoomRef.current = currentRoom;
+    if (currentRoom && !currentRoom.personalAgentOwnerId) localStorage.setItem(`roomtalk.chat.activeRoom.${clientId}`,currentRoom.id);
   }, [currentRoom]);
 
   // 切换语言方法修改为支持多语言
@@ -678,14 +682,27 @@ export const MessagePage: React.FC = () => {
 
   const handleViewChange = useCallback((nextView: AppView) => {
     setError(null);
+    if (nextView === 'chat' && currentRoomRef.current?.personalAgentOwnerId) {
+      const ordinaryRoomId = localStorage.getItem(`roomtalk.chat.activeRoom.${clientId}`);
+      if (!ordinaryRoomId) {setView('rooms');return;}
+      void ensureActiveRoomSession({roomId:ordinaryRoomId,source:'manual'}).then(room=>{
+        if (room && !room.personalAgentOwnerId) setView('chat');
+      }).catch(error=>setError(error instanceof Error ? error.message : t('errorLoading')));
+      return;
+    }
     setView(nextView);
+    if (nextView === 'personal' && personalChatId && currentRoomRef.current?.id !== personalChatId) {
+      void ensureActiveRoomSession({roomId:personalChatId,source:'manual'}).then(room=>{
+        if (room?.personalAgentOwnerId) setPersonalChatSelection(value=>value+1);
+      }).catch(error=>setError(error instanceof Error ? error.message : t('errorLoading')));
+    }
     if (nextView !== 'personal' && searchParams.has('personal')) {
       const params = new URLSearchParams(searchParams);
       params.delete('personal');
       params.delete('tab');
       setSearchParams(params, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, ensureActiveRoomSession, personalChatId, t]);
 
   const clearStatusForTask = useCallback(() => {
     setError(null);
@@ -763,7 +780,7 @@ export const MessagePage: React.FC = () => {
         }
 
         if (savedView === "chat" && view !== "chat") {
-          setView("chat");
+          setView(storedRoom.personalAgentOwnerId ? "personal" : "chat");
         }
 
         void ensureActiveRoomSession({
@@ -1056,7 +1073,12 @@ export const MessagePage: React.FC = () => {
   }, [currentRoom, showSuccess, t]);
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
-  const handleRoomSelect = async (room: Room, password?: string) => {
+  const handleRoomSelect = async (room: Room, password?: string, options?:{focusPersonalChat?:boolean}) => {
+    if(room.personalAgentOwnerId){
+      setPersonalChatId(room.id);
+      if(options?.focusPersonalChat!==false)setPersonalChatSelection(value=>value+1);
+      setView('personal');
+    }
     roomLookupGenerationRef.current += 1;
     setIsLoadingRoom(false);
     setRoomToJoin(null);
@@ -1070,7 +1092,8 @@ export const MessagePage: React.FC = () => {
         source: searchParams.get("room") === room.id ? "url" : "manual",
       });
       if (joinedRoom) {
-        setView("chat");
+        if(joinedRoom.personalAgentOwnerId){setPersonalChatId(joinedRoom.id);localStorage.setItem('roomtalk.personalAgent.activeChat',joinedRoom.id);}
+        setView(joinedRoom.personalAgentOwnerId ? 'personal' : 'chat');
         clearRoomUrlParam();
       }
     } catch (error) {
@@ -1317,9 +1340,18 @@ export const MessagePage: React.FC = () => {
     switch (view) {
       case "personal":
         return <PersonalAgentView
+          selectedRoomId={personalChatId}
+          conversationSelection={personalChatSelection}
+          conversation={currentRoom?.personalAgentOwnerId && personalChatId === currentRoom.id ? ((openThreads,openComputer) => <PersonalAgentConversation key={currentRoom.id}
+          room={currentRoom} clientId={clientId} username={username} roomPermissions={roomPermissions}
+          isRoomSessionReady={isCurrentRoomSessionReady} canUseRetainedRoomAccess={canUseRetainedRoomAccess}
+          ensureRoomSessionReady={ensureRoomSessionReadyForOperation} messageSyncRequestId={roomSession.messageSyncRequestId}
+          onRoomUpdated={applyServerRoom} onRoomDeleted={applyRoomRemoval} onRoomAccessDenied={applyRoomRemoval}
+          showError={setError} onComputer={openComputer} onBack={openThreads} />) : undefined}
           clientId={clientId}
           roomUpdates={rooms}
           onRoomSelect={handleRoomSelect}
+          onMainRoomSelect={room=>{void handleRoomSelect(room,undefined,{focusPersonalChat:false});}}
           onOpenConnections={() => handleViewChange("settings")}
           onBack={() => handleViewChange("rooms")}
           showSuccess={showSuccess}
@@ -1377,12 +1409,7 @@ export const MessagePage: React.FC = () => {
           return <WelcomeView onEnterRooms={() => handleViewChange("rooms")} />;
         }
 
-        if (currentRoom.personalAgentOwnerId) return <PersonalAgentConversation key={currentRoom.id}
-          room={currentRoom} clientId={clientId} username={username} roomPermissions={roomPermissions}
-          isRoomSessionReady={isCurrentRoomSessionReady} canUseRetainedRoomAccess={canUseRetainedRoomAccess}
-          ensureRoomSessionReady={ensureRoomSessionReadyForOperation} messageSyncRequestId={roomSession.messageSyncRequestId}
-          onRoomUpdated={applyServerRoom} onRoomDeleted={applyRoomRemoval} onRoomAccessDenied={applyRoomRemoval}
-          showError={setError} onBack={() => { clearRoomUrlParam(); handleViewChange('personal'); }} />;
+
 
         const codeAgentBackend = getCodeAgentBackend(currentRoom, featureFlags.codeAgent.defaultBackend);
         if (codeAgentBackend) {

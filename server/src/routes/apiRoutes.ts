@@ -1,3 +1,6 @@
+import { PersonalAgentGoogleService } from '../services/personalAgentGoogle';
+import { PersonalAgentTaskService } from '../services/personalAgentTasks';
+import { PersonalAgentFileService } from '../services/personalAgentFiles';
 import { PersonalAgentTrackingService } from '../services/personalAgentTracking';
 import { PersonalAgentNotificationService } from '../services/personalAgentNotifications';
 import { PersonalAgentIdeaService } from '../services/personalAgentIdeas';
@@ -64,12 +67,16 @@ const normalizeRoomNickname = (value: string): string | null => {
 };
 
 interface ApiRouteOptions {
+  personalAgentComputer?: import('../services/personalAgentComputer').PersonalAgentComputerService;
+  personalAgentGoogle?: PersonalAgentGoogleService;
   personalAgentBrowser?: PersonalAgentBrowserService;
   personalAgentIdeas?: PersonalAgentIdeaService;
   personalAgentTracking?: PersonalAgentTrackingService;
   personalAgentNotifications?: PersonalAgentNotificationService;
   personalAgentAcceptIdea?: (clientId: string, id: string, prompt: string, expectedUpdatedAt: string) => Promise<{ idea: import('../types').PersonalAgentIdea; room: Room }>;
   personalAgentCancelGoal?: (goal: PersonalAgentGoal, expectedUpdatedAt?: string) => Promise<PersonalAgentGoal>;
+  personalAgentTasks?:PersonalAgentTaskService;
+  personalAgentReviewDecided?:()=>Promise<void>;
   personalAgentStartGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
   store: RoomStore;
   io: Server;
@@ -575,6 +582,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   registerPersonalAgentRoutes(app, {
     store, logger: routeLogger,
     results: new PersonalAgentResultService(store, mediaObjectStorage, routeLogger),
+    google: options.personalAgentGoogle,
+    computer: options.personalAgentComputer,
+    tasks: options.personalAgentTasks,
+    reviewDecided:options.personalAgentReviewDecided,
+    files: new PersonalAgentFileService(store, mediaObjectStorage, routeLogger),
     browser: options.personalAgentBrowser,
     ideas: options.personalAgentIdeas,
     tracking: options.personalAgentTracking, notifications: options.personalAgentNotifications,

@@ -1,10 +1,10 @@
+import { PersonalAgentTaskDetailView } from './PersonalAgentTaskDetail';
+import { answerPersonalAgentTaskInput } from '../utils/personalAgent';
 import React from 'react';
-import { PersonalAgentBrowserControl } from './PersonalAgentBrowser';
 import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { MessageList, type MessageListHandle } from './MessageList';
-import { getPersonalAgent, type PersonalAgentProfile } from '../utils/personalAgent';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { interruptCodeAgentTurn, queueCodeAgentInput, requestCodeWorkspaceAssetUrl, requestCodeWorkspaceFile, sendMessageAndAskAI, uploadMediaMessage } from '../utils/socket';
 import type { Message, Room, RoomPermissions } from '../utils/types';
@@ -17,15 +17,14 @@ export const PersonalAgentConversation: React.FC<{
   room: Room; clientId: string; username: string; roomPermissions: RoomPermissions | null;
   isRoomSessionReady: boolean; canUseRetainedRoomAccess: boolean; ensureRoomSessionReady: EnsureRoomSessionReady;
   messageSyncRequestId?: number; onRoomUpdated: (room: Room) => void; onRoomDeleted: (roomId: string) => void;
-  onRoomAccessDenied: (roomId: string) => void; onBack: () => void; showError: (message: string) => void;
+  onRoomAccessDenied: (roomId: string) => void; onBack: () => void; onComputer:(tab?:'Desktop')=>void; showError: (message: string) => void;
 }> = props => {
   const { t } = useTranslation();
   const { room, clientId, username, ensureRoomSessionReady, showError } = props;
-  const [profile, setProfile] = React.useState<PersonalAgentProfile>();
   const [text, setText] = React.useState('');
   const [sending, setSending] = React.useState(false);
   const [stopping, setStopping] = React.useState(false);
-  const [browserOpen, setBrowserOpen] = React.useState(false);
+  const [taskOpen,setTaskOpen] = React.useState(false);
   const [attachments, setAttachments] = React.useState<Message[]>([]);
   const list = React.useRef<MessageListHandle>(null);
   const editor = React.useRef<HTMLDivElement>(null);
@@ -34,7 +33,7 @@ export const PersonalAgentConversation: React.FC<{
   const restoreDraft = React.useCallback((value: string) => setText(value), []);
   const { saveDraft, beginDraftSend } = useRoomTextDraft(clientId, room.id, editor, restoreDraft);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  React.useEffect(() => { let live = true; void getPersonalAgent(clientId).then(result => { if (live) setProfile(result.profile); }).catch(error => { if (live) showError(error.message); }); return () => { live = false; }; }, [clientId, showError]);
+
   const running = room.codeAgentStatus === 'running';
   const canSend = props.canUseRetainedRoomAccess && Boolean(props.roomPermissions?.canPost && props.roomPermissions?.canUseCodeAgent);
   const send = async () => {
@@ -101,16 +100,9 @@ export const PersonalAgentConversation: React.FC<{
     } catch (error) { if (mounted.current) showError(error instanceof Error ? error.message : t('personalAgentLoadFailed')); }
   };
   return <section className="flex h-full min-h-0 w-full flex-col bg-[#f7f6f2] dark:bg-[#191917]" data-testid="personal-agent-conversation">
-    <header className="flex shrink-0 items-center justify-between gap-3 border-b border-default-200 px-4 py-4 sm:px-8">
-      <Button isIconOnly variant="light" aria-label={t('personalAgentBack')} onPress={props.onBack}><Icon icon="lucide:arrow-left" className="h-5 w-5" /></Button>
-      <button type="button" className="flex min-w-0 items-center gap-3 rounded-full px-2 py-1 text-left" onClick={props.onBack} aria-label={t('personalAgentBack')}>
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e9e5da] text-xl dark:bg-[#34332f]">{profile?.avatar || '✦'}</span>
-        <span className="min-w-0"><span className="block truncate font-medium">{profile?.name || t('personalAgent')}</span>{room.personalAgentThreadKind !== 'main' && <span className="block truncate text-xs text-default-500">{room.name}</span>}</span>
-      </button>
-      <Button isIconOnly variant="light" aria-label={t('personalBrowser')} isDisabled={!canSend || running} onPress={() => setBrowserOpen(true)}><Icon icon="lucide:globe" className="h-5 w-5" /></Button>
-    </header>
+    {room.personalAgentThreadKind!=='main' && <header className="relative shrink-0 px-4 py-1"><p className="text-center text-xs text-default-500">{room.name}</p><Button isIconOnly size="sm" variant="light" className="absolute right-0 top-0" aria-label={t('personalTaskDetail')} onPress={()=>setTaskOpen(true)}><Icon icon="lucide:list-checks"/></Button></header>}
     <div className="relative flex min-h-0 flex-1 flex-col px-1 pt-4 sm:px-6">
-      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent"
+      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onOpenPersonalComputer={()=>props.onComputer('Desktop')}
         roomPermissions={props.roomPermissions} isRoomSessionReady={props.isRoomSessionReady} canUseRetainedRoomAccess={props.canUseRetainedRoomAccess}
         ensureRoomSessionReady={ensureRoomSessionReady} messageSyncRequestId={props.messageSyncRequestId} onRoomUpdated={props.onRoomUpdated}
         onRoomDeleted={props.onRoomDeleted} onRoomAccessDenied={props.onRoomAccessDenied} onOpenWorkspaceFile={path => void openFile(path)} />
@@ -128,6 +120,11 @@ export const PersonalAgentConversation: React.FC<{
         {(!running || text.trim()) && <Button isIconOnly radius="full" color="secondary" aria-label={t('sendMessage')} isLoading={sending} isDisabled={!canSend || !text.trim()} onPress={() => void send()}><Icon icon="lucide:arrow-up" className="h-5 w-5" /></Button>}
       </div>
     </div>
-    <PersonalAgentBrowserControl clientId={clientId} roomId={room.id} isOpen={browserOpen} onClose={() => setBrowserOpen(false)} />
+    <PersonalAgentTaskDetailView clientId={clientId} roomId={room.id} isOpen={taskOpen} onClose={()=>setTaskOpen(false)} onSubmit={async(request,answer)=>{
+      if(!canSend)throw new Error(t('errorSendingMessage'));
+      await ensureRoomSessionReady(room.id);
+      await answerPersonalAgentTaskInput(clientId,room.id,request.id,answer);
+      list.current?.scrollToBottom();
+    }} />
   </section>;
 };

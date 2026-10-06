@@ -1,9 +1,11 @@
+import {createRoomRecord} from './messageDomain';
 import { randomUUID } from 'node:crypto';
 import { RoomStore } from '../repositories/store';
 import { PersonalAgentBrowserObservation, PersonalAgentBrowserSession } from '../types';
 import { CodexAuthCipher } from './codexConnection';
 import { CodeAgentSandboxService } from './codeAgentSandboxService';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
+import { PersonalAgentFileService } from './personalAgentFiles';
 import { MediaObjectStorage } from './mediaObjectStorage';
 
 export const PERSONAL_BROWSER_API_PATH = '/api/code-agent/room-context/personal-browser';
@@ -17,11 +19,12 @@ const field = (value: unknown, name: string, max = 2000) => {
   return value;
 };
 export const browserObservationMetadata = ({ clientId: _owner, objectKey: _key, ...value }: PersonalAgentBrowserObservation) => value;
-const sessionMetadata = ({ encryptedState: _state, clientId: _owner, ...value }: PersonalAgentBrowserSession) => value;
+export const personalBrowserMetadata = ({encryptedState:_state,clientId:_owner,previewObjectKey,...value}:PersonalAgentBrowserSession)=>({...value,...(previewObjectKey?{previewUrl:`/api/personal-agent/browser/${encodeURIComponent(value.roomId)}/preview?version=${encodeURIComponent(value.updatedAt)}`}:{})});
 export type BrowserControl = { id: string; fence: number };
 
 export function parsePersonalBrowserAction(input: Record<string, unknown>): Record<string, unknown> {
   const action = input.action;
+  if (action === 'import_pdf') return {action,id:field(input.id,'download id',100)};
   if (action === 'read' || action === 'close') return { action };
   if (action === 'open') {
     let url: URL;
@@ -49,7 +52,7 @@ export class PersonalAgentBrowserService {
   private readonly queues = new Map<string, Promise<unknown>>();
   constructor(private readonly store: RoomStore, private readonly sandbox: CodeAgentSandboxService,
     private readonly lifecycle: CodeAgentSandboxLifecycleService, private readonly storage: MediaObjectStorage,
-    private readonly cipher: CodexAuthCipher) {}
+    private readonly cipher: CodexAuthCipher, private readonly files?: PersonalAgentFileService) {}
 
   private async serial<T>(roomId: string, operation: () => Promise<T>): Promise<T> {
     const next = (this.queues.get(roomId) || Promise.resolve()).catch(() => {}).then(operation);
@@ -61,10 +64,35 @@ export class PersonalAgentBrowserService {
     if (!room || room.personalAgentOwnerId !== clientId || room.creatorId !== clientId) throw new PersonalAgentBrowserError('Browser not found', 404);
     return room;
   }
+  async sessions(clientId:string){
+    const rooms=await this.store.readPersonalAgentRooms!(clientId);
+    const sessions=await Promise.all(rooms.map(room=>this.current(clientId,room.id)));
+    return {sessions:sessions.flatMap(value=>value.session?[value.session]:[])};
+  }
+  async preview(clientId:string,roomId:string){
+    await this.ownedRoom(clientId,roomId);
+    const session=await this.store.getPersonalAgentBrowserSession!(clientId,roomId);
+    if(!session?.previewObjectKey)throw new PersonalAgentBrowserError('Preview unavailable. Open the browser to reconnect.',404);
+    return (await this.storage.getMediaObject!(session.previewObjectKey)).body;
+  }
+  async create(clientId:string,input:Record<string,unknown>,source?:{clientId:string;roomId:string;turnId:string}){
+    const action=parsePersonalBrowserAction({action:'open',url:input.url});
+    const room={...createRoomRecord({roomId:randomUUID(),name:'Browser',creatorId:clientId,type:'codeAgent',codeAgentBackend:'codex-app-server',now:new Date()}),personalAgentOwnerId:clientId,personalAgentThreadKind:'browser' as const,codeAgentAccess:'owner' as const,codeAgentMode:'fullAccess' as const};
+    if(!await this.store.saveRoom(room))throw new PersonalAgentBrowserError('Browser session could not be created',503);
+    const {control}=await this.takeControl(clientId,room.id);
+    const leaseTurnId=`browser-control:${control.id}`;
+    await this.store.savePersonalAgentBrowser!({id:room.id,clientId,roomId:room.id,url:String(action.url),title:'Browser',status:'active',updatedAt:new Date().toISOString()},leaseTurnId);
+    try{return await this.serial(room.id,()=>this.execute(clientId,room.id,leaseTurnId,action,source));}
+    catch(error){
+      const session=await this.store.getPersonalAgentBrowserSession!(clientId,room.id);
+      if(session)await this.store.savePersonalAgentBrowser!({...session,status:'error'},leaseTurnId);
+      throw error;
+    }finally{await this.releaseControl(clientId,room.id,control);}
+  }
   async current(clientId: string, roomId: string) {
     await this.ownedRoom(clientId, roomId);
     const session = await this.store.getPersonalAgentBrowserSession!(clientId, roomId);
-    return { session: session ? sessionMetadata(session) : null };
+    return { session: session ? personalBrowserMetadata(session) : null };
   }
   async list(clientId: string, query: Record<string, unknown>) {
     const limit = Number(query.limit ?? 50), offset = Number(query.offset ?? 0);
@@ -102,15 +130,24 @@ export class PersonalAgentBrowserService {
     const action = parsePersonalBrowserAction(input);
     return this.serial(roomId, async () => this.execute(clientId, roomId, await this.renew(clientId, roomId, control), action));
   }
-  async agent(source: { clientId: string; roomId: string; turnId: string }, input: Record<string, unknown>) {
-    const action = parsePersonalBrowserAction(input);
-    return this.serial(source.roomId, async () => {
-      await this.ownedRoom(source.clientId, source.roomId);
-      if (!await this.store.hasActiveCodeAgentRoomLease!(source.roomId, new Date().toISOString(), source.turnId)) throw new PersonalAgentBrowserError('This agent turn ended', 403);
-      return this.execute(source.clientId, source.roomId, source.turnId, action, true);
-    });
+  async agent(source:{clientId:string;roomId:string;turnId:string},input:Record<string,unknown>){
+    await this.ownedRoom(source.clientId,source.roomId);
+    if(!await this.store.hasActiveCodeAgentRoomLease!(source.roomId,new Date().toISOString(),source.turnId))throw new PersonalAgentBrowserError('This agent turn ended',403);
+    if(input.action==='create')return this.create(source.clientId,input,source);
+    const action=parsePersonalBrowserAction(input);
+    if(input.sessionId!==undefined){
+      const session=await this.store.getPersonalAgentBrowserSession!(source.clientId,field(input.sessionId,'session id',100));
+      if(!session)throw new PersonalAgentBrowserError('Browser session not found',404);
+      if(session.roomId!==source.roomId){
+        const {control}=await this.takeControl(source.clientId,session.roomId);
+        try{return await this.serial(session.roomId,()=>this.execute(source.clientId,session.roomId,`browser-control:${control.id}`,action,source));}
+        finally{await this.releaseControl(source.clientId,session.roomId,control);}
+      }
+    }
+    return this.serial(source.roomId,()=>this.execute(source.clientId,source.roomId,source.turnId,action,source));
   }
-  private async execute(clientId: string, roomId: string, leaseTurnId: string, action: Record<string, unknown>, recordVisit = false) {
+  private async execute(clientId: string, roomId: string, leaseTurnId: string, action: Record<string, unknown>, source?:{clientId:string;roomId:string;turnId:string}) {
+    const recordVisit=Boolean(source);
     const previous = await this.store.getPersonalAgentBrowserSession!(clientId, roomId);
     const ready = await this.lifecycle.ensureReadySandbox(roomId, clientId);
     if (!ready.ok) throw new PersonalAgentBrowserError('Browser environment is not ready', 503);
@@ -127,7 +164,7 @@ export class PersonalAgentBrowserService {
       const read = new Promise<void>((resolve, reject) => {
         process.stdout!.on('data', chunk => {
           output += chunk.toString();
-          if (Buffer.byteLength(output) > 8 * 1024 * 1024) { reject(new PersonalAgentBrowserError('Browser response exceeds its limit', 400)); void process.stop(); }
+          if (Buffer.byteLength(output) > 18 * 1024 * 1024) { reject(new PersonalAgentBrowserError('Browser response exceeds its limit', 400)); void process.stop(); }
         });
         process.stdout!.once('end', resolve); process.stdout!.once('error', reject);
       });
@@ -139,15 +176,21 @@ export class PersonalAgentBrowserService {
     const state = JSON.stringify(observed.storageState);
     if (Buffer.byteLength(state || '') > 1024 * 1024) throw new PersonalAgentBrowserError('Browser login state is too large to save', 400);
     const session: PersonalAgentBrowserSession = { id, clientId, roomId, url: observed.url || previous?.url || 'about:blank',
-      title: observed.title || previous?.title || '', encryptedState: state ? JSON.stringify(this.cipher.encryptAuthJson(state)) : undefined, updatedAt: new Date().toISOString() };
+      title: observed.title || previous?.title || '',status:observed.closed?'closed':'active',previewObjectKey:previous?.previewObjectKey, encryptedState: state ? JSON.stringify(this.cipher.encryptAuthJson(state)) : undefined, updatedAt: new Date().toISOString() };
     let observation: PersonalAgentBrowserObservation | undefined;
-    if (recordVisit && !observed.closed) {
+    if (source && !observed.closed) {
       const visitId = randomUUID();
       const body = Buffer.from(observed.screenshot, 'base64');
       if (!body.length || body.length > 2 * 1024 * 1024) throw new PersonalAgentBrowserError('Browser screenshot exceeds its limit', 400);
-      observation = { id: visitId, clientId, roomId, turnId: leaseTurnId, url: session.url, title: session.title,
+      observation = { id: visitId, sessionId:session.id,browserRoomId:session.roomId,clientId, roomId:source.roomId, turnId:source.turnId, url: session.url, title: session.title,
         objectKey: `personal-agent-browser/${roomId}/${visitId}.jpg`, createdAt: session.updatedAt };
       await this.storage.putMediaObject({ objectKey: observation.objectKey, body, byteSize: body.length, mimeType: 'image/jpeg' });
+    }
+    if(!observed.closed && observed.screenshot){
+      const body=Buffer.from(observed.screenshot,'base64');
+      if(!body.length || body.length>2*1024*1024)throw new PersonalAgentBrowserError('Browser screenshot exceeds its limit',400);
+      session.previewObjectKey=observation?.objectKey || `personal-agent-browser/${roomId}/preview.jpg`;
+      if(!observation)await this.storage.putMediaObject({objectKey:session.previewObjectKey,body,byteSize:body.length,mimeType:'image/jpeg'});
     }
     try {
       if (!await this.store.savePersonalAgentBrowser!(session, leaseTurnId, observation)) throw new PersonalAgentBrowserError('Browser execution ended before the observation was saved', 409);
@@ -155,7 +198,13 @@ export class PersonalAgentBrowserService {
       if (observation) await this.storage.deleteMediaObject!(observation.objectKey);
       throw error;
     }
-    return { session: sessionMetadata(session), ...(observation ? { observation: browserObservationMetadata(observation) } : {}),
+    let file: unknown;
+    if (action.action === 'import_pdf') {
+      if (!this.files || !observed.download || typeof observed.download.content !== 'string') throw new PersonalAgentBrowserError('Downloaded PDF is unavailable',400);
+      const saved = await this.files.import(clientId,observed.download.name,Buffer.from(observed.download.content,'base64'),`Browser: ${observed.download.url}`,undefined,source ? {roomId:source.roomId,turnId:source.turnId} : undefined);
+      file = saved.file;
+    }
+    return { ...(file ? {file} : {}), downloads: observed.downloads || [], session: personalBrowserMetadata(session), ...(observation ? { observation: browserObservationMetadata(observation) } : {}),
       httpStatus: observed.httpStatus, text: observed.text || '', truncated: observed.truncated === true,
       ...(recordVisit ? {} : { screenshot: observed.screenshot, viewport: observed.viewport }), closed: observed.closed === true };
   }

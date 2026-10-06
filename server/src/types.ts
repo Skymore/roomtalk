@@ -213,7 +213,13 @@ export interface Room {
   lastActivityAt?: string;
   creatorId: string;
   personalAgentOwnerId?: string;
-  personalAgentThreadKind?: 'main' | 'task' | 'watch';
+  personalAgentTaskStatus?: 'scheduled' | 'queued' | 'running' | 'complete' | 'error' | 'cancelled' | 'paused' | 'waiting_input' | 'waiting_review';
+  personalAgentTaskControl?: 'paused' | 'cancelled' | 'error';
+  personalAgentResumedTurnId?:string;
+  personalAgentTaskKind?: 'plan' | 'document' | 'finance' | 'agent' | 'monitor';
+  personalAgentTaskPlan?: {step:string;status:string}[];
+  personalAgentTaskSummary?: string;
+  personalAgentThreadKind?: 'main' | 'task' | 'watch' | 'browser';
   personalAgentGoalId?: string;
   personalAgentMemoryId?: string;
   personalAgentArchivedAt?: string;
@@ -238,6 +244,7 @@ export interface PersonalAgentProfile {
   clientId: string;
   name: string;
   avatar: string;
+  tone?: 'warm' | 'concise' | 'thoughtful';
   instructions: string;
   memory: string;
   mainRoomId: string;
@@ -245,6 +252,11 @@ export interface PersonalAgentProfile {
   pushEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersonalAgentTask {
+  roomId:string;clientId:string;kind:'plan'|'document'|'finance'|'agent';prompt:string;
+  input:{csv?:string;messageId?:string};createdAt:string;
 }
 
 export interface PersonalAgentMemory {
@@ -268,11 +280,15 @@ export interface PersonalAgentBrowserSession {
   url: string;
   title: string;
   encryptedState?: string;
+  status?:'active'|'closed'|'error';
+  previewObjectKey?:string;
   updatedAt: string;
 }
 
 export interface PersonalAgentBrowserObservation {
   id: string;
+  sessionId?:string;
+  browserRoomId?:string;
   clientId: string;
   roomId: string;
   turnId: string;
@@ -282,12 +298,26 @@ export interface PersonalAgentBrowserObservation {
   createdAt: string;
 }
 
+export interface PersonalAgentFile {
+  id: string;
+  clientId: string;
+  name: string;
+  byteSize: number;
+  pageCount: number;
+  fields: { name: string; value: string; type: 'text' | 'checkbox' | 'unsupported' }[];
+  objectKey: string;
+  source: string;
+  parentId?: string;
+  createdAt: string;
+}
+
 export interface PersonalAgentResult {
   id: string;
   clientId: string;
   roomId: string;
   turnId: string;
-  kind: 'plan' | 'document' | 'web';
+  kind: 'plan' | 'document' | 'web' | 'comparison' | 'finance';
+  data?: Record<string, unknown>;
   title: string;
   summary: string;
   filename: string;
@@ -306,7 +336,7 @@ export interface PersonalAgentWatch {
   condition: 'change' | 'contains' | 'price_below';
   value: string;
   intervalMinutes: number;
-  status: 'active' | 'paused';
+  status: 'active' | 'paused' | 'stopped';
   epoch: number;
   checks: number;
   failures: number;
@@ -325,7 +355,7 @@ export interface PersonalAgentNotification {
   id: string;
   clientId: string;
   eventKey: string;
-  kind: 'task_complete' | 'task_error' | 'watch_match' | 'watch_error';
+  kind: 'task_complete' | 'task_error' | 'task_input' | 'task_review' | 'watch_match' | 'watch_error';
   title: string;
   body: string;
   roomId?: string;
@@ -345,7 +375,7 @@ export interface PersonalAgentWatchOutcome {
   error?: string;
 }
 
-export type PersonalAgentIdeaSourceKind = 'goal' | 'memory' | 'result' | 'browser';
+export type PersonalAgentIdeaSourceKind = 'goal' | 'memory' | 'result' | 'browser' | 'mail';
 export interface PersonalAgentIdeaSource {
   kind: PersonalAgentIdeaSourceKind;
   id: string;
@@ -363,6 +393,8 @@ export interface PersonalAgentIdea {
   reason: string;
   prompt: string;
   source: PersonalAgentIdeaSource;
+  taskKind?: 'plan' | 'document' | 'finance' | 'agent';
+  input?: {messageId?:string;goalId?:string};
   automatic: boolean;
   status: 'new' | 'accepted' | 'dismissed';
   acceptedRoomId?: string;
@@ -375,6 +407,7 @@ export interface PersonalAgentGoal {
   clientId: string;
   title: string;
   prompt: string;
+  category?: string;
   schedule: 'manual' | 'once' | 'daily' | 'weekly';
   time: string;
   timezone: string;
@@ -507,4 +540,11 @@ export interface RoomMemberEvent {
   count: number;
   action: 'join' | 'leave';
   timestamp: string;
+}
+
+export interface PersonalAgentInputRequest {
+  id: string; clientId: string; roomId: string; turnId: string;
+  question: string; fields: {name:string; type:'text'|'checkbox'}[]; fileId?: string;
+  answer?: {text:string; fields:Record<string,string|boolean>};
+  createdAt: string; answeredAt?: string;
 }

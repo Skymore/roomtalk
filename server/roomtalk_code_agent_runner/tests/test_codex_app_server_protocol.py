@@ -183,3 +183,38 @@ def test_codex_image_materialization_enforces_transport_boundaries(monkeypatch: 
     with pytest.raises(codex_app_server.RunnerError) as insecure_redirect:
         codex_app_server._materialize_codex_image_url(image_url, turn_id="turn-image")
     assert insecure_redirect.value.code == "codex_image_insecure_redirect"
+
+
+def test_mapper_preserves_native_image_view_lifecycle_without_image_bytes() -> None:
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-image-view", message_id="message-image-view", workspace=Path("/workspace")
+    )
+    item = {"id": "image-view-1", "type": "imageView", "path": "/workspace/actual-desktop.jpg"}
+    started = mapper.map_notification({"method": "item/started", "params": {"item": item}})
+    completed = mapper.map_notification({"method": "item/completed", "params": {"item": item}})
+    assert started[0]["type"] == "tool_call"
+    assert started[0]["name"] == "view_image"
+    assert started[0]["args"] == {"path": "/workspace/actual-desktop.jpg"}
+    assert completed[0]["type"] == "tool_result"
+    assert completed[0]["id"] == started[0]["id"]
+    assert completed[0]["success"] is True
+    assert "actual-desktop.jpg" in completed[0]["output"]
+    assert "data:" not in completed[0]["output"]
+
+
+def test_mapper_persists_each_actual_native_plan_update() -> None:
+    mapper = codex_app_server.CodexAppServerJsonRpcMapper(
+        turn_id="turn-plan", message_id="message-plan", workspace=Path("/workspace")
+    )
+    first = mapper.map_notification({"method": "turn/plan/updated", "params": {
+        "turnId": "backend-turn", "explanation": "Read the actual source first",
+        "plan": [{"step": "Inspect source", "status": "inProgress"}, {"step": "Save result", "status": "pending"}],
+    }})
+    assert first[0]["name"] == "update_plan"
+    assert first[0]["args"]["plan"][0] == {"step": "Inspect source", "status": "in_progress"}
+    assert first[1]["id"] == first[0]["id"]
+    second = mapper.map_notification({"method": "turn/plan/updated", "params": {
+        "turnId": "backend-turn", "plan": [{"step": "Inspect source", "status": "completed"}],
+    }})
+    assert second[0]["id"] != first[0]["id"]
+    assert second[0]["args"]["plan"][0]["status"] == "completed"

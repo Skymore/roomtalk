@@ -1,8 +1,32 @@
+/*
+MIT License
+
+Copyright (c) 2026 OpenMuse contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ported from OpenMuse NotificationsSheet in agent-ui.tsx (73a7149).
+*/
 import React from 'react';
 import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { PersonalAgentBrowserControl } from './PersonalAgentBrowser';
 import { readPersonalAgentNotifications, markPersonalAgentNotificationRead, type PersonalAgentNotification } from '../utils/personalAgent';
 import type { Room } from '../utils/types';
 
@@ -14,7 +38,6 @@ export const PersonalAgentUpdates: React.FC<{
   const [updates,setUpdates]=React.useState<PersonalAgentNotification[]>([]),[total,setTotal]=React.useState(0),[unread,setUnread]=React.useState(0);
   const [busy,setBusy]=React.useState<string>();
   const [loading,setLoading]=React.useState(false);
-  const [browser,setBrowser]=React.useState<string>();
   const receipts=React.useRef(new Map<string,PersonalAgentNotification>());
   const live=React.useRef(true),pending=React.useRef(false),loaded=React.useRef(50);loaded.current=Math.max(50,updates.length);
   React.useEffect(()=>{live.current=true;return()=>{live.current=false}},[]);
@@ -34,35 +57,28 @@ export const PersonalAgentUpdates: React.FC<{
   },[clientId,mode,enabled,showError]);
   React.useEffect(()=>{void refresh();if(!enabled)return;const timer=window.setInterval(()=>{if(!document.hidden)void refresh(0,true)},15000);return()=>window.clearInterval(timer)},[enabled,refresh]);
   const markRead=async(notice:PersonalAgentNotification)=>{
-    if(busy)return;setBusy(notice.id);
-    try {const saved=await markPersonalAgentNotificationRead(clientId,notice.id);if(!live.current)return;
+    if(busy)return false;setBusy(notice.id);
+    try {const saved=await markPersonalAgentNotificationRead(clientId,notice.id);if(!live.current)return false;
       receipts.current.set(notice.id,saved.notification);
       setUpdates(previous=>mode==='banner' ? previous.filter(item=>item.id!==notice.id) : previous.map(item=>item.id===notice.id ? saved.notification : item));
       setUnread(previous=>Math.max(0,previous-(notice.readAt ? 0 : 1)));
-    }catch(error){if(live.current)showError(error instanceof Error ? error.message : String(error));}finally{if(live.current)setBusy(undefined)}
+      return true;
+    }catch(error){if(live.current)showError(error instanceof Error ? error.message : String(error));return false;}finally{if(live.current)setBusy(undefined)}
   };
   if(!enabled||(mode==='banner'&&!updates.length))return null;
   const visible=mode==='banner' ? updates.slice(0,1) : updates;
   return <section className="space-y-3" aria-label={t('personalUpdates')}>
-    {mode==='list'&&<div className="flex items-center justify-between gap-3"><h3 className="font-medium">{t('personalUpdates')}</h3><Button size="sm" variant="light" isLoading={loading} onPress={()=>void refresh()}>{t('refresh')}</Button></div>}
-    {mode==='list'&&!loading&&!updates.length&&<p className="rounded-2xl bg-default-50 p-6 text-center text-sm text-default-500">{t('personalUpdatesEmpty')}</p>}
+    {mode==='list'&&!loading&&!updates.length&&<div className="space-y-2 py-8 text-center"><Icon icon="lucide:bell" className="mx-auto h-6 w-6 text-default-400"/><p className="font-medium">{t('personalNotificationCaughtUp')}</p><p className="text-sm text-default-500">{t('personalNotificationEmptyHint')}</p></div>}
     {visible.map(notice=>{
       const room=rooms.find(value=>value.id===notice.roomId);
-      return <article key={notice.id} className="space-y-3 rounded-2xl border border-default-200 bg-[#f0f4f1] p-4 dark:bg-[#252d27]" data-testid="personal-update-card">
-      <div className="flex items-start gap-2"><Icon icon="lucide:bell" className="mt-1 shrink-0 text-secondary" />
-        <div className="min-w-0 flex-1"><span className="block text-xs text-default-500">{t(notice.kind==='watch_match' ? 'personalUpdatePageChanged' : notice.kind==='watch_error' ? 'personalUpdateWatchNeedsAttention' : notice.kind==='task_error' ? 'personalAgentNeedsAttention' : 'personalUpdateTaskDone')}</span><h4 className="mt-1 break-words font-medium">{notice.title}</h4></div>
-        {!notice.readAt&&<Button isIconOnly size="sm" variant="light" aria-label={t('personalUpdateDismiss')} isDisabled={Boolean(busy)} onPress={()=>void markRead(notice)}><Icon icon="lucide:x" /></Button>}</div>
-      <p className="line-clamp-4 whitespace-pre-wrap break-words text-sm text-default-600">{notice.body}</p>
-      {notice.source&&<details className="text-xs text-default-500"><summary className="cursor-pointer">{t('personalIdeaSource')}: {notice.source.title}</summary><p className="mt-2 break-all">{notice.source.url}</p><p className="mt-1">{new Date(notice.source.checkedAt).toLocaleString()}</p></details>}
-      <div className="flex flex-wrap items-center gap-2">
-        {room&&(notice.watchId ? <Button size="sm" variant="light" onPress={()=>setBrowser(room.id)}>{t('personalWatchOpenPage')}</Button>
-          : <Button size="sm" variant="light" onPress={()=>onRoomSelect(room)}>{t('personalUpdateViewTask')}</Button>)}
-        {mode==='list'&&!notice.readAt&&<Button size="sm" variant="light" isDisabled={Boolean(busy)} onPress={()=>void markRead(notice)}>{t('personalUpdateRead')}</Button>}
+      return <article key={notice.id} className={`space-y-2 rounded-[22px] p-5 ${notice.readAt?'bg-[#f0f1f2] dark:bg-[#292b2d]':'bg-[#d7e9fa] dark:bg-[#263744]'}`} data-testid="personal-update-card">
+      <div className="flex items-start justify-between gap-3"><h4 className="break-words font-semibold">{notice.title}</h4>{!notice.readAt && <span className="shrink-0 rounded-full bg-white/60 px-2 py-1 text-xs dark:bg-black/20">{t('personalNotificationNew')}</span>}</div>
+      <p className="whitespace-pre-wrap break-words text-sm text-default-500">{notice.body}</p>
+      <time className="block text-xs text-default-500">{new Date(notice.createdAt).toLocaleString()}</time>
+      <div className="flex flex-wrap gap-2"><Button size="sm" isDisabled={Boolean(busy)} onPress={()=>{void markRead(notice).then(saved=>{if(saved && room)onRoomSelect(room);});}}>{t(room?'personalUpdateViewTask':notice.readAt?'personalNotificationRead':'personalUpdateRead')}</Button>
         {mode==='banner'&&unread>1&&<Button size="sm" variant="light" onPress={onOpenUpdates}>{t('personalUpdateMore',{count:unread-1})}</Button>}
-        <time className="text-xs text-default-400">{new Date(notice.createdAt).toLocaleString()}</time>
       </div>
     </article>})}
     {mode==='list'&&updates.length<total&&<Button variant="light" isLoading={loading} onPress={()=>void refresh(updates.length)}>{t('loadMore')}</Button>}
-    {browser&&<PersonalAgentBrowserControl key={browser} clientId={clientId} roomId={browser} isOpen onClose={()=>setBrowser(undefined)} />}
   </section>;
 };

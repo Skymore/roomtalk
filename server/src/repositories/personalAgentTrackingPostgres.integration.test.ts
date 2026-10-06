@@ -5,6 +5,7 @@ import { createPostgresPool } from './postgresPool';
 import { PostgresPool, PostgresStore } from './postgresStore';
 import { PersonalAgentTrackingService, matchPersonalWatch } from '../services/personalAgentTracking';
 import { PersonalAgentWatch, Message } from '../types';
+import {PersonalAgentTaskService} from '../services/personalAgentTasks';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 
 const databaseUrl = process.env.ROOM_EVENT_TEST_DATABASE_URL;
@@ -58,6 +59,20 @@ describe('personal tracking and durable updates PostgreSQL', { skip: !databaseUr
     assert.equal(rooms[0].codeAgentMode, 'fullAccess'); assert.equal(rooms[0].codeAgentAccess, 'owner');
     assert.equal((await tracking.list(other)).total, 0);
     await assert.rejects(tracking.control(other, saved[0].watch.id, { action: 'pause', expectedUpdatedAt: saved[0].watch.updatedAt }), /not found/);
+  });
+
+  it('exposes a source monitor task in Activity and controls it without queuing model work',async()=>{
+    const watch=await create();let wakes=0,interrupts=0;
+    const tasks=new PersonalAgentTaskService(store as any,{create:()=>{throw Error('A monitor does not queue model work');},wake:async()=>{wakes++;},interrupt:async()=>{interrupts++;},tracking});
+    const projected=(await tasks.list(owner)).tasks.find(room=>room.id===watch.roomId)!;
+    assert.equal(projected.personalAgentTaskKind,'monitor');assert.equal(projected.personalAgentTaskStatus,'scheduled');
+    const detail=await tasks.detail(owner,watch.roomId);assert.equal(detail.task?.kind,'monitor');assert.ok('watch' in detail && detail.watch?.id===watch.id);
+    await assert.rejects(tasks.detail(other,watch.roomId),/not found/);
+    await tasks.control(owner,watch.roomId,{action:'pause'});assert.equal((await tasks.detail(owner,watch.roomId)).room.personalAgentTaskStatus,'paused');
+    await tasks.control(owner,watch.roomId,{action:'resume'});assert.equal((await tasks.detail(owner,watch.roomId)).room.personalAgentTaskStatus,'scheduled');
+    await tasks.control(owner,watch.roomId,{action:'cancel'});assert.equal((await tasks.detail(owner,watch.roomId)).room.personalAgentTaskStatus,'cancelled');
+    assert.equal((await store.readMessagesByRoom(watch.roomId)).length,0);assert.equal(wakes,0);assert.equal(interrupts,0);
+    await assert.rejects(tasks.control(owner,watch.roomId,{action:'resume'}),/stopped monitor/);
   });
 
   it('commits baseline and real change exactly once under the browser lease', async () => {
@@ -124,6 +139,20 @@ describe('personal tracking and durable updates PostgreSQL', { skip: !databaseUr
     assert.equal((await restart.readPersonalAgentWatches(owner, { id: current.id })).watches[0].status, 'paused');
     const retry = (await restart.controlPersonalAgentWatch(owner, current.id, 'resume', current.updatedAt))!;
     assert.ok((await finish(retry, undefined, 'Another failure'))!.notification);
+  });
+
+  it('retains stopped tracking history and rejects further controls and stale observations',async()=>{
+    const baseline=(await finish(await create(),'Confirmed original'))!.watch;
+    const lease=await acquire(baseline);
+    const stopped=(await store.controlPersonalAgentWatch(owner,baseline.id,'stop',baseline.updatedAt))!;
+    assert.equal(stopped.status,'stopped');assert.equal(stopped.nextCheckAt,undefined);
+    assert.equal((await new PostgresStore(pool,logger as any).readPersonalAgentWatches(owner,{id:baseline.id})).watches[0].lastText,'Confirmed original');
+    assert.equal(await store.controlPersonalAgentWatch(owner,baseline.id,'resume',stopped.updatedAt),null);
+    assert.equal(await store.finishPersonalAgentWatchCheck({clientId:owner,id:baseline.id,epoch:baseline.epoch,checks:baseline.checks,control:lease,checkedAt:new Date().toISOString(),error:'stale'}),null);
+    await store.releaseCodeAgentRoomLease(baseline.roomId,`browser-control:${lease.id}`,'tracking-test',lease.fence);
+    assert.equal((await store.readDuePersonalAgentWatches(100)).some(item=>item.id===baseline.id),false);
+    const saved=await tracking.create(owner,{title:'Weekly check',url:`https://example.org/${randomUUID()}`,condition:'change',intervalMinutes:10080});
+    assert.equal(saved.watch.intervalMinutes,10080);
   });
 
   it('stores task completion and its update atomically and preserves preference revisions', async () => {

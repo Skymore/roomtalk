@@ -67,14 +67,14 @@ export class PersonalAgentTrackingService {
     if(!watch)throw new PersonalAgentTrackingError('Watch not found',404);return watch;
   }
   async create(clientId: string, body: Record<string,unknown>, claim?: {roomId: string;turnId: string}) {
-    const title=field(body.title,'watch title'),url=new URL(field(body.url,'page URL',2000));
+    const title=field(body.title,'watch title',160),url=new URL(field(body.url,'page URL',4096));
     if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new RangeError('Use an HTTP or HTTPS page URL');
-    if(!['change','contains','price_below'].includes(String(body.condition)))throw new RangeError('Invalid watch condition');
-    const condition=body.condition as PersonalAgentWatch['condition'];
-    let value=condition==='change' ? '' : field(body.value,'watch value',1000);
+    if(!['change','contains','price_below'].includes(String(body.condition ?? 'change')))throw new RangeError('Invalid watch condition');
+    const condition=(body.condition ?? 'change') as PersonalAgentWatch['condition'];
+    let value=condition==='change' ? '' : field(body.value,'watch value',300);
     if(condition==='price_below') { const price=Number(value);if(!Number.isFinite(price)||price<=0)throw new RangeError('Enter a positive USD price');value=String(price); }
-    const intervalMinutes=Number(body.intervalMinutes ?? 30);
-    if(!Number.isInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>1440)throw new RangeError('Check interval must be 1 to 1440 minutes');
+    const intervalMinutes=Number(body.intervalMinutes ?? 15);
+    if(!Number.isInteger(intervalMinutes)||intervalMinutes<1||intervalMinutes>10080)throw new RangeError('Check interval must be 1 to 10080 minutes');
     const now=new Date(),roomId=randomUUID();
     const watch:PersonalAgentWatch={id:randomUUID(),clientId,roomId,title,url:url.href,condition,value,intervalMinutes,status:'active',epoch:0,
       checks:0,failures:0,failureStreak:0,matched:false,nextCheckAt:now.toISOString(),createdAt:now.toISOString(),updatedAt:now.toISOString()};
@@ -85,13 +85,17 @@ export class PersonalAgentTrackingService {
     return {watch:personalWatchMetadata(saved)};
   }
   async control(clientId: string,id: string,body: Record<string,unknown>) {
-    await this.get(clientId,id);
+    const current=await this.get(clientId,id);
     const action=body.action;
-    if(!['pause','resume','check'].includes(String(action)))throw new RangeError('Invalid watch action');
-    const revision=field(body.expectedUpdatedAt,'watch version');if(!Number.isFinite(Date.parse(revision)))throw new RangeError('Invalid watch version');
-    const watch=await this.store.controlPersonalAgentWatch!(clientId,id,action as 'pause'|'resume'|'check',revision);
+    if(!['pause','resume','check','stop'].includes(String(action)))throw new RangeError('Invalid watch action');
+    if(current.status==='stopped'){
+      if(action==='stop')return {watch:personalWatchMetadata(current)};
+      throw new PersonalAgentTrackingError('Create a new watch to restart this stopped monitor',409);
+    }
+    const revision=field(body.expectedUpdatedAt ?? current.updatedAt,'watch version');if(!Number.isFinite(Date.parse(revision)))throw new RangeError('Invalid watch version');
+    const watch=await this.store.controlPersonalAgentWatch!(clientId,id,action as 'pause'|'resume'|'check'|'stop',revision);
     if(!watch)throw new PersonalAgentTrackingError('The watch changed. Refresh before trying again.',409);
-    if(action!=='pause')this.wake();
+    if(action==='resume'||action==='check')this.wake();
     return {watch:personalWatchMetadata(watch)};
   }
   async remove(clientId: string,id: string) {

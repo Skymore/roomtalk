@@ -243,6 +243,7 @@ def test_codex_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Pat
     assert client.started_env["PUBLIC_VALUE"] == "visible"
     assert refreshed_auth_json.read_text(encoding="utf-8") == '{"accessToken":"refreshed"}'
 
+    assert next(call[1] for call in client.calls if call[0] == "thread_resume")["params"]["config"] == {"tools.update_plan.enabled": True}
     turn_start = next(call[1] for call in client.calls if call[0] == "turn_start")
     assert turn_start["thread_id"] == "thread-sdk-1"
     assert turn_start["params"]["model"] == "gpt-5.3-codex-spark"
@@ -388,6 +389,7 @@ def test_codex_app_server_falls_back_to_new_thread_when_resume_fails(tmp_path: P
     call_names = [name for name, _payload in factory.clients[0].calls]
     assert "thread_resume" in call_names
     assert "thread_start" in call_names
+    assert next(payload for name, payload in factory.clients[0].calls if name == "thread_resume")["params"]["config"] == {"tools.update_plan.enabled": True}
     assert event_lines(stdout)[-1]["sessionId"] == "thread-sdk-new"
 
 

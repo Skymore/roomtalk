@@ -69,7 +69,7 @@ describe('personal shared browser', () => {
     test.end();
     const held = (await test.service.takeControl('owner', 'private')).control;
     const live = await test.service.manual('owner', 'private', held, { action: 'read' });
-    assert.equal(typeof live.screenshot, 'string'); assert.equal(test.visits.length, 0); assert.equal(test.objects.size, 0);
+    assert.equal(typeof live.screenshot, 'string'); assert.equal(test.visits.length,0);assert.equal(test.objects.size,1);assert.ok(live.session.previewUrl);assert.equal('previewObjectKey' in live.session,false);
     assert.equal(test.savedLease, `browser-control:${held.id}`);
     await assert.rejects(test.service.manual('owner', 'private', { ...held, fence: 6 }, { action: 'read' }), /expired/);
     assert.equal((await test.service.releaseControl('owner', 'private', held)).released, true);

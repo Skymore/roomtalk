@@ -45,7 +45,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             aria-label={t("personalAgent")}
             aria-current={view === "personal" || (view === "chat" && currentRoom?.personalAgentOwnerId) ? "page" : undefined}
           >
-            <Icon icon="lucide:bot" className="h-4 w-4" />
+            <span className="text-lg" aria-hidden="true">🦊</span>
           </Button>
 
           <Button

@@ -37,6 +37,18 @@ describe('persistent personal results', () => {
     const fixtureFailed = fixture(); fixtureFailed.fail();
     await assert.rejects(fixtureFailed.service.save(source, input), /database unavailable/); assert.equal(fixtureFailed.objects.size, 0);
   });
+  it('persists computed finance data with the original CSV and comparison objects', async () => {
+    const {service}=fixture();
+    const csv='date,description,amount,category\n2026-10-06,Salary,-1000,Income\n2026-10-06,Lunch,12.50,Food';
+    const saved=await service.save(source,{...input,kind:'finance',filename:'transactions.csv',content:Buffer.from(csv).toString('base64')});
+    assert.equal(saved.result.data!.spending,12.5);assert.equal(saved.result.data!.income,1000);assert.equal(saved.result.data!.saved,987.5);
+    assert.equal((await service.get('owner',saved.result.id))!.body.toString(),csv);
+    const options={options:[{name:'Train',source:'https://example.org/train'}]};
+    const compared=await service.save(source,{...input,kind:'comparison',filename:'options.json',content:Buffer.from(JSON.stringify(options)).toString('base64')});
+    assert.deepEqual(compared.result.data,options);
+    await assert.rejects(service.save(source,{...input,kind:'finance',filename:'invented.csv'}),/CSV needs/);
+    await assert.rejects(service.save(source,{...input,kind:'comparison',filename:'options.json',content:Buffer.from('[]').toString('base64')}),/object/);
+  });
   it('validates encoding, names, formats and real byte limits before any upload', async () => {
     const { service, objects } = fixture();
     for (const invalid of [ { filename: '../secret.md' }, { kind: 'web' }, { filename: 'plan.pdf' }, { content: 'not-base64!' },

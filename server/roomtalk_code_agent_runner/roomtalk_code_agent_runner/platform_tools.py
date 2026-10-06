@@ -57,6 +57,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "browser":
             _require_write_access(env)
             result = _personal_browser(args, env)
+        elif args.command == "google":
+            operation = args.google_command
+            query = {"operation": operation}
+            for key in ("id", "query", "calendarId", "timeMin", "timeMax"):
+                value = getattr(args, key, None)
+                if value is not None:
+                    query[key] = value
+            if operation in ("save-draft", "propose"):
+                _require_write_access(env)
+                body = {"operation": operation, "data": json.loads(Path(args.file).read_text(encoding="utf-8"))}
+                result = _read_room_context_path("/personal-google", env, method="PATCH", body=body)
+            elif operation == "import-attachment":
+                _require_write_access(env)
+                result = _read_room_context_path("/personal-google", env, method="PATCH", body={"operation": operation, "reference": args.reference})
+            else:
+                result = _read_room_context_path("/personal-google?" + urllib_parse.urlencode(query), env)
+            result = {"success": True, **result, "tool": "PersonalGoogle"}
+        elif args.command == "task":
+            operation = args.task_command
+            if operation in ("request-input", "delegate", "control"):
+                _require_write_access(env)
+                if operation == "control":
+                    body = {"operation": operation, "id": args.id, "action": args.action}
+                else:
+                    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+                    body = {"operation": operation, "data": payload} if operation == "delegate" else payload
+                result = _read_room_context_path("/personal-task", env, method="PATCH", body=body)
+            else:
+                query = {"operation": operation}
+                if getattr(args, "id", None):
+                    query["id"] = args.id
+                result = _read_room_context_path("/personal-task?" + urllib_parse.urlencode(query), env)
+            result = {"success": True, **result, "tool": "PersonalTask"}
+        elif args.command == "computer":
+            result = _personal_computer(args, env)
+        elif args.command == "file":
+            if args.file_command != "list":
+                _require_write_access(env)
+            result = _personal_file(args, env)
         elif args.command == "result":
             if args.result_command in ("save", "get"):
                 _require_write_access(env)
@@ -127,9 +166,9 @@ def _build_parser() -> argparse.ArgumentParser:
     watch_create.add_argument("--url", required=True)
     watch_create.add_argument("--condition", choices=("change", "contains", "price_below"), required=True)
     watch_create.add_argument("--value", default="")
-    watch_create.add_argument("--interval-minutes", type=int, default=30)
+    watch_create.add_argument("--interval-minutes", type=int, default=15)
     watch_create.add_argument("--json", action="store_true")
-    for action in ("pause", "resume", "check", "remove"):
+    for action in ("pause", "resume", "check", "stop", "remove"):
         command = watch_sub.add_parser(action)
         command.add_argument("--id", required=True)
         if action != "remove":
@@ -164,12 +203,68 @@ def _build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--offset", type=int, default=0)
     listing.add_argument("--json", action="store_true")
 
+    computer = subparsers.add_parser("computer", help="Use the personal computer's real terminal, files and desktop.")
+    computer_sub = computer.add_subparsers(dest="computer_command", required=True)
+    for name in ("status", "start", "stop", "run", "list", "read", "write", "mkdir", "copy-document", "import-pdf", "desktop", "screenshot"):
+        command = computer_sub.add_parser(name)
+        command.add_argument("--json", action="store_true")
+        if name in ("list", "read", "write", "mkdir", "copy-document", "import-pdf"):
+            command.add_argument("--path", default="/workspace" if name == "list" else None, required=name != "list")
+        if name in ("write", "desktop"):
+            command.add_argument("--file", required=True)
+        if name in ("run", "desktop"):
+            command.add_argument("--operation-id", required=True, help="Reuse only for an exact duplicate request.")
+        if name == "run":
+            command.add_argument("--command", dest="shell_command", required=True)
+            command.add_argument("--cwd", default="/workspace")
+        if name in ("desktop", "screenshot"):
+            command.add_argument("--output", required=True, help="Save the actual screenshot inside the runner workspace.")
+        if name == "screenshot":
+            command.add_argument("--receipt-id")
+        if name == "copy-document":
+            command.add_argument("--file-id", required=True)
+
+    google = subparsers.add_parser("google", help="Read connected Gmail/Calendar and prepare reviewed actions.")
+    google_sub = google.add_subparsers(dest="google_command", required=True)
+    for name in ("status", "mail", "thread", "message", "calendars", "events", "drafts", "actions", "save-draft", "propose", "import-attachment"):
+        command = google_sub.add_parser(name)
+        command.add_argument("--json", action="store_true")
+        if name in ("save-draft", "propose"):
+            command.add_argument("--file", required=True)
+        if name in ("thread", "message"):
+            command.add_argument("--id", required=True)
+        if name == "mail":
+            command.add_argument("--query")
+        if name == "import-attachment":
+            command.add_argument("--reference", required=True)
+        if name == "events":
+            command.add_argument("--calendar-id", dest="calendarId")
+            command.add_argument("--time-min", dest="timeMin")
+            command.add_argument("--time-max", dest="timeMax")
+
+    task = subparsers.add_parser("task", help="Delegate, inspect and control saved personal tasks.")
+    task_sub = task.add_subparsers(dest="task_command", required=True)
+    for name in ("list", "get", "delegate", "control", "request-input"):
+        command = task_sub.add_parser(name)
+        command.add_argument("--json", action="store_true")
+        if name == "get":
+            command.add_argument("--id", help="Task room id; defaults to this task")
+        if name == "delegate":
+            command.add_argument("--file", required=True, help="JSON {prompt,title?,kind?:agent|plan|document|finance,goalId?,input?:{csv?,messageId?}}")
+        if name == "control":
+            command.add_argument("--id", required=True)
+            command.add_argument("--action", required=True, choices=("pause", "resume", "retry", "cancel"))
+        if name == "request-input":
+            command.add_argument("--file", required=True, help="JSON {question,fileId?,fields?: [actual PDF field names]}")
+
     browser = subparsers.add_parser("browser", help="Read and operate your personal agent's actual shared browser.")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
-    for action in ("open", "read", "click", "fill", "text", "key", "scroll", "close", "list"):
+    for action in ("create", "sessions", "open", "read", "click", "fill", "text", "key", "scroll", "close", "list", "import_pdf"):
         command = browser_sub.add_parser(action)
         command.add_argument("--json", action="store_true")
-        if action == "open": command.add_argument("--url", required=True)
+        if action == "import_pdf": command.add_argument("--id", required=True)
+        if action in ("open","create"): command.add_argument("--url", required=True)
+        if action not in ("list","sessions","create"): command.add_argument("--session-id")
         if action in ("click", "fill"): command.add_argument("--selector", required=True)
         if action in ("fill", "text"): command.add_argument("--text", required=True)
         if action == "key": command.add_argument("--key", required=True)
@@ -230,11 +325,30 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_forget.add_argument("--expected-updated-at", required=True)
     memory_forget.add_argument("--json", action="store_true")
 
+    file_parser = subparsers.add_parser("file", help="Import, read and fill persistent personal PDFs.")
+    file_commands = file_parser.add_subparsers(dest="file_command", required=True)
+    file_list = file_commands.add_parser("list")
+    file_list.add_argument("--id")
+    file_list.add_argument("--limit", type=int, default=50)
+    file_list.add_argument("--offset", type=int, default=0)
+    file_list.add_argument("--json", action="store_true")
+    file_import = file_commands.add_parser("import")
+    file_import.add_argument("--file", required=True, help="An existing PDF, at most 10 MiB.")
+    file_import.add_argument("--json", action="store_true")
+    file_get = file_commands.add_parser("get")
+    file_get.add_argument("--id", required=True)
+    file_get.add_argument("--output", required=True)
+    file_get.add_argument("--json", action="store_true")
+    file_fill = file_commands.add_parser("fill")
+    file_fill.add_argument("--id", required=True)
+    file_fill.add_argument("--fields-json", required=True, help="JSON object of confirmed PDF field values.")
+    file_fill.add_argument("--json", action="store_true")
+
     result = subparsers.add_parser("result", help="Save and reopen private persistent plans, documents and web results.")
     result_commands = result.add_subparsers(dest="result_command", required=True)
     result_save = result_commands.add_parser("save")
     result_save.add_argument("--file", required=True, help="An existing file, at most 4 MiB; text at most 512 KiB.")
-    result_save.add_argument("--kind", required=True, choices=("plan", "document", "web"))
+    result_save.add_argument("--kind", required=True, choices=("plan", "document", "web", "comparison", "finance"))
     result_save.add_argument("--title", required=True)
     result_save.add_argument("--summary", default="")
     result_save.add_argument("--json", action="store_true")
@@ -298,6 +412,64 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
         raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
 
     return _read_room_context_path(path, env)
+
+
+def _personal_computer(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    operation = args.computer_command
+    read = operation in ("status", "list", "read", "screenshot")
+    body: dict[str, Any] = {"operation": operation}
+    for flag, key in (("path", "path"), ("receipt_id", "receiptId"), ("file_id", "fileId"), ("operation_id", "operationId")):
+        value = getattr(args, flag, None)
+        if value is not None:
+            body[key] = value
+    if operation == "run":
+        body.update(command=args.shell_command, cwd=args.cwd)
+    elif operation == "write":
+        body["text"] = Path(args.file).read_text(encoding="utf-8")
+    elif operation == "desktop":
+        body["action"] = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if read:
+        result = _read_room_context_path("/personal-computer?" + urllib_parse.urlencode(body), env)
+    else:
+        _require_write_access(env)
+        result = _read_room_context_path("/personal-computer", env, method="PATCH", body=body)
+    if operation in ("desktop", "screenshot"):
+        content = result.pop("data", None)
+        if content:
+            target = validate_workspace_path(Path(args.output).expanduser().absolute(), env)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(base64.b64decode(content, validate=True))
+            result["screenshot"] = str(target)
+            result["inspectWith"] = "view_image"
+    return {"success": True, **result, "tool": "PersonalComputer"}
+
+
+def _personal_file(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    action = args.file_command
+    if action == "list":
+        query = {"limit": args.limit, "offset": args.offset}
+        if args.id:
+            query["id"] = args.id
+        result = _read_room_context_path("/personal-files?" + urllib_parse.urlencode(query), env)
+    elif action == "get":
+        result = _read_room_context_path("/personal-files?" + urllib_parse.urlencode({"id": args.id, "content": "true"}), env)
+        target = validate_workspace_path(Path(args.output).expanduser().absolute(), env)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(result.pop("content"), validate=True))
+        result["output"] = str(target)
+    elif action == "fill":
+        fields = json.loads(args.fields_json)
+        if not isinstance(fields, dict):
+            raise RunnerError("PDF fields must be a JSON object", code="personal_file_invalid")
+        result = _read_room_context_path("/personal-files", env, method="PATCH", body={"action": "fill", "id": args.id, "fields": fields})
+    else:
+        source = Path(args.file)
+        if source.stat().st_size > 10 * 1024 * 1024:
+            raise RunnerError("PDF files are limited to 10 MiB", code="personal_file_invalid")
+        result = _read_room_context_path("/personal-files", env, method="PATCH", body={
+            "action": "import", "name": source.name, "content": base64.b64encode(source.read_bytes()).decode("ascii"),
+        })
+    return {**result, "tool": "PersonalFile"}
 
 
 def _personal_result(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
@@ -416,13 +588,16 @@ def _personal_idea(args: argparse.Namespace, env: dict[str, str]) -> dict[str, A
 
 
 def _personal_browser(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
-    if args.browser_command == "list":
+    if args.browser_command == "sessions":
+        result = _read_room_context_path("/personal-browser?operation=sessions", env)
+    elif args.browser_command == "list":
         query = {"limit": args.limit, "offset": args.offset}
         if args.room_id: query["roomId"] = args.room_id
         result = _read_room_context_path("/personal-browser?" + urllib_parse.urlencode(query), env)
     else:
         body = {"action": args.browser_command}
-        for key in ("url", "selector", "text", "key", "delta_y"):
+        if getattr(args,"session_id",None): body["sessionId"] = args.session_id
+        for key in ("url", "selector", "text", "key", "delta_y", "id"):
             if hasattr(args, key): body["deltaY" if key == "delta_y" else key] = getattr(args, key)
         result = _read_room_context_path("/personal-browser", env, method="PATCH", body=body)
     return {**result, "tool": "PersonalBrowser"}

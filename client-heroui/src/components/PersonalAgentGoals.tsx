@@ -1,121 +1,90 @@
+/*
+MIT License
+
+Copyright (c) 2026 OpenMuse contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ported from OpenMuse GoalsScreen, GoalForm and GoalCard in agent-ui.tsx (73a7149).
+*/
 import React from 'react';
-import { Button, Checkbox, Chip, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Textarea } from '@heroui/react';
-import { Icon } from '@iconify/react';
-import { useTranslation } from 'react-i18next';
-import { createPersonalAgentGoal, cancelPersonalAgentGoal, deletePersonalAgentGoal, runPersonalAgentGoal, updatePersonalAgentGoal,
-  type PersonalAgentGoal, type PersonalAgentGoalInput } from '../utils/personalAgent';
-import type { Room } from '../utils/types';
-
-interface GoalAction { (): Promise<void> }
+import {Button,Checkbox,Input,Modal,ModalBody,ModalContent,ModalHeader,Textarea} from '@heroui/react';
+import {Icon} from '@iconify/react';
+import {useTranslation} from 'react-i18next';
+import {createPersonalAgentGoal,updatePersonalAgentGoal,delegatePersonalAgentTask,answerPersonalAgentTaskInput,type PersonalAgentGoal} from '../utils/personalAgent';
+import {PersonalAgentTaskDetailView} from './PersonalAgentTaskDetail';
+import type {Room} from '../utils/types';
 interface PersonalAgentGoalsProps {
-  clientId: string; goals: PersonalAgentGoal[]; rooms: Room[]; isConnected: boolean;
-  onRoomSelect: (room: Room) => void; onGoalsChange: (goals: PersonalAgentGoal[]) => void;
-  showSuccess: (message: string) => void; showError: (message: string) => void;
+  clientId:string;goals:PersonalAgentGoal[];rooms:Room[];isConnected:boolean;
+  onRoomSelect:(room:Room)=>void;onGoalsChange:(goals:PersonalAgentGoal[])=>void;
+  showSuccess:(message:string)=>void;showError:(message:string)=>void;
 }
-const panelClass = 'rounded-2xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
-const mutedClass = 'text-[#5e5d59] dark:text-[#b0aea5]';
-const localDateTime = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-};
-const formatRunDate = (date: string, language: string, timezone: string) => new Intl.DateTimeFormat(language, {
-  timeZone: timezone, dateStyle: 'medium', timeStyle: 'short',
-}).format(new Date(date));
-const newGoal = (): PersonalAgentGoalInput => ({
-  title: '', prompt: '', schedule: 'manual', weekday: new Date().getDay(), time: '09:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-});
-
-export const PersonalAgentGoals: React.FC<PersonalAgentGoalsProps> = ({ clientId, goals, rooms, isConnected, onRoomSelect, onGoalsChange, showSuccess, showError }) => {
-  const { t, i18n } = useTranslation();
-  const [isBusy, setIsBusy] = React.useState(false);
-  const [isGoalModalOpen, setIsGoalModalOpen] = React.useState(false);
-  const [editingGoal, setEditingGoal] = React.useState<PersonalAgentGoal | null>(null);
-  const [goalDraft, setGoalDraft] = React.useState<PersonalAgentGoalInput>(newGoal);
-
-  const mutate = async (action: GoalAction) => {
-    if (isBusy) return;
-    setIsBusy(true);
-    try { await action(); } catch (error) { showError(error instanceof Error ? error.message : t('personalAgentUpdateFailed')); }
-    finally { setIsBusy(false); }
-  };
-  const openGoal = (goal?: PersonalAgentGoal) => {
-    setEditingGoal(goal ?? null);
-    setGoalDraft(goal ? { title: goal.title, prompt: goal.prompt, schedule: goal.schedule, time: goal.time, timezone: goal.timezone, weekday: goal.weekday ?? new Date().getDay(), runAt: goal.runAt, milestones: goal.milestones } : newGoal());
-    setIsGoalModalOpen(true);
-  };
-
+interface GoalAction { ():Promise<void> }
+const categories=[{name:'Health',icon:'lucide:heart'},{name:'Relationships',icon:'lucide:users'},{name:'Finances',icon:'lucide:circle-dollar-sign'},{name:'Something else',icon:'lucide:target'}];
+const status=(goal:PersonalAgentGoal)=>goal.completedAt?'personalAgentGoalCompleted':goal.enabled?'personalGoalActive':'personalAgentPaused';
+export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goals,rooms,onGoalsChange})=>{
+  const {t}=useTranslation();
+  const [category,setCategory]=React.useState<string>();
+  const [selected,setSelected]=React.useState<string>();
+  const [taskId,setTaskId]=React.useState<string>();
+  const [title,setTitle]=React.useState('');
+  const [description,setDescription]=React.useState('');
+  const [milestones,setMilestones]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [error,setError]=React.useState('');
+  const goal=goals.find(item=>item.id===selected);
+  async function act(action:GoalAction){if(busy)return;setBusy(true);setError('');try{await action();}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setBusy(false);}}
+  const update=(body:Parameters<typeof updatePersonalAgentGoal>[2])=>act(async()=>{
+    if(!goal)return;const saved=await updatePersonalAgentGoal(clientId,goal.id,body,goal.updatedAt);onGoalsChange(goals.map(item=>item.id===goal.id?saved.goal:item));
+  });
   return <>
-    <section className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className={`max-w-lg text-sm ${mutedClass}`}>{t('personalAgentGoalsDescription')}</p>
-            <Button size="sm" color="secondary" onPress={() => openGoal()} startContent={<Icon icon="lucide:plus" className="h-4 w-4" />}>{t('personalAgentNewGoal')}</Button>
-          </div>
-          {goals.length === 0 && <p className={`${panelClass} p-6 text-sm ${mutedClass}`}>{t('personalAgentNoGoals')}</p>}
-          {goals.map(goal => <article key={goal.id} className={`${panelClass} p-4`}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><h3 className="font-medium">{goal.title}</h3><p className={`mt-1 whitespace-pre-wrap text-sm ${mutedClass}`}>{goal.prompt}</p></div>
-              <Chip size="sm" variant="flat" color={goal.enabled ? 'success' : 'default'}>{t(goal.completedAt ? 'personalAgentGoalCompleted' : goal.schedule === 'once' && goal.lastRunAt && !goal.nextRunAt ? 'personalAgentScheduledRunStarted' : goal.enabled ? 'personalAgentEnabled' : 'personalAgentPaused')}</Chip>
-            </div>
-            {Boolean(goal.milestones?.length) && <div className="mt-3 flex flex-col gap-2" aria-label={t('personalAgentMilestones')}>
-              {goal.milestones!.map(milestone => <Checkbox key={milestone.id} size="sm" isSelected={milestone.done} isDisabled={isBusy || Boolean(goal.completedAt)} onValueChange={done => { void mutate(async () => {
-                const { goal: updated } = await updatePersonalAgentGoal(clientId, goal.id, { milestones: goal.milestones!.map(item => item.id === milestone.id ? { ...item, done } : item) }, goal.updatedAt);
-                onGoalsChange(goals.map(item => item.id === goal.id ? updated : item));
-              }); }}>{milestone.title}</Checkbox>)}
-            </div>}
-            <p className={`mt-3 flex flex-wrap items-center gap-1.5 text-xs ${mutedClass}`}><Icon icon="lucide:clock" className="h-3.5 w-3.5" />{t(`personalAgentSchedule_${goal.schedule}`)}{goal.schedule === 'weekly' && <> · {new Intl.DateTimeFormat(i18n.language, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 9, 4 + goal.weekday!)))}</>}{goal.schedule === 'once' ? <> · {goal.runAt && formatRunDate(goal.runAt, i18n.language, goal.timezone)} · {goal.timezone}</> : goal.schedule !== 'manual' && <> · {goal.time} · {goal.timezone}</>}</p>
-            {goal.nextRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentNextRun', { date: formatRunDate(goal.nextRunAt, i18n.language, goal.timezone) })}</p>}
-            {goal.lastRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentLastRun', { date: formatRunDate(goal.lastRunAt, i18n.language, goal.timezone) })}</p>}
-            {goal.lastRun && <p className={`mt-2 text-sm ${mutedClass}`}>{t('personalAgentRunStatus', { status: t(`personalAgentRun_${goal.lastRun.status}`) })}</p>}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button size="sm" variant="flat" color="secondary" isDisabled={isBusy || !isConnected || Boolean(goal.completedAt)} onPress={() => { void mutate(async () => { const { room } = await runPersonalAgentGoal(clientId, goal.id); onRoomSelect(room); }); }} startContent={<Icon icon="lucide:play" className="h-3.5 w-3.5" />}>{t('personalAgentRunNow')}</Button>
-              <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => { void mutate(async () => { const { goal: updated } = await updatePersonalAgentGoal(clientId, goal.id, { enabled: !goal.enabled, ...(goal.completedAt ? { completed: false } : {}) }, goal.updatedAt); onGoalsChange(goals.map(item => item.id === goal.id ? updated : item)); }); }}>{t(goal.completedAt ? 'personalAgentReopenGoal' : goal.enabled ? 'personalAgentPause' : 'personalAgentResume')}</Button>
-              {!goal.completedAt && <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => { void mutate(async () => {
-                const { goal: updated } = await updatePersonalAgentGoal(clientId, goal.id, { completed: true, milestones: (goal.milestones || []).map(item => ({ ...item, done: true })) }, goal.updatedAt);
-                onGoalsChange(goals.map(item => item.id === goal.id ? updated : item));
-              }); }}>{t('personalAgentCompleteGoal')}</Button>}
-              {goal.lastRun && ['queued', 'running'].includes(goal.lastRun.status) && <Button size="sm" variant="light" color="danger" isDisabled={isBusy} onPress={() => { void mutate(async () => {
-                const { goal: updated } = await cancelPersonalAgentGoal(clientId, goal.id, goal.updatedAt);
-                onGoalsChange(goals.map(item => item.id === goal.id ? { ...updated, lastRun: goal.lastRun } : item));
-                showSuccess(t('personalAgentCancellationRequested'));
-              }); }}>{t('personalAgentCancelWork')}</Button>}
-              {goal.lastRunRoomId && rooms.some(room => room.id === goal.lastRunRoomId) && <Button size="sm" variant="light" onPress={() => onRoomSelect(rooms.find(room => room.id === goal.lastRunRoomId)!)}>{t('personalAgentViewWork')}</Button>}
-              <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => openGoal(goal)}>{t('edit')}</Button>
-              <Button size="sm" variant="light" color="danger" isDisabled={isBusy} onPress={() => { void mutate(async () => { await deletePersonalAgentGoal(clientId, goal.id, goal.updatedAt); onGoalsChange(goals.filter(item => item.id !== goal.id)); }); }}>{t('delete')}</Button>
-            </div>
-          </article>)}
-        </section>
-      <Modal isOpen={isGoalModalOpen} onOpenChange={setIsGoalModalOpen} scrollBehavior="inside">
-        <ModalContent><ModalHeader>{t(editingGoal ? 'personalAgentEditGoal' : 'personalAgentNewGoal')}</ModalHeader><ModalBody className="gap-4">
-          <Input autoFocus label={t('personalAgentGoalTitle')} value={goalDraft.title} maxLength={100} onValueChange={title => setGoalDraft({ ...goalDraft, title })} />
-          <Textarea label={t('personalAgentGoalPrompt')} minRows={4} value={goalDraft.prompt} maxLength={16000} onValueChange={prompt => setGoalDraft({ ...goalDraft, prompt })} />
-          <Textarea label={t('personalAgentMilestones')} description={t('personalAgentMilestonesHint')} minRows={2} value={(goalDraft.milestones || []).map(item => item.title).join('\n')} onValueChange={value => setGoalDraft({ ...goalDraft, milestones: value.split('\n').map((title, index) => {
-            const existing = goalDraft.milestones?.[index];
-            return { id: existing?.id || crypto.randomUUID(), title, done: existing?.title === title ? existing.done : false };
-          }) })} />
-          <Select label={t('personalAgentSchedule')} selectedKeys={[goalDraft.schedule]} onSelectionChange={keys => { const schedule = Array.from(keys)[0]; if (schedule === 'manual' || schedule === 'once' || schedule === 'daily' || schedule === 'weekly') setGoalDraft({ ...goalDraft, schedule }); }}>
-            {(['manual', 'once', 'daily', 'weekly'] as const).map(schedule => <SelectItem key={schedule}>{t(`personalAgentSchedule_${schedule}`)}</SelectItem>)}
-          </Select>
-          {goalDraft.schedule === 'weekly' && <fieldset>
-            <legend className={`mb-2 text-sm ${mutedClass}`}>{t('personalAgentWeekday')}</legend>
-            <div className="flex flex-wrap gap-2">
-              {Array.from({ length: 7 }, (_, day) => <Button key={day} size="sm" variant={goalDraft.weekday === day ? 'flat' : 'light'} color={goalDraft.weekday === day ? 'secondary' : 'default'} aria-pressed={goalDraft.weekday === day} onPress={() => setGoalDraft({ ...goalDraft, weekday: day })}>
-                {new Intl.DateTimeFormat(i18n.language, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 9, 4 + day)))}
-              </Button>)}
-            </div>
-          </fieldset>}
-          {goalDraft.schedule === 'once' && <Input type="datetime-local" label={t('personalAgentExecutionDate')} value={localDateTime(goalDraft.runAt)} onValueChange={value => setGoalDraft({ ...goalDraft, runAt: value ? new Date(value).toISOString() : undefined, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })} />}
-          {goalDraft.schedule !== 'manual' && <>
-            {goalDraft.schedule !== 'once' && <Input type="time" label={t('personalAgentScheduleTime')} value={goalDraft.time} onValueChange={time => setGoalDraft({ ...goalDraft, time })} />}<Input label={t('personalAgentTimezone')} isReadOnly={goalDraft.schedule === 'once'} value={goalDraft.schedule === 'once' ? Intl.DateTimeFormat().resolvedOptions().timeZone : goalDraft.timezone} onValueChange={timezone => setGoalDraft({ ...goalDraft, timezone })} /><p className={`text-xs ${mutedClass}`}>{t('personalAgentScheduleHint')}</p></>}
-        </ModalBody><ModalFooter>
-          <Button variant="light" onPress={() => setIsGoalModalOpen(false)}>{t('cancel')}</Button>
-          <Button color="secondary" isLoading={isBusy} isDisabled={!goalDraft.title.trim() || !goalDraft.prompt.trim() || !goalDraft.time || !goalDraft.timezone.trim() || (goalDraft.schedule === 'once' && !goalDraft.runAt)} onPress={() => { void mutate(async () => {
-            const { goal } = editingGoal ? await updatePersonalAgentGoal(clientId, editingGoal.id, { ...goalDraft, milestones: goalDraft.milestones?.filter(item => item.title.trim()) }, editingGoal.updatedAt) : await createPersonalAgentGoal(clientId, { ...goalDraft, milestones: goalDraft.milestones?.filter(item => item.title.trim()) });
-            onGoalsChange(editingGoal ? goals.map(item => item.id === goal.id ? goal : item) : [goal, ...goals]);
-            setIsGoalModalOpen(false);
-            showSuccess(t('personalAgentGoalSaved'));
-          }); }}>{t('save')}</Button>
-        </ModalFooter></ModalContent>
-      </Modal>
+    <section className="space-y-2 border-t border-default-200 pt-5" aria-label={t('personalAgentGoals')}>
+      <h3 className="flex items-center gap-2 text-lg font-semibold text-[#2784bc]"><span className="h-4 w-4 rounded-full border-[5px] border-[#d7e9fa] bg-[#3d9bde]"/>{t('personalAgentGoals')}</h3>
+      {goals.map(goal=><button key={goal.id} type="button" className="flex w-full items-center gap-3 py-3 text-left" aria-label={t('personalGoalOpen',{title:goal.title})} onClick={()=>{setSelected(goal.id);setError('');}}>
+        <Icon icon="lucide:square" className={`h-5 w-5 shrink-0 ${goal.completedAt?'fill-success text-success':'text-default-400'}`}/><span className="min-w-0 flex-1"><span className="block">{goal.title}</span><span className="mt-1 line-clamp-2 block text-sm text-default-500">{goal.prompt || t(status(goal))}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/>
+      </button>)}
+      {!goals.length && <p className="py-3 text-sm text-default-500">{t('personalGoalEmpty')}</p>}
+    </section>
+    <section className="space-y-3 border-t border-default-200 pt-5"><h3 className="text-lg font-semibold">{t('personalGoalCreate')}</h3>
+      {categories.map(item=><button key={item.name} type="button" className="flex min-h-10 w-full items-center gap-3 text-left text-default-500" aria-label={t('personalGoalCreateCategory',{category:t(`personalGoalCategory_${item.name}`)})} onClick={()=>{setCategory(item.name);setTitle('');setDescription('');setMilestones('');setError('');}}><Icon icon={item.icon} className="h-6 w-6"/><span className="flex-1">{t(`personalGoalCategory_${item.name}`)}</span><Icon icon="lucide:plus"/></button>)}
+    </section>
+    <Modal isOpen={Boolean(category)} onClose={()=>setCategory(undefined)} scrollBehavior="inside"><ModalContent><ModalHeader>{t('personalGoalCreate')}</ModalHeader><ModalBody className="pb-6"><form className="space-y-4" onSubmit={event=>{event.preventDefault();void act(async()=>{
+      const saved=await createPersonalAgentGoal(clientId,{title:title.trim(),prompt:description,category,schedule:'manual',time:'09:00',timezone:'UTC',milestones:milestones.split('\n').map(line=>line.trim()).filter(Boolean).map(title=>({id:crypto.randomUUID(),title,done:false}))});onGoalsChange([saved.goal,...goals]);setCategory(undefined);
+    });}}>
+      <Input label={t('personalGoalYourGoal')} placeholder={t('personalGoalExample')} value={title} onValueChange={setTitle} maxLength={160}/>
+      <Textarea label={t('personalGoalSuccess')} value={description} onValueChange={setDescription} maxLength={4000}/>
+      <Textarea label={t('personalGoalMilestoneLines')} value={milestones} onValueChange={setMilestones}/>
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      <Button type="submit" color="secondary" isLoading={busy} isDisabled={!title.trim()}>{t('personalGoalCreateButton')}</Button>
+    </form></ModalBody></ModalContent></Modal>
+    <Modal isOpen={Boolean(goal)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent><ModalHeader>{goal?.title}</ModalHeader><ModalBody className="pb-6">{goal && <div className="space-y-3 rounded-2xl border border-default-200 p-4">
+      <div className="flex justify-between gap-3"><h3 className="font-semibold">{goal.title}</h3><span className="rounded-full bg-[#d7e9fa] px-2 py-1 text-xs dark:bg-[#263744]">{t(status(goal))}</span></div>
+      <p className="whitespace-pre-wrap text-sm text-default-500">{goal.prompt}</p>
+      <p className="text-xs text-default-500">{t('personalGoalProgress',{done:(goal.milestones || []).filter(item=>item.done).length,total:goal.milestones?.length || 0})}</p>
+      {(goal.milestones || []).map(milestone=><Checkbox key={milestone.id} className="flex" isDisabled={busy} isSelected={milestone.done} onValueChange={done=>void update({milestones:goal.milestones!.map(item=>item.id===milestone.id?{...item,done}:item)})}>{milestone.title}</Checkbox>)}
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      <div className="flex flex-wrap gap-2"><Button size="sm" isLoading={busy} onPress={()=>void update({enabled:!goal.enabled,completed:false})}>{t(goal.enabled?'personalAgentPause':'personalAgentResume')}</Button>
+        {!goal.completedAt && <Button size="sm" isLoading={busy} onPress={()=>void update({completed:true})}>{t('personalAgentCompleteGoal')}</Button>}
+        <Button size="sm" color="secondary" isLoading={busy} onPress={()=>void act(async()=>{const saved=await delegatePersonalAgentTask(clientId,{kind:'plan',title:`Plan: ${goal.title}`,prompt:`Create a practical plan for this goal: ${goal.title}. ${goal.prompt}`,goalId:goal.id,input:{}});setSelected(undefined);setTaskId(saved.room.id);})}>{t('personalGoalPlan')}</Button>
+      </div>
+      {rooms.filter(room=>room.personalAgentGoalId===goal.id).map(room=><button key={room.id} type="button" className="block w-full rounded-xl border border-default-200 p-3 text-left text-sm" onClick={()=>{setSelected(undefined);setTaskId(room.id);}}>{room.name}<span className="mt-1 block text-xs text-default-500">{t('personalAgentViewWork')}</span></button>)}
+    </div>}</ModalBody></ModalContent></Modal>
+    {taskId && <PersonalAgentTaskDetailView clientId={clientId} roomId={taskId} isOpen onClose={()=>setTaskId(undefined)} onSubmit={async(request,answer)=>{await answerPersonalAgentTaskInput(clientId,taskId,request.id,answer);}}/>}
   </>;
 };

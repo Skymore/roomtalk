@@ -203,7 +203,14 @@ export interface Room {
   codeAgentBackend?: CodeAgentBackend;
   personalAgentOwnerId?: string;
   personalAgentMemoryId?: string;
-  personalAgentThreadKind?: 'main' | 'task' | 'watch';
+  personalAgentTaskStatus?: 'scheduled' | 'queued' | 'running' | 'complete' | 'error' | 'cancelled' | 'paused' | 'waiting_input' | 'waiting_review';
+  personalAgentTaskControl?: 'paused' | 'cancelled' | 'error';
+  personalAgentResumedTurnId?:string;
+  personalAgentTaskKind?: 'plan' | 'document' | 'finance' | 'agent' | 'monitor';
+  personalAgentTaskPlan?: {step:string;status:string}[];
+  personalAgentTaskSummary?: string;
+  personalAgentThreadKind?: 'main' | 'task' | 'watch' | 'browser';
+  personalAgentGoalId?: string;
   personalAgentArchivedAt?: string;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;

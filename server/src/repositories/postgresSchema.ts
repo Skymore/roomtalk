@@ -2883,4 +2883,174 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX personal_agent_notifications_owner_created ON personal_agent_notifications(client_id,created_at DESC,id);
     `,
   },
+  {
+    id: '0042_personal_agent_files',
+    sql: `
+      CREATE TABLE personal_agent_files (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        name TEXT NOT NULL, byte_size INTEGER NOT NULL CHECK (byte_size BETWEEN 1 AND 10485760),
+        page_count INTEGER NOT NULL CHECK (page_count BETWEEN 1 AND 500),
+        fields JSONB NOT NULL, object_key TEXT NOT NULL UNIQUE, source TEXT NOT NULL,
+        parent_id TEXT REFERENCES personal_agent_files(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX personal_agent_files_owner_created ON personal_agent_files(client_id,created_at DESC,id);
+    `,
+  },
+  {
+    id: '0043_personal_agent_structured_results',
+    sql: `
+      ALTER TABLE personal_agent_results DROP CONSTRAINT personal_agent_results_kind_check;
+      ALTER TABLE personal_agent_results ADD CONSTRAINT personal_agent_results_kind_check
+        CHECK (kind IN ('plan','document','web','comparison','finance'));
+      ALTER TABLE personal_agent_results ADD COLUMN data JSONB;
+    `,
+  },
+  {
+    id: '0044_personal_agent_task_inputs',
+    sql: `
+      CREATE TABLE personal_agent_input_requests (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL REFERENCES room_agent_turns(id) ON DELETE CASCADE,
+        question TEXT NOT NULL, fields JSONB NOT NULL,
+        file_id TEXT REFERENCES personal_agent_files(id) ON DELETE SET NULL,
+        answer JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), answered_at TIMESTAMPTZ
+      );
+      CREATE INDEX personal_agent_inputs_owner_room ON personal_agent_input_requests(client_id,room_id,created_at);
+    `,
+  },
+  {
+    id: '0045_personal_agent_fox_avatar',
+    sql: `ALTER TABLE personal_agent_profiles ALTER COLUMN avatar SET DEFAULT '🦊';
+      UPDATE personal_agent_profiles SET avatar='🦊' WHERE avatar='✦';`,
+  },
+  {
+    id: '0046_personal_agent_tone',
+    sql: `ALTER TABLE personal_agent_profiles ADD COLUMN tone TEXT NOT NULL DEFAULT 'warm'
+      CHECK(tone IN ('warm','concise','thoughtful'));`,
+  },
+  {
+    id: '0047_personal_agent_google',
+    sql: `
+      CREATE TABLE personal_google_credentials (
+        client_id TEXT PRIMARY KEY REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        generation TEXT NOT NULL,connection_id TEXT,secret JSONB
+      );
+      CREATE TABLE personal_google_oauth_states (
+        id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        generation TEXT NOT NULL,verifier TEXT NOT NULL,scopes JSONB NOT NULL,expires_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE TABLE personal_google_records (
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('mail','event','draft','action','attachment')),
+        id TEXT NOT NULL,data JSONB NOT NULL,connection_id TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY(client_id,kind,id)
+      );
+      CREATE INDEX personal_google_records_owner_kind ON personal_google_records(client_id,kind,updated_at DESC);
+    `,
+  },
+
+  {
+    id: '0048_personal_agent_openmuse_identity',
+    sql: `
+      INSERT INTO personal_agent_memories
+        (id,client_id,kind,title,content,source,provenance,created_at,updated_at)
+      SELECT 'legacy-instructions-' || client_id,client_id,'preference','Personal preferences',instructions,
+        'User added in Apps',jsonb_build_array(jsonb_build_object('label','User added in Apps','recordedAt',updated_at)),created_at,updated_at
+      FROM personal_agent_profiles WHERE length(trim(instructions)) > 0;
+      INSERT INTO personal_agent_memories
+        (id,client_id,kind,title,content,source,provenance,created_at,updated_at)
+      SELECT 'legacy-about-' || client_id || '-' || part,client_id,'fact',
+        'About me' || CASE WHEN length(memory)>8000 THEN ' (' || part || ')' ELSE '' END,
+        substring(memory FROM (part-1)*8000+1 FOR 8000),'User added in Apps',
+        jsonb_build_array(jsonb_build_object('label','User added in Apps','recordedAt',updated_at)),created_at,updated_at
+      FROM personal_agent_profiles CROSS JOIN LATERAL generate_series(1,ceil(length(memory)/8000.0)::integer) AS part
+      WHERE length(trim(memory)) > 0;
+      UPDATE personal_agent_profiles SET instructions='',memory='',
+        avatar=CASE WHEN avatar IN ('sky','sand','lilac') THEN avatar ELSE 'sky' END,
+        updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond');
+      ALTER TABLE personal_agent_profiles ALTER COLUMN avatar SET DEFAULT 'sky';
+      ALTER TABLE personal_agent_profiles ADD CONSTRAINT personal_agent_avatar_check CHECK(avatar IN ('sky','sand','lilac'));
+    `,
+  },
+  {
+    id:'0049_personal_agent_delegated_tasks',
+    sql:`CREATE TABLE personal_agent_tasks(
+      room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('plan','document','finance','agent')),
+      prompt TEXT NOT NULL,input JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL
+    );CREATE INDEX personal_agent_tasks_owner ON personal_agent_tasks(client_id,created_at DESC);`,
+  },
+  {
+    id:'0050_personal_agent_computer',
+    sql:`CREATE TABLE personal_agent_computer_records(
+      client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,id TEXT NOT NULL,data JSONB NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      PRIMARY KEY(client_id,kind,id)
+    );CREATE INDEX personal_computer_owner_kind ON personal_agent_computer_records(client_id,kind,updated_at DESC);`,
+  },
+  {
+    id:'0051_personal_agent_openmuse_goals_tracking',
+    sql:`ALTER TABLE personal_agent_goals ADD COLUMN category TEXT NOT NULL DEFAULT 'Something else';
+      ALTER TABLE personal_agent_watches DROP CONSTRAINT personal_agent_watches_status_check;
+      ALTER TABLE personal_agent_watches ADD CONSTRAINT personal_agent_watches_status_check CHECK(status IN ('active','paused','stopped'));
+      ALTER TABLE personal_agent_watches DROP CONSTRAINT personal_agent_watches_interval_minutes_check;
+      ALTER TABLE personal_agent_watches ADD CONSTRAINT personal_agent_watches_interval_minutes_check CHECK(interval_minutes BETWEEN 1 AND 10080);`,
+  },
+  {
+    id:'0052_personal_agent_openmuse_mail_ideas',
+    sql:`ALTER TABLE personal_agent_ideas ADD COLUMN task_kind TEXT NOT NULL DEFAULT 'plan' CHECK(task_kind IN ('plan','document','finance','agent'));
+      ALTER TABLE personal_agent_ideas ADD COLUMN input JSONB NOT NULL DEFAULT '{}'::jsonb;
+      ALTER TABLE personal_agent_ideas DROP CONSTRAINT personal_agent_ideas_source_kind_check;
+      ALTER TABLE personal_agent_ideas ADD CONSTRAINT personal_agent_ideas_source_kind_check CHECK(source_kind IN ('goal','memory','result','browser','mail'));
+      ALTER TABLE personal_agent_ideas DROP CONSTRAINT personal_agent_ideas_client_id_source_kind_source_id_source_key;
+      ALTER TABLE personal_agent_ideas ADD CONSTRAINT personal_agent_idea_source_task_unique UNIQUE(client_id,source_kind,source_id,source_recorded_at,task_kind);
+      UPDATE personal_agent_ideas SET input=jsonb_build_object('goalId',source_id) WHERE source_kind='goal';`,
+  },
+  {
+    id:'0053_personal_agent_task_controls',
+    sql:`ALTER TABLE rooms ADD COLUMN personal_agent_task_control TEXT CHECK(personal_agent_task_control IN ('paused','cancelled'));
+      ALTER TABLE personal_agent_goals ALTER COLUMN category SET DEFAULT 'Personal';`,
+  },
+  {
+    id:'0054_personal_agent_task_updates',
+    sql:`ALTER TABLE personal_agent_notifications DROP CONSTRAINT personal_agent_notifications_kind_check;
+      ALTER TABLE personal_agent_notifications ADD CONSTRAINT personal_agent_notifications_kind_check CHECK(kind IN ('task_complete','task_error','task_input','task_review','watch_match','watch_error'));`,
+  },
+  {
+    id:'0055_personal_agent_review_outcomes',
+    sql:`ALTER TABLE rooms DROP CONSTRAINT rooms_personal_agent_task_control_check;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_task_control_check CHECK(personal_agent_task_control IN ('paused','cancelled','error'));
+      ALTER TABLE rooms ADD COLUMN personal_agent_resumed_turn_id TEXT;`,
+  },
+  {
+    id:'0056_personal_agent_workspace_timeline',
+    sql:`ALTER TABLE personal_google_records DROP CONSTRAINT personal_google_records_kind_check;
+      ALTER TABLE personal_google_records ADD CONSTRAINT personal_google_records_kind_check CHECK(kind IN ('mail','event','draft','action','attachment','activity'));`,
+  },
+  {
+    id:'0057_personal_agent_browser_sessions',
+    sql:`ALTER TABLE rooms DROP CONSTRAINT rooms_personal_agent_thread_kind_check;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_thread_kind_check CHECK(personal_agent_thread_kind IN ('main','task','watch','browser'));
+      ALTER TABLE personal_agent_browser_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','closed','error'));
+      ALTER TABLE personal_agent_browser_sessions ADD COLUMN preview_object_key TEXT;`,
+  },
+  {
+    id:'0058_personal_agent_task_artifacts',
+    sql:`CREATE TABLE personal_agent_task_files (
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        file_id TEXT NOT NULL REFERENCES personal_agent_files(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL REFERENCES room_agent_turns(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY(room_id,file_id)
+      );
+      ALTER TABLE personal_agent_browser_observations DROP CONSTRAINT personal_agent_browser_observations_room_id_fkey;
+      ALTER TABLE personal_agent_browser_observations ADD CONSTRAINT personal_agent_browser_observations_room_id_fkey FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE;
+      ALTER TABLE personal_agent_browser_observations ADD COLUMN browser_session_id TEXT REFERENCES personal_agent_browser_sessions(id) ON DELETE SET NULL;
+      UPDATE personal_agent_browser_observations observation SET browser_session_id=session.id FROM personal_agent_browser_sessions session WHERE session.room_id=observation.room_id;`,
+  },
 ];

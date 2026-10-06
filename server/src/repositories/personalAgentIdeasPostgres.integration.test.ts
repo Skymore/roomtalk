@@ -62,15 +62,15 @@ describe('personal suggestions PostgreSQL transactions', { skip: !databaseUrl },
     const [a, b] = await Promise.all([scheduler.acceptIdea(owner, idea.id, 'My edited instructions', idea.updatedAt),
       scheduler.acceptIdea(owner, idea.id, 'Another edit', idea.updatedAt)]);
     assert.equal(a.room.id, b.room.id); assert.equal(a.idea.prompt, b.idea.prompt);
-    assert.equal(a.room.personalAgentGoalId, saved.id); assert.equal(a.room.codeAgentMode, 'fullAccess');
+    assert.equal(a.room.personalAgentGoalId,`idea-goal-${idea.id}`); assert.equal(a.room.codeAgentMode, 'fullAccess');
     assert.equal(a.room.codeAgentBackend, 'codex-app-server');
     const messages = await store.readMessagesByRoom(a.room.id);
     assert.equal(messages.length, 1); assert.equal(messages[0].content, a.idea.prompt);
     assert.equal(messages[0].codeAgentQueuedInput?.requestedMode, 'fullAccess');
-    assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === saved.id)!.lastRunRoomId, a.room.id);
+    assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === a.room.personalAgentGoalId)!.lastRunRoomId, a.room.id);
     const replay = await scheduler.acceptIdea(owner, idea.id, 'Retry must not change the task', idea.updatedAt);
     assert.equal(replay.room.id, a.room.id); assert.equal(replay.idea.prompt, a.idea.prompt);
-    assert.equal((await store.readPersonalAgentRooms(owner)).filter(room => room.personalAgentGoalId === saved.id).length, 1);
+    assert.equal((await store.readPersonalAgentRooms(owner)).filter(room => room.personalAgentGoalId === a.room.personalAgentGoalId).length, 1);
     assert.equal((await ideas.refresh(owner)).ideas.some(item => item.source.id === saved.id), false);
     await assert.rejects(scheduler.acceptIdea(other, idea.id, 'Foreign task', idea.updatedAt));
     await store.deleteRoom(a.room.id, owner);
@@ -87,6 +87,35 @@ describe('personal suggestions PostgreSQL transactions', { skip: !databaseUrl },
     await store.deletePersonalAgentGoal(owner, saved.id, updated.updatedAt);
     await assert.rejects(scheduler.acceptIdea(owner, fresh.id, 'Missing source', fresh.updatedAt));
     assert.equal((await ideas.refresh(owner)).ideas.some(item => item.source.id === saved.id), false);
+  });
+
+  it('generates source mail suggestions and deduplicates a second acceptance against the existing task',async()=>{
+    const connectionId=randomUUID();await store.rotatePersonalGoogleCredential(owner,'mail-ideas',false);
+    assert.equal(await store.savePersonalGoogleCredential({clientId:owner,generation:'mail-ideas',connectionId,secret:{version:1,algorithm:'aes-256-gcm',iv:'fixture',tag:'fixture',ciphertext:'fixture'} as any},'mail-ideas'),true);
+    const id=randomUUID();const mail={id,threadId:'thread',from:'sender@example.com',sender:'Confirmed sender',to:[],subject:'Permission form and coffee schedule',body:'Please fill and sign the attached form. Are you available to meet?',date:now,unread:true,label:'Inbox',attachments:['attachment']};
+    await store.savePersonalGoogleRecord({clientId:owner,kind:'mail',id,connectionId,data:mail,updatedAt:now});
+    const found=await ideas.refresh(owner);const candidates=found.ideas.filter(item=>item.source.id===id);
+    assert.equal(candidates.length,2);assert.deepEqual(new Set(candidates.map(item=>item.taskKind)),new Set(['document','agent']));
+    const document=candidates.find(item=>item.taskKind==='document')!;
+    assert.deepEqual(document.input,{messageId:id});assert.equal(document.source.excerpt,mail.body);
+    await store.savePersonalGoogleRecord({clientId:owner,kind:'mail',id,connectionId,data:mail,updatedAt:now});
+    assert.equal((await ideas.refresh(owner)).ideas.filter(item=>item.source.id===id).length,2);
+    const accepted=await scheduler.acceptIdea(owner,document.id,document.prompt,document.updatedAt);
+    assert.equal((await store.readPersonalAgentTask(owner,accepted.room.id))!.input.messageId,id);
+    const duplicate=(await ideas.propose(owner,{sourceKind:'mail',sourceId:id,taskKind:'document',title:'Duplicate',reason:'Source changed',prompt:'Same PDF'})).idea;
+    assert.equal(duplicate.id,document.id);
+    // A fresh source revision can still resolve to the task already handling the mail.
+    await pool.query(`UPDATE personal_agent_ideas SET status='new',accepted_room_id=NULL,updated_at=clock_timestamp() WHERE id=$1`,[document.id]);
+    const replay=(await ideas.list(owner,{id:document.id})).ideas[0];
+    const shared=await scheduler.acceptIdea(owner,replay.id,replay.prompt,replay.updatedAt);
+    assert.equal(shared.room.id,accepted.room.id);
+    await store.upsertRoomAgentTurn({id:randomUUID(),roomId:accepted.room.id,status:'complete',startedAt:now,completedAt:now,backend:'codex-app-server',assistantName:'Agent',updatedAt:now});
+    await store.savePersonalGoogleRecord({clientId:owner,kind:'mail',id,connectionId,data:{...mail,label:'Sent'},updatedAt:now});
+    assert.equal((await ideas.refresh(owner)).ideas.some(item=>item.source.id===id),false);
+    const retired=(await ideas.list(owner,{status:'all'})).ideas.find(item=>item.source.id===id && item.taskKind==='agent')!;
+    assert.equal(retired.status,'dismissed');
+    await store.rotatePersonalGoogleCredential(owner,'disconnected',true);
+    await assert.rejects(ideas.propose(owner,{sourceKind:'mail',sourceId:id,title:'Old account',reason:'Old',prompt:'Old'}));
   });
 
   it('uses canonical memory evidence and fences writes to the actual active owner turn', async () => {

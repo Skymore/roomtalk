@@ -1,7 +1,10 @@
+import {PersonalAgentTaskControlError} from './store';
+import type { PersonalGoogleCredential, PersonalGoogleOAuthState, PersonalGoogleRecord } from '../services/personalAgentGoogleTypes';
+import { PersonalAgentInputRequest } from '../types';
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, PersonalAgentFile, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -87,6 +90,12 @@ type RoomRow = {
   last_activity_at: string | Date;
   creator_id: string;
   personal_agent_owner_id?: string | null;
+  personal_agent_task_status?: Room['personalAgentTaskStatus'];
+  personal_agent_task_control?: Room['personalAgentTaskControl'];
+  personal_agent_resumed_turn_id?: string;
+  personal_agent_task_kind?: Room['personalAgentTaskKind'];
+  personal_agent_task_plan?: Room['personalAgentTaskPlan'];
+  personal_agent_task_summary?: string;
   personal_agent_thread_kind?: 'main' | 'task' | null;
   personal_agent_goal_id?: string | null;
   personal_agent_memory_id?: string | null;
@@ -380,7 +389,7 @@ type AccountEntitlementRow = {
   updated_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, personal_agent_owner_id, personal_agent_thread_kind, personal_agent_goal_id, personal_agent_memory_id, personal_agent_archived_at, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
+const ROOM_COLUMNS = 'personal_agent_resumed_turn_id, personal_agent_task_control, id, name, description, created_at, last_activity_at, creator_id, personal_agent_owner_id, personal_agent_thread_kind, personal_agent_goal_id, personal_agent_memory_id, personal_agent_archived_at, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_last_turn_id, code_agent_workspace_revision_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, client_batch_id, client_batch_index, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ai_stream_fence, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence, position, reactions';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at, nickname';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -512,6 +521,12 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.code_agent_session_id) room.codeAgentSessionId = row.code_agent_session_id;
   if (row.code_agent_last_turn_id) room.codeAgentLastTurnId = row.code_agent_last_turn_id;
   if (row.code_agent_status) room.codeAgentStatus = row.code_agent_status;
+  if (row.personal_agent_resumed_turn_id)room.personalAgentResumedTurnId=row.personal_agent_resumed_turn_id;
+  if (row.personal_agent_task_control) room.personalAgentTaskControl=row.personal_agent_task_control;
+  if (row.personal_agent_task_plan) room.personalAgentTaskPlan=row.personal_agent_task_plan;
+  if (row.personal_agent_task_summary) room.personalAgentTaskSummary=row.personal_agent_task_summary;
+  if (row.personal_agent_task_kind) room.personalAgentTaskKind=row.personal_agent_task_kind;
+  if (row.personal_agent_task_status) room.personalAgentTaskStatus = row.personal_agent_task_status;
   if (row.code_agent_access) room.codeAgentAccess = row.code_agent_access as Room['codeAgentAccess'];
   if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
   if (row.code_agent_backend) room.codeAgentBackend = row.code_agent_backend as Room['codeAgentBackend'];
@@ -523,6 +538,7 @@ const mapPersonalAgentProfile = (row: Record<string, any>): PersonalAgentProfile
   clientId: row.client_id,
   name: row.name,
   avatar: row.avatar,
+  tone: row.tone,
   instructions: row.instructions,
   memory: row.memory,
   mainRoomId: row.main_room_id || '',
@@ -540,6 +556,7 @@ const mapPersonalAgentMemory = (row: Record<string, any>): PersonalAgentMemory =
 
 const mapPersonalAgentIdea = (row: Record<string, any>): PersonalAgentIdea => ({
   id: row.id, clientId: row.client_id, title: row.title, reason: row.reason, prompt: row.prompt,
+  taskKind:row.task_kind,input:row.input,
   source: parseJsonValue<PersonalAgentIdeaSource>(row.source)!, automatic: row.automatic, status: row.status,
   acceptedRoomId: row.accepted_room_id || undefined, createdAt: toIsoString(row.created_at), updatedAt: toIsoString(row.updated_at),
 });
@@ -549,6 +566,7 @@ const mapPersonalAgentGoal = (row: Record<string, any>): PersonalAgentGoal => ({
   clientId: row.client_id,
   title: row.title,
   prompt: row.prompt,
+  category: row.category,
   schedule: row.schedule,
   time: row.time,
   timezone: row.timezone,
@@ -1235,10 +1253,10 @@ export class PostgresStore implements DurableRoomStore {
       return this.mapPersonalWatch(existing.rows[0]);
     });
   }
-  async readPersonalAgentWatches(clientId: string, options: { id?: string; limit?: number; offset?: number } = {}) {
-    const where='client_id=$1 AND ($2::text IS NULL OR id=$2)', params=[clientId,options.id ?? null];
+  async readPersonalAgentWatches(clientId: string, options: { id?: string; roomId?:string; limit?: number; offset?: number } = {}) {
+    const where='client_id=$1 AND ($2::text IS NULL OR id=$2) AND ($3::text IS NULL OR room_id=$3)', params=[clientId,options.id ?? null,options.roomId ?? null];
     const [rows,count] = await Promise.all([
-      this.pool.query(`SELECT * FROM personal_agent_watches WHERE ${where} ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, [...params,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT * FROM personal_agent_watches WHERE ${where} ORDER BY created_at DESC,id LIMIT $4 OFFSET $5`, [...params,options.limit ?? 50,options.offset ?? 0]),
       this.pool.query(`SELECT count(*) AS total FROM personal_agent_watches WHERE ${where}`,params),
     ]);
     return { watches: rows.rows.map(row => this.mapPersonalWatch(row)), total: Number(count.rows[0].total) };
@@ -1249,14 +1267,14 @@ export class PostgresStore implements DurableRoomStore {
       ORDER BY next_check_at,id LIMIT $1`,[limit]);
     return rows.rows.map(row => this.mapPersonalWatch(row));
   }
-  async controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string) {
+  async controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check' | 'stop', expectedUpdatedAt: string) {
     const rows=await this.pool.query(`UPDATE personal_agent_watches SET
-      status=CASE WHEN $3='pause' THEN 'paused' WHEN $3='resume' THEN 'active' ELSE status END,
-      next_check_at=CASE WHEN $3='pause' THEN NULL ELSE clock_timestamp() END,
+      status=CASE WHEN $3='pause' THEN 'paused' WHEN $3 IN ('resume','check') THEN 'active' WHEN $3='stop' THEN 'stopped' ELSE status END,
+      next_check_at=CASE WHEN $3 IN ('pause','stop') THEN NULL ELSE clock_timestamp() END,
       failures=CASE WHEN $3='resume' THEN 0 ELSE failures END,error=CASE WHEN $3='resume' THEN NULL ELSE error END,
       epoch=epoch+1,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond')
       WHERE client_id=$1 AND id=$2 AND date_trunc('milliseconds',updated_at)=$4::timestamptz
-        AND ($3<>'check' OR status='active') RETURNING *`,[clientId,id,action,expectedUpdatedAt]);
+        AND status<>'stopped' RETURNING *`,[clientId,id,action,expectedUpdatedAt]);
     return rows.rows[0] ? this.mapPersonalWatch(rows.rows[0]) : null;
   }
   private async insertPersonalNotification(query: PostgresQueryable, notice: PersonalAgentNotification) {
@@ -1321,11 +1339,19 @@ export class PostgresStore implements DurableRoomStore {
     return this.personalIdeaSource(this.pool, clientId, kind, id);
   }
   private async personalIdeaSource(query: PostgresQueryable, clientId: string, kind: PersonalAgentIdeaSourceKind, id: string, lock = false): Promise<PersonalAgentIdeaSource | null> {
+    if(kind==='mail'){
+      const found=await query.query(`SELECT record.* FROM personal_google_records record JOIN personal_google_credentials credential ON credential.client_id=record.client_id AND credential.connection_id=record.connection_id
+        WHERE record.client_id=$1 AND record.kind='mail' AND record.id=$2${lock?' FOR SHARE OF record,credential':''}`,[clientId,id]);
+      const row=found.rows[0];if(!row)return null;
+      const mail=row.data as import('../services/personalAgentGoogleTypes').Mail;
+      if(/^Sent\b/i.test(mail.label))return null;
+      return {kind,id,title:mail.subject,excerpt:mail.body.slice(0,1000),recordedAt:mail.date};
+    }
     const tables = { goal: 'personal_agent_goals', memory: 'personal_agent_memories', result: 'personal_agent_results', browser: 'personal_agent_browser_observations' };
     const found = await query.query(`SELECT * FROM ${tables[kind]} WHERE client_id = $1 AND id = $2${lock ? ' FOR SHARE' : ''}`, [clientId,id]);
     const row = found.rows[0]; if (!row) return null;
     // A goal already being handled or completed is not new work to propose.
-    if (kind === 'goal' && (!row.enabled || row.completed_at || row.last_run_room_id)) return null;
+    if (kind === 'goal' && (!row.enabled || row.completed_at)) return null;
     return { kind, id, title: row.title, excerpt: String(row.prompt ?? row.content ?? row.summary ?? row.url ?? '').slice(0,1000),
       recordedAt: toIsoString(row.updated_at ?? row.created_at), ...(row.room_id || row.source_room_id ? { roomId: row.room_id || row.source_room_id } : {}),
       ...(row.turn_id || row.source_turn_id ? { turnId: row.turn_id || row.source_turn_id } : {}), ...(row.url ? { url: row.url } : {}) };
@@ -1348,11 +1374,11 @@ export class PostgresStore implements DurableRoomStore {
       }
       const source = await this.personalIdeaSource(client,idea.clientId,idea.source.kind,idea.source.id,true);
       if (!source || source.recordedAt !== idea.source.recordedAt) return null;
-      const inserted = await client.query(`INSERT INTO personal_agent_ideas(id,client_id,title,reason,prompt,source_kind,source_id,source_recorded_at,source,automatic)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) ON CONFLICT (client_id,source_kind,source_id,source_recorded_at) DO NOTHING RETURNING *`,
-        [idea.id,idea.clientId,idea.title,idea.reason,idea.prompt,source.kind,source.id,source.recordedAt,JSON.stringify(source),idea.automatic]);
+      const inserted = await client.query(`INSERT INTO personal_agent_ideas(id,client_id,title,reason,prompt,source_kind,source_id,source_recorded_at,source,automatic,task_kind,input)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb) ON CONFLICT (client_id,source_kind,source_id,source_recorded_at,task_kind) DO NOTHING RETURNING *`,
+        [idea.id,idea.clientId,idea.title,idea.reason,idea.prompt,source.kind,source.id,source.recordedAt,JSON.stringify(source),idea.automatic,idea.taskKind ?? 'plan',JSON.stringify(idea.input ?? (source.kind==='goal'?{goalId:source.id}:{}))]);
       if (inserted.rows[0]) return mapPersonalAgentIdea(inserted.rows[0]);
-      const existing = await client.query('SELECT * FROM personal_agent_ideas WHERE client_id=$1 AND source_kind=$2 AND source_id=$3 AND source_recorded_at=$4',[idea.clientId,source.kind,source.id,source.recordedAt]);
+      const existing = await client.query('SELECT * FROM personal_agent_ideas WHERE client_id=$1 AND source_kind=$2 AND source_id=$3 AND source_recorded_at=$4 AND task_kind=$5',[idea.clientId,source.kind,source.id,source.recordedAt,idea.taskKind ?? 'plan']);
       return mapPersonalAgentIdea(existing.rows[0]);
     });
   }
@@ -1365,6 +1391,7 @@ export class PostgresStore implements DurableRoomStore {
   }
   async acceptPersonalAgentIdea(input: { clientId: string; id: string; expectedUpdatedAt: string; room: Room; message: Message }): Promise<{ idea: PersonalAgentIdea; room: Room } | null> {
     return this.transaction(async client => {
+      await client.query('SELECT client_id FROM personal_agent_profiles WHERE client_id=$1 FOR UPDATE',[input.clientId]);
       const found = await client.query('SELECT * FROM personal_agent_ideas WHERE client_id=$1 AND id=$2 FOR UPDATE',[input.clientId,input.id]);
       if (!found.rows[0]) return null;
       const idea = mapPersonalAgentIdea(found.rows[0]);
@@ -1376,9 +1403,21 @@ export class PostgresStore implements DurableRoomStore {
       const source = await this.personalIdeaSource(client,input.clientId,idea.source.kind,idea.source.id,true);
       if (!source || source.recordedAt !== idea.source.recordedAt) return null;
       if (input.room.creatorId !== input.clientId || input.room.personalAgentOwnerId !== input.clientId || input.message.clientId !== input.clientId || input.message.roomId !== input.room.id) return null;
-      const room = await this.insertPersonalAgentRoom(client,{...input.room,...(source.kind==='goal' ? {personalAgentGoalId:source.id} : {})});
+      if(idea.input?.messageId){
+        const handling=await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id IN(SELECT task.room_id FROM personal_agent_tasks task WHERE task.client_id=$1 AND task.kind=$2 AND task.input->>'messageId'=$3)
+          AND COALESCE((SELECT status FROM room_agent_turns turn WHERE turn.room_id=rooms.id ORDER BY started_at DESC,id DESC LIMIT 1),'queued') NOT IN ('error','cancelled') ORDER BY created_at DESC LIMIT 1`,[input.clientId,idea.taskKind,idea.input.messageId]);
+        if(handling.rows[0]){
+          const room=mapRoom(handling.rows[0]);const saved=await client.query(`UPDATE personal_agent_ideas SET status='accepted',accepted_room_id=$2,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE id=$1 RETURNING *`,[idea.id,room.id]);
+          return {idea:mapPersonalAgentIdea(saved.rows[0]),room};
+        }
+      }
+      if(idea.title.length>160)throw new RangeError('Goal title is limited to 160 characters');
+      const goalId=`idea-goal-${idea.id}`;
+      await client.query(`INSERT INTO personal_agent_goals(id,client_id,title,prompt,schedule,time,timezone,enabled,created_at,category) VALUES($1,$2,$3,$4,'manual','09:00','UTC',TRUE,$5,'Personal')`,[goalId,input.clientId,idea.title,idea.reason,input.message.timestamp]);
+      const room = await this.insertPersonalAgentRoom(client,{...input.room,personalAgentGoalId:goalId});
       await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(input.message,0));
-      if (source.kind==='goal') await client.query(`UPDATE personal_agent_goals SET last_run_room_id=$1,last_run_at=$2,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE client_id=$3 AND id=$4`,[room.id,input.message.timestamp,input.clientId,source.id]);
+      await client.query(`INSERT INTO personal_agent_tasks(room_id,client_id,kind,prompt,input,created_at) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,[room.id,input.clientId,idea.taskKind ?? 'plan',input.message.content,JSON.stringify(idea.input ?? {}),input.message.timestamp]);
+      await client.query(`UPDATE personal_agent_goals SET last_run_room_id=$1,last_run_at=$2 WHERE client_id=$3 AND id=$4`,[room.id,input.message.timestamp,input.clientId,goalId]);
       const saved = await client.query(`UPDATE personal_agent_ideas SET status='accepted',accepted_room_id=$1,prompt=$2,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE id=$3 RETURNING *`,[room.id,input.message.content,idea.id]);
       return { idea:mapPersonalAgentIdea(saved.rows[0]),room };
     });
@@ -1408,25 +1447,25 @@ export class PostgresStore implements DurableRoomStore {
     });
   }
 
-  async updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null> {
+  async updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled' | 'tone'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null> {
     const result = await this.pool.query(
       `UPDATE personal_agent_profiles SET
         name = COALESCE($2, name), avatar = COALESCE($3, avatar),
         instructions = COALESCE($4, instructions), memory = COALESCE($5, memory),
-        show_updates = COALESCE($7, show_updates), push_enabled = COALESCE($8, push_enabled),
+        show_updates = COALESCE($7, show_updates), push_enabled = COALESCE($8, push_enabled), tone=COALESCE($9,tone),
         updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
       WHERE client_id = $1 AND ($6::timestamptz IS NULL OR date_trunc('milliseconds', updated_at) = $6::timestamptz)
       RETURNING *`,
-      [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null, updates.showUpdates ?? null, updates.pushEnabled ?? null],
+      [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null, updates.showUpdates ?? null, updates.pushEnabled ?? null, updates.tone ?? null],
     );
     return result.rows[0] ? mapPersonalAgentProfile(result.rows[0]) : null;
   }
 
   async getPersonalAgentBrowserSession(clientId: string, roomId: string): Promise<PersonalAgentBrowserSession | null> {
-    const found = await this.pool.query('SELECT * FROM personal_agent_browser_sessions WHERE client_id=$1 AND room_id=$2', [clientId,roomId]);
+    const found = await this.pool.query('SELECT * FROM personal_agent_browser_sessions WHERE client_id=$1 AND (room_id=$2 OR id=$2)', [clientId,roomId]);
     const row = found.rows[0];
     return row ? { id: row.id, clientId: row.client_id, roomId: row.room_id, url: row.url, title: row.title,
-      encryptedState: row.encrypted_state || undefined, updatedAt: toIsoString(row.updated_at) } : null;
+      encryptedState: row.encrypted_state || undefined,status:row.status,previewObjectKey:row.preview_object_key || undefined, updatedAt: toIsoString(row.updated_at) } : null;
   }
 
   async savePersonalAgentBrowser(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation): Promise<boolean> {
@@ -1437,16 +1476,16 @@ export class PostgresStore implements DurableRoomStore {
           AND lease.expires_at>clock_timestamp() FOR UPDATE OF room`, [session.roomId,session.clientId,leaseTurnId]);
       if (!owned.rows[0]) return false;
       if (observation) {
-        if (observation.clientId !== session.clientId || observation.roomId !== session.roomId || observation.turnId !== leaseTurnId) return false;
-        const turn = await client.query("SELECT id FROM room_agent_turns WHERE id=$1 AND room_id=$2 AND status='running'", [observation.turnId,session.roomId]);
+        if (observation.clientId !== session.clientId) return false;
+        const turn = await client.query(`SELECT turn.id FROM room_agent_turns turn JOIN rooms room ON room.id=turn.room_id JOIN code_agent_room_leases lease ON lease.room_id=turn.room_id AND lease.turn_id=turn.id WHERE turn.id=$1 AND turn.room_id=$2 AND turn.status='running' AND room.personal_agent_owner_id=$3 AND room.creator_id=$3 AND room.personal_agent_task_control IS NULL AND lease.expires_at>clock_timestamp()`,[observation.turnId,observation.roomId,session.clientId]);
         if (!turn.rows[0]) return false;
       }
-      await client.query(`INSERT INTO personal_agent_browser_sessions (room_id,id,client_id,url,title,encrypted_state,updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,clock_timestamp()) ON CONFLICT (room_id) DO UPDATE SET
-          id=EXCLUDED.id,url=EXCLUDED.url,title=EXCLUDED.title,encrypted_state=EXCLUDED.encrypted_state,updated_at=EXCLUDED.updated_at`,
-        [session.roomId,session.id,session.clientId,session.url,session.title,session.encryptedState || null]);
-      if (observation) await client.query(`INSERT INTO personal_agent_browser_observations (id,client_id,room_id,turn_id,url,title,object_key)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)`, [observation.id,observation.clientId,observation.roomId,observation.turnId,observation.url,observation.title,observation.objectKey]);
+      await client.query(`INSERT INTO personal_agent_browser_sessions (room_id,id,client_id,url,title,encrypted_state,status,preview_object_key,updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp()) ON CONFLICT (room_id) DO UPDATE SET
+          id=EXCLUDED.id,url=EXCLUDED.url,title=EXCLUDED.title,encrypted_state=EXCLUDED.encrypted_state,status=EXCLUDED.status,preview_object_key=EXCLUDED.preview_object_key,updated_at=EXCLUDED.updated_at`,
+        [session.roomId,session.id,session.clientId,session.url,session.title,session.encryptedState || null,session.status || 'active',session.previewObjectKey || null]);
+      if (observation) await client.query(`INSERT INTO personal_agent_browser_observations (id,client_id,room_id,turn_id,url,title,object_key,browser_session_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [observation.id,observation.clientId,observation.roomId,observation.turnId,observation.url,observation.title,observation.objectKey,session.id]);
       return true;
     });
   }
@@ -1455,28 +1494,164 @@ export class PostgresStore implements DurableRoomStore {
     const where = `client_id=$1 AND ($2::text IS NULL OR room_id=$2) AND ($3::text IS NULL OR turn_id=$3) AND ($4::text IS NULL OR id=$4)`;
     const params = [clientId,options.roomId || null,options.turnId || null,options.id || null];
     const [rows, count] = await Promise.all([
-      this.pool.query(`SELECT * FROM personal_agent_browser_observations WHERE ${where} ORDER BY created_at DESC,id LIMIT $5 OFFSET $6`, [...params,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT observation.*,session.room_id AS browser_room_id FROM (SELECT * FROM personal_agent_browser_observations WHERE ${where} ORDER BY created_at DESC,id LIMIT $5 OFFSET $6) observation LEFT JOIN personal_agent_browser_sessions session ON session.id=observation.browser_session_id ORDER BY observation.created_at DESC,observation.id`, [...params,options.limit ?? 50,options.offset ?? 0]),
       this.pool.query(`SELECT count(*) AS total FROM personal_agent_browser_observations WHERE ${where}`, params),
     ]);
     return { observations: rows.rows.map(row => ({ id: row.id,clientId: row.client_id,roomId: row.room_id,turnId: row.turn_id,
-      url: row.url,title: row.title,objectKey: row.object_key,createdAt: toIsoString(row.created_at) })),total: Number(count.rows[0].total) };
+      sessionId:row.browser_session_id || undefined,browserRoomId:row.browser_room_id || undefined,url: row.url,title: row.title,objectKey: row.object_key,createdAt: toIsoString(row.created_at) })),total: Number(count.rows[0].total) };
+  }
+
+  async readPersonalGoogleCredential(clientId: string): Promise<PersonalGoogleCredential | null> {
+    const rows = await this.pool.query('SELECT * FROM personal_google_credentials WHERE client_id=$1',[clientId]);
+    const row = rows.rows[0];
+    return row ? {clientId: row.client_id,generation: row.generation,connectionId: row.connection_id,secret: row.secret} : null;
+  }
+  async rotatePersonalGoogleCredential(clientId: string, generation: string, disconnect: boolean): Promise<PersonalGoogleCredential> {
+    // Preserve the old tokens during reconnect, but rotate before starting OAuth or disconnecting.
+    const rows = await this.pool.query(`INSERT INTO personal_google_credentials(client_id,generation)
+      VALUES($1,$2) ON CONFLICT(client_id) DO UPDATE SET generation=$2,
+      connection_id=CASE WHEN $3 THEN NULL ELSE personal_google_credentials.connection_id END,
+      secret=CASE WHEN $3 THEN NULL ELSE personal_google_credentials.secret END RETURNING *`,[clientId,generation,disconnect]);
+    const row = rows.rows[0];
+    return {clientId,generation:row.generation,connectionId:row.connection_id,secret:row.secret};
+  }
+  async savePersonalGoogleCredential(value: PersonalGoogleCredential, expectedGeneration: string): Promise<boolean> {
+    const rows = await this.pool.query(`UPDATE personal_google_credentials SET generation=$3,connection_id=$4,secret=$5::jsonb
+      WHERE client_id=$1 AND generation=$2`,[value.clientId,expectedGeneration,value.generation,value.connectionId,JSON.stringify(value.secret)]);
+    return rows.rowCount === 1;
+  }
+  async refreshPersonalGoogleCredential(clientId: string, connectionId: string, secret: NonNullable<PersonalGoogleCredential['secret']>): Promise<boolean> {
+    const rows = await this.pool.query('UPDATE personal_google_credentials SET secret=$3::jsonb WHERE client_id=$1 AND connection_id=$2',[clientId,connectionId,JSON.stringify(secret)]);
+    return rows.rowCount === 1;
+  }
+  async savePersonalGoogleOAuthState(state: PersonalGoogleOAuthState): Promise<void> {
+    await this.pool.query('DELETE FROM personal_google_oauth_states WHERE expires_at < clock_timestamp()');
+    await this.pool.query(`INSERT INTO personal_google_oauth_states(id,client_id,generation,verifier,scopes,expires_at)
+      VALUES($1,$2,$3,$4,$5::jsonb,$6)`,[state.id,state.clientId,state.generation,state.verifier,JSON.stringify(state.scopes),new Date(state.expiresAt).toISOString()]);
+  }
+  async takePersonalGoogleOAuthState(id: string): Promise<PersonalGoogleOAuthState | null> {
+    const rows = await this.pool.query('DELETE FROM personal_google_oauth_states WHERE id=$1 RETURNING *',[id]);
+    const row = rows.rows[0];
+    return row ? {id:row.id,clientId:row.client_id,generation:row.generation,verifier:row.verifier,scopes:row.scopes,expiresAt:new Date(row.expires_at).getTime()} : null;
+  }
+  private mapPersonalGoogleRecord(row: any): PersonalGoogleRecord {
+    return {clientId:row.client_id,kind:row.kind,id:row.id,data:row.data,connectionId:row.connection_id ?? undefined,updatedAt:new Date(row.updated_at).toISOString()};
+  }
+  async readPersonalGoogleRecords(clientId: string, kind: PersonalGoogleRecord['kind'], id?: string): Promise<PersonalGoogleRecord[]> {
+    const rows = await this.pool.query(`SELECT * FROM personal_google_records WHERE client_id=$1 AND kind=$2
+      AND ($3::text IS NULL OR id=$3) ORDER BY updated_at DESC,id LIMIT 500`,[clientId,kind,id ?? null]);
+    return rows.rows.map(row => this.mapPersonalGoogleRecord(row));
+  }
+  async savePersonalGoogleRecord(value: PersonalGoogleRecord, expectedUpdatedAt?: string): Promise<PersonalGoogleRecord | null> {
+    const rows = expectedUpdatedAt
+      ? await this.pool.query(`UPDATE personal_google_records SET data=$4::jsonb,connection_id=$5,updated_at=GREATEST(clock_timestamp(),date_trunc('milliseconds',personal_google_records.updated_at)+INTERVAL '1 millisecond')
+          WHERE client_id=$1 AND kind=$2 AND id=$3 AND date_trunc('milliseconds',updated_at)=$6::timestamptz RETURNING *`,
+          [value.clientId,value.kind,value.id,JSON.stringify(value.data),value.connectionId ?? null,expectedUpdatedAt])
+      : await this.pool.query(`INSERT INTO personal_google_records(client_id,kind,id,data,connection_id) VALUES($1,$2,$3,$4::jsonb,$5)
+          ON CONFLICT(client_id,kind,id) DO UPDATE SET data=EXCLUDED.data,connection_id=EXCLUDED.connection_id,updated_at=GREATEST(clock_timestamp(),date_trunc('milliseconds',personal_google_records.updated_at)+INTERVAL '1 millisecond') RETURNING *`,
+          [value.clientId,value.kind,value.id,JSON.stringify(value.data),value.connectionId ?? null]);
+    return rows.rows[0] ? this.mapPersonalGoogleRecord(rows.rows[0]) : null;
+  }
+  async claimPersonalGoogleAction(clientId: string, id: string, expectedUpdatedAt: string, status: string): Promise<PersonalGoogleRecord | null> {
+    const rows = await this.pool.query(`UPDATE personal_google_records SET data=jsonb_set(data,'{status}',to_jsonb($4::text)),updated_at=GREATEST(clock_timestamp(),date_trunc('milliseconds',personal_google_records.updated_at)+INTERVAL '1 millisecond')
+      WHERE client_id=$1 AND kind='action' AND id=$2 AND date_trunc('milliseconds',updated_at)=$3::timestamptz AND data->>'status'='awaiting_review' RETURNING *`,[clientId,id,expectedUpdatedAt,status]);
+    return rows.rows[0] ? this.mapPersonalGoogleRecord(rows.rows[0]) : null;
+  }
+
+  async savePersonalAgentInputRequest(input: PersonalAgentInputRequest): Promise<PersonalAgentInputRequest | null> {
+    const saved=await this.pool.query(`WITH saved AS (INSERT INTO personal_agent_input_requests (id,client_id,room_id,turn_id,question,fields,file_id)
+      SELECT $1,$2,$3,$4,$5,$6::jsonb,$7 FROM rooms room
+      JOIN room_agent_turns turn ON turn.room_id=room.id AND turn.id=$4
+      JOIN code_agent_room_leases lease ON lease.room_id=room.id AND lease.turn_id=turn.id
+      WHERE room.id=$3 AND room.creator_id=$2 AND room.personal_agent_owner_id=$2 AND room.personal_agent_task_control IS NULL AND turn.status='running'
+        AND lease.expires_at>clock_timestamp()
+        AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM personal_agent_files WHERE id=$7 AND client_id=$2))
+      RETURNING *), linked AS (INSERT INTO personal_agent_task_files(room_id,file_id,turn_id) SELECT room_id,file_id,turn_id FROM saved WHERE file_id IS NOT NULL ON CONFLICT(room_id,file_id) DO UPDATE SET turn_id=EXCLUDED.turn_id RETURNING file_id) SELECT * FROM saved`,[input.id,input.clientId,input.roomId,input.turnId,input.question,JSON.stringify(input.fields),input.fileId || null]);
+    return saved.rows[0] ? this.mapPersonalAgentInputRequest(saved.rows[0]) : null;
+  }
+  private mapPersonalAgentInputRequest(row: any): PersonalAgentInputRequest {
+    return { id:row.id,clientId:row.client_id,roomId:row.room_id,turnId:row.turn_id,question:row.question,fields:row.fields,
+      fileId:row.file_id || undefined,answer:row.answer || undefined,createdAt:toIsoString(row.created_at),answeredAt:row.answered_at ? toIsoString(row.answered_at) : undefined };
+  }
+  async readPersonalAgentInputRequests(clientId: string,roomId: string): Promise<PersonalAgentInputRequest[]> {
+    const rows=await this.pool.query('SELECT * FROM personal_agent_input_requests WHERE client_id=$1 AND room_id=$2 ORDER BY created_at,id LIMIT 100',[clientId,roomId]);
+    return rows.rows.map(row=>this.mapPersonalAgentInputRequest(row));
+  }
+  async answerPersonalAgentInputRequest(clientId:string,id:string,answer:PersonalAgentInputRequest['answer'],continuation?:Message):Promise<PersonalAgentInputRequest|null>{
+    if(!continuation){const saved=await this.pool.query(`UPDATE personal_agent_input_requests SET answer=$3::jsonb,answered_at=clock_timestamp() WHERE id=$1 AND client_id=$2 AND answered_at IS NULL RETURNING *`,[id,clientId,JSON.stringify(answer)]);return saved.rows[0]?this.mapPersonalAgentInputRequest(saved.rows[0]):null;}
+    if(continuation.clientId!==clientId || continuation.codeAgentQueuedInput?.state!=='queued')throw new Error('Invalid task continuation');
+    return this.transaction(async client=>{
+      const room=await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id=$1 AND creator_id=$2 AND personal_agent_owner_id=$2 FOR UPDATE`,[continuation.roomId,clientId]);
+      if(!room.rows[0] || room.rows[0].personal_agent_task_control)return null;
+      const latest=await client.query('SELECT id,status FROM room_agent_turns WHERE room_id=$1 ORDER BY started_at DESC,id DESC LIMIT 1',[continuation.roomId]);
+      if(latest.rows[0]?.status==='cancelled' && room.rows[0].personal_agent_resumed_turn_id!==latest.rows[0].id)return null;
+      const existing=await client.query('SELECT * FROM personal_agent_input_requests WHERE id=$1 AND client_id=$2 AND room_id=$3 FOR UPDATE',[id,clientId,continuation.roomId]);
+      if(!existing.rows[0])return null;
+      if(existing.rows[0].answered_at)return this.mapPersonalAgentInputRequest(existing.rows[0]);
+      const saved=await client.query('UPDATE personal_agent_input_requests SET answer=$3::jsonb,answered_at=clock_timestamp() WHERE id=$1 AND client_id=$2 RETURNING *',[id,clientId,JSON.stringify(answer)]);
+      const position=await client.query<{position:number}>('SELECT COALESCE(MAX(position),-1)+1 AS position FROM room_messages WHERE room_id=$1',[continuation.roomId]);
+      await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(continuation,Number(position.rows[0].position)));
+      await this.updateRoomLastActivityFromMessages(client,continuation.roomId,toIsoString(room.rows[0].created_at));
+      return this.mapPersonalAgentInputRequest(saved.rows[0]);
+    });
+  }
+
+  async savePersonalAgentFile(file: PersonalAgentFile, claim?: { roomId: string; turnId: string }): Promise<PersonalAgentFile | null> {
+    const result = await this.pool.query(`WITH saved AS (INSERT INTO personal_agent_files
+      (id,client_id,name,byte_size,page_count,fields,object_key,source,parent_id)
+      SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9
+      WHERE ($9::text IS NULL OR EXISTS(SELECT 1 FROM personal_agent_files WHERE id=$9 AND client_id=$2))
+        AND ($10::text IS NULL OR EXISTS (
+          SELECT 1 FROM rooms room JOIN room_agent_turns turn ON turn.room_id=room.id AND turn.id=$11
+          JOIN code_agent_room_leases lease ON lease.room_id=room.id AND lease.turn_id=turn.id
+          WHERE room.id=$10 AND room.creator_id=$2 AND room.personal_agent_owner_id=$2
+            AND room.personal_agent_task_control IS NULL AND turn.status='running' AND lease.expires_at>clock_timestamp()
+        )) RETURNING *), linked AS (INSERT INTO personal_agent_task_files(room_id,file_id,turn_id) SELECT $10,id,$11 FROM saved WHERE $10::text IS NOT NULL RETURNING file_id) SELECT * FROM saved`, [file.id,file.clientId,file.name,file.byteSize,file.pageCount,JSON.stringify(file.fields),file.objectKey,file.source,file.parentId || null,claim?.roomId || null,claim?.turnId || null]);
+    return result.rows[0] ? this.mapPersonalAgentFile(result.rows[0]) : null;
+  }
+
+  private mapPersonalAgentFile(row: any): PersonalAgentFile {
+    return { id: row.id,clientId: row.client_id,name: row.name,byteSize: Number(row.byte_size),pageCount: Number(row.page_count),
+      fields: row.fields,objectKey: row.object_key,source: row.source,parentId: row.parent_id || undefined,createdAt: toIsoString(row.created_at) };
+  }
+
+  async linkPersonalAgentTaskFile(clientId:string,fileId:string,claim:{roomId:string;turnId:string}):Promise<boolean>{
+    const saved=await this.pool.query(`INSERT INTO personal_agent_task_files(room_id,file_id,turn_id)
+      SELECT room.id,file.id,turn.id FROM rooms room
+      JOIN room_agent_turns turn ON turn.room_id=room.id AND turn.id=$4
+      JOIN code_agent_room_leases lease ON lease.room_id=room.id AND lease.turn_id=turn.id
+      JOIN personal_agent_files file ON file.id=$2 AND file.client_id=$1
+      WHERE room.id=$3 AND room.creator_id=$1 AND room.personal_agent_owner_id=$1
+        AND room.personal_agent_task_control IS NULL AND turn.status='running' AND lease.expires_at>clock_timestamp()
+      ON CONFLICT(room_id,file_id) DO UPDATE SET turn_id=EXCLUDED.turn_id RETURNING file_id`,[clientId,fileId,claim.roomId,claim.turnId]);
+    return saved.rowCount===1;
+  }
+
+  async readPersonalAgentFiles(clientId: string, options: { id?: string; roomId?:string; limit?: number; offset?: number } = {}): Promise<{ files: PersonalAgentFile[]; total: number }> {
+    const params = [clientId,options.id || null,options.roomId || null];
+    const where = 'client_id=$1 AND ($2::text IS NULL OR id=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM personal_agent_task_files linked WHERE linked.file_id=personal_agent_files.id AND linked.room_id=$3))';
+    const [rows,count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_files WHERE ${where} ORDER BY created_at DESC,id LIMIT $4 OFFSET $5`, [...params,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_files WHERE ${where}`, params),
+    ]);
+    return { files: rows.rows.map(row => this.mapPersonalAgentFile(row)),total: Number(count.rows[0].total) };
   }
 
   async savePersonalAgentResult(result: PersonalAgentResult): Promise<PersonalAgentResult | null> {
     const saved = await this.pool.query(`INSERT INTO personal_agent_results
-      (id,client_id,room_id,turn_id,kind,title,summary,filename,mime_type,byte_size,object_key)
-      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 FROM rooms room
+      (id,client_id,room_id,turn_id,kind,title,summary,filename,mime_type,byte_size,object_key,data)
+      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb FROM rooms room
       JOIN room_agent_turns turn ON turn.room_id = room.id AND turn.id = $4
       JOIN code_agent_room_leases lease ON lease.room_id = room.id AND lease.turn_id = turn.id
       WHERE room.id = $3 AND room.personal_agent_owner_id = $2 AND room.creator_id = $2
-        AND turn.status = 'running' AND lease.expires_at > clock_timestamp()
-      RETURNING *`, [result.id,result.clientId,result.roomId,result.turnId,result.kind,result.title,result.summary,result.filename,result.mimeType,result.byteSize,result.objectKey]);
+        AND room.personal_agent_task_control IS NULL AND turn.status = 'running' AND lease.expires_at > clock_timestamp()
+      RETURNING *`, [result.id,result.clientId,result.roomId,result.turnId,result.kind,result.title,result.summary,result.filename,result.mimeType,result.byteSize,result.objectKey,result.data ? JSON.stringify(result.data) : null]);
     return saved.rows[0] ? this.mapPersonalAgentResult(saved.rows[0]) : null;
   }
 
   private mapPersonalAgentResult(row: any): PersonalAgentResult {
     return { id: row.id, clientId: row.client_id, roomId: row.room_id, turnId: row.turn_id,
-      kind: row.kind, title: row.title, summary: row.summary, filename: row.filename, mimeType: row.mime_type,
+      kind: row.kind, ...(row.data ? { data: row.data } : {}), title: row.title, summary: row.summary, filename: row.filename, mimeType: row.mime_type,
       byteSize: Number(row.byte_size), objectKey: row.object_key, createdAt: toIsoString(row.created_at) };
   }
 
@@ -1561,8 +1736,25 @@ export class PostgresStore implements DurableRoomStore {
 
   async readPersonalAgentRooms(clientId: string): Promise<Room[]> {
     const result = await this.pool.query<RoomRow>(
-      `SELECT ${ROOM_COLUMNS} FROM rooms WHERE personal_agent_owner_id = $1
-      ORDER BY personal_agent_thread_kind = 'main' DESC, last_activity_at DESC, created_at DESC`, [clientId],
+      `SELECT ${ROOM_COLUMNS.split(', ').map(column=>`room.${column}`).join(', ')},
+        COALESCE((SELECT kind FROM personal_agent_tasks WHERE room_id=room.id),CASE WHEN watch.id IS NOT NULL THEN 'monitor' END) AS personal_agent_task_kind,
+        COALESCE(watch.updated_at,room.updated_at) AS updated_at,
+        (SELECT tool_args->'plan' FROM room_messages WHERE room_id=room.id AND tool_name='update_plan' AND jsonb_typeof(tool_args->'plan')='array' ORDER BY position DESC LIMIT 1) AS personal_agent_task_plan,
+        COALESCE(watch.error,left(watch.last_text,1000),(SELECT question FROM personal_agent_input_requests WHERE room_id=room.id AND answered_at IS NULL ORDER BY created_at DESC LIMIT 1),(SELECT content FROM room_messages WHERE room_id=room.id AND message_type='ai' ORDER BY position DESC LIMIT 1)) AS personal_agent_task_summary,
+        CASE WHEN watch.id IS NOT NULL THEN CASE watch.status WHEN 'stopped' THEN 'cancelled' WHEN 'paused' THEN 'paused' ELSE 'scheduled' END
+          WHEN room.personal_agent_task_control IS NOT NULL THEN room.personal_agent_task_control
+          WHEN turn.status='running' THEN 'running'
+          WHEN EXISTS(SELECT 1 FROM room_messages WHERE room_id=room.id AND code_agent_queued_input->>'state' IN ('queued','starting')) THEN 'queued'
+          WHEN turn.status='error' OR (turn.status='cancelled' AND room.personal_agent_resumed_turn_id IS DISTINCT FROM turn.id) THEN turn.status
+          WHEN EXISTS(SELECT 1 FROM personal_agent_input_requests input WHERE input.room_id=room.id AND input.answered_at IS NULL) THEN 'waiting_input'
+          WHEN EXISTS(SELECT 1 FROM personal_google_records action WHERE action.client_id=$1 AND action.kind='action' AND action.data->>'sourceRoomId'=room.id AND action.data->>'sourceTurnId'=turn.id AND action.data->>'status' IN ('awaiting_review','executing')) THEN 'waiting_review'
+          WHEN EXISTS(SELECT 1 FROM personal_google_records action WHERE action.client_id=$1 AND action.kind='action' AND action.data->>'sourceRoomId'=room.id AND action.data->>'sourceTurnId'=turn.id AND NOT(action.data ? 'taskContinuationMessageId') AND NOT(action.data ? 'taskOutcomeRecorded')) THEN 'queued'
+          ELSE turn.status END AS personal_agent_task_status
+      FROM rooms room
+      LEFT JOIN personal_agent_watches watch ON watch.room_id=room.id AND watch.client_id=room.personal_agent_owner_id
+      LEFT JOIN LATERAL(SELECT id,status FROM room_agent_turns WHERE room_id=room.id ORDER BY started_at DESC,id DESC LIMIT 1) turn ON TRUE
+      WHERE room.personal_agent_owner_id = $1
+      ORDER BY room.personal_agent_thread_kind = 'main' DESC, room.last_activity_at DESC, room.created_at DESC`, [clientId],
     );
     return result.rows.map(mapRoom);
   }
@@ -1617,24 +1809,24 @@ export class PostgresStore implements DurableRoomStore {
       ? await this.pool.query(
         `UPDATE personal_agent_goals SET title = $3, prompt = $4, schedule = $5, time = $6,
           timezone = $7, enabled = $8, next_run_at = $9, weekday = $11, run_at = $12,
-          milestones = $13::jsonb, completed_at = $14,
+          milestones = $13::jsonb, completed_at = $14, category = $15,
           updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
         WHERE id = $1 AND client_id = $2 AND date_trunc('milliseconds', updated_at) = $10::timestamptz
         RETURNING *`,
-        [...values, expectedUpdatedAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null],
+        [...values, expectedUpdatedAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null, goal.category ?? 'Personal'],
       )
       : await this.pool.query(
-        `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at, milestones, completed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+        `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at, milestones, completed_at, category)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)
         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, prompt = EXCLUDED.prompt,
           schedule = EXCLUDED.schedule, time = EXCLUDED.time, timezone = EXCLUDED.timezone,
           enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at,
           weekday = EXCLUDED.weekday, run_at = EXCLUDED.run_at,
-          milestones = EXCLUDED.milestones, completed_at = EXCLUDED.completed_at,
+          milestones = EXCLUDED.milestones, completed_at = EXCLUDED.completed_at, category = EXCLUDED.category,
           updated_at = GREATEST(clock_timestamp(), personal_agent_goals.updated_at + INTERVAL '1 millisecond')
         WHERE personal_agent_goals.client_id = EXCLUDED.client_id
         RETURNING *`,
-        [...values, goal.createdAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null],
+        [...values, goal.createdAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null, goal.category ?? 'Personal'],
       );
     if (!result.rows[0]) throw new PersonalAgentGoalConflictError('This goal changed. Refresh and try again.');
     return mapPersonalAgentGoal(result.rows[0]);
@@ -1652,6 +1844,100 @@ export class PostgresStore implements DurableRoomStore {
       ORDER BY next_run_at LIMIT $2`, [now, limit],
     );
     return result.rows.map(mapPersonalAgentGoal);
+  }
+
+  async readPersonalComputerRecords(clientId:string,kind:string,id?:string):Promise<{id:string;data:Record<string,unknown>}[]>{
+    return (await this.pool.query(`SELECT id,data FROM personal_agent_computer_records WHERE client_id=$1 AND kind=$2 AND ($3::text IS NULL OR id=$3) ORDER BY updated_at DESC,id`,[clientId,kind,id ?? null])).rows;
+  }
+  async putPersonalComputerRecord(clientId:string,kind:string,id:string,data:Record<string,unknown>,insertOnly=false):Promise<{id:string;data:Record<string,unknown>}|null>{
+    return (await this.pool.query(`INSERT INTO personal_agent_computer_records(client_id,kind,id,data) VALUES($1,$2,$3,$4::jsonb)
+      ON CONFLICT(client_id,kind,id) ${insertOnly?'DO NOTHING':'DO UPDATE SET data=EXCLUDED.data,updated_at=clock_timestamp()'} RETURNING id,data`,[clientId,kind,id,JSON.stringify(data)])).rows[0] ?? null;
+  }
+  async patchPersonalComputerRecord(clientId:string,kind:string,id:string,expected:Record<string,unknown>,patch:Record<string,unknown>):Promise<{id:string;data:Record<string,unknown>}|null>{
+    return (await this.pool.query(`UPDATE personal_agent_computer_records SET data=data || $5::jsonb,updated_at=clock_timestamp() WHERE client_id=$1 AND kind=$2 AND id=$3 AND data @> $4::jsonb RETURNING id,data`,[clientId,kind,id,JSON.stringify(expected),JSON.stringify(patch)])).rows[0] ?? null;
+  }
+
+  async startPersonalAgentTask(task:import('../types').PersonalAgentTask,room:Room,message:Message):Promise<Room>{
+    if(task.clientId!==room.creatorId || room.personalAgentOwnerId!==task.clientId || task.roomId!==room.id || message.roomId!==room.id || message.clientId!==task.clientId || message.codeAgentQueuedInput?.state!=='queued')throw new Error('Invalid personal task');
+    return this.transaction(async client=>{
+      await client.query('SELECT client_id FROM personal_agent_profiles WHERE client_id=$1 FOR UPDATE',[task.clientId]);
+      if(room.personalAgentGoalId){
+        const goal=await client.query('SELECT id FROM personal_agent_goals WHERE client_id=$1 AND id=$2 FOR UPDATE',[task.clientId,room.personalAgentGoalId]);
+        if(!goal.rows.length)throw new PersonalAgentGoalConflictError('Goal not found');
+      }
+      const saved=await this.insertPersonalAgentRoom(client,room);
+      await client.query(`INSERT INTO personal_agent_tasks(room_id,client_id,kind,prompt,input,created_at) VALUES($1,$2,$3,$4,$5,$6)`,[task.roomId,task.clientId,task.kind,task.prompt,JSON.stringify(task.input),task.createdAt]);
+      await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(message,0));
+      return saved;
+    });
+  }
+  async readPersonalAgentReviewContinuations():Promise<PersonalGoogleRecord[]>{
+    await this.pool.query(`UPDATE personal_google_records SET data=data || '{"status":"outcome_unknown","error":"Execution was interrupted. Check Google before trying again."}'::jsonb,updated_at=clock_timestamp() WHERE kind='action' AND data->>'status'='executing' AND updated_at<clock_timestamp()-INTERVAL '2 minutes'`);
+    // A committed review survives an App restart before the queue is woken.
+    await this.pool.query(`UPDATE personal_google_records SET data=jsonb_set(data,'{status}','"expired"'::jsonb),updated_at=clock_timestamp() WHERE kind='action' AND data->>'status'='awaiting_review' AND (data->>'expiresAt')::timestamptz<=clock_timestamp()`);
+    const result=await this.pool.query(`SELECT action.* FROM personal_google_records action JOIN rooms room ON room.id=action.data->>'sourceRoomId' JOIN room_agent_turns turn ON turn.id=action.data->>'sourceTurnId' AND turn.room_id=room.id
+      WHERE action.kind='action' AND action.client_id=room.personal_agent_owner_id AND room.creator_id=action.client_id
+        AND action.data->>'status' IN ('succeeded','failed','denied','expired','outcome_unknown') AND NOT (action.data ? 'taskContinuationMessageId') AND NOT (action.data ? 'taskOutcomeRecorded')
+        AND room.personal_agent_task_control IS NULL AND (turn.status='complete' OR (turn.status='cancelled' AND room.personal_agent_resumed_turn_id=turn.id))
+        AND turn.id=(SELECT id FROM room_agent_turns WHERE room_id=room.id ORDER BY started_at DESC,id DESC LIMIT 1) ORDER BY action.updated_at LIMIT 50`);
+    return result.rows.map(row=>({clientId:row.client_id,kind:row.kind,id:row.id,data:row.data,connectionId:row.connection_id || undefined,updatedAt:toIsoString(row.updated_at)}));
+  }
+  async continuePersonalAgentReview(record:PersonalGoogleRecord,message:Message):Promise<Room|null>{
+    return this.transaction(async client=>{
+      const rooms=await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id=$1 AND creator_id=$2 AND personal_agent_owner_id=$2 FOR UPDATE`,[message.roomId,record.clientId]);
+      const room=rooms.rows[0];if(!room || room.personal_agent_task_control)return null;
+      const actions=await client.query(`SELECT * FROM personal_google_records WHERE client_id=$1 AND kind='action' AND id=$2 FOR UPDATE`,[record.clientId,record.id]);
+      const data=actions.rows[0]?.data;
+      if(!data || data.taskContinuationMessageId || data.taskOutcomeRecorded || data.sourceRoomId!==message.roomId || !['succeeded','failed','denied','expired','outcome_unknown'].includes(data.status))return null;
+      const turns=await client.query('SELECT id,status FROM room_agent_turns WHERE room_id=$1 ORDER BY started_at DESC,id DESC LIMIT 1',[message.roomId]);
+      if((turns.rows[0]?.status!=='complete' && !(turns.rows[0]?.status==='cancelled' && room.personal_agent_resumed_turn_id===turns.rows[0]?.id)) || turns.rows[0]?.id!==data.sourceTurnId)return null;
+      if(data.status!=='succeeded'){
+        await client.query(`UPDATE rooms SET personal_agent_task_control='error',updated_at=clock_timestamp() WHERE id=$1`,[message.roomId]);
+        await client.query(`UPDATE personal_google_records SET data=jsonb_set(data,'{taskOutcomeRecorded}','true'::jsonb),updated_at=clock_timestamp() WHERE client_id=$1 AND kind='action' AND id=$2`,[record.clientId,record.id]);
+        await this.insertPersonalNotification(client,{id:`review:${record.id}`,clientId:record.clientId,eventKey:`review:${record.id}`,kind:'task_error',title:'Task needs attention',body:`Reviewed action ${data.status}: ${data.error || 'No further action was taken'}`,roomId:message.roomId,createdAt:new Date().toISOString()});
+        return null;
+      }
+      if(message.clientId!==record.clientId || message.codeAgentQueuedInput?.state!=='queued')throw new Error('Invalid review continuation');
+      const position=await client.query<{position:number}>('SELECT COALESCE(MAX(position),-1)+1 AS position FROM room_messages WHERE room_id=$1',[message.roomId]);
+      await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(message,Number(position.rows[0].position)));
+      await client.query(`UPDATE personal_google_records SET data=jsonb_set(data,'{taskContinuationMessageId}',$3::jsonb),updated_at=clock_timestamp() WHERE client_id=$1 AND kind='action' AND id=$2`,[record.clientId,record.id,JSON.stringify(message.id)]);
+      return this.updateRoomLastActivityFromMessages(client,message.roomId,toIsoString(room.created_at));
+    });
+  }
+
+  async controlPersonalAgentTask(clientId:string,roomId:string,action:'pause'|'resume'|'cancel'|'retry',continuation:Message):Promise<Room>{
+    return this.transaction(async client=>{
+      const saved=await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id=$1 AND creator_id=$2 AND personal_agent_owner_id=$2 FOR UPDATE`,[roomId,clientId]);
+      const row=saved.rows[0];if(!row)throw new PersonalAgentTaskControlError('Task not found');
+      const latest=await client.query('SELECT id,status FROM room_agent_turns WHERE room_id=$1 ORDER BY started_at DESC,id DESC LIMIT 1',[roomId]);
+      const pending=await client.query(`SELECT id FROM personal_google_records WHERE client_id=$1 AND kind='action' AND data->>'sourceRoomId'=$2 AND data->>'sourceTurnId'=$3 FOR UPDATE`,[clientId,roomId,latest.rows[0]?.id || null]);
+      const actions=await client.query(`SELECT data FROM personal_google_records WHERE client_id=$1 AND kind='action' AND id=ANY($2::text[])`,[clientId,pending.rows.map(item=>item.id)]);
+      const queue=await client.query(`SELECT id FROM room_messages WHERE room_id=$1 AND code_agent_queued_input->>'state' IN ('queued','starting')`,[roomId]);
+      const inputs=await client.query('SELECT id FROM personal_agent_input_requests WHERE room_id=$1 AND answered_at IS NULL',[roomId]);
+      const waitingReview=actions.rows.some(item=>['awaiting_review','executing'].includes(item.data.status));
+      const pendingOutcome=actions.rows.some(item=>!item.data.taskContinuationMessageId && !item.data.taskOutcomeRecorded);
+      const status=row.personal_agent_task_control || (latest.rows[0]?.status==='running'?'running':queue.rows.length?'queued':latest.rows[0]?.status==='error'?'error':latest.rows[0]?.status==='cancelled' && row.personal_agent_resumed_turn_id!==latest.rows[0].id?'cancelled':inputs.rows.length?'waiting_input':waitingReview?'waiting_review':pendingOutcome?'queued':latest.rows[0]?.status || 'queued');
+      if(action==='cancel' && status==='complete')throw new PersonalAgentTaskControlError('This task is already complete');
+      if(action==='retry' && status!=='error')throw new PersonalAgentTaskControlError('Only failed tasks can be retried');
+      if(action==='resume' && status!=='paused')throw new PersonalAgentTaskControlError('Only paused tasks can be resumed');
+      if(action==='pause' && ['complete','error','cancelled','paused'].includes(status))return mapRoom(row);
+      if(action==='retry' && actions.rows.some(item=>item.data.status!=='succeeded'))throw new PersonalAgentTaskControlError('Check the reviewed action before retrying; its outcome may be uncertain. Start a new task when reconciled.');
+      const control=action==='pause'?'paused':action==='cancel'?'cancelled':null;
+      const updated=await client.query<RoomRow>(`UPDATE rooms SET personal_agent_task_control=$3,personal_agent_resumed_turn_id=CASE WHEN $4 THEN $5 ELSE personal_agent_resumed_turn_id END,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE id=$1 AND personal_agent_owner_id=$2 RETURNING ${ROOM_COLUMNS}`,[roomId,clientId,control,action==='resume',latest.rows[0]?.id || null]);
+      if(action==='cancel')await client.query(`UPDATE personal_google_records SET data=jsonb_set(data,'{status}','"denied"'::jsonb),updated_at=clock_timestamp() WHERE client_id=$1 AND kind='action' AND id=ANY($2::text[]) AND data->>'status'='awaiting_review'`,[clientId,pending.rows.map(item=>item.id)]);
+      // Resume pending input/review in place; preserve queued user intent. Interrupted work gets one durable continuation.
+      if(!control && !queue.rows.length && !inputs.rows.length && !pendingOutcome){
+        if(continuation.clientId!==clientId || continuation.roomId!==roomId || continuation.codeAgentQueuedInput?.state!=='queued')throw new Error('Invalid task continuation');
+        const position=await client.query<{position:number}>('SELECT COALESCE(MAX(position),-1)+1 AS position FROM room_messages WHERE room_id=$1',[roomId]);
+        await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(continuation,Number(position.rows[0].position)));
+      }
+      const room=mapRoom(updated.rows[0]);room.personalAgentTaskStatus=control || (inputs.rows.length?'waiting_input':waitingReview?'waiting_review':'queued');return room;
+    });
+  }
+
+  async readPersonalAgentTask(clientId:string,roomId:string):Promise<import('../types').PersonalAgentTask|null>{
+    const found=await this.pool.query('SELECT * FROM personal_agent_tasks WHERE client_id=$1 AND room_id=$2',[clientId,roomId]);
+    const row=found.rows[0];return row?{roomId:row.room_id,clientId:row.client_id,kind:row.kind,prompt:row.prompt,input:row.input,createdAt:toIsoString(row.created_at)}:null;
   }
 
   async startPersonalAgentGoalRun(input: { clientId: string; goalId: string; room: Room; message: Message; nextRunAt?: string; expectedNextRunAt?: string }): Promise<{ goal: PersonalAgentGoal; room: Room } | null> {
@@ -2360,7 +2646,7 @@ export class PostgresStore implements DurableRoomStore {
           `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
           [roomId]
         );
-        if (room.rows.length === 0) {
+        if (room.rows.length === 0 || room.rows[0].personal_agent_task_control) {
           return null;
         }
 
@@ -2440,9 +2726,9 @@ export class PostgresStore implements DurableRoomStore {
   async findRoomsWithQueuedCodeAgentMessages(): Promise<string[]> {
     try {
       const result = await this.pool.query<{ room_id: string }>(
-        `SELECT DISTINCT room_id
-        FROM room_messages
-        WHERE code_agent_queued_input->>'state' = 'queued'`
+        `SELECT DISTINCT message.room_id
+        FROM room_messages message JOIN rooms room ON room.id=message.room_id
+        WHERE message.code_agent_queued_input->>'state' = 'queued' AND room.personal_agent_task_control IS NULL`
       );
       return result.rows.map(row => row.room_id);
     } catch (error) {
@@ -2997,6 +3283,7 @@ export class PostgresStore implements DurableRoomStore {
           [input.roomId],
         );
         if (!room.rows[0]) return { outcome: 'missing_room' as const };
+        if (room.rows[0].personal_agent_task_control) return { outcome: 'busy' as const };
 
         let workspaceParentRevisionId: string | null = null;
         if (input.captureWorkspaceRevision) {
@@ -3477,12 +3764,23 @@ export class PostgresStore implements DurableRoomStore {
         ],
       );
       if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
-      if (savedMessage && room.rows[0].personal_agent_owner_id && room.rows[0].personal_agent_thread_kind === 'task' && actualOutcome !== 'cancelled') {
-        await this.insertPersonalNotification(client, {
+      if (savedMessage && room.rows[0].personal_agent_owner_id && room.rows[0].personal_agent_thread_kind === 'task' && actualOutcome !== 'cancelled' && !room.rows[0].personal_agent_task_control) {
+        const waitingInput=await client.query('SELECT question FROM personal_agent_input_requests WHERE room_id=$1 AND answered_at IS NULL ORDER BY created_at LIMIT 1',[claim.roomId]);
+        const reviews=await client.query(`SELECT data FROM personal_google_records WHERE client_id=$1 AND kind='action' AND data->>'sourceRoomId'=$2 AND data->>'sourceTurnId'=$3`,[room.rows[0].personal_agent_owner_id,claim.roomId,claim.turnId]);
+        const pendingInput=actualOutcome==='complete' && waitingInput.rows.length>0;
+        const pendingReview=actualOutcome==='complete' && reviews.rows.some(item=>['awaiting_review','executing'].includes(item.data.status));
+        const pendingOutcome=actualOutcome==='complete' && reviews.rows.some(item=>!item.data.taskContinuationMessageId && !item.data.taskOutcomeRecorded);
+        // A quick approval can finish while the proposing model is still running.
+        // Its receipt must continue the task before publishing the final outcome.
+        if(!pendingOutcome || pendingInput || pendingReview || actualOutcome!=='complete')await this.insertPersonalNotification(client, {
           id: `task:${savedMessage.id}`, clientId: room.rows[0].personal_agent_owner_id,
-          eventKey: `task:${savedMessage.id}`, kind: actualOutcome === 'complete' ? 'task_complete' : 'task_error',
-          title: room.rows[0].name, body: savedMessage.content.slice(0,500), roomId: claim.roomId, createdAt: input.completedAt,
+          eventKey: `task:${savedMessage.id}`, kind: actualOutcome!=='complete'?'task_error':pendingInput?'task_input':pendingReview?'task_review':'task_complete',
+          title: actualOutcome!=='complete'?'Task needs attention':pendingInput?'Your details are needed':pendingReview?'Ready for your review':room.rows[0].name,
+          body: pendingInput?waitingInput.rows[0].question:pendingReview?room.rows[0].name:savedMessage.content.slice(0,500), roomId: claim.roomId, createdAt: input.completedAt,
         });
+        if(actualOutcome==='complete' && !pendingInput && !pendingOutcome && room.rows[0].personal_agent_goal_id){
+          await client.query(`UPDATE personal_agent_goals SET milestones=milestones || $3::jsonb,updated_at=clock_timestamp() WHERE id=$1 AND client_id=$2 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(milestones) milestone WHERE milestone->>'id'=$4)`,[room.rows[0].personal_agent_goal_id,room.rows[0].personal_agent_owner_id,JSON.stringify([{id:claim.roomId,title:room.rows[0].name,done:true}]),claim.roomId]);
+        }
       }
 
 

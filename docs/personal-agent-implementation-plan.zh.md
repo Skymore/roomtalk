@@ -1,5 +1,7 @@
 # Personal Agent：Codex 优先实施计划
 
+当前范围已升级为完整 OpenMuse 移植，以下首发计划保留为历史记录；当前状态见 [逐项移植清单](personal-agent-openmuse-coverage.zh.md)。
+
 [English](personal-agent-implementation-plan.md)
 
 状态：独立界面和 OpenMuse 记忆库已部署，生产验证完成

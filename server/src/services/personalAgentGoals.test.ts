@@ -9,6 +9,10 @@ const input = { title: 'Weekly plan', prompt: 'Review progress', schedule: 'week
 const store = { savePersonalAgentGoal: async (goal: PersonalAgentGoal) => goal } as RoomStore;
 
 describe('personal goal saving', () => {
+  it('saves the source form with an optional description and category', async()=>{
+    const goal=await savePersonalAgentGoal(store,'owner',{title:'Emergency fund',category:'Finances'},undefined,now);
+    assert.equal(goal.prompt,'');assert.equal(goal.category,'Finances');assert.equal(goal.schedule,'manual');
+  });
   it('saves a requested weekday and preserves its next run during a content edit', async () => {
     const goal = await savePersonalAgentGoal(store, 'owner', input, undefined, now);
     assert.equal(goal.weekday, 5);
@@ -30,11 +34,11 @@ describe('personal goal saving', () => {
       { ...input, schedule: 'once', runAt: '2026-10-05T09:00:00Z' },
     ]) await assert.rejects(savePersonalAgentGoal(store, 'owner', body, undefined, now), RangeError);
   });
-  it('keeps milestone progress until an explicitly verified outcome is completed', async () => {
+  it('completes and reopens a goal without changing its milestone progress', async () => {
     const goal = await savePersonalAgentGoal(store, 'owner', { ...input, milestones: ['Collect sources', 'Write plan'] }, undefined, now);
     assert.equal(goal.milestones!.length, 2); assert.equal(goal.milestones![0].done, false);
-    await assert.rejects(savePersonalAgentGoal(store, 'owner', { completed: true }, goal, now), RangeError);
-    const done = await savePersonalAgentGoal(store, 'owner', { completed: true, milestones: goal.milestones!.map(item => ({ ...item, done: true })) }, goal, now);
+    const done = await savePersonalAgentGoal(store, 'owner', { completed: true }, goal, now);
+    assert.deepEqual(done.milestones, goal.milestones);
     assert.equal(done.enabled, false); assert.equal(done.nextRunAt, undefined); assert.ok(done.completedAt);
     assert.deepEqual(done.milestones!.map(item => item.id), goal.milestones!.map(item => item.id));
     const reopened = await savePersonalAgentGoal(store, 'owner', { completed: false, enabled: true }, done, now);

@@ -1,3 +1,5 @@
+import { PdfError } from '../services/personalAgentPdf';
+import { PersonalAgentFileError } from '../services/personalAgentFiles';
 import { Express } from 'express';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
@@ -17,10 +19,13 @@ export const registerPersonalAgentBrowserContextRoutes = (app: Express, options:
       const room = await options.store.getRoomById(claims.roomId);
       if (!room || room.personalAgentOwnerId !== claims.clientId || room.creatorId !== claims.clientId) throw new CodeAgentRoomContextError('Personal browser is only available to its owner', 403, 'personal_browser_access_denied');
       if (!await options.store.hasActiveCodeAgentRoomLease!(claims.roomId, new Date().toISOString(), claims.turnId)) throw new CodeAgentRoomContextError('Personal browser requires an active turn', 403, 'personal_browser_turn_ended');
-      if (!write) return res.json(await options.browser.list(claims.clientId, req.query));
+      if (!write) return res.json(req.query.operation==='sessions'?await options.browser.sessions(claims.clientId):await options.browser.list(claims.clientId,req.query));
+      if(room.personalAgentTaskControl)throw new PersonalAgentBrowserError('This task is paused or cancelled',409);
       if (!codeAgentModeAllowsWriteTools(claims.mode)) throw new CodeAgentRoomContextError('This agent mode cannot operate a browser', 403, 'personal_browser_read_only');
       return res.json(await options.browser.agent({ clientId: claims.clientId, roomId: claims.roomId, turnId: claims.turnId }, req.body || {}));
     } catch (error) {
+      if (error instanceof PdfError) return res.status(error.status).json({error:error.message});
+      if (error instanceof PersonalAgentFileError) return res.status(error.statusCode).json({error:error.message});
       if (error instanceof RangeError || error instanceof TypeError) return res.status(400).json({ error: error.message });
       if (error instanceof CodeAgentRoomContextError || error instanceof PersonalAgentBrowserError) return res.status(error.statusCode).json({ error: error.message });
       options.logger.error('Personal browser operation failed', { error, roomId: claims.roomId, turnId: claims.turnId });

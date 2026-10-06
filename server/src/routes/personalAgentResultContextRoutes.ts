@@ -21,6 +21,7 @@ export const registerPersonalAgentResultContextRoutes = (app: Express, options: 
       if (!await options.store.hasActiveCodeAgentRoomLease!(claims.roomId, new Date().toISOString(), claims.turnId)) {
         throw new CodeAgentRoomContextError('Personal results require an active agent turn', 403, 'personal_result_turn_ended');
       }
+      if(write && room.personalAgentTaskControl)throw new CodeAgentRoomContextError('This task is paused or cancelled',409,'personal_task_paused');
       if (write) {
         if (!codeAgentModeAllowsWriteTools(claims.mode)) throw new CodeAgentRoomContextError('This agent mode cannot save personal results', 403, 'personal_result_read_only');
         return res.json(await options.results.save({ clientId: claims.clientId, roomId: claims.roomId, turnId: claims.turnId }, req.body || {}));

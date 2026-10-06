@@ -1,4 +1,6 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import type { PersonalGoogleCredential, PersonalGoogleOAuthState, PersonalGoogleRecord } from '../services/personalAgentGoogleTypes';
+import { PersonalAgentInputRequest } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, PersonalAgentFile, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -21,6 +23,8 @@ export type ClientPresenceEventAction = 'online' | 'offline';
 
 // This is an audit record for an authenticated Socket.IO session, rather than
 // the Redis-backed current-presence projection used by the room UI.
+export class PersonalAgentTaskControlError extends Error {}
+
 export interface ClientPresenceEventInput {
   clientId: string;
   socketId: string;
@@ -776,9 +780,9 @@ export interface IdempotentMessageAppendResult {
 
 export interface DurableRoomStore {
   createPersonalAgentWatch?(watch: PersonalAgentWatch, room: Room, claim?: {roomId: string;turnId: string}): Promise<PersonalAgentWatch>;
-  readPersonalAgentWatches?(clientId: string, options?: { id?: string; limit?: number; offset?: number }): Promise<{ watches: PersonalAgentWatch[]; total: number }>;
+  readPersonalAgentWatches?(clientId: string, options?: { id?: string; roomId?:string; limit?: number; offset?: number }): Promise<{ watches: PersonalAgentWatch[]; total: number }>;
   readDuePersonalAgentWatches?(limit: number): Promise<PersonalAgentWatch[]>;
-  controlPersonalAgentWatch?(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string): Promise<PersonalAgentWatch | null>;
+  controlPersonalAgentWatch?(clientId: string, id: string, action: 'pause' | 'resume' | 'check' | 'stop', expectedUpdatedAt: string): Promise<PersonalAgentWatch | null>;
   finishPersonalAgentWatchCheck?(outcome: PersonalAgentWatchOutcome): Promise<{ watch: PersonalAgentWatch; notification?: PersonalAgentNotification } | null>;
   savePersonalAgentNotification?(notification: PersonalAgentNotification): Promise<{ notification: PersonalAgentNotification; created: boolean }>;
   readPersonalAgentNotifications?(clientId: string, options?: { unread?: boolean; limit?: number; offset?: number }): Promise<{ notifications: PersonalAgentNotification[]; total: number; unread: number }>;
@@ -793,11 +797,26 @@ export interface DurableRoomStore {
   getPersonalAgentBrowserSession?(clientId: string, roomId: string): Promise<PersonalAgentBrowserSession | null>;
   savePersonalAgentBrowser?(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation): Promise<boolean>;
   readPersonalAgentBrowserObservations?(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }): Promise<{ observations: PersonalAgentBrowserObservation[]; total: number }>;
+  readPersonalGoogleCredential?(clientId: string): Promise<PersonalGoogleCredential | null>;
+  rotatePersonalGoogleCredential?(clientId: string, generation: string, disconnect: boolean): Promise<PersonalGoogleCredential>;
+  savePersonalGoogleCredential?(credential: PersonalGoogleCredential, expectedGeneration: string): Promise<boolean>;
+  refreshPersonalGoogleCredential?(clientId: string, connectionId: string, secret: NonNullable<PersonalGoogleCredential['secret']>): Promise<boolean>;
+  savePersonalGoogleOAuthState?(state: PersonalGoogleOAuthState): Promise<void>;
+  takePersonalGoogleOAuthState?(id: string): Promise<PersonalGoogleOAuthState | null>;
+  readPersonalGoogleRecords?(clientId: string, kind: PersonalGoogleRecord['kind'], id?: string): Promise<PersonalGoogleRecord[]>;
+  savePersonalGoogleRecord?(record: PersonalGoogleRecord, expectedUpdatedAt?: string): Promise<PersonalGoogleRecord | null>;
+  claimPersonalGoogleAction?(clientId: string, id: string, expectedUpdatedAt: string, status: string): Promise<PersonalGoogleRecord | null>;
+  savePersonalAgentInputRequest?(input: PersonalAgentInputRequest): Promise<PersonalAgentInputRequest | null>;
+  readPersonalAgentInputRequests?(clientId: string,roomId: string): Promise<PersonalAgentInputRequest[]>;
+  answerPersonalAgentInputRequest?(clientId: string,id: string,answer: PersonalAgentInputRequest['answer'],continuation?:Message): Promise<PersonalAgentInputRequest | null>;
+  savePersonalAgentFile?(file: PersonalAgentFile, claim?: { roomId: string; turnId: string }): Promise<PersonalAgentFile | null>;
+  linkPersonalAgentTaskFile?(clientId:string,fileId:string,claim:{roomId:string;turnId:string}):Promise<boolean>;
+  readPersonalAgentFiles?(clientId: string, options?: { id?: string; roomId?:string; limit?: number; offset?: number }): Promise<{ files: PersonalAgentFile[]; total: number }>;
   savePersonalAgentResult?(result: PersonalAgentResult): Promise<PersonalAgentResult | null>;
   readPersonalAgentResults?(clientId: string, options?: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number }): Promise<{ results: PersonalAgentResult[]; total: number }>;
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
   ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
-  updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
+  updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled' | 'tone'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
   readPersonalAgentMemories?(clientId: string, options?: { id?: string; query?: string; kind?: string; limit?: number; offset?: number }): Promise<{ memories: PersonalAgentMemory[]; total: number }>;
   savePersonalAgentMemory?(memory: PersonalAgentMemory, expectedUpdatedAt?: string): Promise<PersonalAgentMemory | null>;
   mergePersonalAgentMemories?(memory: PersonalAgentMemory, entries: { id: string; updatedAt: string }[]): Promise<PersonalAgentMemory | null>;
@@ -809,6 +828,14 @@ export interface DurableRoomStore {
   savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
   deletePersonalAgentGoal?(clientId: string, goalId: string, expectedUpdatedAt?: string): Promise<boolean>;
   readDuePersonalAgentGoals?(now: string, limit?: number): Promise<PersonalAgentGoal[]>;
+  readPersonalComputerRecords?(clientId:string,kind:string,id?:string):Promise<{id:string;data:Record<string,unknown>}[]>;
+  putPersonalComputerRecord?(clientId:string,kind:string,id:string,data:Record<string,unknown>,insertOnly?:boolean):Promise<{id:string;data:Record<string,unknown>}|null>;
+  patchPersonalComputerRecord?(clientId:string,kind:string,id:string,expected:Record<string,unknown>,patch:Record<string,unknown>):Promise<{id:string;data:Record<string,unknown>}|null>;
+  startPersonalAgentTask?(task:import('../types').PersonalAgentTask,room:Room,message:Message):Promise<Room>;
+  readPersonalAgentReviewContinuations?():Promise<PersonalGoogleRecord[]>;
+  continuePersonalAgentReview?(record:PersonalGoogleRecord,message:Message):Promise<Room|null>;
+  controlPersonalAgentTask?(clientId:string,roomId:string,action:'pause'|'resume'|'cancel'|'retry',continuation:Message):Promise<Room>;
+  readPersonalAgentTask?(clientId:string,roomId:string):Promise<import('../types').PersonalAgentTask|null>;
   startPersonalAgentGoalRun?(input: {
     clientId: string;
     goalId: string;
@@ -1024,14 +1051,14 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.ensurePersonalAgentProfile(clientId);
   }
 
-  updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string) {
+  updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled' | 'tone'>>, expectedUpdatedAt?: string) {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
   }
 
   createPersonalAgentWatch(watch: PersonalAgentWatch, room: Room, claim?: {roomId: string;turnId: string}) { return this.durableStore.createPersonalAgentWatch!(watch, room, claim); }
-  readPersonalAgentWatches(clientId: string, options?: { id?: string; limit?: number; offset?: number }) { return this.durableStore.readPersonalAgentWatches!(clientId, options); }
+  readPersonalAgentWatches(clientId: string, options?: { id?: string; roomId?:string; limit?: number; offset?: number }) { return this.durableStore.readPersonalAgentWatches!(clientId, options); }
   readDuePersonalAgentWatches(limit: number) { return this.durableStore.readDuePersonalAgentWatches!(limit); }
-  controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string) { return this.durableStore.controlPersonalAgentWatch!(clientId, id, action, expectedUpdatedAt); }
+  controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check' | 'stop', expectedUpdatedAt: string) { return this.durableStore.controlPersonalAgentWatch!(clientId, id, action, expectedUpdatedAt); }
   finishPersonalAgentWatchCheck(outcome: PersonalAgentWatchOutcome) { return this.durableStore.finishPersonalAgentWatchCheck!(outcome); }
   savePersonalAgentNotification(notification: PersonalAgentNotification) { return this.durableStore.savePersonalAgentNotification!(notification); }
   readPersonalAgentNotifications(clientId: string, options?: { unread?: boolean; limit?: number; offset?: number }) { return this.durableStore.readPersonalAgentNotifications!(clientId, options); }
@@ -1066,6 +1093,37 @@ export class CompositeRoomStore implements RoomStore {
   readPersonalAgentBrowserObservations(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }) {
     if (!this.durableStore.readPersonalAgentBrowserObservations) throw new Error('Personal browsing requires PostgreSQL');
     return this.durableStore.readPersonalAgentBrowserObservations(clientId, options);
+  }
+
+  readPersonalGoogleCredential(clientId: string) { return this.durableStore.readPersonalGoogleCredential!(clientId); }
+  rotatePersonalGoogleCredential(clientId: string, generation: string, disconnect: boolean) { return this.durableStore.rotatePersonalGoogleCredential!(clientId,generation,disconnect); }
+  savePersonalGoogleCredential(credential: PersonalGoogleCredential, expectedGeneration: string) { return this.durableStore.savePersonalGoogleCredential!(credential,expectedGeneration); }
+  refreshPersonalGoogleCredential(clientId: string, connectionId: string, secret: NonNullable<PersonalGoogleCredential['secret']>) { return this.durableStore.refreshPersonalGoogleCredential!(clientId,connectionId,secret); }
+  savePersonalGoogleOAuthState(state: PersonalGoogleOAuthState) { return this.durableStore.savePersonalGoogleOAuthState!(state); }
+  takePersonalGoogleOAuthState(id: string) { return this.durableStore.takePersonalGoogleOAuthState!(id); }
+  readPersonalGoogleRecords(clientId: string, kind: PersonalGoogleRecord['kind'], id?: string) { return this.durableStore.readPersonalGoogleRecords!(clientId,kind,id); }
+  savePersonalGoogleRecord(record: PersonalGoogleRecord, expectedUpdatedAt?: string) { return this.durableStore.savePersonalGoogleRecord!(record,expectedUpdatedAt); }
+  claimPersonalGoogleAction(clientId: string, id: string, expectedUpdatedAt: string, status: string) { return this.durableStore.claimPersonalGoogleAction!(clientId,id,expectedUpdatedAt,status); }
+  savePersonalAgentInputRequest(input: PersonalAgentInputRequest) { return this.durableStore.savePersonalAgentInputRequest!(input); }
+  readPersonalAgentInputRequests(clientId: string,roomId: string) { return this.durableStore.readPersonalAgentInputRequests!(clientId,roomId); }
+  async answerPersonalAgentInputRequest(clientId:string,id:string,answer:PersonalAgentInputRequest['answer'],continuation?:Message){
+    const saved=await this.durableStore.answerPersonalAgentInputRequest!(clientId,id,answer,continuation);
+    if(saved && continuation)await this.invalidateRoomMessagesCache(continuation.roomId);
+    return saved;
+  }
+  savePersonalAgentFile(file: PersonalAgentFile, claim?: { roomId: string; turnId: string }) {
+    if (!this.durableStore.savePersonalAgentFile) throw new Error('Personal files require PostgreSQL');
+    return this.durableStore.savePersonalAgentFile(file, claim);
+  }
+
+  linkPersonalAgentTaskFile(clientId:string,fileId:string,claim:{roomId:string;turnId:string}){
+    if(!this.durableStore.linkPersonalAgentTaskFile)throw new Error('Personal files require PostgreSQL');
+    return this.durableStore.linkPersonalAgentTaskFile(clientId,fileId,claim);
+  }
+
+  readPersonalAgentFiles(clientId: string, options?: { id?: string; roomId?:string; limit?: number; offset?: number }) {
+    if (!this.durableStore.readPersonalAgentFiles) throw new Error('Personal files require PostgreSQL');
+    return this.durableStore.readPersonalAgentFiles(clientId, options);
   }
 
   savePersonalAgentResult(result: PersonalAgentResult) {
@@ -1127,6 +1185,21 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.readDuePersonalAgentGoals?.(now, limit) || Promise.resolve([]);
   }
 
+  readPersonalComputerRecords(clientId:string,kind:string,id?:string){return this.durableStore.readPersonalComputerRecords!(clientId,kind,id);}
+  putPersonalComputerRecord(clientId:string,kind:string,id:string,data:Record<string,unknown>,insertOnly?:boolean){return this.durableStore.putPersonalComputerRecord!(clientId,kind,id,data,insertOnly);}
+  patchPersonalComputerRecord(clientId:string,kind:string,id:string,expected:Record<string,unknown>,patch:Record<string,unknown>){return this.durableStore.patchPersonalComputerRecord!(clientId,kind,id,expected,patch);}
+  startPersonalAgentTask(task:import('../types').PersonalAgentTask,room:Room,message:Message){return this.durableStore.startPersonalAgentTask!(task,room,message);}
+  readPersonalAgentReviewContinuations(){return this.durableStore.readPersonalAgentReviewContinuations!();}
+  async continuePersonalAgentReview(record:PersonalGoogleRecord,message:Message){
+    const room=await this.durableStore.continuePersonalAgentReview!(record,message);
+    if(room)await this.invalidateRoomMessagesCache(room.id);return room;
+  }
+  async controlPersonalAgentTask(clientId:string,roomId:string,action:'pause'|'resume'|'cancel'|'retry',continuation:Message){
+    const room=await this.durableStore.controlPersonalAgentTask!(clientId,roomId,action,continuation);
+    await this.invalidateRoomMessagesCache(roomId);
+    return room;
+  }
+  readPersonalAgentTask(clientId:string,roomId:string){return this.durableStore.readPersonalAgentTask!(clientId,roomId);}
   startPersonalAgentGoalRun(input: { clientId: string; goalId: string; room: Room; message: Message; nextRunAt?: string; expectedNextRunAt?: string }) {
     if (!this.durableStore.startPersonalAgentGoalRun) throw new Error('Personal agents require PostgreSQL');
     return this.durableStore.startPersonalAgentGoalRun(input);

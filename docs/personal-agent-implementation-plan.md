@@ -1,5 +1,7 @@
 # Personal Agent: Codex-first implementation plan
 
+The scope now covers the full implemented OpenMuse feature set. The initial plan below is historical; see the [current parity checklist](personal-agent-openmuse-coverage.zh.md).
+
 [中文](personal-agent-implementation-plan.zh.md)
 
 Status: Independent UI and OpenMuse memory library deployed; production validation complete

@@ -220,6 +220,7 @@ const readStoredSidebarWidth = () => {
 
 interface SidebarNavItemProps {
   icon: string;
+  emoji?: string;
   label: string;
   isActive: boolean;
   onPress: () => void;
@@ -229,6 +230,7 @@ interface SidebarNavItemProps {
 
 const SidebarNavItem: React.FC<SidebarNavItemProps> = ({
   icon,
+  emoji,
   label,
   isActive,
   onPress,
@@ -249,9 +251,9 @@ const SidebarNavItem: React.FC<SidebarNavItemProps> = ({
         ? '!bg-secondary !text-secondary-foreground shadow-[0_0_0_1px_#c96442]'
         : 'text-[#5e5d59] data-[hover=true]:bg-[#e8e6dc] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#30302e]'
       }`}
-      startContent={!isCollapsed ? <Icon icon={icon} className="h-4 w-4" /> : undefined}
+      startContent={!isCollapsed ? (emoji ? <span className="text-lg" aria-hidden="true">{emoji}</span> : <Icon icon={icon} className="h-4 w-4" />) : undefined}
     >
-      {isCollapsed ? <Icon icon={icon} className="h-4 w-4" /> : label}
+      {isCollapsed ? (emoji ? <span className="text-lg" aria-hidden="true">{emoji}</span> : <Icon icon={icon} className="h-4 w-4" />) : label}
     </Button>
   );
 
@@ -706,6 +708,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         >
           <SidebarNavItem
             icon="lucide:bot"
+            emoji="🦊"
             label={t('personalAgent')}
             isActive={view === 'personal' || (view === 'chat' && Boolean(currentRoom?.personalAgentOwnerId))}
             onPress={() => setView('personal')}

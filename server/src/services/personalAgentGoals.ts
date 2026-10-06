@@ -25,7 +25,7 @@ export const savePersonalAgentGoal = async (
   if (typeof enabled !== 'boolean') throw new RangeError('Invalid enabled value');
   let milestones = existing?.milestones || [];
   if (body.milestones !== undefined) {
-    if (!Array.isArray(body.milestones) || body.milestones.length > 30) throw new RangeError('Provide at most 30 milestones');
+    if (!Array.isArray(body.milestones) || (!existing && body.milestones.length > 20)) throw new RangeError('Provide at most 20 milestones');
     milestones = body.milestones.map(value => {
       const item = typeof value === 'string' ? { title: value } : value;
       if (!item || typeof item !== 'object' || (item.done !== undefined && typeof item.done !== 'boolean')) throw new RangeError('Invalid milestone');
@@ -34,7 +34,6 @@ export const savePersonalAgentGoal = async (
     });
     if (new Set(milestones.map(item => item.id)).size !== milestones.length) throw new RangeError('Milestone IDs must be distinct');
   }
-  if (completed && milestones.some(item => !item.done)) throw new RangeError('Confirm remaining milestones before completing the goal');
   const weekday = schedule === 'weekly' ? body.weekday ?? existing?.weekday : undefined;
   if (schedule === 'weekly' && (typeof weekday !== 'number' || !Number.isInteger(weekday) || weekday < 0 || weekday > 6)) {
     throw new RangeError('Select a weekday from 0 (Sunday) to 6 (Saturday)');
@@ -52,10 +51,13 @@ export const savePersonalAgentGoal = async (
   if (existing && expected !== undefined && expected !== existing.updatedAt) {
     throw new PersonalAgentGoalConflictError('This goal changed. Read it again before saving.');
   }
+  const description = body.prompt ?? existing?.prompt ?? '';
+  if (typeof description !== 'string' || description.length > (body.prompt===undefined && existing ? 16000 : 4000)) throw new RangeError('Invalid description');
   const goal: PersonalAgentGoal = {
     ...existing, id: existing?.id || randomUUID(), clientId,
-    title: text(body.title ?? existing?.title, 'title', 100),
-    prompt: text(body.prompt ?? existing?.prompt, 'prompt', 16000),
+    title: text(body.title ?? existing?.title, 'title', 160),
+    prompt: description.trim(),
+    category: text(body.category ?? existing?.category ?? 'Personal', 'category', 80),
     schedule: schedule as PersonalAgentGoal['schedule'], time, timezone, enabled, weekday: weekday as number | undefined, runAt,
     milestones, completedAt: completed ? existing?.completedAt || now.toISOString() : undefined,
     createdAt: existing?.createdAt || now.toISOString(), updatedAt: now.toISOString(),

@@ -1,3 +1,15 @@
+import {registerPersonalAgentComputerContextRoutes} from './routes/personalAgentComputerContextRoutes';
+import {PersonalAgentComputerService} from './services/personalAgentComputer';
+import {ComputerService} from './services/personalComputer/computer';
+import {Store as PersonalComputerStore} from './services/personalComputer/store';
+import {personalComputerConfig} from './services/personalComputer/config';
+import { registerPersonalAgentGoogleContextRoutes } from './routes/personalAgentGoogleContextRoutes';
+import { PersonalAgentGoogleService } from './services/personalAgentGoogle';
+import { PersonalAgentGoogleAuth } from './services/personalAgentGoogleAuth';
+import { PersonalAgentTaskService } from './services/personalAgentTasks';
+import { registerPersonalAgentTaskContextRoutes } from './routes/personalAgentTaskContextRoutes';
+import { PERSONAL_FILES_API_PATH, PersonalAgentFileService } from './services/personalAgentFiles';
+import { registerPersonalAgentFileContextRoutes } from './routes/personalAgentFileContextRoutes';
 import { registerPersonalAgentTrackingContextRoutes } from './routes/personalAgentTrackingContextRoutes';
 import { PersonalAgentTrackingService } from './services/personalAgentTracking';
 import { PersonalAgentNotificationService } from './services/personalAgentNotifications';
@@ -190,7 +202,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
     return;
   }
-  if (req.path === PERSONAL_RESULT_API_PATH) { next(); return; }
+  if (req.path === PERSONAL_RESULT_API_PATH || req.path === PERSONAL_FILES_API_PATH) { next(); return; }
   defaultJsonParser(req, res, next);
 });
 
@@ -649,6 +661,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
 const personalAgentScheduler = new PersonalAgentScheduler(store, codeAgentSessionService, codeAgentLogger, {
   selectedModel: normalizeAIModel(DEFAULT_AI_MODEL_ID),
   serverOrigin: process.env.CLIENT_URL,
+  onNotification:notice=>personalAgentNotifications.deliver(notice),
   onRunQueued: room => { io.to(room.creatorId).emit('room_updated', room); },
 });
 
@@ -895,17 +908,29 @@ if (codeAgentModelGateway) {
   );
 }
 
-const personalAgentIdeas = new PersonalAgentIdeaService(store);
+const personalAgentGoogle = new PersonalAgentGoogleService(store,new PersonalAgentGoogleAuth(store,{
+  clientId:process.env.GOOGLE_CLIENT_ID,clientSecret:process.env.GOOGLE_CLIENT_SECRET,
+  redirectUri:process.env.GOOGLE_REDIRECT_URI,encryptionKey:codexConnectionConfig.authEncryptionKey,
+}),new PersonalAgentFileService(store,mediaObjectStorage,codeAgentLogger));
+const personalAgentIdeas = new PersonalAgentIdeaService(store,personalAgentGoogle);
 const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBrowserService(
   store, codeAgentSandboxService, codeAgentSandboxLifecycle, mediaObjectStorage,
   new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),
+  new PersonalAgentFileService(store,mediaObjectStorage,codeAgentLogger),
 ) : undefined;
 
 const personalAgentTracking = personalAgentBrowser ? new PersonalAgentTrackingService(store, personalAgentBrowser, codeAgentSandboxService,
   codeAgentLogger, notice => personalAgentNotifications.deliver(notice)) : undefined;
 
+const personalAgentComputer=new PersonalAgentComputerService(new ComputerService(new PersonalComputerStore(store),personalComputerConfig(),mediaObjectStorage),new PersonalAgentFileService(store,mediaObjectStorage,codeAgentLogger));
+
+const personalAgentTasks=new PersonalAgentTaskService(store,{create:(clientId,roomId,content)=>personalAgentScheduler.createQueuedMessage(clientId,roomId,content),wake:room=>personalAgentScheduler.wakeTask(room),interrupt:(roomId,clientId)=>codeAgentSessionService.interruptTurn(roomId,clientId),delegate:(clientId,input)=>personalAgentScheduler.delegate(clientId,input),google:personalAgentGoogle,tracking:personalAgentTracking});
+
 registerApiRoutes(app, {
-  personalAgentBrowser,
+  personalAgentGoogle,
+  personalAgentReviewDecided:()=>personalAgentScheduler.tick(),
+  personalAgentTasks,
+  personalAgentComputer, personalAgentBrowser,
   personalAgentIdeas,
   personalAgentTracking, personalAgentNotifications,
   personalAgentAcceptIdea: (clientId, id, prompt, expectedUpdatedAt) => personalAgentScheduler.acceptIdea(clientId, id, prompt, expectedUpdatedAt),
@@ -959,6 +984,9 @@ registerCodeAgentRoomContextRoutes(app, {
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
 });
 
+registerPersonalAgentComputerContextRoutes(app,{store,roomContext:codeAgentRoomContextService,computer:personalAgentComputer,logger:codeAgentLogger});
+registerPersonalAgentGoogleContextRoutes(app,{store,roomContext:codeAgentRoomContextService,logger:codeAgentLogger,google:personalAgentGoogle});
+registerPersonalAgentTaskContextRoutes(app,{store,roomContext:codeAgentRoomContextService,tasks:personalAgentTasks,logger:codeAgentLogger});
 if (personalAgentBrowser) registerPersonalAgentBrowserContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
 });
@@ -967,6 +995,10 @@ if(personalAgentTracking)registerPersonalAgentTrackingContextRoutes(app,{
   store,roomContext:codeAgentRoomContextService,tracking:personalAgentTracking,notifications:personalAgentNotifications,logger:codeAgentLogger,
 });
 registerPersonalAgentIdeaContextRoutes(app, { store, roomContext: codeAgentRoomContextService, ideas: personalAgentIdeas, logger: codeAgentLogger });
+registerPersonalAgentFileContextRoutes(app, {
+  store,roomContext: codeAgentRoomContextService,logger: codeAgentLogger,
+  files: new PersonalAgentFileService(store,mediaObjectStorage,codeAgentLogger),
+});
 registerPersonalAgentResultContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
   results: new PersonalAgentResultService(store, mediaObjectStorage, codeAgentLogger),
@@ -979,7 +1011,7 @@ registerPersonalAgentContextRoutes(app, {
 });
 
 registerPersonalAgentGoalContextRoutes(app, {
-  store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
+  tasks:personalAgentTasks,store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
   execution: {
     startGoal: goal => personalAgentScheduler.startGoal(goal),
     interruptTurn: (roomId, clientId, reason) => codeAgentSessionService.interruptTurn(roomId, clientId, reason),
