@@ -102,6 +102,10 @@ test('tracks a real page, deduplicates updates, pauses and preserves read/prefer
     await expect(page.getByText('Agent preferences and memory saved', { exact: true })).toBeVisible();
     await page.reload(); await page.getByRole('button', { name: 'Memory', exact: true }).click();
     await expect(page.getByRole('checkbox', { name: 'Push background task and page updates', exact: true })).not.toBeChecked();
+    await page.getByRole('button', { name: 'Tracking', exact: true }).click();
+    await page.getByTestId('personal-watch-card').getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByTestId('personal-watch-card')).toHaveCount(0);
   } finally { fixture.closeAllConnections(); await new Promise<void>(resolve => fixture.close(() => resolve())); }
 });
 
