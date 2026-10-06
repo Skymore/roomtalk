@@ -544,6 +544,8 @@ const mapPersonalAgentGoal = (row: Record<string, any>): PersonalAgentGoal => ({
   time: row.time,
   timezone: row.timezone,
   enabled: row.enabled,
+  ...(row.weekday !== null && row.weekday !== undefined ? { weekday: Number(row.weekday) } : {}),
+  ...(row.run_at ? { runAt: toIsoString(row.run_at) } : {}),
   ...(row.last_run_at ? { lastRunAt: toIsoString(row.last_run_at) } : {}),
   ...(row.next_run_at ? { nextRunAt: toIsoString(row.next_run_at) } : {}),
   ...(row.last_run_room_id ? { lastRunRoomId: row.last_run_room_id } : {}),
@@ -1290,16 +1292,20 @@ export class PostgresStore implements DurableRoomStore {
 
   async savePersonalAgentGoal(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal> {
     const result = await this.pool.query(
-      `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at)
+      SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, $13
+      WHERE $11::timestamptz IS NULL OR EXISTS (
+        SELECT 1 FROM personal_agent_goals WHERE id = $1 AND client_id = $2
+      )
       ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, prompt = EXCLUDED.prompt,
         schedule = EXCLUDED.schedule, time = EXCLUDED.time, timezone = EXCLUDED.timezone,
         enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at,
+        weekday = EXCLUDED.weekday, run_at = EXCLUDED.run_at,
         updated_at = GREATEST(clock_timestamp(), personal_agent_goals.updated_at + INTERVAL '1 millisecond')
       WHERE personal_agent_goals.client_id = EXCLUDED.client_id
         AND ($11::timestamptz IS NULL OR date_trunc('milliseconds', personal_agent_goals.updated_at) = $11::timestamptz)
       RETURNING *`,
-      [goal.id, goal.clientId, goal.title, goal.prompt, goal.schedule, goal.time, goal.timezone, goal.enabled, goal.nextRunAt ?? null, goal.createdAt, expectedUpdatedAt ?? null],
+      [goal.id, goal.clientId, goal.title, goal.prompt, goal.schedule, goal.time, goal.timezone, goal.enabled, goal.nextRunAt ?? null, goal.createdAt, expectedUpdatedAt ?? null, goal.weekday ?? null, goal.runAt ?? null],
     );
     if (!result.rows[0]) throw new PersonalAgentGoalConflictError('This goal changed. Refresh and try again.');
     return mapPersonalAgentGoal(result.rows[0]);
@@ -1327,12 +1333,12 @@ export class PostgresStore implements DurableRoomStore {
       if (!existing.rows[0]) return null;
       const goal = mapPersonalAgentGoal(existing.rows[0]);
       if (input.expectedNextRunAt && (!goal.enabled || goal.nextRunAt !== input.expectedNextRunAt)) return null;
-      const room = await this.insertPersonalAgentRoom(client, { ...input.room, personalAgentThreadKind: 'task', personalAgentGoalId: goal.id });
+      const room = await this.insertPersonalAgentRoom(client, { ...input.room, name: goal.title, personalAgentThreadKind: 'task', personalAgentGoalId: goal.id });
       await client.query(INSERT_MESSAGE_ROW_SQL, messageParams({ ...input.message, content: goal.prompt }, 0));
       const updated = await client.query(
         `UPDATE personal_agent_goals SET last_run_at = $3, next_run_at = $4, last_run_room_id = $5,
           updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond') WHERE id = $1 AND client_id = $2 RETURNING *`,
-        [goal.id, input.clientId, input.message.timestamp, nextPersonalAgentGoalRunAt(goal, new Date(input.message.timestamp)) ?? null, room.id],
+        [goal.id, input.clientId, input.message.timestamp, goal.schedule === 'once' ? null : nextPersonalAgentGoalRunAt(goal, new Date(input.message.timestamp)) ?? null, room.id],
       );
       return { goal: mapPersonalAgentGoal(updated.rows[0]), room };
     });

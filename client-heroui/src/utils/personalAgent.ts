@@ -12,7 +12,7 @@ export interface PersonalAgentProfile {
   updatedAt: string;
 }
 
-export type PersonalAgentSchedule = 'manual' | 'daily' | 'weekly';
+export type PersonalAgentSchedule = 'manual' | 'once' | 'daily' | 'weekly';
 
 export interface PersonalAgentGoal {
   id: string;
@@ -22,6 +22,8 @@ export interface PersonalAgentGoal {
   schedule: PersonalAgentSchedule;
   time: string;
   timezone: string;
+  weekday?: number;
+  runAt?: string;
   enabled: boolean;
   lastRunAt?: string;
   lastRunRoomId?: string;
@@ -36,7 +38,7 @@ export interface PersonalAgentSnapshot {
   goals: PersonalAgentGoal[];
 }
 
-export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone'>;
+export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt'>;
 
 const request = async <T>(clientId: string, path: string, method = 'GET', data?: Record<string, unknown>): Promise<T> => {
   const token = localStorage.getItem('clientAuthToken')?.trim();
@@ -74,7 +76,8 @@ export const updatePersonalAgentGoal = (
   clientId: string,
   id: string,
   goal: Partial<PersonalAgentGoalInput> & { enabled?: boolean },
-) => request<{ goal: PersonalAgentGoal }>(clientId, `/goals/${encodeURIComponent(id)}`, 'PATCH', goal);
+  expectedUpdatedAt?: string,
+) => request<{ goal: PersonalAgentGoal }>(clientId, `/goals/${encodeURIComponent(id)}`, 'PATCH', { ...goal, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 
 export const deletePersonalAgentGoal = (clientId: string, id: string) => request<{ success: true }>(clientId, `/goals/${encodeURIComponent(id)}`, 'DELETE');
 

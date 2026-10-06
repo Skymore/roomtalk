@@ -99,6 +99,20 @@ describe('personal agent API', () => {
     assert.equal(profiles.get('owner')!.memory, '');
   });
 
+  it('creates explicit weekly and one-time schedules and rejects a stale form edit', async () => {
+    const { request } = await startServer();
+    const input = { title: 'Friday report', prompt: 'Review progress', schedule: 'weekly', weekday: 5, time: '09:00', timezone: 'America/Los_Angeles' };
+    const weekly = (await (await request('/api/personal-agent/goals', 'owner', 'POST', input)).json()).goal;
+    assert.equal(weekly.weekday, 5); assert.ok(weekly.nextRunAt);
+    assert.equal((await request(`/api/personal-agent/goals/${weekly.id}`, 'owner', 'PATCH', { title: 'Stale', expectedUpdatedAt: now })).status, 409);
+    const runAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const response = await request('/api/personal-agent/goals', 'owner', 'POST', { ...input, schedule: 'once', runAt });
+    assert.equal(response.status, 201);
+    const once = (await response.json()).goal;
+    assert.equal(once.runAt, runAt); assert.equal(once.nextRunAt, runAt); assert.equal(once.weekday, undefined);
+    assert.equal((await request('/api/personal-agent/goals', 'owner', 'POST', { ...input, weekday: undefined })).status, 400);
+  });
+
   it('renames, archives and restores only owned side conversations, preserving the main chat', async () => {
     const { request } = await startServer();
     const created = await request('/api/personal-agent/threads', 'owner', 'POST', { name: 'Trip planning' });

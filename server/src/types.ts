@@ -262,9 +262,11 @@ export interface PersonalAgentGoal {
   clientId: string;
   title: string;
   prompt: string;
-  schedule: 'manual' | 'daily' | 'weekly';
+  schedule: 'manual' | 'once' | 'daily' | 'weekly';
   time: string;
   timezone: string;
+  weekday?: number;
+  runAt?: string;
   enabled: boolean;
   lastRunAt?: string;
   nextRunAt?: string;

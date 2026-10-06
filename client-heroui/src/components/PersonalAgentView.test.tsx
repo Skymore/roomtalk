@@ -124,7 +124,7 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentGoals' }));
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentPause' }));
     await screen.findByText('personalAgentPaused');
-    expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', 'goal-1', { enabled: false });
+    expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', 'goal-1', { enabled: false }, snapshot.goals[0].updatedAt);
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentRunNow' }));
     await waitFor(() => expect(callbacks.onRoomSelect).toHaveBeenCalledWith(snapshot.rooms[0]));
     expect(api.runPersonalAgentGoal).toHaveBeenCalledWith('client-1', 'goal-1');

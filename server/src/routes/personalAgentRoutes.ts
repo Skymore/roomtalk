@@ -1,10 +1,9 @@
 import { Express, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { PersonalAgentGoalConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
 import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory } from '../services/personalAgentMemory';
-import { nextPersonalAgentGoalRunAt } from '../services/personalAgentSchedule';
+import { savePersonalAgentGoal } from '../services/personalAgentGoals';
 
 export interface PersonalAgentRouteOptions {
   store: RoomStore;
@@ -21,28 +20,6 @@ const textField = (value: unknown, name: string, maxLength: number, allowEmpty =
   return allowEmpty ? value : value.trim();
 };
 
-const parseGoal = (body: Record<string, unknown>, existing?: PersonalAgentGoal): PersonalAgentGoal => {
-  const now = new Date();
-  const schedule = body.schedule ?? existing?.schedule ?? 'manual';
-  if (schedule !== 'manual' && schedule !== 'daily' && schedule !== 'weekly') throw new RangeError('Invalid schedule');
-  const time = body.time ?? existing?.time ?? '09:00';
-  if (typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new RangeError('Invalid time');
-  const timezone = textField(body.timezone ?? existing?.timezone ?? 'UTC', 'timezone', 100);
-  try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }); } catch { throw new RangeError('Invalid timezone'); }
-  const enabled = body.enabled ?? existing?.enabled ?? true;
-  if (typeof enabled !== 'boolean') throw new RangeError('Invalid enabled value');
-  const goal: PersonalAgentGoal = {
-    ...(existing || {}), id: existing?.id || uuidv4(), clientId: existing?.clientId || '',
-    title: textField(body.title ?? existing?.title, 'title', 100),
-    prompt: textField(body.prompt ?? existing?.prompt, 'prompt', 16000),
-    schedule, time, timezone, enabled,
-    createdAt: existing?.createdAt || now.toISOString(), updatedAt: now.toISOString(),
-  };
-  const scheduleChanged = !existing || existing.schedule !== schedule || existing.time !== time
-    || existing.timezone !== timezone || existing.enabled !== enabled;
-  if (scheduleChanged) goal.nextRunAt = enabled ? nextPersonalAgentGoalRunAt(goal, now) : undefined;
-  return goal;
-};
 
 export function registerPersonalAgentRoutes(app: Express, options: PersonalAgentRouteOptions) {
   const { store } = options;
@@ -112,15 +89,13 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   }));
 
   app.post('/api/personal-agent/goals', withProfile(async (req, res, profile) => {
-    const goal = parseGoal(req.body || {});
-    goal.clientId = profile.clientId;
-    return res.status(201).json({ goal: await store.savePersonalAgentGoal!(goal) });
+    return res.status(201).json({ goal: await savePersonalAgentGoal(store, profile.clientId, req.body || {}) });
   }));
 
   app.patch('/api/personal-agent/goals/:id', withProfile(async (req, res, profile) => {
     const existing = (await store.readPersonalAgentGoals!(profile.clientId)).find(goal => goal.id === req.params.id);
     if (!existing) return res.status(404).json({ error: 'Goal not found' });
-    return res.json({ goal: await store.savePersonalAgentGoal!(parseGoal(req.body || {}, existing), existing.updatedAt) });
+    return res.json({ goal: await savePersonalAgentGoal(store, profile.clientId, req.body || {}, existing) });
   }));
 
   app.delete('/api/personal-agent/goals/:id', withProfile(async (req, res, profile) => {

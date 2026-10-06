@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createPostgresPool } from './postgresPool';
+import { POSTGRES_MIGRATIONS } from './postgresSchema';
 import { PostgresPool, PostgresStore } from './postgresStore';
 import { PersonalAgentGoal, Room } from '../types';
 import { getRoomActor } from '../socket/roomAuthorization';
@@ -56,6 +57,50 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     }
     const restarted = new PostgresStore(pool, logger as any);
     assert.equal((await restarted.getPersonalAgentProfile(owner))!.mainRoomId, first.mainRoomId);
+  });
+
+  it('backfills existing weekly schedules using their original local creation weekday', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`CREATE SCHEMA personal_goal_migration_test`);
+      await client.query('SET LOCAL search_path TO personal_goal_migration_test');
+      await client.query(`CREATE TABLE personal_agent_goals (
+        id TEXT PRIMARY KEY, schedule TEXT CHECK (schedule IN ('manual', 'daily', 'weekly')),
+        created_at TIMESTAMPTZ, timezone TEXT
+      )`);
+      await client.query(`INSERT INTO personal_agent_goals VALUES ('west', 'weekly', '2026-10-06T02:00:00Z', 'America/Los_Angeles'),
+        ('east', 'weekly', '2026-10-06T02:00:00Z', 'Asia/Shanghai')`);
+      await client.query(POSTGRES_MIGRATIONS.find(item => item.id === '0035_personal_agent_goal_schedules')!.sql);
+      const result = await client.query('SELECT id, weekday FROM personal_agent_goals ORDER BY id');
+      assert.deepEqual(result.rows, [{ id: 'east', weekday: 2 }, { id: 'west', weekday: 1 }]);
+    } finally { await client.query('ROLLBACK'); client.release(); }
+  });
+
+  it('persists explicit weekdays and consumes a one-time schedule in the same queue transaction', async () => {
+    const profile = await store.ensurePersonalAgentProfile(owner);
+    const runAt = '2026-10-07T16:00:00.000Z';
+    const goal: PersonalAgentGoal = { id: randomUUID(), clientId: owner, title: 'Once', prompt: 'Run once',
+      schedule: 'once', time: '09:00', timezone: 'America/Los_Angeles', runAt, nextRunAt: runAt,
+      enabled: true, createdAt: now, updatedAt: now };
+    const saved = await store.savePersonalAgentGoal(goal);
+    const weekly = await store.savePersonalAgentGoal({ ...goal, id: randomUUID(), title: 'Friday', schedule: 'weekly', weekday: 5, runAt: undefined });
+    assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === weekly.id)!.weekday, 5);
+    const main = (await store.getRoomById(profile.mainRoomId))!;
+    const room = { ...main, id: randomUUID(), name: 'Old name', personalAgentThreadKind: 'task' as const };
+    const message = { id: randomUUID(), clientId: owner, roomId: room.id, content: goal.prompt, timestamp: now,
+      messageType: 'text' as const, codeAgentQueuedInput: { state: 'queued' as const, queuedAt: now, updatedAt: now, selectedModel: model } };
+    const admission = await store.startPersonalAgentGoalRun({ clientId: owner, goalId: saved.id, room, message, expectedNextRunAt: runAt });
+    assert.ok(admission); assert.equal(admission.goal.nextRunAt, undefined);
+    assert.equal(admission.room.name, goal.title);
+    const restarted = new PostgresStore(pool, logger as any);
+    assert.equal((await restarted.readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!.runAt, runAt);
+    const secondRoom = { ...room, id: randomUUID() };
+    assert.equal(await store.startPersonalAgentGoalRun({ clientId: owner, goalId: saved.id, room: secondRoom, message: { ...message, roomId: secondRoom.id }, expectedNextRunAt: runAt }), null);
+    assert.equal((await store.readDuePersonalAgentGoals('2026-10-08T00:00:00Z')).some(item => item.id === goal.id), false);
+    await store.deletePersonalAgentGoal(owner, saved.id);
+    await assert.rejects(store.savePersonalAgentGoal(saved, saved.updatedAt));
+    assert.equal((await store.readPersonalAgentGoals(owner)).some(item => item.id === saved.id), false);
   });
 
   it('blocks another user from joining, reading and saving the private room', async () => {
@@ -164,7 +209,7 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.equal(messages[0].position, 0);
     const events = await restarted.readRoomEvents(admitted.room.id, { afterSeq: 0 });
     assert.ok(events.events.some(event => event.payload.messages?.[0]?.id === messages[0].id));
-    assert.equal((await restarted.readPersonalAgentGoals(owner))[0].lastRunRoomId, admitted.room.id);
+    assert.equal((await restarted.readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!.lastRunRoomId, admitted.room.id);
     assert.equal((await restarted.readDuePersonalAgentGoals(now)).some(item => item.id === goal.id), false);
     await assert.rejects(store.savePersonalAgentGoal({ ...savedGoal, prompt: 'Stale edit' }, savedGoal.updatedAt));
     assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!.nextRunAt, '2026-10-06T12:00:00.000Z');

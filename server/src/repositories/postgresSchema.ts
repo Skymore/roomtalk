@@ -2714,4 +2714,19 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         EXECUTE FUNCTION queue_active_room_change();
     `,
   },
+  {
+    id: '0035_personal_agent_goal_schedules',
+    sql: `
+      ALTER TABLE personal_agent_goals DROP CONSTRAINT personal_agent_goals_schedule_check;
+      ALTER TABLE personal_agent_goals ADD CONSTRAINT personal_agent_goals_schedule_check
+        CHECK (schedule IN ('manual', 'once', 'daily', 'weekly'));
+      ALTER TABLE personal_agent_goals ADD COLUMN weekday INTEGER CHECK (weekday BETWEEN 0 AND 6);
+      ALTER TABLE personal_agent_goals ADD COLUMN run_at TIMESTAMPTZ;
+      UPDATE personal_agent_goals SET weekday = EXTRACT(DOW FROM created_at AT TIME ZONE timezone)
+        WHERE schedule = 'weekly';
+      ALTER TABLE personal_agent_goals ADD CONSTRAINT personal_agent_goals_schedule_fields_check CHECK (
+        (schedule <> 'weekly' OR weekday IS NOT NULL) AND (schedule <> 'once' OR run_at IS NOT NULL)
+      );
+    `,
+  },
 ];

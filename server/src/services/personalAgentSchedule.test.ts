@@ -18,8 +18,15 @@ describe('personal agent schedule', () => {
     assert.equal(nextPersonalAgentGoalRunAt(goal({ enabled: false }), new Date()), undefined);
   });
 
-  it('anchors weekly schedules to the local weekday on which the goal was created', () => {
-    assert.equal(nextPersonalAgentGoalRunAt(goal({ schedule: 'weekly' }), new Date('2026-10-06T10:00:00Z')), '2026-10-12T16:00:00.000Z');
+  it('advances to the following selected weekday', () => {
+    assert.equal(nextPersonalAgentGoalRunAt(goal({ schedule: 'weekly', weekday: 1 }), new Date('2026-10-06T10:00:00Z')), '2026-10-12T16:00:00.000Z');
+  });
+
+  it('uses explicit weekly weekdays and consumes one-time slots', () => {
+    assert.equal(nextPersonalAgentGoalRunAt(goal({ schedule: 'weekly', weekday: 5 }), new Date('2026-10-06T10:00:00Z')), '2026-10-09T16:00:00.000Z');
+    const once = goal({ schedule: 'once', runAt: '2026-10-07T16:00:00.000Z' });
+    assert.equal(nextPersonalAgentGoalRunAt(once, new Date('2026-10-06T10:00:00Z')), once.runAt);
+    assert.equal(nextPersonalAgentGoalRunAt(once, new Date(once.runAt!)), undefined);
   });
 
   it('skips nonexistent spring wall times and runs only once during a repeated autumn hour', () => {

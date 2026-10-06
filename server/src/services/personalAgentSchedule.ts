@@ -12,12 +12,17 @@ const localParts = (formatter: Intl.DateTimeFormat, date: Date): LocalDateTime =
 
 const wallTime = (parts: LocalDateTime) => Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
 
-/** Weekly routines use the weekday on which the goal was created in its timezone. */
+/** Resolve a local calendar slot without duplicating repeated DST wall times. */
 export const nextPersonalAgentGoalRunAt = (
-  goal: Pick<PersonalAgentGoal, 'schedule' | 'time' | 'timezone' | 'createdAt' | 'enabled'>,
+  goal: Pick<PersonalAgentGoal, 'schedule' | 'time' | 'timezone' | 'enabled' | 'weekday' | 'runAt'>,
   after: Date,
 ): string | undefined => {
   if (!goal.enabled || goal.schedule === 'manual') return undefined;
+  if (goal.schedule === 'once') {
+    const runAt = goal.runAt ? Date.parse(goal.runAt) : NaN;
+    if (!Number.isFinite(runAt)) throw new RangeError('Invalid one-time execution date');
+    return runAt > after.getTime() ? new Date(runAt).toISOString() : undefined;
+  }
   const match = /^(\d{2}):(\d{2})$/.exec(goal.time);
   if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) throw new Error('Invalid personal agent routine time');
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -25,8 +30,8 @@ export const nextPersonalAgentGoalRunAt = (
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   });
   const today = localParts(formatter, after);
-  const created = localParts(formatter, new Date(goal.createdAt));
-  const weeklyDay = new Date(Date.UTC(created.year, created.month - 1, created.day)).getUTCDay();
+  const weeklyDay = goal.weekday;
+  if (goal.schedule === 'weekly' && (weeklyDay === undefined || !Number.isInteger(weeklyDay) || weeklyDay < 0 || weeklyDay > 6)) throw new RangeError('Invalid weekly weekday');
   const dayMs = 24 * 60 * 60 * 1000;
   for (let day = 0; day <= 14; day += 1) {
     const calendarDay = new Date(Date.UTC(today.year, today.month - 1, today.day + day));

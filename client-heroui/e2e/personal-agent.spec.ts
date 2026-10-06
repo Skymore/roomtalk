@@ -187,6 +187,43 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await expect(goalCard.getByText('Make a short plan for today.', { exact: true })).toBeVisible();
   await goalCard.getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(goalCard.getByText('Active', { exact: true })).toBeVisible();
+  // Weekly and one-time schedules are created through the real independent form.
+  await page.getByRole('button', { name: 'New goal', exact: true }).click();
+  await page.getByLabel('Goal title', { exact: true }).fill('Friday review');
+  await page.getByLabel('What should your agent do?', { exact: true }).fill('Review my weekly progress.');
+  await page.getByRole('dialog').getByLabel('Schedule', { exact: true }).click();
+  await page.getByRole('option', { name: 'Every week', exact: true }).click();
+  await page.getByRole('dialog').getByLabel('Weekday', { exact: true }).click();
+  await page.getByRole('option', { name: 'Friday', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  const fridayCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Friday review', exact: true }) });
+  await expect(fridayCard).toContainText('Friday');
+  await page.reload();
+  await page.getByRole('button', { name: 'Goals', exact: true }).click();
+  await expect(fridayCard).toContainText('Friday');
+  await fridayCard.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(fridayCard).toHaveCount(0);
+  await page.getByRole('button', { name: 'New goal', exact: true }).click();
+  await page.getByLabel('Goal title', { exact: true }).fill('Tomorrow review');
+  await page.getByLabel('What should your agent do?', { exact: true }).fill('Review tomorrow.');
+  await page.getByRole('dialog').getByLabel('Schedule', { exact: true }).click();
+  await page.getByRole('option', { name: 'One time', exact: true }).click();
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const localFuture = new Date(future.getTime() - future.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  await page.getByLabel('Execution date', { exact: true }).fill(localFuture);
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  const onceCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Tomorrow review', exact: true }) });
+  await expect(onceCard).toContainText('One time');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-goal-schedules-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.reload();
+  await page.getByRole('button', { name: 'Goals', exact: true }).click();
+  await expect(onceCard).toContainText('One time');
+  await onceCard.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(onceCard).toHaveCount(0);
+
   const [runResponse] = await Promise.all([
     page.waitForResponse(response => response.url().endsWith('/run') && response.url().includes('/api/personal-agent/goals/') && response.request().method() === 'POST'),
     goalCard.getByRole('button', { name: 'Run now', exact: true }).click(),
