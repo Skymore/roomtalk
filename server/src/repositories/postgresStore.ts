@@ -1291,22 +1291,29 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async savePersonalAgentGoal(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal> {
-    const result = await this.pool.query(
-      `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at)
-      SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, $13
-      WHERE $11::timestamptz IS NULL OR EXISTS (
-        SELECT 1 FROM personal_agent_goals WHERE id = $1 AND client_id = $2
+    const values = [goal.id, goal.clientId, goal.title, goal.prompt, goal.schedule, goal.time,
+      goal.timezone, goal.enabled, goal.nextRunAt ?? null];
+    const result = expectedUpdatedAt
+      ? await this.pool.query(
+        `UPDATE personal_agent_goals SET title = $3, prompt = $4, schedule = $5, time = $6,
+          timezone = $7, enabled = $8, next_run_at = $9, weekday = $11, run_at = $12,
+          updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
+        WHERE id = $1 AND client_id = $2 AND date_trunc('milliseconds', updated_at) = $10::timestamptz
+        RETURNING *`,
+        [...values, expectedUpdatedAt, goal.weekday ?? null, goal.runAt ?? null],
       )
-      ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, prompt = EXCLUDED.prompt,
-        schedule = EXCLUDED.schedule, time = EXCLUDED.time, timezone = EXCLUDED.timezone,
-        enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at,
-        weekday = EXCLUDED.weekday, run_at = EXCLUDED.run_at,
-        updated_at = GREATEST(clock_timestamp(), personal_agent_goals.updated_at + INTERVAL '1 millisecond')
-      WHERE personal_agent_goals.client_id = EXCLUDED.client_id
-        AND ($11::timestamptz IS NULL OR date_trunc('milliseconds', personal_agent_goals.updated_at) = $11::timestamptz)
-      RETURNING *`,
-      [goal.id, goal.clientId, goal.title, goal.prompt, goal.schedule, goal.time, goal.timezone, goal.enabled, goal.nextRunAt ?? null, goal.createdAt, expectedUpdatedAt ?? null, goal.weekday ?? null, goal.runAt ?? null],
-    );
+      : await this.pool.query(
+        `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, prompt = EXCLUDED.prompt,
+          schedule = EXCLUDED.schedule, time = EXCLUDED.time, timezone = EXCLUDED.timezone,
+          enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at,
+          weekday = EXCLUDED.weekday, run_at = EXCLUDED.run_at,
+          updated_at = GREATEST(clock_timestamp(), personal_agent_goals.updated_at + INTERVAL '1 millisecond')
+        WHERE personal_agent_goals.client_id = EXCLUDED.client_id
+        RETURNING *`,
+        [...values, goal.createdAt, goal.weekday ?? null, goal.runAt ?? null],
+      );
     if (!result.rows[0]) throw new PersonalAgentGoalConflictError('This goal changed. Refresh and try again.');
     return mapPersonalAgentGoal(result.rows[0]);
   }
