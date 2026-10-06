@@ -600,7 +600,7 @@ test('shares a real browser with user takeover, sourced replay and restored logi
     async function browserAgentAction(action: Record<string, unknown>) {
       let turnId = '';
       await page.getByTestId('message-editor').fill(`Browser operation ${action.action}`);
-      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      await page.getByTestId('personal-agent-conversation').getByRole('button', { name: 'Send message', exact: true }).click();
       await expect.poll(async () => {
         const messages = await (await request.get(`${serverURL}/api/rooms/${roomId}/messages?clientId=${clientId}`, { headers })).json() as Message[];
         turnId = messages.filter(message => message.turnId).at(-1)?.turnId || '';
@@ -669,9 +669,10 @@ test('shares a real browser with user takeover, sourced replay and restored logi
     await expect(dialog.getByText('Second page', { exact: true })).toBeVisible();
     await expect.poll(() => signedInVisits).toBeGreaterThan(beforeReopen);
     await dialog.getByRole('button', { name: 'Return to chat', exact: true }).click();
-    const downloaded=await browserAgentAction({action:'click',selector:'#pdf'});
-    expect(downloaded.downloads[0].name).toBe('browser-form.pdf');
+    await expect(dialog).toHaveCount(0);
+    await browserAgentAction({action:'click',selector:'#pdf'});
     await visit.getByRole('button',{name:'Take control',exact:true}).click();
+    await expect(dialog.getByText('browser-form.pdf',{exact:true})).toBeVisible();
     await dialog.getByRole('button',{name:'Import PDF to files',exact:true}).click();
     await expect(dialog.getByRole('button',{name:'PDF saved in Files',exact:true})).toBeDisabled();
     await dialog.getByRole('button',{name:'Return to chat',exact:true}).click();
