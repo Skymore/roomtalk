@@ -2,7 +2,7 @@
 
 [English](personal-agent-implementation-plan.md)
 
-状态：首发已部署，独立界面和记忆库升级验证中
+状态：独立界面和 OpenMuse 记忆库已部署，生产验证完成
 更新：2026-10-06
 
 ## 产品范围
@@ -62,7 +62,7 @@
 
 发布命令：`node scripts/local-production.mjs --profile edge up -d --build`。源码推送、Compose 发布、E2B artifact 状态和公网 smoke 分开记录。
 
-## 验证记录
+## 2026-10-05 首发验证记录
 
 - 前后端生产构建通过；授权、持久化、调度、会话及客户端相关测试通过。
 - 独立 PostgreSQL 数据库验证并发主聊天创建、记忆 CAS、原子调度认领、队列持久化与回滚，5 项通过。
@@ -90,3 +90,12 @@
 每次执行读取最新资料、常用偏好和当前任务匹配的摘要，完整条目由 agent 按需查询。采用支持中文的关键词检索，无需额外 embedding API key；没有宣称向量语义检索。正常 Codex 回合保存用户确认的长期信息，沉淀长话题的决策和后续工作；修改前检索已有条目，冲突后重读，只有工具成功才报告已记住。忘记后不从旧聊天擅自重建。
 
 CLI 支持 `roomtalk memory list/search/save/forget`；更新和删除携带读取时间，来源由服务端生成。broker 验证账号、私密聊天和当前执行 lease。runner 为 `0.1.56`，E2B artifact 为 `roomtalk-code-agent-2026-10-06-personal-memory-library-v1`。
+
+### 升级验证与部署记录
+
+- 服务端完整测试 1098/1098、客户端完整测试 1135/1135、Python runner 测试 84/84 通过；最终相关服务测试 113/113、ESLint 与双方生产构建通过。
+- Chrome Playwright 3/3 通过，覆盖独立聊天界面、固定完全访问、记忆新增/搜索/编辑/忘记、停止后保留草稿、目标后台执行、刷新恢复及其他账号隔离。浏览器测试使用真实 PostgreSQL/Redis 与模拟 Codex runner，现已加入 CI。
+- 功能源代码 `29d38bbe` 的 [CI 全部通过](https://github.com/Skymore/roomtalk/actions/runs/37405389564)。历史迁移测试的种子数据结构与最新仓储不匹配已修复；并行事件测试改为使用实际提交的事件 ID，消除对请求胜出顺序的假设。
+- E2B artifact 已重新构建、发布并更新生产 pin。追加迁移 `0033_personal_agent_memory_library` 已应用，现有个人聊天改为完全访问。
+- 生产从 `4f3d7109` 构建，保留既有两项本地 presence 改动；镜像为 `sha256:137459045effc0bc418b49ee180874843718621e03d90b4ce6c4bab39e4fdd6d`。App、AI Worker、数据库、Redis、对象存储与两个 Tunnel 健康，本地及两个公网 `/api/status` 返回 HTTP 200、`ready: true`。
+- 部署后使用已有 Codex 订阅执行四个真实沙箱回合：记住带来源的话题笔记、在新对话找回未写入该次提示的内容、修正同一条目而不重复新增、忘记该条目。四步均完成，数据库结果与工具执行一致；执行 lease 释放后已清理临时目标、聊天、沙箱及测试记忆，保留原有资料。

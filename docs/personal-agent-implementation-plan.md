@@ -2,7 +2,7 @@
 
 [中文](personal-agent-implementation-plan.zh.md)
 
-Status: First release deployed; UI and memory-library revision under validation
+Status: Independent UI and OpenMuse memory library deployed; production validation complete
 Updated: 2026-10-06
 
 ## Scope
@@ -56,7 +56,7 @@ Validation includes a second account accessing a personal room ID, concurrent sc
 
 Deploy with `node scripts/local-production.mjs --profile edge up -d --build`. Report source push, Compose deployment, E2B artifact state and public smoke separately.
 
-## Validation record
+## 2026-10-05 first-release validation
 
 - Both production builds passed, together with relevant authorization, persistence, scheduler, session and client tests.
 - Five disposable PostgreSQL tests passed for concurrent main-room creation, memory CAS, atomic schedule claims, durable queue admission and rollback.
@@ -84,3 +84,12 @@ Migration `0033_personal_agent_memory_library` adds PostgreSQL preference/fact/t
 Every turn loads current preferences and matching excerpts; full entries are retrieved on demand. Keyword search supports Chinese without an embedding API key; vector semantic retrieval is not claimed. Normal Codex turns remember confirmed lasting facts and compact topic decisions/next steps, search before updating, reread conflicts and report success only after persistence. Forgotten facts are not reconstructed from older transcripts without another user request.
 
 `roomtalk memory list/search/save/forget` uses the current private turn broker and active execution lease. The server supplies provenance. Runner version is `0.1.56`; the matching E2B artifact is `roomtalk-code-agent-2026-10-06-personal-memory-library-v1`.
+
+### Revision validation and deployment
+
+- Full server tests passed 1098/1098, client tests 1135/1135 and Python runner tests 84/84. The final focused server suite passed 113/113, with affected ESLint and both production builds passing.
+- Chrome Playwright passed 3/3, covering the independent conversation UI, fixed full access, memory creation/search/editing/forgetting, draft preservation after stopping, background goals, reload recovery and account isolation. These tests use real PostgreSQL/Redis with a fake Codex runner and now run in CI.
+- Feature source `29d38bbe` passed [all CI jobs](https://github.com/Skymore/roomtalk/actions/runs/37405389564). Historical-migration seed fixtures now match the current repository while seeding; concurrent event tests use the actual committed event ID instead of assuming which request wins.
+- The E2B artifact was rebuilt and published, and production pins updated. Append-only migration `0033_personal_agent_memory_library` was applied, including full access for existing personal rooms.
+- Production was built from `4f3d7109`, retaining its two existing local presence changes. Image: `sha256:137459045effc0bc418b49ee180874843718621e03d90b4ce6c4bab39e4fdd6d`. App, AI Worker, PostgreSQL, Redis, object storage and both Tunnel services are healthy; loopback and both public `/api/status` endpoints returned HTTP 200 and `ready: true`.
+- Four real sandbox turns using an existing Codex subscription verified remembering a topic with provenance, retrieving its value in a new conversation without supplying that value in the prompt, correcting the same entry without duplicates, and forgetting it. All turns completed and tool results matched PostgreSQL. After execution leases were released, temporary goals, conversations, sandboxes and probe memories were removed, preserving existing profile data.
