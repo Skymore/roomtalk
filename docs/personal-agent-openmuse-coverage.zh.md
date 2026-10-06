@@ -97,3 +97,7 @@
 - v6 已部署后，真实 Codex 调用 `roomtalk search web` 返回 `room_context_broker_path_denied`。原因是运行器私有 Unix socket 代理遗漏了 search/choices 路径和 PATCH 放行；并非 Parallel 搜索不可用。已补齐两条路径，搜索等待时间覆盖原版 45 秒期限。43 项运行器测试通过，包含真实私有 socket 的 search/choices CLI 转发；不能用先前的 CLI help 检查代替实际调用。
 - 新对话原先残留普通房间的空状态。已按 chat.tsx 移植欢迎文案和 Hacker News、copilotkit.ai、网站监控三个入口。
 - 本轮 v6 镜像 `sha256:d000cb7d00c83f4e5c65a47acc63d277309b8b69b21ce2b3c0dc152946892932` 部署健康，本地及两个公网状态均 ready；v7 运行器升级为 0.1.69，后续真实调用结果单独记录。
+- v7 模板已发布并在安装后的 E2B 沙箱中实际检查私有代理转发（上游明确为 fixture）。生产独立聊天 `ac3JEZYNew` 实际使用 v7，由真实 Codex 调用匿名 Parallel 搜索，返回 10 个来源及官方仓库链接；刷新后工具卡片和来源完整恢复，数据库中该房间 artifact 为 v7，执行状态 idle。
+- 功能版本 `4c563e14` 的 [CI 五项全部通过](https://github.com/Skymore/roomtalk/actions/runs/37548702259)。43 项运行器、66 项相关客户端、3 项 artifact 契约通过；Chrome 390×844 验证记忆直接显示、设置查看/编辑/取消、目标说明截断、原版欢迎页及网站监控入口。
+- 暗色复查：对话 canvas 继承个人页面背景，避免嵌套黑色矩形；来源链接采用原版浅蓝 palette，保证深色卡片上的可读性。本地、room.ruit.me、ai-chat.wenlin.dev 均 ready。最终部署证据单独保存在 `/tmp/roomtalk-openmuse-verification-20261006.json`。
+- Google OAuth 回调、权限范围仍为未提交草稿；没有新建 secret、启用 Gmail/Calendar API、或声称真实账号连接成功。Jev live 缺少 TYPESAFE_API_KEY，保持源版默认 off。
