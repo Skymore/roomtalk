@@ -678,6 +678,7 @@ test('shares a real browser with user takeover, sourced replay and restored logi
     await openFiles(page);await page.getByTestId('personal-file-card').filter({hasText:'browser-form.pdf'}).click();
     await dialog.getByLabel('Full name',{exact:true}).fill('Browser PDF User');
     await dialog.getByRole('button',{name:'Save filled copy',exact:true}).click();
+    await expect(dialog).toContainText('browser-form — filled.pdf');
     const downloadPromise=page.waitForEvent('download');await dialog.getByRole('button',{name:'Open / download',exact:true}).click();
     const file=await downloadPromise,filled=await PDFDocument.load(readFileSync((await file.path())!));
     expect(filled.getForm().getTextField('Full name').getText()).toBe('Browser PDF User');
