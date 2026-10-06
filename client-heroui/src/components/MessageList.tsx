@@ -1460,7 +1460,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       <EditMessageModal
         isOpen={isEditModalOpen}
         onClose={handleCloseEditModal}
-        message={messageToEdit}
+        message={messageToEdit?.clientMessageId
+          ? messages.find(message => message.clientMessageId === messageToEdit.clientMessageId) ?? messageToEdit
+          : messageToEdit}
         onSave={handleSaveEdit}
         onSaveAndAskAI={handleSaveEditAndAskAI}
         showSaveAndAskAI={!messageToEdit?.codeAgentQueuedInput}

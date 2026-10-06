@@ -248,6 +248,23 @@ body {
   color: #11191c;
   font-size: 11px;
   font-weight: 600;
+  line-height: 14px;
+}
+.personal-agent-theme [data-slot="base"][data-has-label="true"]:has(input, textarea) {
+  margin-top: 0 !important;
+}
+.personal-agent-theme [data-slot="base"]:has(> [data-slot="main-wrapper"] > [data-slot="input-wrapper"] > [data-slot="label"]) {
+  padding-top: 21px;
+}
+.personal-agent-theme [data-slot="input-wrapper"] > [data-slot="label"] {
+  top: -21px;
+  left: 0;
+  transform: none !important;
+}
+.personal-agent-theme [data-slot="base"]:has([data-slot="input-wrapper"]) > [data-slot="label"] {
+  position: static;
+  transform: none !important;
+  margin-bottom: 7px;
 }
 .dark .personal-agent-theme [data-slot="input-wrapper"] {
   background-color: #252522;

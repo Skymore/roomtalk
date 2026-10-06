@@ -1474,6 +1474,17 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
+  it('uses the acknowledged message ID when a prompt is confirmed while its edit window is open', async () => {
+    const ref = createRef<MessageListHandle>();
+    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />);
+    await resolveNextHistory({roomId: 'room-1', messages: [], snapshotSeq: 1, hasMore: false, mode: 'replace'});
+    act(() => ref.current?.addOptimisticMessage(message({id: 'temp-edit', clientMessageId: 'draft-edit', deliveryStatus: 'pending'})));
+    fireEvent.click(await screen.findByText('edit-temp-edit'));
+    act(() => ref.current?.replaceOptimisticMessage('draft-edit', message({id: 'saved-edit', clientMessageId: 'draft-edit'})));
+    fireEvent.click(screen.getByText('edit-and-ask'));
+    await waitFor(() => expect(requestEditMessageAndAIResponseMock).toHaveBeenCalledWith(expect.objectContaining({messageId: 'saved-edit'})));
+  });
+
   it('closes open edit and delete modals and rejects their stale callbacks when the session becomes unverified', async () => {
     const rendered = render(
       <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
