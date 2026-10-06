@@ -2,7 +2,7 @@
 
 [中文](personal-agent-implementation-plan.zh.md)
 
-Status: Implemented; release verification in progress
+Status: Complete and deployed
 Updated: 2026-10-05
 
 ## Scope
@@ -42,11 +42,11 @@ Add Personal Agent to desktop and mobile navigation. Show the agent avatar, name
 - [x] Add personal APIs and close ordinary room access leaks.
 - [x] Integrate personal Codex context, background scheduling and completion notifications.
 - [x] Implement desktop/mobile conversations, goals, activity and editable memory.
-- [ ] Complete the chosen authentication path and verify a real Codex turn.
+- [x] Complete the chosen authentication path and verify a real Codex turn.
 - [x] Run relevant authorization, persistence, scheduling and session tests, client tests and both builds.
-- [ ] Verify main/topic conversations, memory, goals, reload recovery and privacy through real UI.
-- [ ] Push to `origin/master`, confirm production checkout state and deploy.
-- [ ] Verify local/public readiness, deployed navigation and real Codex sandbox memory read/write.
+- [x] Verify main/topic conversations, memory, goals, reload recovery and privacy through real UI.
+- [x] Push to `origin/master`, confirm production checkout state and deploy.
+- [x] Verify local/public readiness, deployed navigation and real Codex sandbox memory read/write.
 
 ## Release constraints
 
@@ -62,4 +62,12 @@ Deploy with `node scripts/local-production.mjs --profile edge up -d --build`. Re
 - Five disposable PostgreSQL tests passed for concurrent main-room creation, memory CAS, atomic schedule claims, durable queue admission and rollback.
 - 83 Python runner/broker/CLI/app-server/daemon/ACP tests passed.
 - E2B artifact `roomtalk-code-agent-2026-10-05-personal-memory-v1` was built and published; runner version `0.1.55`.
-- Browser end-to-end verification, production deployment and real Codex memory read/write remain in progress.
+- 101 focused client unit tests, affected ESLint and both production builds passed. The isolated release branch also passed both builds.
+- Chrome Playwright passed 2/2: memory persistence/reload, private main/topic conversations, goal pause/edit/resume, leaving and reloading while a goal runs, reopening completed results, another account receiving metadata 404/messages 403 and stale private-room cache removal.
+- Browser end-to-end tests used real PostgreSQL/Redis with a fake Codex runner. Real model functionality was verified separately in production below.
+- Feature source published to `origin/master`: `6816032f`. Production was built from original checkout `54dd1e73`, preserving its two existing local presence changes; those changes were not included in this feature's remote publication.
+- Deployed using `node scripts/local-production.mjs --profile edge up -d --build`; production image `sha256:962b9f835b0f904ca304caec42661d61b0b7ac1ac5d2c6fb64d042e025707a7b`. Migration `0032_personal_agents` was applied with a recorded checksum.
+- App, AI Worker, PostgreSQL, Redis, object storage and both Tunnel services are healthy. Loopback, `https://room.ruit.me` and `https://ai-chat.wenlin.dev` `/api/status` returned HTTP 200 and `ready: true`; a public browser confirmed personal navigation and guest sign-in guidance.
+- Production template/artifact pins are `roomtalk-code-agent-2026-10-05-personal-memory-v1`; the engine source pin remains `0b5e44eb29ad1bec89b2143737f6917aafa79359`.
+- An existing Codex subscription connection completed a real `codex-app-server` turn. Sandbox `roomtalk memory get/set`, read-back and PostgreSQL memory agreed; the turn and final message were `complete`. After lease release, the temporary goal/task/sandbox were removed and the probe memory was removed with CAS, preserving unrelated content.
+- Completion push tests verify multi-device fan-out and owner isolation. Physical-device notification display was not tested in this release.

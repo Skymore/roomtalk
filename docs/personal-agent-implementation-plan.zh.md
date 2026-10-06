@@ -2,7 +2,7 @@
 
 [English](personal-agent-implementation-plan.md)
 
-状态：实现完成，发布验证中
+状态：已完成并部署
 更新：2026-10-05
 
 ## 产品范围
@@ -48,11 +48,11 @@
 - [x] 添加个人 API 与所有者授权，封闭普通房间入口泄露路径。
 - [x] 接入 Codex 个人上下文、后台调度与完成通知。
 - [x] 实现桌面和手机个人入口、聊天、目标、活动、记忆设置。
-- [ ] 完成首发 Codex 认证路径并验证真实回合。
+- [x] 完成首发 Codex 认证路径并验证真实回合。
 - [x] 运行授权/仓储/调度/会话测试、客户端测试和双方构建。
-- [ ] 通过真实 UI 验证主聊天、专题任务、记忆、目标、刷新恢复和私密性。
-- [ ] 推送 `origin/master`，核对生产 checkout，再部署。
-- [ ] 验证本地和公网 readiness、部署后的页面入口，以及真实 Codex 沙箱记忆读写。
+- [x] 通过真实 UI 验证主聊天、专题任务、记忆、目标、刷新恢复和私密性。
+- [x] 推送 `origin/master`，核对生产 checkout，再部署。
+- [x] 验证本地和公网 readiness、部署后的页面入口，以及真实 Codex 沙箱记忆读写。
 
 ## 发布要求
 
@@ -68,4 +68,12 @@
 - 独立 PostgreSQL 数据库验证并发主聊天创建、记忆 CAS、原子调度认领、队列持久化与回滚，5 项通过。
 - Runner/broker/CLI/app-server/daemon/ACP Python 测试 83 项通过。
 - E2B artifact `roomtalk-code-agent-2026-10-05-personal-memory-v1` 已构建并发布；runner 版本 `0.1.55`。
-- 浏览器端到端验证、生产部署和真实 Codex 记忆读写仍在进行。
+- 客户端相关单元测试 101 项通过，ESLint 与双方生产构建通过；独立发布分支也完成双方构建。
+- Chrome Playwright 2/2 通过：记忆保存/刷新、私密主聊天与专题任务、目标暂停/编辑/恢复、运行中离开聊天并刷新后继续执行、结果重开、另一账号的 metadata 404 / messages 403、旧私密聊天缓存清除。
+- 浏览器端到端使用真实 PostgreSQL、Redis 与模拟 Codex runner；真实模型能力由下述生产验证单独确认。
+- 功能源码发布到 `origin/master`：`6816032f`。生产从原 checkout `54dd1e73` 构建，保留其两项既有本地 presence 改动；这些本地改动没有随本次功能发布到远端。
+- 已执行 `node scripts/local-production.mjs --profile edge up -d --build`，生产镜像 `sha256:962b9f835b0f904ca304caec42661d61b0b7ac1ac5d2c6fb64d042e025707a7b`。迁移 `0032_personal_agents` 已应用并记录 checksum。
+- App、AI Worker、PostgreSQL、Redis、对象存储和两个 Tunnel 服务健康。本地、`https://room.ruit.me`、`https://ai-chat.wenlin.dev` 的 `/api/status` 均返回 HTTP 200、`ready: true`；公网浏览器确认个人入口与未登录提示。
+- 生产 template/artifact pin 均为 `roomtalk-code-agent-2026-10-05-personal-memory-v1`；engine source pin 保持 `0b5e44eb29ad1bec89b2143737f6917aafa79359`。
+- 使用已有 Codex 订阅连接完成真实 `codex-app-server` 回合：沙箱执行 `roomtalk memory get/set`，读回与 PostgreSQL 记忆一致；回合及最终消息为 `complete`。等待执行 lease 释放后，已删除临时目标/任务/沙箱，并通过 CAS 移除测试记忆，保留原有内容。
+- 完成推送通过服务测试验证多设备扇出与所有者隔离；本次没有验证物理设备上的通知展示。
