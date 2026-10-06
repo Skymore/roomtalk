@@ -13,6 +13,7 @@ type TestServer = {
   close: () => Promise<void>;
   service: PublishedStaticSiteService;
   roomIds: Set<string>;
+  personalRoomIds: Set<string>;
   activeTurnIds: Set<string>;
   storage: MemoryMediaObjectStorage;
 };
@@ -20,6 +21,7 @@ type TestServer = {
 const createTestServer = async (): Promise<TestServer> => {
   const app = express();
   const roomIds = new Set(['room-1']);
+  const personalRoomIds = new Set<string>();
   const activeTurnIds = new Set(['turn-1']);
   const storage = new MemoryMediaObjectStorage();
   const service = new PublishedStaticSiteService({
@@ -35,7 +37,7 @@ const createTestServer = async (): Promise<TestServer> => {
   registerPublishedStaticSiteRoutes(app, {
     service,
     logger: new Logger('PublishedStaticSiteRoutesTest'),
-    getRoomById: async roomId => roomIds.has(roomId) ? { id: roomId } : null,
+    getRoomById: async roomId => roomIds.has(roomId) ? { id: roomId, ...(personalRoomIds.has(roomId) ? { personalAgentOwnerId: 'client-1' } : {}) } : null,
     refreshAuthorization: {
       verifyTurnToken: token => token === 'refresh-token' ? {
         v: 1,
@@ -59,6 +61,7 @@ const createTestServer = async (): Promise<TestServer> => {
     baseUrl: `http://127.0.0.1:${port}`,
     service,
     roomIds,
+    personalRoomIds,
     activeTurnIds,
     storage,
     close: () => new Promise<void>((resolve, reject) => {
@@ -149,6 +152,22 @@ describe('published static site routes', () => {
 
     const unpublishedResponse = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
     assert.equal(unpublishedResponse.status, 404);
+  });
+
+  it('rejects public publication and token refresh from private personal rooms', async () => {
+    server.personalRoomIds.add('room-1');
+    const token = server.service.issueTurnToken({ roomId: 'room-1', clientId: 'client-1', turnId: 'turn-1', mode: 'fullAccess' });
+    for (const endpoint of ['', '/prepare', '/finalize', '/activate']) {
+      const response = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site${endpoint}`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}',
+      });
+      assert.equal(response.status, 403);
+    }
+    const refresh = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site/token`, {
+      method: 'POST', headers: { authorization: 'Bearer refresh-token', 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(refresh.status, 403);
+    assert.equal((await server.service.listSitesForRoom('room-1')).length, 0);
   });
 
   it('refreshes a short-lived publish token only while the turn is running', async () => {

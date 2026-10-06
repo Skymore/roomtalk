@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { PushSubscriptionRecord } from '../repositories/store';
-import { selectPushRecipients } from './pushNotifications';
+import { describe, it, mock } from 'node:test';
+import webPush from 'web-push';
+import { PushSubscriptionRecord, RoomStore } from '../repositories/store';
+import { Logger } from '../logger';
+import { Message, Room } from '../types';
+import { notifyPersonalAgentCompletion, selectPushRecipients } from './pushNotifications';
 
 const subscription = (overrides: Partial<PushSubscriptionRecord>): PushSubscriptionRecord => ({
   clientId: 'client-1',
@@ -12,6 +15,56 @@ const subscription = (overrides: Partial<PushSubscriptionRecord>): PushSubscript
   createdAt: '2026-05-03T00:00:00.000Z',
   updatedAt: '2026-05-03T00:00:00.000Z',
   ...overrides,
+});
+
+describe('personal agent completion notifications', () => {
+  it('sends AI results to every inactive owner device without leaking to another client', async t => {
+    const env = { ...process.env };
+    t.after(() => {
+      mock.restoreAll();
+      for (const key of ['WEB_PUSH_VAPID_PUBLIC_KEY', 'WEB_PUSH_VAPID_PRIVATE_KEY']) {
+        if (env[key] === undefined) delete process.env[key];
+        else process.env[key] = env[key];
+      }
+    });
+    process.env.WEB_PUSH_VAPID_PUBLIC_KEY = 'test-public';
+    process.env.WEB_PUSH_VAPID_PRIVATE_KEY = 'test-private';
+    mock.method(webPush, 'setVapidDetails', () => undefined);
+    const sent: string[] = [];
+    const removed: string[] = [];
+    mock.method(webPush, 'sendNotification', async (destination: { endpoint: string }, payload: string) => {
+      sent.push(destination.endpoint);
+      assert.equal(JSON.parse(payload).roomId, 'personal-room');
+      assert.equal(JSON.parse(payload).body, 'Your report is ready.');
+      if (destination.endpoint.endsWith('/expired')) {
+        throw Object.assign(new Error('Expired'), { statusCode: 410 });
+      }
+      return { statusCode: 201 };
+    });
+    const store = {
+      readPushSubscriptionsByRoom: async () => [
+        subscription({ clientId: 'owner', endpoint: 'https://push.example/phone', browserInstanceId: 'phone' }),
+        subscription({ clientId: 'owner', endpoint: 'https://push.example/desktop', browserInstanceId: 'desktop' }),
+        subscription({ clientId: 'owner', endpoint: 'https://push.example/expired', browserInstanceId: 'old' }),
+        subscription({ clientId: 'owner', endpoint: 'https://push.example/active', browserInstanceId: 'active' }),
+        subscription({ clientId: 'other', endpoint: 'https://push.example/other' }),
+      ],
+      getRoomActiveBrowserInstanceIds: async () => ['active'],
+      readMutedNotificationClientIdsByRoom: async () => [],
+      deletePushSubscription: async (clientId: string, endpoint: string) => {
+        assert.equal(clientId, 'owner');
+        removed.push(endpoint);
+      },
+    } as unknown as RoomStore;
+    await notifyPersonalAgentCompletion({
+      store,
+      room: { id: 'personal-room', name: 'Research', personalAgentOwnerId: 'owner' } as Room,
+      message: { id: 'result', roomId: 'personal-room', clientId: 'ai_assistant', content: 'Your report is ready.', messageType: 'ai' } as Message,
+      logger: new Logger('PersonalAgentPushTest'),
+    });
+    assert.deepEqual(sent.sort(), ['https://push.example/desktop', 'https://push.example/expired', 'https://push.example/phone']);
+    assert.deepEqual(removed, ['https://push.example/expired']);
+  });
 });
 
 describe('push notification recipient selection', () => {

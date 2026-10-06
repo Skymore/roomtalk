@@ -43,7 +43,7 @@ const readStoredRoomPermissions = (): RoomPermissions | null => {
   return null;
 };
 
-export type AppView = "chat" | "rooms" | "saved" | "settings";
+export type AppView = "chat" | "rooms" | "saved" | "settings" | "personal";
 
 export const saveUsername = (name: string) => {
   localStorage.setItem(USERNAME_KEY, name);
@@ -64,7 +64,7 @@ export const saveCurrentView = (view: string) => {
 
 export const getStoredView = (): AppView => {
   const storedView = localStorage.getItem(CURRENT_VIEW_KEY);
-  return storedView === "chat" || storedView === "rooms" || storedView === "saved" || storedView === "settings"
+  return storedView === "chat" || storedView === "rooms" || storedView === "saved" || storedView === "settings" || storedView === "personal"
     ? storedView
     : "rooms";
 };

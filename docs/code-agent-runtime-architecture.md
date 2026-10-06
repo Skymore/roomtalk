@@ -209,9 +209,13 @@ roomtalk room delta
 roomtalk room search
 roomtalk room message
 roomtalk site list
+roomtalk memory get --json
+roomtalk memory set --file <utf8-file> --expected-updated-at <timestamp> --json
 ```
 
 The runner holds the upstream URL/token and brokers bounded requests. Responses project only agent-safe message fields and omit internal recovery, billing, storage, and streaming metadata. This gives Coco and Codex the same on-demand room awareness without adding a separate MCP lifecycle.
+
+Personal memory commands require a private personal-agent room and an active turn lease. Reading returns the memory and `updatedAt`; writing replaces the complete memory using that timestamp to reject stale writes. Plan mode can read but cannot save memory. For personal turns, the broker credential lasts for the configured turn timeout, and the Unix socket closes when the runner turn ends. This capability requires runner 0.1.55 and artifact `roomtalk-code-agent-2026-10-05-personal-memory-v1` or a matching later artifact.
 
 ### Static publishing
 

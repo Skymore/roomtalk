@@ -59,6 +59,11 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
 
   const requireActiveTurn = async (roomId: string, turnId: string, res: Response) => {
     try {
+      const room = await options.getRoomById?.(roomId);
+      if (room && typeof room === 'object' && 'personalAgentOwnerId' in room && room.personalAgentOwnerId) {
+        res.status(403).json({ error: 'Personal agent conversations cannot publish public sites' });
+        return false;
+      }
       if (!options.isTurnActive || await options.isTurnActive(roomId, turnId)) {
         return true;
       }
@@ -200,8 +205,11 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
       if (!result) {
         return res.status(404).send('Published site not found');
       }
-      if (options.getRoomById && !(await options.getRoomById(result.manifest.roomId))) {
-        return res.status(404).send('Published site not found');
+      if (options.getRoomById) {
+        const room = await options.getRoomById(result.manifest.roomId);
+        if (!room || (typeof room === 'object' && 'personalAgentOwnerId' in room && room.personalAgentOwnerId)) {
+          return res.status(404).send('Published site not found');
+        }
       }
 
       res.type(result.file.mimeType);

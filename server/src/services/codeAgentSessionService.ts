@@ -74,6 +74,7 @@ import {
   displayNameForCodeAgentBackend,
   isCodexCodeAgentBackend,
 } from './codeAgentBackends';
+import { buildPersonalAgentPrompt } from './personalAgentContext';
 
 const isCodexBackend = (backend: CodeAgentBackend) => (
   isCodexCodeAgentBackend(backend)
@@ -176,6 +177,7 @@ export interface CodeAgentSessionServiceOptions {
   turnTimeoutMs?: number;
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
+  onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   createId?: () => string;
 }
@@ -459,6 +461,7 @@ export class CodeAgentSessionService {
           kind: 'complete';
           turn: RoomAgentTurn;
           room: Room;
+          message?: Message;
           streamEnd?: Record<string, unknown>;
           roomCostTotal: RoomAICostTotal;
         }
@@ -466,6 +469,7 @@ export class CodeAgentSessionService {
           kind: 'failed';
           turn: RoomAgentTurn;
           room: Room;
+          message?: Message;
           streamError: Record<string, unknown>;
         }
     ) | undefined;
@@ -859,6 +863,7 @@ export class CodeAgentSessionService {
           turnId,
           backend: turnBackend,
           mode: turnMode.mode,
+          personalAgent: Boolean(room!.personalAgentOwnerId),
           clientOrigin: input.clientOrigin,
           serverOrigin: input.serverOrigin,
         }),
@@ -889,6 +894,16 @@ export class CodeAgentSessionService {
         allowedPaths: this.options.allowedPaths || ['.'],
         ...(turnImages.length > 0 ? { images: turnImages } : {}),
       };
+      if (room!.personalAgentOwnerId) {
+        const profile = await this.store.getPersonalAgentProfile?.(room!.personalAgentOwnerId);
+        if (!profile || profile.clientId !== input.clientId) {
+          throw new Error('Personal agent profile is unavailable for this workspace');
+        }
+        runnerRequest.prompt = buildPersonalAgentPrompt(
+          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)),
+        );
+        assertTurnWithinDeadline();
+      }
       const startRunnerProcess = async (env: Record<string, string>) => {
         assertTurnWithinDeadline();
         if (leaseLost) {
@@ -1239,6 +1254,7 @@ export class CodeAgentSessionService {
         kind: 'complete',
         turn: turnRecord,
         room: terminal.room,
+        ...(finalMessage ? { message: finalMessage } : {}),
         roomCostTotal,
         ...(finalMessage ? { streamEnd: {
           messageId: finalActiveId,
@@ -1441,6 +1457,7 @@ export class CodeAgentSessionService {
             kind: 'failed',
             turn: turnRecord,
             room: terminal.room,
+            ...(persistedMessage ? { message: stripAIStreamRecoveryMetadata(persistedMessage) } : {}),
             streamError: {
               messageId: errorTargetId,
               error: content,
@@ -1684,6 +1701,16 @@ export class CodeAgentSessionService {
       }
       if (cleanupSucceeded && shouldDrainQueue && releasedCleanupLease && !leaseLost) {
         this.scheduleQueuedTurn(input.roomId);
+      }
+      if (canEmitTerminalReadiness && pendingTerminalRealtime) {
+        const terminalMessage = pendingTerminalRealtime.message;
+        if (pendingTerminalRealtime.room.personalAgentOwnerId && terminalMessage && this.options.onPersonalAgentTurnCompleted) {
+          try {
+            await this.options.onPersonalAgentTurnCompleted(pendingTerminalRealtime.room, terminalMessage);
+          } catch (error) {
+            this.logger.warn('Personal agent completion notification failed', { error, roomId: input.roomId, turnId });
+          }
+        }
       }
     }
   }
@@ -3878,6 +3905,7 @@ export class CodeAgentSessionService {
     turnId: string;
     backend: CodeAgentBackend;
     mode: CodeAgentRunnerMode;
+    personalAgent?: boolean;
     clientOrigin?: string;
     serverOrigin?: string;
   }) {
@@ -3939,7 +3967,7 @@ export class CodeAgentSessionService {
         clientId: context.clientId,
         turnId: context.turnId,
         mode: normalizedMode,
-      });
+      }, context.personalAgent ? { ttlSeconds: Math.ceil(this.turnTimeoutMs / 1000) } : {});
       env.ROOMTALK_ROOM_CONTEXT_URL = publicBaseUrl
         ? `${publicBaseUrl}${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}`
         : CODE_AGENT_ROOM_CONTEXT_API_PREFIX;

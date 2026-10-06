@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -10,6 +10,8 @@ import {
 } from '../services/accountEntitlements';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
+
+export class PersonalAgentGoalConflictError extends Error {}
 
 export type ClientPresenceEventAction = 'online' | 'offline';
 
@@ -769,6 +771,23 @@ export interface IdempotentMessageAppendResult {
 }
 
 export interface DurableRoomStore {
+  getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
+  ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
+  updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
+  readPersonalAgentRooms?(clientId: string): Promise<Room[]>;
+  createPersonalAgentThread?(clientId: string, name: string): Promise<Room>;
+  readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
+  savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
+  deletePersonalAgentGoal?(clientId: string, goalId: string): Promise<boolean>;
+  readDuePersonalAgentGoals?(now: string, limit?: number): Promise<PersonalAgentGoal[]>;
+  startPersonalAgentGoalRun?(input: {
+    clientId: string;
+    goalId: string;
+    room: Room;
+    message: Message;
+    nextRunAt?: string;
+    expectedNextRunAt?: string;
+  }): Promise<{ goal: PersonalAgentGoal; room: Room } | null>;
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
   appendMessageIdempotent(message: Message): Promise<IdempotentMessageAppendResult | null>;
@@ -967,6 +986,50 @@ export interface RoomMessageCacheStore {
 export type RoomStore = DurableRoomStore & RealtimeRoomStore & RoomPresenceStore;
 
 export class CompositeRoomStore implements RoomStore {
+  getPersonalAgentProfile(clientId: string) {
+    return this.durableStore.getPersonalAgentProfile?.(clientId) || Promise.resolve(null);
+  }
+
+  ensurePersonalAgentProfile(clientId: string) {
+    if (!this.durableStore.ensurePersonalAgentProfile) throw new Error('Personal agents require PostgreSQL');
+    return this.durableStore.ensurePersonalAgentProfile(clientId);
+  }
+
+  updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string) {
+    return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
+  }
+
+  readPersonalAgentRooms(clientId: string) {
+    return this.durableStore.readPersonalAgentRooms?.(clientId) || Promise.resolve([]);
+  }
+
+  createPersonalAgentThread(clientId: string, name: string) {
+    if (!this.durableStore.createPersonalAgentThread) throw new Error('Personal agents require PostgreSQL');
+    return this.durableStore.createPersonalAgentThread(clientId, name);
+  }
+
+  readPersonalAgentGoals(clientId: string) {
+    return this.durableStore.readPersonalAgentGoals?.(clientId) || Promise.resolve([]);
+  }
+
+  savePersonalAgentGoal(goal: PersonalAgentGoal, expectedUpdatedAt?: string) {
+    if (!this.durableStore.savePersonalAgentGoal) throw new Error('Personal agents require PostgreSQL');
+    return this.durableStore.savePersonalAgentGoal(goal, expectedUpdatedAt);
+  }
+
+  deletePersonalAgentGoal(clientId: string, goalId: string) {
+    return this.durableStore.deletePersonalAgentGoal?.(clientId, goalId) || Promise.resolve(false);
+  }
+
+  readDuePersonalAgentGoals(now: string, limit?: number) {
+    return this.durableStore.readDuePersonalAgentGoals?.(now, limit) || Promise.resolve([]);
+  }
+
+  startPersonalAgentGoalRun(input: { clientId: string; goalId: string; room: Room; message: Message; nextRunAt?: string; expectedNextRunAt?: string }) {
+    if (!this.durableStore.startPersonalAgentGoalRun) throw new Error('Personal agents require PostgreSQL');
+    return this.durableStore.startPersonalAgentGoalRun(input);
+  }
+
   constructor(
     private readonly durableStore: DurableRoomStore,
     private readonly realtimeStore: RealtimeRoomStore,

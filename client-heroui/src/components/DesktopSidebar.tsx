@@ -704,6 +704,13 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
             isCollapsed ? 'items-center p-2' : 'p-3'
           }`}
         >
+          <SidebarNavItem
+            icon="lucide:bot"
+            label={t('personalAgent')}
+            isActive={view === 'personal' || (view === 'chat' && Boolean(currentRoom?.personalAgentOwnerId))}
+            onPress={() => setView('personal')}
+            isCollapsed={isCollapsed}
+          />
           {isCollapsed ? (
             <>
               <HoverTooltip content={t('create')} placement="right">

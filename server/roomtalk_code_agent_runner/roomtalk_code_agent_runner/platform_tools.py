@@ -41,6 +41,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "memory":
+            if args.memory_command == "set":
+                _require_write_access(env)
+            result = _personal_memory(args, env)
         else:  # pragma: no cover - argparse prevents this.
             parser.error("missing command")
             return 2
@@ -114,6 +118,15 @@ def _build_parser() -> argparse.ArgumentParser:
     message.add_argument("message_id")
     message.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
+    memory = subparsers.add_parser("memory", help="Read or update your personal agent's persistent memory.")
+    memory_subparsers = memory.add_subparsers(dest="memory_command", required=True)
+    memory_get = memory_subparsers.add_parser("get", help="Read the latest personal memory and its update timestamp.")
+    memory_get.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    memory_set = memory_subparsers.add_parser("set", help="Replace personal memory using its last read update timestamp.")
+    memory_set.add_argument("--file", required=True, help="UTF-8 file containing the complete updated memory.")
+    memory_set.add_argument("--expected-updated-at", required=True, help="updatedAt returned by memory get.")
+    memory_set.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
     return parser
 
 
@@ -147,7 +160,20 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
     return _read_room_context_path(path, env)
 
 
-def _read_room_context_path(path: str, env: dict[str, str]) -> dict[str, Any]:
+def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.memory_command == "set":
+        memory = Path(args.file).read_text(encoding="utf-8")
+        if len(memory) > 16_000:
+            raise RunnerError("Personal memory is limited to 16000 characters", code="personal_memory_invalid")
+        result = _read_room_context_path("/personal-memory", env, method="PATCH", body={
+            "memory": memory, "expectedUpdatedAt": args.expected_updated_at,
+        })
+    else:
+        result = _read_room_context_path("/personal-memory", env)
+    return {**result, "tool": "PersonalMemory"}
+
+
+def _read_room_context_path(path: str, env: dict[str, str], *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
     base_url = (env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip().rstrip("/")
     token = (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
     socket_path = (env.get("ROOMTALK_ROOM_CONTEXT_SOCKET") or "").strip()
@@ -155,8 +181,8 @@ def _read_room_context_path(path: str, env: dict[str, str]) -> dict[str, Any]:
         raise RunnerError("Room context is not available for this turn", code="room_context_unavailable")
 
     if socket_path:
-        return _get_room_context_from_broker(socket_path, path)
-    return _get_room_context(f"{base_url}{path}", token)
+        return _get_room_context_from_broker(socket_path, path, method=method, body=body)
+    return _get_room_context(f"{base_url}{path}", token, method=method, body=body)
 
 
 def _list_static_sites(env: dict[str, str]) -> dict[str, Any]:
@@ -186,12 +212,13 @@ def _list_static_site_versions(args: argparse.Namespace, env: dict[str, str]) ->
     }
 
 
-def _get_room_context_from_broker(socket_path: str, path: str) -> dict[str, Any]:
+def _get_room_context_from_broker(socket_path: str, path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(30)
             client.connect(socket_path)
-            client.sendall((json.dumps({"path": path}, separators=(",", ":")) + "\n").encode("utf-8"))
+            request = {"path": path, **({"method": method, "body": body} if method != "GET" else {})}
+            client.sendall((json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
             chunks: list[bytes] = []
             total = 0
             while True:
@@ -220,10 +247,13 @@ def _get_room_context_from_broker(socket_path: str, path: str) -> dict[str, Any]
     return {"success": True, "tool": "RoomContext", **payload}
 
 
-def _get_room_context(url: str, token: str) -> dict[str, Any]:
-    request = urllib_request.Request(url, method="GET", headers={
+def _get_room_context(url: str, token: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+    request = urllib_request.Request(url, method=method, data=(
+        json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    ), headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
+        **({"Content-Type": "application/json"} if body is not None else {}),
         "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
     })
     try:

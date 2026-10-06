@@ -1494,6 +1494,24 @@ describe('room socket handlers', () => {
     assert.equal(deniedRoom, null);
   });
 
+  it('rejects private personal room lookup, joining and saving for a second user', async () => {
+    const other = createHarness('client-2');
+    other.store.rooms[0] = room({ type: 'codeAgent', codeAgentBackend: 'codex-app-server', codeAgentAccess: 'owner', personalAgentOwnerId: 'client-1' });
+    let lookup: Room | null | undefined;
+    await other.socket.invoke('get_room_by_id', 'room-1', (value: Room | null) => { lookup = value; });
+    assert.equal(lookup, null);
+    let joined: any;
+    await other.socket.invoke('join_room', 'room-1', (value: unknown) => { joined = value; });
+    assert.equal(joined.success, false);
+    assert.equal(joined.code, 'ROOM_ACCESS_REMOVED');
+    assert.deepEqual(other.store.addedMembers, []);
+    assert.deepEqual(other.socket.joined, []);
+    let saved: any;
+    await other.socket.invoke('save_room', 'room-1', (value: unknown) => { saved = value; });
+    assert.equal(saved.success, false);
+    assert.deepEqual(other.store.userSavedRooms.size, 0);
+  });
+
   it('runs disconnect cleanup after an in-flight join and uses the disconnecting room snapshot', async () => {
     const valid = createHarness('client-1');
     const joinedRoom = room({ id: 'room-a', name: 'Room A' });

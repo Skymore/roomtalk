@@ -160,7 +160,7 @@ export function getPostingAvailability(room: Room, now = new Date()): { allowed:
 
 export async function getRoomActor(store: RoomStore, roomId: string, clientId: string): Promise<RoomActor | null> {
   const room = await store.getRoomById(roomId);
-  if (!room) {
+  if (!room || (room.personalAgentOwnerId && room.personalAgentOwnerId !== clientId)) {
     return null;
   }
 
@@ -201,9 +201,9 @@ export function buildRoomPermissions(actor: RoomActor | null, roomId: string, cl
     canDeleteAnyMessage: Boolean(isOwner),
     canClearHistory: Boolean(isOwner),
     canManageRoom: Boolean(isOwner || isAdmin),
-    canManageAdmins: Boolean(isOwner),
-    canManageMembers: Boolean(isOwner || isAdmin),
-    canTransferOwnership: Boolean(isOwner),
+    canManageAdmins: Boolean(isOwner && !targetRoom?.personalAgentOwnerId),
+    canManageMembers: Boolean((isOwner || isAdmin) && !targetRoom?.personalAgentOwnerId),
+    canTransferOwnership: Boolean(isOwner && !targetRoom?.personalAgentOwnerId),
     canUseCodeAgent: Boolean(actor && targetRoom && canUseCodeAgentRoom(targetRoom, clientId, actor.role)),
     postingRestrictionReason: posting.allowed ? undefined : posting.reason,
   };
@@ -227,6 +227,10 @@ export async function authorizeRoomAction(input: {
 
   const isOwner = actor.role === 'owner';
   const isAdmin = actor.role === 'admin';
+
+  if (actor.room.personalAgentOwnerId && ['room.manageAdmins', 'room.manageMembers', 'room.transferOwnership'].includes(input.action.type)) {
+    return { ok: false, code: 'forbidden', message: 'Personal agent conversations are private', actor };
+  }
 
   switch (input.action.type) {
     case 'message.post': {

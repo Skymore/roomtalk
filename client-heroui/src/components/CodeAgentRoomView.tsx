@@ -79,6 +79,7 @@ interface CodeAgentRoomViewProps {
   onRoomAccessDenied?: (roomId: string) => void;
   showSuccess?: (message: string) => void;
   showError?: (message: string) => void;
+  personalAgent?: boolean;
 }
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
@@ -153,6 +154,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   onRoomAccessDenied,
   showSuccess,
   showError,
+  personalAgent = false,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -163,7 +165,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [showScrollButton, setShowScrollButton] = React.useState(false);
   const [isMobileFileManagerOpen, setIsMobileFileManagerOpen] = React.useState(false);
   const [hasMobileFileManagerMounted, setHasMobileFileManagerMounted] = React.useState(false);
-  const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
+  const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(() => personalAgent || readStoredFileManagerCollapsed());
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = React.useState<string | null>(null);
@@ -452,7 +454,21 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  const header = (
+  const header = personalAgent ? (
+    <header className="flex min-h-16 items-center gap-3 border-b border-[#dedbd0] bg-[#faf9f5] px-3 py-3 dark:border-[#30302e] dark:bg-[#1d1d1b] sm:px-5">
+      <Button isIconOnly size="sm" variant="light" aria-label={t('personalAgentBack')} onPress={() => setView('personal')}>
+        <Icon icon="lucide:arrow-left" className="h-4 w-4" />
+      </Button>
+      <Icon icon="lucide:bot" className="h-6 w-6 shrink-0 text-secondary" />
+      <div className="min-w-0 flex-1">
+        <h2 className="truncate text-sm font-semibold" data-testid="chat-room-title">{currentRoom.name}</h2>
+        <p className="mt-0.5 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{t('personalAgentPrivateChat')}</p>
+      </div>
+      {showRoomSessionSpinner ? <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin text-secondary" aria-label={t('loading')} /> : !isRoomSessionReady ? (
+        <Button size="sm" variant="flat" onPress={onRetryRoomSession}>{t('retry')}</Button>
+      ) : <span className="hidden text-xs text-[#5e5d59] dark:text-[#b0aea5] sm:block">{t(getCodeAgentStatus(currentRoom, defaultBackend) === 'running' ? 'personalAgentWorking' : 'personalAgentReady')}</span>}
+    </header>
+  ) : (
     <ChatHeader
       currentRoom={currentRoom}
       memberCount={memberCount}

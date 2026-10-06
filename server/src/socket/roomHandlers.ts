@@ -607,6 +607,11 @@ export function registerRoomHandlers({
       return;
     }
 
+    if (room.personalAgentOwnerId && room.personalAgentOwnerId !== userId) {
+      callback?.({ success: false, code: 'ROOM_ACCESS_REMOVED', error: 'Personal agent conversations are private' });
+      return;
+    }
+
     if (room.type === 'codeAgent') {
       const access = codeAgentAccess.canUse(userId);
       if (!access.allowed) {
@@ -772,6 +777,11 @@ export function registerRoomHandlers({
       return;
     }
 
+    const targetRoom = await store.getRoomById(roomId);
+    if (targetRoom?.personalAgentOwnerId) {
+      callback?.({ success: false, error: 'Personal agent conversations cannot be shared or saved as rooms' });
+      return;
+    }
     const savedRoom = await store.saveRoomForUser(roomId, clientId);
     if (!savedRoom) {
       socketLogger.warn('Client tried to save non-existent room', { socketId: socket.id, clientId, roomId });
@@ -1156,6 +1166,13 @@ export function registerRoomHandlers({
     }
 
     const hasCodeAgentAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentAccess');
+    if (auth.actor.room.personalAgentOwnerId && (
+      (hasCodeAgentAccessUpdate && data.codeAgentAccess !== 'owner')
+      || (Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentBackend') && data.codeAgentBackend !== 'codex-app-server')
+    )) {
+      callback?.({ success: false, error: 'Personal agent conversations use the private Codex workspace' });
+      return;
+    }
     if (hasCodeAgentAccessUpdate && auth.actor.role !== 'owner') {
       callback?.({ success: false, error: 'Only the room owner can manage Workspace access' });
       return;
@@ -1440,6 +1457,11 @@ export function registerRoomHandlers({
   socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
     const room = await store.getRoomById(roomId);
     const userId = await resolveClientId();
+
+    if (room?.personalAgentOwnerId && room.personalAgentOwnerId !== userId) {
+      callback(null);
+      return;
+    }
 
     if (room) {
       if (room.type === 'codeAgent') {

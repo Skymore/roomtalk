@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Writable } from 'node:stream';
 import { Logger } from '../logger';
-import { AIModelOption, CodeAgentMode, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentMode, MediaAsset, Message, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
@@ -75,6 +75,7 @@ const createMemoryObservability = () => {
 };
 
 class MemoryCodeAgentStore {
+  personalAgentProfiles = new Map<string, PersonalAgentProfile>();
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
   agentTurns = new Map<string, RoomAgentTurn>();
@@ -125,6 +126,10 @@ class MemoryCodeAgentStore {
 
   async getRoomById(roomId: string) {
     return this.rooms.get(roomId) || null;
+  }
+
+  async getPersonalAgentProfile(clientId: string) {
+    return this.personalAgentProfiles.get(clientId) || null;
   }
 
   async getRoomMember(roomId: string, clientId: string) {
@@ -1209,6 +1214,7 @@ const createService = (options: {
   turnTimeoutMs?: number;
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
+  onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   logger?: Logger;
 } = {}) => {
@@ -1264,12 +1270,110 @@ const createService = (options: {
       turnTimeoutMs: options.turnTimeoutMs,
       scheduleTurnDeadline: options.scheduleTurnDeadline,
       clearTurnDeadline: options.clearTurnDeadline,
+      onPersonalAgentTurnCompleted: options.onPersonalAgentTurnCompleted,
     }
   );
   return { emitter, lifecycle, sandboxService, service, store };
 };
 
 describe('CodeAgentSessionService', () => {
+  it('reloads personal context for every turn without changing saved user messages and reports durable completion', async () => {
+    const originalPrompt = userMessage('Plan my day');
+    const store = new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1', codeAgentBackend: 'hermes-agent' }), [originalPrompt]);
+    const profile: PersonalAgentProfile = {
+      clientId: 'client-1', name: 'Muse', avatar: 'M', instructions: 'Answer in Chinese', memory: 'I work in Seattle',
+      mainRoomId: 'room-1', createdAt: '2026-05-03T00:00:00.000Z', updatedAt: '2026-05-03T00:00:00.000Z',
+    };
+    store.personalAgentProfiles.set(profile.clientId, profile);
+    const runner = new FakeCodeAgentRunnerClient([acpFinalEvent('hermes-agent', 'Your plan is ready.')]);
+    const notifications: Array<{ room: Room; message: Message }> = [];
+    const { service } = createService({
+      store, runner, backend: 'hermes-agent', ids: Array.from({ length: 20 }, (_, index) => `personal-${index}`),
+      onPersonalAgentTurnCompleted: async (room, message) => { notifications.push({ room, message }); },
+    });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.match(runner.requests[0].prompt, /Answer in Chinese/);
+    assert.match(runner.requests[0].prompt, /I work in Seattle/);
+    assert.equal(store.messages.get('room-1')!.find(message => message.id === originalPrompt.id)!.content, 'Plan my day');
+    assert.equal(notifications[0].message.content, 'Your plan is ready.');
+    assert.equal(notifications[0].message.status, 'complete');
+    profile.memory = 'I moved to Vancouver';
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.match(runner.requests[1].prompt, /I moved to Vancouver/);
+    assert.doesNotMatch(runner.requests[1].prompt, /I work in Seattle/);
+  });
+
+  it('keeps the personal memory token valid for the configured agent turn duration', async () => {
+    const store = new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1', codeAgentBackend: 'hermes-agent' }), [userMessage()]);
+    store.personalAgentProfiles.set('client-1', {
+      clientId: 'client-1', name: 'Muse', avatar: 'M', instructions: '', memory: '', mainRoomId: 'room-1',
+      createdAt: '2026-05-03T00:00:00.000Z', updatedAt: '2026-05-03T00:00:00.000Z',
+    });
+    const startedAtMs = Date.parse('2026-05-03T00:00:00.000Z');
+    let nowMs = startedAtMs;
+    const roomContext = new CodeAgentRoomContextService(store as any, {
+      tokenSecret: 'personal-context-secret', nowMs: () => nowMs,
+    });
+    const { service, sandboxService } = createService({
+      store, backend: 'hermes-agent', roomContext, turnTimeoutMs: 60 * 60 * 1000,
+      runner: new FakeCodeAgentRunnerClient([acpFinalEvent('hermes-agent', 'Done')]),
+    });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    const token = sandboxService.startedRunnerEnvs[0].ROOMTALK_ROOM_CONTEXT_TOKEN;
+    nowMs = startedAtMs + 31 * 60 * 1000;
+    assert.equal(roomContext.verifyTurnToken(token)?.turnId, 'turn-1');
+    nowMs = startedAtMs + 60 * 60 * 1000;
+    assert.equal(roomContext.verifyTurnToken(token), null);
+  });
+
+  it('keeps the persisted personal result and terminal event when completion notification fails', async () => {
+    const store = new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1', codeAgentBackend: 'hermes-agent' }), [userMessage()]);
+    store.personalAgentProfiles.set('client-1', {
+      clientId: 'client-1', name: 'Muse', avatar: 'M', instructions: '', memory: '', mainRoomId: 'room-1',
+      createdAt: '2026-05-03T00:00:00.000Z', updatedAt: '2026-05-03T00:00:00.000Z',
+    });
+    const runner = new FakeCodeAgentRunnerClient([acpFinalEvent('hermes-agent', 'Saved result')]);
+    const { service, emitter } = createService({
+      store, runner, backend: 'hermes-agent',
+      onPersonalAgentTurnCompleted: async () => { throw new Error('Push unavailable'); },
+    });
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.equal(result.success, true);
+    assert.equal(store.agentTurns.get('turn-1')!.status, 'complete');
+    assert.equal(store.messages.get('room-1')!.find(message => message.content === 'Saved result')!.status, 'complete');
+    assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+  });
+
+  it('starts queued personal work while the prior completion push is still pending', async () => {
+    const store = new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1' }), [userMessage()]);
+    store.personalAgentProfiles.set('client-1', {
+      clientId: 'client-1', name: 'Muse', avatar: 'M', instructions: '', memory: '', mainRoomId: 'room-1',
+      createdAt: '2026-05-03T00:00:00.000Z', updatedAt: '2026-05-03T00:00:00.000Z',
+    });
+    const runner = new SequencedBlockingRunner();
+    let releasePush!: () => void;
+    const pendingPush = new Promise<void>(resolve => { releasePush = resolve; });
+    const { service } = createService({
+      store, runner, ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+      onPersonalAgentTurnCompleted: async (_room, message) => {
+        if (message.turnId === 'turn-1') await pendingPush;
+      },
+    });
+    const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.waitForRuns(1);
+    await service.queueTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }, { ...userMessage('Next task'), id: 'queued-1' });
+    runner.release(0);
+    try {
+      await runner.waitForRuns(2);
+      assert.match(runner.requests[1].prompt, /Next task/);
+    } finally {
+      releasePush();
+      runner.release(1);
+    }
+    await first;
+    await runner.waitForCompletions(2);
+  });
+
   it('restores a workspace revision atomically and forks Codex context at the pre-turn boundary', async () => {
     const store = new MemoryCodeAgentStore(room({
       codeAgentBackend: 'codex-app-server',

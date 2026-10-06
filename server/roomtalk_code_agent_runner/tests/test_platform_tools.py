@@ -11,6 +11,21 @@ import pytest
 from roomtalk_code_agent_runner import platform_tools
 
 
+def test_personal_memory_set_refuses_plan_mode(tmp_path: Path, monkeypatch, capsys):
+    source = tmp_path / "memory.txt"
+    source.write_text("Seattle", encoding="utf-8")
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    assert platform_tools.main(["memory", "set", "--file", str(source), "--expected-updated-at", "2026-10-05T18:00:00.000Z", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_personal_memory_set_refuses_oversized_memory(tmp_path: Path, capsys):
+    source = tmp_path / "memory.txt"
+    source.write_text("x" * 16_001, encoding="utf-8")
+    assert platform_tools.main(["memory", "set", "--file", str(source), "--expected-updated-at", "2026-10-05T18:00:00.000Z", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "personal_memory_invalid"
+
+
 def test_direct_publish_upload_streams_file_body(tmp_path: Path):
     received: dict[str, Any] = {}
 
@@ -250,7 +265,8 @@ def test_site_unpublish_is_rejected_by_read_only_cli_access(monkeypatch, capsys)
 def test_site_list_uses_read_only_room_context_capability(monkeypatch, capsys):
     requested: dict[str, str] = {}
 
-    def fake_get(url: str, token: str):
+    def fake_get(url: str, token: str, *, method: str = "GET", body=None):
+        assert method == "GET" and body is None
         requested.update({"url": url, "token": token})
         return {
             "success": True,
@@ -339,7 +355,8 @@ def test_site_publish_requires_stable_slug(capsys):
 def test_room_context_commands_use_scoped_api(argv, expected_suffix, monkeypatch, capsys):
     requested: dict[str, str] = {}
 
-    def fake_get(url: str, token: str):
+    def fake_get(url: str, token: str, *, method: str = "GET", body=None):
+        assert method == "GET" and body is None
         requested["url"] = url
         requested["token"] = token
         return {"success": True, "tool": "RoomContext", "messages": []}

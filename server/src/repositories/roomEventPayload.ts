@@ -182,7 +182,10 @@ const ROOM_KEYS = [
 ] as const;
 
 const validateRoomRow = (value: unknown, path: string, roomId: string): void => {
-  const row = exactKeys(value, path, ROOM_KEYS);
+  const row = exactKeys(value, path, ROOM_KEYS, ['personal_agent_owner_id', 'personal_agent_thread_kind', 'personal_agent_goal_id']);
+  ['personal_agent_owner_id', 'personal_agent_thread_kind', 'personal_agent_goal_id'].forEach(key => {
+    if (row[key] !== undefined) nullableString(row[key], `${path}.${key}`);
+  });
   if (string(row.id, `${path}.id`) !== roomId) fail(`${path}.id`, `equal to ${roomId}`);
   string(row.name, `${path}.name`);
   nullableString(row.description, `${path}.description`);

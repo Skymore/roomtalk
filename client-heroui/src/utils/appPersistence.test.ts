@@ -43,6 +43,8 @@ describe("appPersistence", () => {
     expect(getStoredView()).toBe("rooms");
     saveCurrentView("chat");
     expect(getStoredView()).toBe("chat");
+    saveCurrentView("personal");
+    expect(getStoredView()).toBe("personal");
     localStorage.setItem("roomtalk_current_view", "invalid");
     expect(getStoredView()).toBe("rooms");
   });

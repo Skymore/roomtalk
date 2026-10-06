@@ -68,4 +68,13 @@ describe('BottomNav', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings' }));
     expect(setView).toHaveBeenCalledWith('settings');
   });
+
+  it('opens the personal agent and highlights it in private conversations', () => {
+    const setView = vi.fn();
+    render(<BottomNav view="chat" setView={setView} currentRoom={{ ...currentRoom, personalAgentOwnerId: 'client-1' }} />);
+    const button = screen.getByRole('button', { name: 'personalAgent' });
+    expect(button.getAttribute('aria-current')).toBe('page');
+    fireEvent.click(button);
+    expect(setView).toHaveBeenCalledWith('personal');
+  });
 });

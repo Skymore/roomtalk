@@ -12,7 +12,7 @@ const chromiumExecutablePath = process.env.E2E_CHROMIUM_EXECUTABLE_PATH;
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /.*\/codex-connection\.spec\.ts/,
+  testMatch: /.*\/(codex-connection|personal-agent)\.spec\.ts/,
   timeout: 40_000,
   expect: {
     timeout: 10_000,
@@ -51,8 +51,11 @@ export default defineConfig({
         'CODE_AGENT_ALLOWED_USER_IDS=',
         'CODE_AGENT_SANDBOX_PROVIDER=fake',
         'CODE_AGENT_RUNNER_CLIENT=fake',
+        'CODE_AGENT_BACKEND=codex-app-server',
+        'CODEX_CLI_BACKEND_ENABLED=true',
         'CODE_AGENT_MODE=plan',
-        'CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS=250',
+        'CODE_AGENT_ALLOWED_RUN_MODES=plan,edit',
+        'CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS=1000',
         'CODEX_CONNECTIONS_ENABLED=true',
         'CODEX_AUTH_ENCRYPTION_KEY=e2e-codex-connection-secret',
         'CODEX_AUTH_LOGIN_TIMEOUT_MS=30000',

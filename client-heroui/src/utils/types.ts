@@ -201,6 +201,8 @@ export interface Room {
   codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
+  personalAgentOwnerId?: string;
+  personalAgentThreadKind?: 'main' | 'task';
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
   updatedAt?: string;

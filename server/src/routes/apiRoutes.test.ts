@@ -934,6 +934,34 @@ describe('API routes', () => {
     });
   });
 
+  it('keeps private personal room metadata and messages owner-only with authenticated requests', async () => {
+    const privateRoom = sampleRoom({ type: 'codeAgent', codeAgentBackend: 'codex-app-server', codeAgentAccess: 'owner', personalAgentOwnerId: 'client-1' });
+    server.store.rooms[0] = privateRoom;
+    const ownerToken = 'personal-owner-test-token';
+    const otherToken = 'personal-other-test-token';
+    for (const [clientId, token] of [['client-1', ownerToken], ['client-2', otherToken]]) {
+      const account = sampleClientAccount({ accountId: `account-${clientId}`, primaryClientId: clientId });
+      server.store.accounts.set(account.accountId, account);
+      server.store.clientAccountLinks.set(clientId, account.accountId);
+      const tokenHash = hashClientAuthToken(token);
+      await server.store.saveClientAuthToken({ clientId, tokenHash, createdAt: new Date().toISOString() });
+    }
+    // Even a stale membership row must not grant access to a private room.
+    server.store.members.add('room-1:client-2');
+    const ownerHeaders = { 'X-Client-Id': 'client-1', 'X-Client-Auth-Token': ownerToken };
+    const otherHeaders = { 'X-Client-Id': 'client-2', 'X-Client-Auth-Token': otherToken };
+    const ownerMetadata = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1`, { headers: ownerHeaders });
+    assert.equal(ownerMetadata.status, 200);
+    assert.deepEqual(await ownerMetadata.json(), privateRoom);
+    const otherMetadata = await fetch(`${server.baseUrl}/api/clients/client-2/rooms/room-1`, { headers: otherHeaders });
+    assert.equal(otherMetadata.status, 404);
+    assert.deepEqual(await otherMetadata.json(), { error: 'Room not found' });
+    const impersonatedOwner = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1`, { headers: otherHeaders });
+    assert.equal(impersonatedOwner.status, 401);
+    const otherMessages = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, { headers: otherHeaders });
+    assert.equal(otherMessages.status, 403);
+  });
+
   it('redirects sticker asset requests to object storage signed URLs', async () => {
     await server.close();
     const readRequests: Array<{ objectKey: string; expiresInSeconds?: number; responseCacheControl?: string }> = [];

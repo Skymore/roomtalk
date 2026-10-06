@@ -20,6 +20,9 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
 import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContextRoutes';
+import { registerPersonalAgentContextRoutes } from './routes/personalAgentContextRoutes';
+import { PersonalAgentScheduler } from './services/personalAgentScheduler';
+import { notifyPersonalAgentCompletion } from './services/pushNotifications';
 import { registerCodeAgentCodexAuthRoutes } from './routes/codeAgentCodexAuthRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
@@ -52,7 +55,7 @@ import {
 } from './services/codeAgentSessionService';
 import { E2BCodeAgentSandboxService, E2BSandboxDriver } from './services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
-import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent } from './services/codeAgentRunnerProtocol';
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
   DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS,
@@ -160,7 +163,7 @@ const corsOrigin = resolveCorsOrigin();
 const app = express();
 app.use(cors({
   origin: corsOrigin,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
 }));
 console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
@@ -549,7 +552,7 @@ const codeAgentDaemonRunnerClient = codeAgentRuntimeConfig.runnerClient === 'dae
   : undefined;
 const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'daemon'
   ? codeAgentDaemonRunnerClient!
-  : codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
+  : codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient(([
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco Agent fake runner starting' },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco Agent fake runner received the task.' },
   {
@@ -572,7 +575,9 @@ const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'daemon'
     sessionId: 'fake-code-agent-session',
     usage: { promptTokens: 12, completionTokens: 8, totalTokens: 20, source: 'reported' },
   },
-], { eventDelayMs: parsePositiveIntegerEnv('CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
+] satisfies CodeAgentRunnerEvent[]).filter(event => codeAgentRuntimeConfig.backend === 'code-agent' || event.type !== 'model_step'), {
+  eventDelayMs: parsePositiveIntegerEnv('CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS', 0),
+});
 const codeAgentRunner = createCodeAgentRunner(codeAgentRuntimeConfig.backend, codeAgentRunnerClient);
 const codexRunnerEnv = {
   PYTHONPATH: codeAgentRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
@@ -619,8 +624,17 @@ const codeAgentSessionService = new CodeAgentSessionService(
     mediaObjectStorage,
     aiStreamOwnerId,
     turnTimeoutMs: codeAgentTurnTimeoutMs,
+    onPersonalAgentTurnCompleted: (room, message) => notifyPersonalAgentCompletion({
+      store, room, message, logger: codeAgentLogger,
+    }),
   }
 );
+
+const personalAgentScheduler = new PersonalAgentScheduler(store, codeAgentSessionService, codeAgentLogger, {
+  selectedModel: normalizeAIModel(DEFAULT_AI_MODEL_ID),
+  serverOrigin: process.env.CLIENT_URL,
+  onRunQueued: room => { io.to(room.creatorId).emit('room_updated', room); },
+});
 
 // 初始化 Redis、PostgreSQL schema 和 Socket.IO 适配器
 const infrastructureReady = (async () => {
@@ -847,6 +861,7 @@ infrastructureReady
   .then(() => {
     assistantRunDispatchRelay.start();
     assistantRunQueueReconciler.start();
+    personalAgentScheduler.start();
   })
   .catch(error => {
     assistantRunLogger.error('Assistant run queue services did not start because infrastructure initialization failed', { error });
@@ -881,6 +896,7 @@ registerApiRoutes(app, {
   codeAgentDefaultMode: codeAgentRuntimeConfig.defaultMode,
   codeAgentAvailableBackends,
   codeAgentDefaultBackend: codeAgentRuntimeConfig.backend,
+  personalAgentStartGoal: goal => personalAgentScheduler.startGoal(goal),
   codexConnections: {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,
@@ -907,6 +923,12 @@ registerCodeAgentRoomContextRoutes(app, {
   service: codeAgentRoomContextService,
   logger: codeAgentLogger,
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
+});
+
+registerPersonalAgentContextRoutes(app, {
+  store,
+  roomContext: codeAgentRoomContextService,
+  logger: codeAgentLogger,
 });
 
 if (codexConnectionService) {
@@ -998,6 +1020,7 @@ const shutdown = () => {
   void Promise.allSettled([
     assistantRunDispatchRelay.stop(),
     assistantRunQueueReconciler.stop(),
+    personalAgentScheduler.stop(),
   ]).then(() => Promise.allSettled([
     assistantRunQueue.close(),
     codeAgentProviderAdmissionConnection?.quit() || Promise.resolve(),

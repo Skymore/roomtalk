@@ -2595,4 +2595,72 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON guest_ai_usage_events (client_id, created_at DESC);
     `,
   },
+  {
+    id: '0032_personal_agents',
+    sql: `
+      ALTER TABLE rooms
+        ADD COLUMN personal_agent_owner_id TEXT,
+        ADD COLUMN personal_agent_thread_kind TEXT CHECK (personal_agent_thread_kind IN ('main', 'task')),
+        ADD COLUMN personal_agent_goal_id TEXT;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_owner_check CHECK (
+        personal_agent_owner_id IS NULL OR
+        (personal_agent_owner_id = creator_id AND type = 'codeAgent'
+          AND code_agent_access = 'owner' AND code_agent_backend = 'codex-app-server')
+      );
+      CREATE INDEX idx_rooms_personal_agent_owner
+        ON rooms (personal_agent_owner_id, last_activity_at DESC)
+        WHERE personal_agent_owner_id IS NOT NULL;
+      CREATE UNIQUE INDEX idx_rooms_personal_agent_main
+        ON rooms (personal_agent_owner_id) WHERE personal_agent_thread_kind = 'main';
+
+      CREATE TABLE personal_agent_profiles (
+        client_id TEXT PRIMARY KEY REFERENCES client_account_links(client_id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT 'My Agent',
+        avatar TEXT NOT NULL DEFAULT '✦',
+        instructions TEXT NOT NULL DEFAULT '',
+        memory TEXT NOT NULL DEFAULT '',
+        main_room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE TABLE personal_agent_goals (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        schedule TEXT NOT NULL CHECK (schedule IN ('manual', 'daily', 'weekly')),
+        time TEXT NOT NULL DEFAULT '09:00',
+        timezone TEXT NOT NULL DEFAULT 'UTC',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        last_run_at TIMESTAMPTZ,
+        next_run_at TIMESTAMPTZ,
+        last_run_room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX idx_personal_agent_goals_due
+        ON personal_agent_goals (next_run_at) WHERE enabled = TRUE AND next_run_at IS NOT NULL;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_goal_fk
+        FOREIGN KEY (personal_agent_goal_id) REFERENCES personal_agent_goals(id) ON DELETE SET NULL;
+
+      CREATE FUNCTION capture_personal_agent_room_event_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE metadata JSONB;
+      BEGIN
+        IF NEW.event_type = 'room.updated' THEN
+          SELECT jsonb_build_object(
+            'personal_agent_owner_id', personal_agent_owner_id,
+            'personal_agent_thread_kind', personal_agent_thread_kind,
+            'personal_agent_goal_id', personal_agent_goal_id
+          ) INTO metadata FROM rooms WHERE id = NEW.room_id AND personal_agent_owner_id IS NOT NULL;
+          IF metadata IS NOT NULL THEN
+            NEW.payload := jsonb_set(NEW.payload, '{roomRow}', (NEW.payload->'roomRow') || metadata);
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER capture_personal_agent_room_event_metadata
+        BEFORE INSERT ON room_events FOR EACH ROW EXECUTE FUNCTION capture_personal_agent_room_event_metadata();
+    `,
+  },
 ];

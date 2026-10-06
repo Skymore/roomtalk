@@ -3,10 +3,11 @@ import { Button } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Room } from "../utils/types";
+import type { AppView } from "../utils/appPersistence";
 
 interface BottomNavProps {
-  view: "chat" | "rooms" | "saved" | "settings";
-  setView: (view: "chat" | "rooms" | "saved" | "settings") => void;
+  view: AppView;
+  setView: (view: AppView) => void;
   currentRoom: Room | null;
 }
 
@@ -33,6 +34,18 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             aria-current={view === "rooms" ? "page" : undefined}
           >
             <Icon icon="lucide:home" className="h-4 w-4" />
+          </Button>
+
+          <Button
+            isIconOnly
+            variant={view === "personal" || (view === "chat" && currentRoom?.personalAgentOwnerId) ? "solid" : "light"}
+            color="default"
+            onPress={() => setView("personal")}
+            className={`h-8 w-11 min-w-11 rounded-xl ${view === "personal" || (view === "chat" && currentRoom?.personalAgentOwnerId) ? activeClass : inactiveClass}`}
+            aria-label={t("personalAgent")}
+            aria-current={view === "personal" || (view === "chat" && currentRoom?.personalAgentOwnerId) ? "page" : undefined}
+          >
+            <Icon icon="lucide:bot" className="h-4 w-4" />
           </Button>
 
           <Button

@@ -8,7 +8,8 @@ import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, ClientAccount, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
-import { CodeAgentBackend, MediaAsset, MediaKind, Message, Room } from '../types';
+import { CodeAgentBackend, MediaAsset, MediaKind, Message, PersonalAgentGoal, Room } from '../types';
+import { registerPersonalAgentRoutes } from './personalAgentRoutes';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
@@ -58,6 +59,7 @@ const normalizeRoomNickname = (value: string): string | null => {
 };
 
 interface ApiRouteOptions {
+  personalAgentStartGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
   store: RoomStore;
   io: Server;
   redisClient: RedisClientType;
@@ -558,6 +560,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     res.status(401).json({ error: 'User ID password login is required' });
     return false;
   };
+
+  registerPersonalAgentRoutes(app, {
+    store, logger: routeLogger,
+    getClientId: req => getQueryClientId(req) || getBodyClientId(req),
+    authorizeClientRequest,
+    startGoal: options.personalAgentStartGoal,
+  });
 
   const resolveAccountRoles = async (account: ClientAccount) => {
     const existingRoles = await store.getAccountRoles(account.accountId);

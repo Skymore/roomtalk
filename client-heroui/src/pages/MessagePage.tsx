@@ -44,6 +44,7 @@ import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
 import { CodeAgentRoomView } from "../components/CodeAgentRoomView";
+import { PersonalAgentView } from "../components/PersonalAgentView";
 import { StatusMessage } from "../components/StatusMessage";
 import { useRoomSession } from "../hooks/useRoomSession";
 
@@ -1286,6 +1287,8 @@ export const MessagePage: React.FC = () => {
       ? t("savedRooms")
       : view === "settings"
         ? t("settings")
+        : view === "personal"
+          ? t("personalAgent")
         : currentRoom?.name || t("welcomeMessage");
 
   // Render content based on current view
@@ -1301,11 +1304,20 @@ export const MessagePage: React.FC = () => {
     }
 
     switch (view) {
+      case "personal":
+        return <PersonalAgentView
+          clientId={clientId}
+          roomUpdates={rooms}
+          onRoomSelect={handleRoomSelect}
+          onOpenConnections={() => handleViewChange("settings")}
+          showSuccess={showSuccess}
+          showError={setError}
+        />;
       case "rooms":
         return (
           <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <RoomList
-              rooms={rooms}
+              rooms={rooms.filter(room => !room.personalAgentOwnerId)}
               isLoading={isLoadingRooms}
               onRoomSelect={handleRoomSelect}
               onRoomSelectById={handleRoomSelectById}
@@ -1323,7 +1335,7 @@ export const MessagePage: React.FC = () => {
         return (
           <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <SavedRoomList
-              rooms={savedRooms}
+              rooms={savedRooms.filter(room => !room.personalAgentOwnerId)}
               isLoading={isLoadingSavedRooms}
               onRoomSelect={handleRoomSelect}
               onUnsaveRoom={handleUnsaveRoom}
@@ -1357,6 +1369,7 @@ export const MessagePage: React.FC = () => {
         if (codeAgentBackend) {
           return (
             <CodeAgentRoomView
+              personalAgent={Boolean(currentRoom.personalAgentOwnerId)}
               currentRoom={currentRoom}
               memberCount={memberCount}
               isRestoringRoom={isCurrentRoomSessionRestoring}
@@ -1371,7 +1384,7 @@ export const MessagePage: React.FC = () => {
               clientId={clientId}
               backend={codeAgentBackend}
               defaultBackend={featureFlags.codeAgent.defaultBackend}
-              availableBackends={getCodeAgentAvailableBackends(featureFlags)}
+              availableBackends={currentRoom.personalAgentOwnerId ? ['codex-app-server'] : getCodeAgentAvailableBackends(featureFlags)}
               availableModes={getCodeAgentAvailableModes(featureFlags)}
               defaultMode={getCodeAgentDefaultMode(featureFlags)}
               handleCopyToClipboard={handleCopyToClipboard}
@@ -1440,8 +1453,8 @@ export const MessagePage: React.FC = () => {
           username={username}
           view={view}
           setView={handleViewChange}
-          rooms={rooms}
-          savedRooms={savedRooms}
+          rooms={rooms.filter(room => !room.personalAgentOwnerId)}
+          savedRooms={savedRooms.filter(room => !room.personalAgentOwnerId)}
           isLoadingRooms={isLoadingRooms}
           isLoadingSavedRooms={isLoadingSavedRooms}
           currentRoom={currentRoom}

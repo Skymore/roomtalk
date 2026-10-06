@@ -212,6 +212,9 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  personalAgentOwnerId?: string;
+  personalAgentThreadKind?: 'main' | 'task';
+  personalAgentGoalId?: string;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
   type?: RoomType;
@@ -227,6 +230,33 @@ export interface Room {
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
   updatedAt?: string;
+}
+
+export interface PersonalAgentProfile {
+  clientId: string;
+  name: string;
+  avatar: string;
+  instructions: string;
+  memory: string;
+  mainRoomId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersonalAgentGoal {
+  id: string;
+  clientId: string;
+  title: string;
+  prompt: string;
+  schedule: 'manual' | 'daily' | 'weekly';
+  time: string;
+  timezone: string;
+  enabled: boolean;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastRunRoomId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RoomMessagePage {

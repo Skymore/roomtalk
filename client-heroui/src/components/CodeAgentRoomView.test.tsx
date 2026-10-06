@@ -284,8 +284,10 @@ const renderCodeAgentRoom = (
   roomPermissions: RoomPermissions | null = null,
   isRoomSessionReady = true,
   canUseRetainedRoomAccess = isRoomSessionReady,
+  personalAgent = false,
 ) => render(
   <CodeAgentRoomView
+    personalAgent={personalAgent}
     currentRoom={room}
     memberCount={1}
     isRestoringRoom={false}
@@ -330,6 +332,14 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('chat-header')).toBeTruthy();
     expect(screen.getByTestId('message-list').dataset.codeAgentBackend).toBe('codex');
     expect(screen.getByTestId('message-input-panel')).toBeTruthy();
+  });
+
+  it('uses a private personal header and starts with workspace tools collapsed', () => {
+    renderCodeAgentRoom({ ...codeAgentRoom, personalAgentOwnerId: 'client-1' }, ['plan'], 'plan', permissions(), true, true, true);
+    expect(screen.queryByTestId('chat-header')).toBeNull();
+    expect(screen.getByRole('button', { name: 'personalAgentBack' })).toBeTruthy();
+    expect(screen.getByText('personalAgentPrivateChat')).toBeTruthy();
+    expect(document.querySelector('[data-code-agent-files-collapsed="true"]')).toBeTruthy();
   });
 
   it('keeps cached code-agent rooms read-only until the room session is verified', async () => {

@@ -162,3 +162,56 @@ export const notifyRoomMessageBestEffort = (params: {
     });
   });
 };
+
+export const notifyPersonalAgentCompletion = async (params: {
+  store: RoomStore;
+  room: Room;
+  message: Message;
+  logger: Logger;
+}) => {
+  const { store, room, message, logger } = params;
+  const ownerId = room.personalAgentOwnerId;
+  const config = getPushConfig();
+  if (!ownerId || !config.enabled) return;
+
+  const [subscriptions, activeBrowsers, mutedClients] = await Promise.all([
+    store.readPushSubscriptionsByRoom(room.id),
+    store.getRoomActiveBrowserInstanceIds(room.id),
+    store.readMutedNotificationClientIdsByRoom(room.id),
+  ]);
+  const recipients = selectPushRecipients(
+    subscriptions.filter(subscription => subscription.clientId === ownerId),
+    new Set(activeBrowsers),
+    'ai_assistant',
+    new Set(mutedClients),
+  );
+  webPush.setVapidDetails(config.subject, config.publicKey, config.privateKey);
+  const payload = JSON.stringify({
+    type: 'room_message',
+    roomId: room.id,
+    messageId: message.id,
+    title: room.name || 'Personal Agent',
+    body: getMessagePreview(message),
+    url: `/?room=${encodeURIComponent(room.id)}`,
+  });
+  await Promise.all([...recipients.values()].map(async subscription => {
+    try {
+      await webPush.sendNotification({
+        endpoint: subscription.endpoint,
+        keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+      }, payload);
+    } catch (error) {
+      const sendError = error as WebPushSendError;
+      if (sendError.statusCode === 404 || sendError.statusCode === 410) {
+        await store.deletePushSubscription(ownerId, subscription.endpoint);
+      } else {
+        logger.warn('Failed to send personal agent completion notification', {
+          error,
+          roomId: room.id,
+          messageId: message.id,
+          recipientClientId: ownerId,
+        });
+      }
+    }
+  }));
+};

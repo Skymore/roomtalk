@@ -14,9 +14,9 @@ from urllib import request as urllib_request
 from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 
 ROOM_CONTEXT_SOCKET_ENV = "ROOMTALK_ROOM_CONTEXT_SOCKET"
-MAX_BROKER_REQUEST_BYTES = 16 * 1024
+MAX_BROKER_REQUEST_BYTES = 128 * 1024
 MAX_BROKER_RESPONSE_BYTES = 25 * 1024 * 1024
-_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$")
+_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$|^/personal-memory$")
 
 
 class RoomContextBrokerError(Exception):
@@ -25,10 +25,13 @@ class RoomContextBrokerError(Exception):
         self.code = code
 
 
-def _fetch_room_context(url: str, token: str) -> dict[str, Any]:
-    request = urllib_request.Request(url, method="GET", headers={
+def _fetch_room_context(url: str, token: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+    request = urllib_request.Request(url, method=method, data=(
+        json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    ), headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
+        **({"Content-Type": "application/json"} if body is not None else {}),
         "User-Agent": ROOMTALK_CODE_AGENT_USER_AGENT,
     })
     try:
@@ -77,9 +80,15 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
             path = request.get("path") if isinstance(request, dict) else None
             if not isinstance(path, str) or not _ALLOWED_PATH.fullmatch(path):
                 raise RoomContextBrokerError("Unsupported room context broker path", code="room_context_broker_path_denied")
+            method = request.get("method", "GET")
+            body = request.get("body")
+            if method != "GET" and not (method == "PATCH" and path == "/personal-memory" and isinstance(body, dict)):
+                raise RoomContextBrokerError("Unsupported room context broker operation", code="room_context_broker_operation_denied")
             server = self.server
             assert isinstance(server, _BrokerServer)
-            response = {"success": True, "payload": _fetch_room_context(f"{server.base_url}{path}", server.token)}
+            response = {"success": True, "payload": _fetch_room_context(
+                f"{server.base_url}{path}", server.token, method=method, body=body if method == "PATCH" else None,
+            )}
         except RoomContextBrokerError as exc:
             response = {"success": False, "error": str(exc), "code": exc.code}
         except Exception as exc:
