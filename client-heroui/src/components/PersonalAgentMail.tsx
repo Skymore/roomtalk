@@ -95,7 +95,7 @@ export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:str
   const items = mail.filter(message=>(tab !== 'unread' || message.unread) && `${message.sender} ${message.subject} ${message.body}`.toLowerCase().includes(query.toLowerCase()));
   const matchingDrafts = drafts.filter(draft=>`${draft.to.join(' ')} ${draft.subject} ${draft.body}`.toLowerCase().includes(query.toLowerCase()));
   return <section className="space-y-5">
-    <div className="flex items-center gap-3"><Input aria-label={t('personalGoogleSearchMail')} placeholder={t('personalGoogleSearchMail')} value={query} onValueChange={setQuery} startContent={<Icon icon="lucide:search" />} /><Button color="secondary" onPress={()=>{setError('');openEditor({...emptyDraft});}}>{t('personalGoogleCompose')}</Button></div>
+    <div className="flex items-center gap-3"><Input variant="bordered" labelPlacement="outside" aria-label={t('personalGoogleSearchMail')} placeholder={t('personalGoogleSearchMail')} value={query} onValueChange={setQuery} startContent={<Icon icon="lucide:search" />} /><Button color="secondary" onPress={()=>{setError('');openEditor({...emptyDraft});}}>{t('personalGoogleCompose')}</Button></div>
     <div className="rounded-3xl border border-default-200 bg-white p-5 dark:bg-[#20201f]">
       <div className="mb-4 flex flex-wrap gap-2">{(['all','unread','drafts'] as const).map(value=><Button key={value} size="sm" variant={value === tab ? 'flat' : 'light'} onPress={()=>setTab(value)}>{t(`personalGoogleMail_${value}`)}</Button>)}<Button size="sm" variant="light" isLoading={busy} onPress={()=>void refresh()}>{t('refresh')}</Button></div>
       {error && !selected && !editing && <p className="mb-3 text-sm text-danger" role="alert">{error}</p>}
@@ -113,9 +113,9 @@ export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:str
     </ModalBody><ModalFooter><Button color="secondary" onPress={()=>{if (selected) {openEditor({...emptyDraft,to:[selected.from],subject:/^re:/i.test(selected.subject) ? selected.subject : `Re: ${selected.subject}`,threadId:selected.threadId,replyToMessageId:selected.id});setSelected(undefined);setError('');}}}>{t('personalGoogleReply')}</Button></ModalFooter></ModalContent></Modal>
     <Modal isOpen={Boolean(editing)} onClose={()=>setEditing(undefined)} size="2xl" scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{t(editing?.threadId ? 'personalGoogleReply' : 'personalGoogleCompose')}</ModalHeader><ModalBody className="space-y-4">
       {editing && <>
-        {(['to','cc','bcc'] as const).map(field=><Input key={field} label={t(`personalGoogle${field === 'to' ? 'To' : field === 'cc' ? 'Cc' : 'Bcc'}`)} value={addressText[field]} onValueChange={value=>setAddressText({...addressText,[field]:value})} />)}
-        <Input label={t('personalGoogleSubject')} value={editing.subject} onValueChange={subject=>setEditing({...editing,subject})} />
-        <Textarea label={t('personalGoogleMessage')} minRows={7} value={editing.body} onValueChange={body=>setEditing({...editing,body})} />
+        {(['to','cc','bcc'] as const).map(field=><Input variant="bordered" labelPlacement="outside" key={field} label={t(`personalGoogle${field === 'to' ? 'To' : field === 'cc' ? 'Cc' : 'Bcc'}`)} value={addressText[field]} onValueChange={value=>setAddressText({...addressText,[field]:value})} />)}
+        <Input variant="bordered" labelPlacement="outside" label={t('personalGoogleSubject')} value={editing.subject} onValueChange={subject=>setEditing({...editing,subject})} />
+        <Textarea variant="bordered" labelPlacement="outside" label={t('personalGoogleMessage')} minRows={7} value={editing.body} onValueChange={body=>setEditing({...editing,body})} />
         {files.length>0 && <section className="space-y-3"><h3 className="text-sm font-medium">{t('personalGoogleAttachments')}</h3>{files.map(file=><Checkbox key={file.id} isSelected={editing.attachmentIds.includes(file.id)} onValueChange={selected=>setEditing({...editing,attachmentIds:selected ? [...editing.attachmentIds,file.id] : editing.attachmentIds.filter(id=>id !== file.id)})}>{file.name}</Checkbox>)}</section>}
       </>}
       {error && <p className="text-sm text-danger" role="alert">{error}</p>}

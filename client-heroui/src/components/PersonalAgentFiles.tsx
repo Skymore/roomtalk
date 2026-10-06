@@ -70,7 +70,7 @@ export const PersonalAgentFiles: React.FC<{ clientId: string; initialFileId?:str
         <Button variant="flat" onPress={() => { const link=document.createElement('a');link.href=url;link.download=selected.name;link.click(); }} startContent={<Icon icon="lucide:download" />}>{t('personalFilesDownload')}</Button>
         {selected.fields.length > 0 && <section className="space-y-4 rounded-2xl bg-default-50 p-4"><h3 className="font-semibold">{t('personalFilesFill')}</h3><p className="text-sm text-default-600">{t('personalFilesCopyHint')}</p>
           {selected.fields.map(function (field) {
-            if (field.type === 'text') return <Input key={field.name} label={field.name} value={String(values[field.name] ?? '')} onValueChange={value => setValues(previous => ({ ...previous,[field.name]: value }))} />;
+            if (field.type === 'text') return <Input variant="bordered" labelPlacement="outside" key={field.name} label={field.name} value={String(values[field.name] ?? '')} onValueChange={value => setValues(previous => ({ ...previous,[field.name]: value }))} />;
             if (field.type === 'checkbox') return <Checkbox key={field.name} isSelected={values[field.name] === true} onValueChange={value => setValues(previous => ({ ...previous,[field.name]: value }))}>{field.name}</Checkbox>;
             return <p key={field.name} className="text-sm text-default-500">{field.name} · {t('personalFilesUnsupported')}</p>;
           })}

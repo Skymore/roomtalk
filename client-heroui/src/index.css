@@ -236,3 +236,23 @@ body {
   --heroui-default-200: 240 4% 25%;
   --heroui-default-500: 203 6% 64%;
 }
+
+.personal-agent-theme [data-slot="input-wrapper"] {
+  background-color: #fff;
+  border: 1px solid #eeeef0;
+  border-radius: 19px;
+  box-shadow: none;
+  min-height: 45px;
+}
+.personal-agent-theme [data-slot="base"]:has([data-slot="input-wrapper"]) [data-slot="label"] {
+  color: #11191c;
+  font-size: 11px;
+  font-weight: 600;
+}
+.dark .personal-agent-theme [data-slot="input-wrapper"] {
+  background-color: #252522;
+  border-color: #39393b;
+}
+.dark .personal-agent-theme [data-slot="base"]:has([data-slot="input-wrapper"]) [data-slot="label"] {
+  color: #e7e7e8;
+}

@@ -84,7 +84,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
       <ModalBody className="gap-3 pb-5">
         <p className="text-xs text-default-500">{t('personalBrowserControlHint')}</p>
         <form className="flex gap-2" onSubmit={event => { event.preventDefault(); addressEdited.current = false; void update({ action: 'open', url: /^https?:\/\//i.test(address) ? address : `https://${address}` }); }}>
-          <Input aria-label={t('personalBrowserAddress')} placeholder="https://" value={address} onValueChange={value => { addressEdited.current = true; setAddress(value); }} isDisabled={!control.current || loading} />
+          <Input variant="bordered" labelPlacement="outside" aria-label={t('personalBrowserAddress')} placeholder="https://" value={address} onValueChange={value => { addressEdited.current = true; setAddress(value); }} isDisabled={!control.current || loading} />
           <Button type="submit" isDisabled={!control.current || !address.trim() || loading}>{t('personalResultOpen')}</Button>
         </form>
         {error && <p role="alert" className="rounded-xl bg-danger-50 px-3 py-2 text-sm text-danger">{error}</p>}
@@ -99,7 +99,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
         </div>
         {Boolean(frame?.downloads?.length) && <section className="space-y-2 rounded-xl border border-default-200 p-3"><h3 className="text-sm font-medium">{t('personalBrowserDownloads')}</h3>{frame?.downloads?.map(file => <div key={file.id} className="flex items-center justify-between gap-2"><span className="min-w-0 break-all text-xs">{file.name}</span><Button size="sm" variant="flat" isDisabled={loading || savedDownloads.includes(file.id)} onPress={()=>void update({action:'import_pdf',id:file.id})}>{t(savedDownloads.includes(file.id) ? 'personalBrowserPdfSaved' : 'personalBrowserImportPdf')}</Button></div>)}</section>}
         <form className="flex gap-2" onSubmit={event => { event.preventDefault(); const value = text; void update({ action: 'text', text: value }).then(success => { if (success) setText(current => current === value ? '' : current); }); }}>
-          <Input aria-label={t('personalBrowserText')} placeholder={t('personalBrowserText')} value={text} onValueChange={setText} isDisabled={!available} autoComplete="off" />
+          <Input variant="bordered" labelPlacement="outside" aria-label={t('personalBrowserText')} placeholder={t('personalBrowserText')} value={text} onValueChange={setText} isDisabled={!available} autoComplete="off" />
           <Button type="submit" isDisabled={!available || !text}>{t('sendMessage')}</Button>
         </form>
         <div className="flex flex-wrap gap-2 [&_button]:min-h-11">

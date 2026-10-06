@@ -41,8 +41,8 @@ const InputRequest:React.FC<{request:PersonalAgentInputRequest;onSubmit:SubmitIn
     <h3 className="text-sm font-semibold">{request.question}</h3>
     {request.fields.map(function(field){if(field.type==='checkbox') { return <Checkbox key={field.name} isSelected={values[field.name] === true} onValueChange={value=>setValues(previous=>({...previous,[field.name]:value}))}>{field.name}</Checkbox>;
       }
-      return <Input key={field.name} label={field.name} isRequired value={String(values[field.name] ?? '')} onValueChange={value=>setValues(previous=>({...previous,[field.name]:value}))} />;})}
-    {!request.fields.length && <Textarea label={t('personalTaskAnswer')} value={text} onValueChange={setText} isRequired />}
+      return <Input variant="bordered" labelPlacement="outside" key={field.name} label={field.name} isRequired value={String(values[field.name] ?? '')} onValueChange={value=>setValues(previous=>({...previous,[field.name]:value}))} />;})}
+    {!request.fields.length && <Textarea variant="bordered" labelPlacement="outside" label={t('personalTaskAnswer')} value={text} onValueChange={setText} isRequired />}
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     <Button type="submit" color="secondary" size="sm" isLoading={busy}>{t('personalTaskContinue')}</Button>
   </form>;

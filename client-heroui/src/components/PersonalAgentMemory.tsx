@@ -24,7 +24,7 @@ SOFTWARE.
 Ported from OpenMuse AppsScreen memory section / MemoryRow (73a7149).
 */
 import React from 'react';
-import {Button,Spinner,Textarea} from '@heroui/react';
+import {Button,Spinner,Input,Textarea} from '@heroui/react';
 import {useTranslation} from 'react-i18next';
 import {forgetPersonalAgentMemory,readPersonalAgentMemories,savePersonalAgentMemory,type PersonalAgentMemory as Memory} from '../utils/personalAgent';
 import {formatDate} from '../utils/formatters';
@@ -35,7 +35,7 @@ const MemoryRow:React.FC<{entry:Memory;mutate:MemoryMutation;busy:boolean}> = ({
   const {t,i18n}=useTranslation(),[editing,setEditing]=React.useState(false),[text,setText]=React.useState(entry.content),[error,setError]=React.useState('');
   const act=async(forget:boolean)=>{setError('');try{await mutate(entry,forget ? undefined : text);setEditing(false);}catch(failure){setError(failure instanceof Error ? failure.message : String(failure));}};
   return <article className="space-y-2 border-b border-[#eeeef0] pb-4 dark:border-[#30302e]" data-testid="personal-memory-entry">
-    {editing ? <Textarea label={t('personalAgentMemory')} value={text} onValueChange={setText} maxLength={8000} /> : <p className="whitespace-pre-wrap break-words text-sm leading-6">{entry.content}</p>}
+    {editing ? <Textarea variant="bordered" labelPlacement="outside" label={t('personalAgentMemory')} value={text} onValueChange={setText} maxLength={8000} /> : <p className="whitespace-pre-wrap break-words text-sm leading-6">{entry.content}</p>}
     <p className="text-xs text-default-500">{entry.source} · {formatDate(entry.createdAt,i18n.language)}</p>
     <div className="flex gap-2">
       {editing ? <Button size="sm" variant="light" isLoading={busy} isDisabled={!text.trim()} onPress={()=>void act(false)}>{t('personalMemorySaveCorrection')}</Button> : <Button size="sm" variant="light" isDisabled={busy} onPress={()=>{setText(entry.content);setEditing(true);}}>{t('edit')}</Button>}
@@ -59,8 +59,8 @@ export const PersonalAgentMemory:React.FC<{clientId:string;rooms:Room[];onRoomSe
     {loading && <Spinner size="sm" label={t('loading')}/> }
     {entries.map(entry=><MemoryRow key={entry.id} entry={entry} mutate={mutate} busy={busy} />)}
     {entries.length<total && <Button variant="light" isLoading={busy} onPress={()=>{setBusy(true);void readPersonalAgentMemories(clientId,'',entries.length).then(found=>{setEntries(previous=>[...previous,...found.memories]);setTotal(found.total);}).catch(failure=>showError(failure.message)).finally(()=>setBusy(false));}}>{t('loadMore')}</Button>}
-    <Textarea label={t('personalMemoryRememberAboutMe')} value={text} onValueChange={setText} placeholder={t('personalMemoryExample')} maxLength={8000} />
-    <Button size="sm" color="secondary" isLoading={busy} isDisabled={!text.trim()} onPress={()=>{
+    <Input variant="bordered" labelPlacement="outside" label={t('personalMemoryRememberAboutMe')} value={text} onValueChange={setText} placeholder={t('personalMemoryExample')} maxLength={8000} />
+    <Button className="h-[42px] rounded-[24px] bg-[#f1f2f3] px-[17px] text-[#11191c] dark:bg-default-100 dark:text-default-800" isLoading={busy} isDisabled={!text.trim()} onPress={()=>{
       const content=text.trim();setBusy(true);void savePersonalAgentMemory(clientId,{kind:'fact',title:content.split('\n')[0].slice(0,200),content})
         .then(saved=>{setEntries(previous=>[...previous,saved.memory]);setTotal(value=>value+1);setText('');showSuccess(t('personalMemorySaved'));})
         .catch(failure=>showError(failure.message)).finally(()=>setBusy(false));

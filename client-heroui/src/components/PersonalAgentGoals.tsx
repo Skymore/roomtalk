@@ -67,9 +67,9 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
     <Modal isOpen={Boolean(category)} onClose={()=>setCategory(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{t('personalGoalCreate')}</ModalHeader><ModalBody className="pb-6"><form className="space-y-4" onSubmit={event=>{event.preventDefault();void act(async()=>{
       const saved=await createPersonalAgentGoal(clientId,{title:title.trim(),prompt:description,category,schedule:'manual',time:'09:00',timezone:'UTC',milestones:milestones.split('\n').map(line=>line.trim()).filter(Boolean).map(title=>({id:crypto.randomUUID(),title,done:false}))});onGoalsChange([saved.goal,...goals]);setCategory(undefined);
     });}}>
-      <Input label={t('personalGoalYourGoal')} placeholder={t('personalGoalExample')} value={title} onValueChange={setTitle} maxLength={160}/>
-      <Textarea label={t('personalGoalSuccess')} value={description} onValueChange={setDescription} maxLength={4000}/>
-      <Textarea label={t('personalGoalMilestoneLines')} value={milestones} onValueChange={setMilestones}/>
+      <Input variant="bordered" labelPlacement="outside" label={t('personalGoalYourGoal')} placeholder={t('personalGoalExample')} value={title} onValueChange={setTitle} maxLength={160}/>
+      <Textarea variant="bordered" labelPlacement="outside" label={t('personalGoalSuccess')} value={description} onValueChange={setDescription} maxLength={4000}/>
+      <Textarea variant="bordered" labelPlacement="outside" label={t('personalGoalMilestoneLines')} value={milestones} onValueChange={setMilestones}/>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <Button type="submit" color="secondary" isLoading={busy} isDisabled={!title.trim()}>{t('personalGoalCreateButton')}</Button>
     </form></ModalBody></ModalContent></Modal>
