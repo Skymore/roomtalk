@@ -1,4 +1,4 @@
-import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory } from '../services/personalAgentMemory';
+import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory, mergePersonalMemories } from '../services/personalAgentMemory';
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
@@ -35,6 +35,9 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
       }
       if (library) {
         if (!write) return res.json(await readPersonalMemories(options.store, claims.clientId, req.query));
+        if (req.body?.action === 'merge') return res.json(await mergePersonalMemories(options.store, claims.clientId, req.body, {
+          label: 'Remembered in conversation', roomId: claims.roomId, turnId: claims.turnId,
+        }));
         if (req.body?.action === 'forget') return res.json(await forgetPersonalMemory(options.store, claims.clientId, req.body.id, req.body.expectedUpdatedAt));
         if (req.body?.action !== 'save') throw new RangeError('Invalid memory action');
         return res.json({ memory: await savePersonalMemory(options.store, claims.clientId, req.body, {
@@ -57,7 +60,7 @@ export const registerPersonalAgentContextRoutes = (app: Express, options: {
       }
       res.json({ memory: profile.memory, updatedAt: profile.updatedAt });
     } catch (error) {
-      if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: 'personal_memory_conflict' });
+      if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: error.existingMemory ? 'personal_memory_duplicate' : 'personal_memory_conflict', ...(error.existingMemory ? { existingMemory: error.existingMemory } : {}) });
       if (error instanceof RangeError) return res.status(400).json({ error: error.message, code: 'personal_memory_invalid' });
       if (error instanceof CodeAgentRoomContextError) {
         res.status(error.statusCode).json({ error: error.message, code: error.code });

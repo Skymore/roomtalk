@@ -215,6 +215,7 @@ export interface Room {
   personalAgentOwnerId?: string;
   personalAgentThreadKind?: 'main' | 'task';
   personalAgentGoalId?: string;
+  personalAgentMemoryId?: string;
   personalAgentArchivedAt?: string;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
@@ -253,6 +254,7 @@ export interface PersonalAgentMemory {
   source: string;
   sourceRoomId?: string;
   sourceTurnId?: string;
+  provenance?: { label: string; roomId?: string; turnId?: string; recordedAt: string }[];
   createdAt: string;
   updatedAt: string;
 }

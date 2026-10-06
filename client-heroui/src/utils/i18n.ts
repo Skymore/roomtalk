@@ -8,6 +8,16 @@ const FALLBACK_LANGUAGE = 'en';
 const resources: Record<string, { translation: Record<string, string> }> = {
   en: {
     translation: {
+      "personalMemoryOrganize": "Organize memories",
+      "personalMemorySelectRelated": "Select related memories of the same type.",
+      "personalMemoryMergeSelected": "Merge {{count}} memories",
+      "personalMemoryMerge": "Merge memories",
+      "personalMemoryMergeHint": "Review the original notes and keep only confirmed, current information. Saving keeps the first selected memory, combines its sources and removes the other copies.",
+      "personalMemorySources": "Sources ({{count}})",
+      "personalMemoryContinueTopic": "Continue this topic",
+      "personalMemoryTopicHint": "Include the brief, decisions, sources, verified work and next steps so another conversation can continue.",
+      "personalMemoryTopicTemplate": "Brief\n\nDecisions\n\nSources\n\nVerified work\n\nNext steps",
+
       "personalMemoryLibraryDescription": "Your agent remembers lasting preferences, confirmed facts and useful topic notes across conversations. Search, correct or forget them here.",
       "personalMemoryAdd": "Add a memory",
       "personalMemorySearch": "Search memories",
@@ -1050,6 +1060,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   zh: {
     translation: {
+      "personalMemoryOrganize": "整理记忆",
+      "personalMemorySelectRelated": "选择同一类型的相关记忆。",
+      "personalMemoryMergeSelected": "合并 {{count}} 条记忆",
+      "personalMemoryMerge": "合并记忆",
+      "personalMemoryMergeHint": "查看原笔记，保留已确认且仍有效的信息。保存后会保留第一条选中的记忆，合并来源并移除其他副本。",
+      "personalMemorySources": "来源（{{count}}）",
+      "personalMemoryContinueTopic": "继续这个话题",
+      "personalMemoryTopicHint": "记录任务背景、决定、来源、已验证工作和下一步，让另一段聊天接着推进。",
+      "personalMemoryTopicTemplate": "任务背景\n\n已决定\n\n来源\n\n已验证工作\n\n下一步",
+
       "personalMemoryLibraryDescription": "Agent 会跨对话记住长期偏好、你确认的信息和话题笔记。在这里检索、修正或忘记。",
       "personalMemoryAdd": "添加记忆",
       "personalMemorySearch": "搜索记忆",
@@ -2092,6 +2112,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   hi: {
     translation: {
+      "personalMemoryOrganize": "यादें व्यवस्थित करें",
+      "personalMemorySelectRelated": "एक ही प्रकार की संबंधित यादें चुनें।",
+      "personalMemoryMergeSelected": "{{count}} यादें मिलाएँ",
+      "personalMemoryMerge": "यादें मिलाएँ",
+      "personalMemoryMergeHint": "मूल नोट जाँचें और केवल पुष्ट, वर्तमान जानकारी रखें। पहली चुनी याद और सभी स्रोत रहेंगे, अन्य प्रतियाँ हट जाएँगी।",
+      "personalMemorySources": "स्रोत ({{count}})",
+      "personalMemoryContinueTopic": "यह विषय जारी रखें",
+      "personalMemoryTopicHint": "सार, निर्णय, स्रोत, सत्यापित काम और अगले कदम लिखें ताकि दूसरी बातचीत आगे बढ़ सके।",
+      "personalMemoryTopicTemplate": "सार\n\nनिर्णय\n\nस्रोत\n\nसत्यापित काम\n\nअगले कदम",
+
       "personalMemoryLibraryDescription": "आपका एजेंट बातचीत के बीच स्थायी पसंद, पुष्टि की गई जानकारी और विषय नोट याद रखता है। यहाँ खोजें, सुधारें या भूलें।",
       "personalMemoryAdd": "याद जोड़ें",
       "personalMemorySearch": "यादें खोजें",
@@ -3136,6 +3166,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
 resources.ja = {
   translation: {
+      "personalMemoryOrganize": "メモリを整理",
+      "personalMemorySelectRelated": "同じ種類の関連するメモリを選択します。",
+      "personalMemoryMergeSelected": "{{count}} 件を統合",
+      "personalMemoryMerge": "メモリを統合",
+      "personalMemoryMergeHint": "元のメモを確認し、確かな最新情報だけを残してください。最初に選んだメモと出典を残し、他のコピーを削除します。",
+      "personalMemorySources": "出典（{{count}}）",
+      "personalMemoryContinueTopic": "この話題を続ける",
+      "personalMemoryTopicHint": "概要、決定事項、出典、検証済みの作業、次の手順を記録し、別の会話に引き継ぎます。",
+      "personalMemoryTopicTemplate": "概要\n\n決定事項\n\n出典\n\n検証済みの作業\n\n次の手順",
+
       "personalMemoryLibraryDescription": "会話をまたいで好み、確認済みの情報、話題のメモを記憶します。ここで検索・修正・削除できます。",
       "personalMemoryAdd": "記憶を追加",
       "personalMemorySearch": "記憶を検索",
@@ -4147,6 +4187,16 @@ resources.ja = {
 
 resources.ko = {
   translation: {
+      "personalMemoryOrganize": "기억 정리",
+      "personalMemorySelectRelated": "같은 유형의 관련 기억을 선택하세요.",
+      "personalMemoryMergeSelected": "기억 {{count}}개 병합",
+      "personalMemoryMerge": "기억 병합",
+      "personalMemoryMergeHint": "원본 메모를 확인하고 검증된 최신 정보만 남기세요. 첫 번째로 선택한 기억과 출처를 보존하고 나머지 사본은 삭제합니다.",
+      "personalMemorySources": "출처 ({{count}})",
+      "personalMemoryContinueTopic": "이 주제 계속하기",
+      "personalMemoryTopicHint": "다른 대화에서 이어갈 수 있도록 배경, 결정, 출처, 검증된 작업과 다음 단계를 기록하세요.",
+      "personalMemoryTopicTemplate": "배경\n\n결정\n\n출처\n\n검증된 작업\n\n다음 단계",
+
       "personalMemoryLibraryDescription": "대화마다 선호, 확인된 정보와 주제 메모를 기억합니다. 여기서 검색, 수정 또는 삭제하세요.",
       "personalMemoryAdd": "기억 추가",
       "personalMemorySearch": "기억 검색",

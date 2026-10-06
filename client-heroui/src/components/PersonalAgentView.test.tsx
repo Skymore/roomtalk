@@ -8,7 +8,7 @@ import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 const api = vi.hoisted(() => ({
   getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
   cancelPersonalAgentGoal: vi.fn(), createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
-  readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
+  mergePersonalAgentMemories: vi.fn(), readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
 }));
 vi.mock('../utils/personalAgent', () => api);
 vi.mock('../utils/codexConnection', () => api);
@@ -188,4 +188,24 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings' }));
     expect(callbacks.onOpenConnections).toHaveBeenCalled();
   });
+  it('continues a topic using its persistent document and merges reviewed notes with captured revisions', async () => {
+    const first = { id: 'memory-1', clientId: 'client-1', kind: 'topic', title: 'Trip plan', content: 'Earlier plan', source: 'Added by you', createdAt: '2026-10-06T00:00:00Z', updatedAt: '2026-10-06T00:00:00Z' };
+    const second = { ...first, id: 'memory-2', title: 'Travel research', content: 'New confirmed destination' };
+    api.readPersonalAgentMemories.mockResolvedValue({ memories: [first, second], total: 2 });
+    api.createPersonalAgentThread.mockResolvedValue({ room: { ...snapshot.rooms[0], id: 'topic-room', personalAgentMemoryId: first.id } });
+    api.mergePersonalAgentMemories.mockResolvedValue({ memory: first });
+    const callbacks = props(); render(<PersonalAgentView {...callbacks} />);
+    await screen.findByText('Muse'); fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    await screen.findByText('Trip plan');
+    fireEvent.click(screen.getAllByRole('button', { name: 'personalMemoryContinueTopic' })[0]);
+    await waitFor(() => expect(api.createPersonalAgentThread).toHaveBeenCalledWith('client-1', 'Trip plan', first.id));
+    await waitFor(() => expect(callbacks.onRoomSelect).toHaveBeenCalledWith(expect.objectContaining({ personalAgentMemoryId: first.id })));
+    fireEvent.click(screen.getByRole('button', { name: 'personalMemoryOrganize' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Trip plan' })); fireEvent.click(screen.getByRole('checkbox', { name: 'Travel research' }));
+    fireEvent.click(screen.getByRole('button', { name: 'personalMemoryMergeSelected' }));
+    fireEvent.change(screen.getByLabelText('personalMemoryContent'), { target: { value: 'Confirmed destination and next steps' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'save' }));
+    await waitFor(() => expect(api.mergePersonalAgentMemories).toHaveBeenCalledWith('client-1', { kind: 'topic', title: 'Trip plan', content: 'Confirmed destination and next steps' }, [first, second]));
+  });
+
 });

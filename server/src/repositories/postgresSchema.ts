@@ -2742,4 +2742,40 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         EXECUTE FUNCTION queue_active_room_change();
     `,
   },
+  {
+    id: '0037_personal_agent_topic_handoff',
+    sql: `
+      ALTER TABLE personal_agent_memories ADD COLUMN provenance JSONB NOT NULL DEFAULT '[]'::jsonb;
+      UPDATE personal_agent_memories SET provenance = jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+        'label', source, 'roomId', source_room_id, 'turnId', source_turn_id, 'recordedAt', updated_at
+      )));
+      ALTER TABLE rooms ADD COLUMN personal_agent_memory_id TEXT
+        REFERENCES personal_agent_memories(id) ON DELETE SET NULL;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_memory_check CHECK (
+        personal_agent_memory_id IS NULL OR (personal_agent_owner_id IS NOT NULL AND personal_agent_thread_kind = 'task')
+      );
+      CREATE OR REPLACE FUNCTION capture_personal_agent_room_event_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE metadata JSONB;
+      BEGIN
+        IF NEW.event_type = 'room.updated' THEN
+          SELECT jsonb_build_object(
+            'personal_agent_owner_id', personal_agent_owner_id,
+            'personal_agent_thread_kind', personal_agent_thread_kind,
+            'personal_agent_goal_id', personal_agent_goal_id,
+            'personal_agent_archived_at', personal_agent_archived_at,
+            'personal_agent_memory_id', personal_agent_memory_id
+          ) INTO metadata FROM rooms WHERE id = NEW.room_id AND personal_agent_owner_id IS NOT NULL;
+          IF metadata IS NOT NULL THEN
+            NEW.payload := jsonb_set(NEW.payload, '{roomRow}', (NEW.payload->'roomRow') || metadata);
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER rooms_personal_agent_memory_change_event
+        AFTER UPDATE ON rooms FOR EACH ROW
+        WHEN (NEW.personal_agent_memory_id IS DISTINCT FROM OLD.personal_agent_memory_id)
+        EXECUTE FUNCTION queue_active_room_change();
+    `,
+  },
 ];

@@ -202,6 +202,7 @@ export interface Room {
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
   personalAgentOwnerId?: string;
+  personalAgentMemoryId?: string;
   personalAgentThreadKind?: 'main' | 'task';
   personalAgentArchivedAt?: string;
   hasPassword?: boolean;

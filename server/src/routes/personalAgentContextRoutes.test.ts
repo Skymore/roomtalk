@@ -28,12 +28,16 @@ describe('personal agent memory broker', () => {
         creatorId: 'owner', type: 'codeAgent', personalAgentOwnerId: personalOwner }; },
       async hasActiveCodeAgentRoomLease(_room: string, _now: string, turn: string) { return active && turn === 'turn'; },
       async getPersonalAgentProfile() { return profile; },
-      async readPersonalAgentMemories() { return { memories, total: memories.length }; },
+      async readPersonalAgentMemories(_owner: string, options: { id?: string } = {}) { const selected = options.id ? memories.filter(item => item.id === options.id) : memories; return { memories: selected, total: selected.length }; },
       async savePersonalAgentMemory(entry: PersonalAgentMemory, expected?: string) {
         const existing = memories.find(item => item.id === entry.id);
         if (expected && existing?.updatedAt !== expected) return null;
         const saved = { ...entry, updatedAt: expected ? '2026-10-06T02:00:00.000Z' : entry.updatedAt };
         memories = [...memories.filter(item => item.id !== entry.id), saved]; return saved;
+      },
+      async mergePersonalAgentMemories(entry: PersonalAgentMemory, selected: { id: string; updatedAt: string }[]) {
+        if (selected.some(item => memories.find(note => note.id === item.id)?.updatedAt !== item.updatedAt)) return null;
+        memories = [...memories.filter(note => !selected.some(item => item.id === note.id)), entry]; return entry;
       },
       async deletePersonalAgentMemory(_owner: string, id: string, expected: string) {
         const existing = memories.find(item => item.id === id);
@@ -100,6 +104,26 @@ describe('personal agent memory broker', () => {
     active = true;
     assert.equal((await fetch(path, { method: 'PATCH', headers, body: forget })).status, 200);
     assert.equal(memories.length, 0);
+  });
+
+  it('reads full documents by id and merges through the same active owner broker', async () => {
+    const headers = tokenHeaders();
+    const create = async (title: string) => (await (await fetch(`${url}/records`, { method: 'PATCH', headers,
+      body: JSON.stringify({ action: 'save', kind: 'topic', title, content: 'Decision and next steps' }) })).json() as { memory: PersonalAgentMemory }).memory;
+    const first = await create('Main topic'), second = await create('Related topic');
+    const selected = await (await fetch(`${url}/records?id=${first.id}`, { headers })).json() as { memories: PersonalAgentMemory[] };
+    assert.equal(selected.memories.length, 1); assert.equal(selected.memories[0].id, first.id);
+    const body = { action: 'merge', id: first.id, clientId: 'forged-owner', kind: 'topic', title: 'Main topic', content: 'Reviewed current decision',
+      entries: [first, second].map(({ id, updatedAt }) => ({ id, updatedAt })) };
+    assert.equal((await fetch(`${url}/records`, { method: 'PATCH', headers: tokenHeaders('plan'), body: JSON.stringify(body) })).status, 403);
+    const response = await fetch(`${url}/records`, { method: 'PATCH', headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 200);
+    const { memory } = await response.json() as { memory: PersonalAgentMemory };
+    assert.equal(memory.clientId, 'owner'); assert.equal(memory.sourceRoomId, 'room'); assert.equal(memory.sourceTurnId, 'turn');
+    assert.equal(memories.length, 1);
+    assert.equal((await fetch(`${url}/records`, { method: 'PATCH', headers, body: JSON.stringify(body) })).status, 409);
+    active = false;
+    assert.equal((await fetch(`${url}/records`, { method: 'PATCH', headers, body: JSON.stringify(body) })).status, 403);
   });
 
 });

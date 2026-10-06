@@ -266,4 +266,48 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!.lastRunAt, undefined);
     assert.ok(await store.getRoomById(profile.mainRoomId));
   });
+  it('prevents normalized duplicates and atomically merges current revisions, sources and topic links', async () => {
+    const suffix = randomUUID();
+    const source = await store.createPersonalAgentThread(owner, 'Research source');
+    const make = (title: string, content: string) => ({ id: randomUUID(), clientId: owner, kind: 'topic' as const,
+      title, content, source: 'Remembered in conversation', sourceRoomId: source.id, sourceTurnId: randomUUID(), createdAt: now, updatedAt: now });
+    const competing = await Promise.allSettled([
+      store.savePersonalAgentMemory(make(`Topic ${suffix}`, 'Earlier decision')),
+      store.savePersonalAgentMemory(make(`  ＴＯＰＩＣ   ${suffix.toUpperCase()}  `, 'Different decision')),
+    ]);
+    assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+    const first = (competing.find(result => result.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof store.savePersonalAgentMemory>>>).value!;
+    const duplicate = competing.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    assert.equal(duplicate.reason.existingMemory.id, first.id);
+    const second = (await store.savePersonalAgentMemory(make(`Related ${suffix}`, 'Updated confirmed decision')))!;
+    const linked = await store.createPersonalAgentThread(owner, 'Continue research', second.id);
+    assert.equal(linked.personalAgentMemoryId, second.id);
+    assert.equal((await store.readPersonalAgentMemories('another-owner', { id: first.id })).total, 0);
+    await assert.rejects(store.createPersonalAgentThread('another-owner', 'Foreign topic', second.id), /unavailable/);
+    const historical = await store.readRoomEvents(linked.id, { afterSeq: 0 });
+    assert.equal(historical.events.find(event => event.type === 'room.updated')!.payload.room!.personalAgentMemoryId, second.id);
+    const revised = (await store.savePersonalAgentMemory({ ...second, content: 'Newer decision', source: 'Edited by you', sourceRoomId: undefined, sourceTurnId: undefined }, second.updatedAt))!;
+    const mergedDraft = { ...first, content: 'Confirmed decision with sources and next steps', source: 'Edited by you', sourceRoomId: undefined, sourceTurnId: undefined };
+    assert.equal(await store.mergePersonalAgentMemories(mergedDraft, [{ id: first.id, updatedAt: first.updatedAt }, { id: second.id, updatedAt: second.updatedAt }]), null);
+    assert.equal((await store.readPersonalAgentMemories(owner, { id: first.id })).memories[0].content, first.content);
+    assert.equal((await store.readPersonalAgentMemories(owner, { id: second.id })).total, 1);
+    const merged = (await store.mergePersonalAgentMemories(mergedDraft, [{ id: first.id, updatedAt: first.updatedAt }, { id: revised.id, updatedAt: revised.updatedAt }]))!;
+    assert.equal(merged.id, first.id);
+    assert.equal(merged.provenance!.filter(item => item.roomId === source.id).length, 2);
+    assert.ok(merged.provenance!.some(item => item.label === 'Edited by you'));
+    assert.equal((await store.readPersonalAgentMemories(owner, { id: second.id })).total, 0);
+    assert.equal(await store.savePersonalAgentMemory(second, revised.updatedAt), null);
+    assert.equal((await store.getRoomById(linked.id))!.personalAgentMemoryId, first.id);
+    // An old workspace update must not restore a superseded topic link.
+    await store.saveRoom({ ...linked, sandboxStatus: 'ready' });
+    assert.equal((await store.getRoomById(linked.id))!.personalAgentMemoryId, first.id);
+    const rebound = await store.readRoomEvents(linked.id, { afterSeq: 0 });
+    assert.deepEqual(rebound.events.slice(0, historical.events.length), historical.events);
+    assert.equal(rebound.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentMemoryId, first.id);
+    assert.equal(await store.deletePersonalAgentMemory(owner, merged.id, merged.updatedAt), true);
+    assert.equal((await store.getRoomById(linked.id))!.personalAgentMemoryId, undefined);
+    const forgotten = await store.readRoomEvents(linked.id, { afterSeq: 0 });
+    assert.equal(forgotten.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentMemoryId, undefined);
+  });
+
 });

@@ -199,3 +199,34 @@ def test_goal_cli_uses_private_broker_for_revisions_and_owner_scoped_status(tmp_
         assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
     finally:
         broker.close()
+
+
+def test_memory_merge_cli_keeps_revisions_and_token_inside_private_broker(tmp_path: Path, monkeypatch, capsys):
+    requests = []
+
+    def fake_fetch(url, token, *, method="GET", body=None):
+        requests.append((url, token, method, body))
+        return {"memories": [{"id": "one", "content": "Full document"}]} if method == "GET" else {"memory": {"id": "one"}}
+
+    monkeypatch.setattr(room_context_broker, "_fetch_room_context", fake_fetch)
+    env = {"ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+           "ROOMTALK_ROOM_CONTEXT_TOKEN": "private-topic-token", "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}"}
+    broker = room_context_broker.start_room_context_broker(env, "topic-turn")
+    try:
+        monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_SOCKET", env["ROOMTALK_ROOM_CONTEXT_SOCKET"])
+        assert platform_tools.main(["memory", "list", "--id", "one", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["memories"][0]["content"] == "Full document"
+        assert "id=one" in requests[-1][0]
+        source = tmp_path / "merge.json"
+        payload = {"id": "one", "kind": "topic", "title": "Research", "content": "Reviewed decisions and next steps",
+                   "entries": [{"id": "one", "updatedAt": "v1"}, {"id": "two", "updatedAt": "v2"}]}
+        source.write_text(json.dumps(payload))
+        assert platform_tools.main(["memory", "merge", "--file", str(source), "--json"]) == 0
+        assert "private-topic-token" not in capsys.readouterr().out
+        assert requests[-1][2:] == ("PATCH", {**payload, "action": "merge"})
+        monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+        assert platform_tools.main(["memory", "merge", "--file", str(source), "--json"]) == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+        assert len(requests) == 2
+    finally:
+        broker.close()

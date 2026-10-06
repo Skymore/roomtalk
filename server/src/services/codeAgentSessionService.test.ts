@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Writable } from 'node:stream';
 import { Logger } from '../logger';
-import { AIModelOption, CodeAgentMode, MediaAsset, Message, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentMode, MediaAsset, Message, PersonalAgentMemory, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
@@ -1302,6 +1302,30 @@ describe('CodeAgentSessionService', () => {
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
     assert.match(runner.requests[1].prompt, /I moved to Vancouver/);
     assert.doesNotMatch(runner.requests[1].prompt, /I work in Seattle/);
+  });
+
+  it('reloads the full linked topic on every turn and stops injecting a forgotten document', async () => {
+    let topic: PersonalAgentMemory | undefined = { id: 'topic-1', clientId: 'client-1', kind: 'topic', title: 'Project handoff',
+      content: 'Verified work '.repeat(60) + 'OLD_NEXT_STEP', source: 'Added by you', createdAt: '2026-05-03T00:00:00Z', updatedAt: '2026-05-03T00:00:00Z' };
+    const store = Object.assign(new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1', personalAgentMemoryId: 'topic-1', codeAgentBackend: 'hermes-agent' }), [userMessage('Continue')]), {
+      async readPersonalAgentMemories(clientId: string, options: { id?: string }) {
+        assert.equal(clientId, 'client-1');
+        return { memories: options.id === topic?.id && topic ? [topic] : [], total: topic ? 1 : 0 };
+      },
+    });
+    store.personalAgentProfiles.set('client-1', { clientId: 'client-1', name: 'Muse', avatar: 'M', instructions: '', memory: '', mainRoomId: 'room-1', createdAt: '2026-05-03T00:00:00Z', updatedAt: '2026-05-03T00:00:00Z' });
+    const runner = new FakeCodeAgentRunnerClient([acpFinalEvent('hermes-agent', 'Continued')]);
+    const { service } = createService({ store, runner, backend: 'hermes-agent', ids: Array.from({ length: 40 }, (_, index) => `topic-${index}`) });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.match(runner.requests[0].prompt, /Current topic handoff/);
+    assert.match(runner.requests[0].prompt, /OLD_NEXT_STEP/);
+    topic = { ...topic!, content: 'Verified work '.repeat(60) + 'CURRENT_NEXT_STEP', updatedAt: '2026-05-03T01:00:00Z' };
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.match(runner.requests[1].prompt, /CURRENT_NEXT_STEP/);
+    assert.doesNotMatch(runner.requests[1].prompt, /OLD_NEXT_STEP/);
+    topic = undefined;
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    assert.doesNotMatch(runner.requests[2].prompt, /Current topic handoff|CURRENT_NEXT_STEP/);
   });
 
   it('keeps the personal memory token valid for the configured agent turn duration', async () => {

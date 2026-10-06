@@ -12,6 +12,9 @@ import {
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
 export class PersonalAgentGoalConflictError extends Error {}
+export class PersonalAgentMemoryConflictError extends Error {
+  constructor(message: string, readonly existingMemory?: PersonalAgentMemory) { super(message); }
+}
 
 export type ClientPresenceEventAction = 'online' | 'offline';
 
@@ -774,11 +777,12 @@ export interface DurableRoomStore {
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
   ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
   updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
-  readPersonalAgentMemories?(clientId: string, options?: { query?: string; kind?: string; limit?: number; offset?: number }): Promise<{ memories: PersonalAgentMemory[]; total: number }>;
+  readPersonalAgentMemories?(clientId: string, options?: { id?: string; query?: string; kind?: string; limit?: number; offset?: number }): Promise<{ memories: PersonalAgentMemory[]; total: number }>;
   savePersonalAgentMemory?(memory: PersonalAgentMemory, expectedUpdatedAt?: string): Promise<PersonalAgentMemory | null>;
+  mergePersonalAgentMemories?(memory: PersonalAgentMemory, entries: { id: string; updatedAt: string }[]): Promise<PersonalAgentMemory | null>;
   deletePersonalAgentMemory?(clientId: string, id: string, expectedUpdatedAt: string): Promise<boolean>;
   readPersonalAgentRooms?(clientId: string): Promise<Room[]>;
-  createPersonalAgentThread?(clientId: string, name: string): Promise<Room>;
+  createPersonalAgentThread?(clientId: string, name: string, memoryId?: string): Promise<Room>;
   updatePersonalAgentThread?(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }): Promise<Room | null>;
   readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
   savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
@@ -1003,13 +1007,18 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
   }
 
-  readPersonalAgentMemories(clientId: string, options?: { query?: string; kind?: string; limit?: number; offset?: number }) {
+  readPersonalAgentMemories(clientId: string, options?: { id?: string; query?: string; kind?: string; limit?: number; offset?: number }) {
     return this.durableStore.readPersonalAgentMemories?.(clientId, options) || Promise.resolve({ memories: [], total: 0 });
   }
 
   savePersonalAgentMemory(memory: PersonalAgentMemory, expectedUpdatedAt?: string) {
     if (!this.durableStore.savePersonalAgentMemory) throw new Error('Personal memory requires PostgreSQL');
     return this.durableStore.savePersonalAgentMemory(memory, expectedUpdatedAt);
+  }
+
+  mergePersonalAgentMemories(memory: PersonalAgentMemory, entries: { id: string; updatedAt: string }[]) {
+    if (!this.durableStore.mergePersonalAgentMemories) throw new Error('Personal memory requires PostgreSQL');
+    return this.durableStore.mergePersonalAgentMemories(memory, entries);
   }
 
   deletePersonalAgentMemory(clientId: string, id: string, expectedUpdatedAt: string) {
@@ -1020,9 +1029,9 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.readPersonalAgentRooms?.(clientId) || Promise.resolve([]);
   }
 
-  createPersonalAgentThread(clientId: string, name: string) {
+  createPersonalAgentThread(clientId: string, name: string, memoryId?: string) {
     if (!this.durableStore.createPersonalAgentThread) throw new Error('Personal agents require PostgreSQL');
-    return this.durableStore.createPersonalAgentThread(clientId, name);
+    return this.durableStore.createPersonalAgentThread(clientId, name, memoryId);
   }
 
   updatePersonalAgentThread(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }) {

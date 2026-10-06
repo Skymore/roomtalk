@@ -69,7 +69,7 @@ export const updatePersonalAgentProfile = (
   expectedUpdatedAt?: string,
 ) => request<{ profile: PersonalAgentProfile }>(clientId, '/profile', 'PUT', { ...profile, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 
-export const createPersonalAgentThread = (clientId: string, name: string) => request<{ room: Room }>(clientId, '/threads', 'POST', { name });
+export const createPersonalAgentThread = (clientId: string, name: string, memoryId?: string) => request<{ room: Room }>(clientId, '/threads', 'POST', { name, ...(memoryId ? { memoryId } : {}) });
 
 export const updatePersonalAgentThread = (clientId: string, id: string, updates: { name?: string; archived?: boolean }) =>
   request<{ room: Room }>(clientId, `/threads/${encodeURIComponent(id)}`, 'PATCH', updates);
@@ -98,6 +98,7 @@ export interface PersonalAgentMemory {
   source: string;
   sourceRoomId?: string;
   sourceTurnId?: string;
+  provenance?: { label: string; roomId?: string; turnId?: string; recordedAt: string }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -107,3 +108,5 @@ export const savePersonalAgentMemory = (clientId: string, entry: Pick<PersonalAg
   request<{ memory: PersonalAgentMemory }>(clientId, existing ? `/memories/${encodeURIComponent(existing.id)}` : '/memories', existing ? 'PATCH' : 'POST', { ...entry, ...(existing ? { expectedUpdatedAt: existing.updatedAt } : {}) });
 export const forgetPersonalAgentMemory = (clientId: string, entry: PersonalAgentMemory) =>
   request<{ success: true }>(clientId, `/memories/${encodeURIComponent(entry.id)}`, 'DELETE', { expectedUpdatedAt: entry.updatedAt });
+export const mergePersonalAgentMemories = (clientId: string, entry: Pick<PersonalAgentMemory, 'kind' | 'title' | 'content'>, selected: PersonalAgentMemory[]) =>
+  request<{ memory: PersonalAgentMemory }>(clientId, '/memories/merge', 'POST', { ...entry, id: selected[0].id, entries: selected.map(({ id, updatedAt }) => ({ id, updatedAt })) });

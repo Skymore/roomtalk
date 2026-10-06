@@ -2,7 +2,7 @@ import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import { PersonalAgentGoalConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
-import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory } from '../services/personalAgentMemory';
+import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory, mergePersonalMemories } from '../services/personalAgentMemory';
 import { savePersonalAgentGoal } from '../services/personalAgentGoals';
 
 export interface PersonalAgentRouteOptions {
@@ -34,7 +34,8 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (!store.ensurePersonalAgentProfile) return res.status(503).json({ error: 'Personal agents are unavailable' });
       return await handler(req, res, await store.ensurePersonalAgentProfile(clientId));
     } catch (error) {
-      if (error instanceof PersonalAgentGoalConflictError || error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message });
+      if (error instanceof PersonalAgentGoalConflictError) return res.status(409).json({ error: error.message });
+      if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: error.existingMemory ? 'personal_memory_duplicate' : 'personal_memory_conflict', ...(error.existingMemory ? { existingMemory: error.existingMemory } : {}) });
       if (error instanceof RangeError) return res.status(400).json({ error: error.message });
       options.logger.error('Personal agent request failed', { error, clientId, endpoint: req.path });
       return res.status(500).json({ error: 'Unable to update your personal agent' });
@@ -52,6 +53,8 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     res.json(await readPersonalMemories(store, profile.clientId, req.query))));
   app.post('/api/personal-agent/memories', withProfile(async (req, res, profile) =>
     res.status(201).json({ memory: await savePersonalMemory(store, profile.clientId, { ...req.body, id: undefined }, { label: 'Added by you' }) })));
+  app.post('/api/personal-agent/memories/merge', withProfile(async (req, res, profile) =>
+    res.json(await mergePersonalMemories(store, profile.clientId, req.body || {}, { label: 'Edited by you' }))));
   app.patch('/api/personal-agent/memories/:id', withProfile(async (req, res, profile) =>
     res.json({ memory: await savePersonalMemory(store, profile.clientId, { ...req.body, id: req.params.id }, { label: 'Edited by you' }) })));
   app.delete('/api/personal-agent/memories/:id', withProfile(async (req, res, profile) =>
@@ -72,7 +75,8 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   }));
 
   app.post('/api/personal-agent/threads', withProfile(async (req, res, profile) => {
-    const room = await store.createPersonalAgentThread!(profile.clientId, textField(req.body?.name, 'name', 100));
+    const memoryId = req.body?.memoryId === undefined ? undefined : textField(req.body.memoryId, 'memoryId', 100);
+    const room = await store.createPersonalAgentThread!(profile.clientId, textField(req.body?.name, 'name', 100), memoryId);
     return res.status(201).json({ room });
   }));
 

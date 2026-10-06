@@ -46,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _require_write_access(env)
             result = _personal_goal(args, env)
         elif args.command == "memory":
-            if args.memory_command in ("set", "save", "forget"):
+            if args.memory_command in ("set", "save", "forget", "merge"):
                 _require_write_access(env)
             result = _personal_memory(args, env)
         else:  # pragma: no cover - argparse prevents this.
@@ -135,6 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_search = memory_subparsers.add_parser("search", help="Find persistent memories by keywords.")
     memory_search.add_argument("--query", required=True)
     for command in (memory_list, memory_search):
+        command.add_argument("--id", help="Read one full document by its persistent id.")
         command.add_argument("--kind", choices=("preference", "fact", "topic"))
         command.add_argument("--limit", type=int, default=50)
         command.add_argument("--offset", type=int, default=0)
@@ -142,6 +143,9 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_save = memory_subparsers.add_parser("save", help="Save one memory or update it using id and expectedUpdatedAt.")
     memory_save.add_argument("--file", required=True, help="JSON with kind, title, content, and optional id/expectedUpdatedAt.")
     memory_save.add_argument("--json", action="store_true")
+    memory_merge = memory_subparsers.add_parser("merge", help="Atomically merge reviewed memories and preserve their sources.")
+    memory_merge.add_argument("--file", required=True, help="JSON with retained id, kind, title, reviewed content and entries [{id,updatedAt}].")
+    memory_merge.add_argument("--json", action="store_true")
     memory_forget = memory_subparsers.add_parser("forget", help="Forget one memory using its last read timestamp.")
     memory_forget.add_argument("--id", required=True)
     memory_forget.add_argument("--expected-updated-at", required=True)
@@ -220,16 +224,18 @@ def _personal_goal(args: argparse.Namespace, env: dict[str, str]) -> dict[str, A
 def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     if args.memory_command in ("list", "search"):
         query = {"limit": args.limit, "offset": args.offset}
+        if args.id:
+            query["id"] = args.id
         if args.kind:
             query["kind"] = args.kind
         if args.memory_command == "search":
             query["query"] = args.query
         result = _read_room_context_path(f"/personal-memory/records?{urllib_parse.urlencode(query)}", env)
-    elif args.memory_command == "save":
+    elif args.memory_command in ("save", "merge"):
         payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise RunnerError("Memory file must contain a JSON object", code="personal_memory_invalid")
-        result = _read_room_context_path("/personal-memory/records", env, method="PATCH", body={**payload, "action": "save"})
+        result = _read_room_context_path("/personal-memory/records", env, method="PATCH", body={**payload, "action": args.memory_command})
     elif args.memory_command == "forget":
         result = _read_room_context_path("/personal-memory/records", env, method="PATCH", body={
             "action": "forget", "id": args.id, "expectedUpdatedAt": args.expected_updated_at,

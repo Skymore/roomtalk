@@ -334,3 +334,77 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
     await expect(otherPage.getByTestId('message-editor')).toHaveCount(0);
   } finally { await otherContext.close(); }
 });
+
+test('continues a topic and reviews conflicting memories before an atomic merge', async ({ page, context, request }) => {
+  test.setTimeout(90_000);
+  const clientId = await seedClient(context, uniqueName('topic-owner'));
+  await page.addInitScript(() => { window.open = () => null; });
+  await openRoomsPage(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+  await page.getByLabel('User ID password', { exact: true }).first().fill('Topic-agent-test-2026');
+  await page.getByRole('button', { name: 'Set password', exact: true }).click();
+  await expect(page.getByText('User ID password saved.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Connect Codex', exact: true }).click();
+  await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 15000 });
+  const token = (await page.evaluate(() => localStorage.getItem('clientAuthToken')))!;
+  const headers = accountHeaders(clientId, token);
+  await openPersonalAgent(page);
+  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  const addTopic = async (title: string, content: string) => {
+    await page.getByRole('button', { name: 'Add a memory', exact: true }).click();
+    await page.getByRole('dialog').getByLabel('Type', { exact: true }).click();
+    await page.getByRole('option', { name: 'Topic note', exact: true }).click();
+    await page.getByLabel('Title', { exact: true }).fill(title);
+    await page.getByLabel('What to remember', { exact: true }).fill(content);
+    await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  };
+  await addTopic('Project handoff', 'Brief: plan a trip.\nDecision: Seattle.\nVerified work: researched options.\nNext steps: compare dates.');
+  await addTopic('Related research', 'Confirmed correction: Vancouver, not Seattle.\nNext steps: confirm dates.');
+  const memories = (await (await request.get(`${serverURL}/api/personal-agent/memories`, { headers })).json()).memories as Array<{ id: string; title: string; kind: string; content: string; updatedAt: string }>;
+  const first = memories.find(entry => entry.title === 'Project handoff')!, second = memories.find(entry => entry.title === 'Related research')!;
+  const duplicate = await request.post(`${serverURL}/api/personal-agent/memories`, { headers, data: { kind: 'topic', title: '  PROJECT   HANDOFF  ', content: 'Conflicting copy' } });
+  expect(duplicate.status()).toBe(409); expect((await duplicate.json()).existingMemory.id).toBe(first.id);
+  const card = (title: string) => page.getByTestId('personal-memory-entry').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+  const [threadResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/api/personal-agent/threads') && response.request().method() === 'POST'),
+    card(second.title).getByRole('button', { name: 'Continue this topic', exact: true }).click(),
+  ]);
+  const { room } = await threadResponse.json() as { room: Room };
+  expect(room.personalAgentMemoryId).toBe(second.id);
+  await expect(page.getByTestId('personal-agent-conversation')).toBeVisible();
+  await page.getByTestId('message-editor').fill('Continue this topic from its saved handoff.');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expectCompletedTurn(request, clientId, token, room.id);
+  await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await page.getByRole('button', { name: 'Organize memories', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Project handoff', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Related research', exact: true }).click();
+  await page.getByRole('button', { name: 'Merge 2 memories', exact: true }).click();
+  await page.getByRole('dialog').getByLabel('What to remember', { exact: true }).fill('Confirmed destination: Vancouver. Next steps: compare dates.');
+  // Another conversation corrects a selected note after the merge form was opened.
+  const revised = await request.patch(`${serverURL}/api/personal-agent/memories/${second.id}`, { headers, data: { ...second, content: 'Vancouver confirmed. Dates now confirmed too.', expectedUpdatedAt: second.updatedAt } });
+  expect(revised.ok()).toBeTruthy();
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('A selected memory changed or was removed. Read all selected memories again before merging.', { exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(card(second.title)).toContainText('Dates now confirmed too.');
+  await page.getByRole('button', { name: 'Merge 2 memories', exact: true }).click();
+  await page.getByRole('dialog').getByLabel('What to remember', { exact: true }).fill('Brief: plan a trip.\nDecision: Vancouver. Dates confirmed.\nVerified work: compared options.\nNext steps: book the trip.');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByTestId('personal-memory-entry')).toHaveCount(1);
+  await expect(card(first.title)).toContainText('Dates confirmed.');
+  const merged = (await (await request.get(`${serverURL}/api/personal-agent/memories`, { headers })).json()).memories;
+  expect(merged[0].id).toBe(first.id); expect(merged[0].provenance.length).toBeGreaterThanOrEqual(3);
+  const rebound = await request.get(`${serverURL}/api/clients/${clientId}/rooms/${room.id}`, { headers });
+  expect((await rebound.json()).personalAgentMemoryId).toBe(first.id);
+  await page.reload(); await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await expect(card(first.title)).toContainText('book the trip');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-topic-memory-mobile.png', fullPage: true });
+  await card(first.title).getByRole('button', { name: 'Forget', exact: true }).click();
+  await expect(page.getByTestId('personal-memory-entry')).toHaveCount(0);
+  expect((await (await request.get(`${serverURL}/api/clients/${clientId}/rooms/${room.id}`, { headers })).json()).personalAgentMemoryId).toBeUndefined();
+});

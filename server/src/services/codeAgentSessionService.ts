@@ -899,13 +899,14 @@ export class CodeAgentSessionService {
         if (!profile || profile.clientId !== input.clientId) {
           throw new Error('Personal agent profile is unavailable for this workspace');
         }
-        const [preferences, relevant] = await Promise.all([
+        const [preferences, relevant, topic] = await Promise.all([
           this.store.readPersonalAgentMemories?.(profile.clientId, { kind: 'preference', limit: 20 }),
           this.store.readPersonalAgentMemories?.(profile.clientId, { query: promptContext.prompt.slice(0, 500), limit: 12 }),
+          room!.personalAgentMemoryId ? this.store.readPersonalAgentMemories?.(profile.clientId, { id: room!.personalAgentMemoryId, kind: 'topic', limit: 1 }) : undefined,
         ]);
         const memories = [...new Map([...(preferences?.memories || []), ...(relevant?.memories || [])].map(memory => [memory.id, memory])).values()];
         runnerRequest.prompt = buildPersonalAgentPrompt(
-          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId,
+          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId, topic?.memories[0],
         );
         assertTurnWithinDeadline();
       }
