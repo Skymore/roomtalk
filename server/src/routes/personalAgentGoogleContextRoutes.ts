@@ -28,12 +28,17 @@ export function registerPersonalAgentGoogleContextRoutes(app: Express,options: {
       let output: unknown;
       switch (input.operation) {
         case 'status': output = await google.auth.status(clientId); break;
-        case 'mail': output = await google.mail(clientId,typeof input.query === 'string' ? input.query : undefined); break;
+        case 'mail': {
+          const {mail}=await google.mail(clientId,typeof input.query === 'string' ? input.query : undefined);
+          output={matches:mail.slice(0,20).map(({id,threadId,sender,from,subject,date,body})=>({id,threadId,sender,from,subject,date,snippet:body.slice(0,240)})),truncated:mail.length>20};
+          break;
+        }
         case 'message': output = await google.message(clientId,z.string().parse(input.id)); break;
         case 'thread': {
           const id=z.string().parse(input.id);
-          output = await google.thread(clientId,id);
-          if ((output as {mail?:unknown[]}).mail?.length) await options.choices?.noteEvidence(clientId,claims.roomId,claims.turnId,'mail',id);
+          const {mail}=await google.thread(clientId,id);
+          if (mail.length) await options.choices?.noteEvidence(clientId,claims.roomId,claims.turnId,'mail',id);
+          output={messages:mail.slice(-20).map(message=>({...message,body:message.body.slice(0,12000)})),truncated:mail.length>20 || mail.some(message=>message.body.length>12000)};
           break;
         }
         case 'calendars': output = await google.calendars(clientId); break;

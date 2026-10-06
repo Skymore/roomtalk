@@ -49,7 +49,7 @@ export const PersonalAgentGoogleReview: React.FC<{
   const labels = action.kind === 'email.send'
     ? [['personalGoogleTo',data.to],['personalGoogleCc',data.cc],['personalGoogleBcc',data.bcc],['personalGoogleSubject',data.subject],['personalGoogleMessage',data.body]]
     : [['personalGoogleTitle',data.title],['personalGoogleStart',data.start],['personalGoogleEnd',data.end],['personalGoogleTimeZone',data.timeZone],['personalGoogleLocation',data.location],['personalGoogleDescriptionField',data.description],['personalGoogleAttendees',data.attendees]];
-  return <Modal isOpen onClose={onClose} scrollBehavior="inside" size="2xl"><ModalContent>
+  return <Modal isOpen onClose={onClose} scrollBehavior="inside" size="2xl"><ModalContent className="personal-agent-theme">
     <ModalHeader>{pending ? t('personalGoogleLastLook') : action.title}</ModalHeader>
     <ModalBody className="space-y-4">
       <p className="text-sm text-default-500">{t('personalGoogleReviewDescription')}</p>

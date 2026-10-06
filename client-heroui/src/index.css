@@ -211,3 +211,28 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* OpenMuse ui.tsx palette, scoped to the personal workspace and its dialogs. */
+.personal-agent-theme {
+  --heroui-secondary: 206 100% 89%;
+  --heroui-secondary-foreground: 196 24% 9%;
+  --heroui-primary: 206 81% 43%;
+  --heroui-primary-foreground: 0 0% 100%;
+  --heroui-content1: 0 0% 100%;
+  --heroui-content2: 210 8% 95%;
+  --heroui-content3: 240 6% 94%;
+  --heroui-divider: 240 6% 94%;
+  --heroui-default-100: 210 8% 95%;
+  --heroui-default-200: 240 6% 94%;
+  --heroui-default-500: 203 6% 44%;
+}
+.dark .personal-agent-theme {
+  --heroui-secondary: 206 51% 28%;
+  --heroui-secondary-foreground: 206 100% 89%;
+  --heroui-content1: 240 4% 15%;
+  --heroui-content2: 240 4% 19%;
+  --heroui-content3: 240 4% 22%;
+  --heroui-default-100: 240 4% 19%;
+  --heroui-default-200: 240 4% 25%;
+  --heroui-default-500: 203 6% 64%;
+}

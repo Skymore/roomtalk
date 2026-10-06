@@ -9,10 +9,13 @@
 ## 本轮源码复查与修正
 
 - JEV：原版 adapter/domain/service/tools、selection/retry/stale/ranking/grounded evidence 逻辑已移植；RoomTalk 的接受回执在服务器确认选择之后返回，不把执行器的提前启动回执当成成功选择。选择不清空编辑器中尚未发送的草稿。
-- 工具卡片：个人助理的聊天不再丢弃配对后的 tool_result，修复选择一直“准备中”和任务卡片读不到成功回执的问题；普通工作区仍沿用原有配对显示。原版邮件、搜索和通用保存工具的内联展示正在继续逐项对齐。
-- 移动 UI：采用原版的图标导航尺寸、窄内容宽度、连接器搜索和分组；已连接状态不再额外占一张助手卡片；目标/任务/监控说明正确截断；记忆首次加载有实际加载反馈。
+- 工具卡片：个人助理的聊天不再丢弃配对后的 tool_result，修复选择一直“准备中”和任务卡片读不到成功回执的问题；普通工作区仍沿用原有配对显示。原版邮件、搜索和通用保存工具的内联卡片已经移植，保留暂停/错误/空结果状态、来源去重与截断提示；邮件可打开完整线程，目标和记忆直接打开对应页面。卡片按工具调用的顺序显示。
+- 移动 UI：采用原版的图标导航尺寸、窄内容宽度、连接器搜索和分组；已连接状态不再额外占一张助手卡片；目标/任务/监控说明正确截断；记忆首次加载有实际加载反馈。白色 canvas、蓝色按钮/用户气泡、灰色助手气泡与尾部圆角采用 ui.tsx/chat.tsx 原值；个人页面和所有弹窗共享独立 palette，普通聊天样式保持原值。排队消息采用原版列表和移除按钮；失败发送可用同一消息 ID/图片重试而不清空新草稿。
 - 测试：原版 JEV adapter 16 项、真实 PostgreSQL restart/race/selection 14 项、owner/turn/evidence HTTP 路由 3 项、运行器工具 29 项、执行器会话与个人上下文 108 项通过。Chrome 中已验证脚本样例选项的真实按钮点击、PostgreSQL 选择、刷新重放及草稿保留；样例不算真实 Jev 服务验收。
-- E2B：新增 `roomtalk choices present/current`，runner 0.1.67 / openmuse-parity-v5 已发布，云沙箱中实际核对 manifest、Python 源版本及 CLI。新增 Google 配置仍未提交，Jev 也没有启用样例冒充真实能力。
+- 公共搜索：按原版 search.ts 移植真实 MCP/Parallel 匿名会话、无 Cookie/认证头的项目标识、引用、超时/取消与输出边界，默认启用。原版 17 项网络/结果测试与 owner/turn/pause 路由通过；真实 Parallel 搜索 OpenMuse 已返回仓库 URL 和摘录。`roomtalk search web` 用于主聊天和委托任务；完整回执持久保存，任务详情可重放来源。
+- Mail tools：按原版 conversation.ts 返回最多 20 条摘要/240 字符 snippet，读线程返回最后 20 条消息/12000 字符正文和真实截断状态；直接 Mail 页面仍可读取全部线程。真实正文与已配对工具回执均不会只读 4 KiB preview。
+- E2B：choices 模块 runner 0.1.67 / v5 已发布并实际检查；新增 search CLI 后升级 0.1.68 / v6，发布验收记录见下方最新模块。新增 Google 配置仍未提交，Jev 也没有启用样例冒充真实能力。
+- CI：v5 首次构建揭露前端隔离镜像缺少 JEV 协议依赖和 ACP artifact 常量仍为 v4；已分别修正客户端自带原版协议/显式 zod 依赖及 artifact 常量，未跳过任何校验。
 
 ## 页面和操作流程
 
@@ -20,6 +23,7 @@
 | --- | --- | --- |
 | App.tsx 主导航、头像、通知头部 | Chat / Activity / Ideas / Goals / Apps；统一菜单、狐狸、名字、实际工作状态与铃铛；没有双重头部或常驻通知横幅 | 手机与桌面浏览器切换、刷新恢复 |
 | threads.tsx 主/侧聊天、抽屉 | 主聊天默认打开；新侧聊天、重命名、归档/恢复、历史翻页和快捷入口 | 真实 PostgreSQL 与 Chrome 流程 |
+| MailToolCard / SearchToolCard / ServerToolCard / JevToolCard | 邮件摘要与完整线程、真实网页来源、保存工具入口、Jev 选项和精炼；按原版状态、布局和跳转 | 定向组件检查、真实持久选择、手机线程/记忆跳转；Google/Jev live 需配置 |
 | DelegateSheet | 计划、PDF 邮件、财务 CSV、通用任务；先持久保存输入再排队 | 队列/并发/账号隔离；真实 Codex task CLI |
 | TaskCard / TaskDetail / TaskThreadCard | 实际计划步骤、状态、暂停/恢复/重试/取消、执行记录、输入请求、审阅结果、文件和独立浏览器 | 手机操作、PostgreSQL 执行围栏、续跑、原生工具回执 |
 | Identity / MemoryRow | 源版只读资料与编辑按钮、sky/sand/lilac 狐狸色、语气、更新偏好；记忆行内修改、遗忘、来源和时间 | 手机行内修改、冲突、旧资料迁移、真实 Codex 记忆保存 |
@@ -39,6 +43,7 @@
 | ArtifactCard | 计划、文档、网页、比较，源版内联卡片及真实结果下载；交互网页与刷新回放通过 |
 | FinanceArtifact / finance.ts | 完整 CSV 解析、收入/支出/分类/日期、事务记录、储蓄目标；单元、数据库、内联卡片、真实 Codex CLI 计算通过 |
 | Chromium / browser sessions | 独立会话、实际截图、接管、输入、关闭/恢复、登录状态、源任务关联；真实 Chromium/Chrome 交互通过 |
+| search.ts / SearchToolCard | 原版匿名 Parallel MCP 服务、持久匿名会话、URL/摘录/警告/截断、错误/取消；CLI 接入主聊天和任务，任务来源回放；17 项原版测试及实际外部搜索通过 |
 | browser PDF downloads | 实际下载字节、导入个人文件库入口；worker 下载/字节检查、手机浏览器下载→导入→填写→下载副本联合回归通过，下载的真实 PDF 字段值已确认 |
 | Task file/browser associations | 0058 保存实际源任务、源执行轮次、文件和独立会话；复用邮件附件、跨实例恢复、账号隔离、暂停拒绝写入通过 |
 
@@ -54,7 +59,7 @@
 | Calendar / EventEditor | 日历选择、日期范围、时区、事件增删改、ETag 版本审阅；接口、持久回执、手机编辑/保存/重载通过；真实 Google 日历尚未验收 |
 | OpenBot | 按源版保留禁用适配器及协议/身份测试；不伪装在线连接 |
 
-## 本地验收记录
+## 前一轮 v4 验收记录
 
 - 客户端完整单元检查：108 个文件、1,155 项通过。真实命令字段与任务/桌面回执的最后定向检查：20 项通过。
 - 服务端完整检查：1,255 项，首轮唯一失败是测试断言仍匹配旧 room 字段列表；已修正，PostgresStore 43 项定向回归通过，无跳过。
@@ -64,7 +69,7 @@
 - 最终 E2B 运行器为 0.1.66 / openmuse-parity-v4，已构建、发布和实际检查 CLI/Chromium。真实 Codex 保存记忆、排队任务、填写 PDF、计算财务、查看桌面截图和原生 update_plan 均通过，工具错误为 0；验收沙箱已清理。
 - Google fixture 与真实外部连接验收分开；生产缺配置时按源版显示未配置。OCR/扫描表格、其他连接器、APNs/FCM、OpenBot 在线桥接等原项目路线图不宣称已实现。
 
-## 生产发布验收
+## 前一轮 v4 生产发布验收
 
 - 功能源码：`12baa7fc`；浏览器时序/定位修正：`434126f7`、`4acb1ba4`。[实现提交的 CI 五项全部通过](https://github.com/Skymore/roomtalk/actions/runs/37535181815)。
 - 生产通过本仓库 `scripts/local-production.mjs --profile edge build app ai-worker`、`up -d --no-build` 发布，保留原 checkout 的 14 项既有 presence 差异。镜像：`sha256:466b21507f51b90e716233065f1e56356772c0ec18ffd85bbb60735d233c996c`。
@@ -74,4 +79,11 @@
 - 已登录生产账号在源版 DelegateSheet 委托计划；真实 Codex app-server/fullAccess 在匹配 v4 沙箱完成，结果 `Production acceptance: three-step release check` 保存于 PostgreSQL。该私人验收任务的 ID 为 `ab89bb71-3988-4281-9484-08df6a8a6d17`，保留回执供查看。
 - 手机 390×844：独立个人聊天与五项导航、🦊、默认只读设置、直接显示记忆、源版 Apps/电脑入口实际可用；普通 RoomTalk 聊天仍独立保留。
 - App、AI Worker、PostgreSQL、Redis、对象存储和两个 Tunnel 健康；本地、room.ruit.me、ai-chat.wenlin.dev 的 `/api/status` 均为 HTTP 200 / ready:true，队列没有积压。
-- 唯一尚需外部输入的生产连接验收是 Google OAuth 的 client secret/回调配置。OpenBot 在线桥接、其他连接器、OCR 等原项目未实现项目仍保持源版状态，不宣称可用。
+- Google OAuth 的 client secret/回调配置和可选 Jev live 的 TYPESAFE_API_KEY 仍需外部输入；Jev 保持原版默认 off。OpenBot 在线桥接、其他连接器、OCR 等原项目未实现项目仍保持源版状态，不宣称可用。
+
+## 最新 search / inline UI 模块验收（2026-10-06）
+
+- Chrome 390×844 的五条流程通过：Google fixture 邮件审阅与真实持久草稿、日历时区编辑、目标里程碑、明确脚本 Jev 选择/刷新/草稿保留、Source mail 与 memory 卡片跳转；未把 fixture 当成真实 Google/Jev 连接。
+- 搜索：17 项原版 MCP/结果测试通过，实际匿名 Parallel 返回真实仓库来源；broker 和 mail 摘录边界验收通过。
+- 运行器 CLI：30 项通过；0.1.68 / v6 已发布，真实 E2B 沙箱核对 manifest、源版本、search/choices CLI 均通过。服务端 22 项搜索/路由/artifact 契约通过；客户端组件/交互 81 项通过。两端生产构建通过。生产状态在实际部署后补充。
+- OAuth：Chrome 登录了实际 RoomTalk 项目；回调与五项范围已准备为未提交的表单。创建密钥/扩大敏感访问的 Computer Use 动作确认仍待用户回复，未保存、未启用 Google API，也未读取真实邮箱。

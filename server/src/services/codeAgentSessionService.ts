@@ -180,6 +180,7 @@ export interface CodeAgentSessionServiceOptions {
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
   personalChoices?: JevService;
+  personalSearchEnabled?:boolean;
   onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   createId?: () => string;
@@ -934,6 +935,7 @@ export class CodeAgentSessionService {
           : promptContext.prompt);
         runnerRequest.prompt = buildPersonalAgentPrompt(
           profile, personalPrompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId, topic?.memories[0], Boolean(this.options.personalChoices),
+          this.options.personalSearchEnabled,
         );
         assertTurnWithinDeadline();
       }

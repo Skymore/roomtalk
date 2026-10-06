@@ -34,7 +34,7 @@ import { PersonalAgentGoogleReview } from './PersonalAgentGoogleReview';
 
 const emptyDraft: PersonalEmailDraft = {to:[],cc:[],bcc:[],subject:'',body:'',attachmentIds:[]};
 const addresses = (value:string) => value.split(/[,;\n]/).map(value=>value.trim()).filter(Boolean);
-export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:string)=>void;onOpenFiles:()=>void}> = ({clientId,showError,onOpenFiles}) => {
+export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:string)=>void;onOpenFiles:()=>void;initialMail?:PersonalMail;onMailOpened?:()=>void}> = ({clientId,showError,onOpenFiles,initialMail,onMailOpened}) => {
   const {t,i18n} = useTranslation();
   const [mail,setMail] = React.useState<PersonalMail[]>([]);
   const [drafts,setDrafts] = React.useState<PersonalEmailDraft[]>([]);
@@ -62,12 +62,13 @@ export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:str
     setBusy(false);
   },[clientId,showError]);
   React.useEffect(()=>{void refresh();},[refresh]);
-  const openThread = async (message:PersonalMail) => {
+  const openThread = React.useCallback(async (message:PersonalMail) => {
     setSelected(message);setThread([message]);setBusy(true);setError('');
     try {setThread((await personalGoogleRequest<{mail:PersonalMail[]}>(clientId,`/mail/threads/${encodeURIComponent(message.threadId)}`)).mail);}
     catch(error) {setError(error instanceof Error ? error.message : String(error));}
     finally {setBusy(false);}
-  };
+  },[clientId]);
+  React.useEffect(()=>{if(initialMail){void openThread(initialMail);onMailOpened?.();}},[initialMail,onMailOpened,openThread]);
   const importAttachment = async (reference:string) => {
     setBusy(true);setError('');
     try {
@@ -105,12 +106,12 @@ export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:str
       </button>)}
       {(tab === 'drafts' ? !matchingDrafts.length : !items.length) && <p className="py-8 text-center text-sm text-default-500">{t(tab === 'drafts' ? 'personalGoogleNoDrafts' : 'personalGoogleNoMail')}</p>}
     </div>
-    <Modal isOpen={Boolean(selected)} onClose={()=>{setSelected(undefined);setThread(undefined);}} size="2xl" scrollBehavior="inside"><ModalContent><ModalHeader>{selected?.subject}</ModalHeader><ModalBody>
+    <Modal isOpen={Boolean(selected)} onClose={()=>{setSelected(undefined);setThread(undefined);}} size="2xl" scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{selected?.subject}</ModalHeader><ModalBody>
       {busy && <Spinner />}
       {thread?.map(message=><article key={message.id} className="space-y-4 rounded-3xl border border-default-200 p-5"><header><p className="text-sm font-semibold">{message.sender}</p><p className="text-xs text-default-500">{message.from}</p><p className="text-xs text-default-500">{t('personalGoogleTo')}: {message.to.join(', ')}</p><p className="text-xs text-default-500">{formatDate(message.date,i18n.language)}</p></header><p className="whitespace-pre-wrap break-words border-t border-default-200 pt-4 text-sm leading-6">{message.body}</p>{message.attachments.map(ref=><Button key={ref} size="sm" variant="light" isDisabled={busy} onPress={()=>void importAttachment(ref)}>{files.find(file=>file.id === ref)?.name || decodeURIComponent(ref.split(':').slice(2).join(':')) || t('personalGoogleAttachments')}</Button>)}</article>)}
       {error && <><p className="text-sm text-danger" role="alert">{error}</p>{selected && <Button onPress={()=>void openThread(selected)}>{t('retry')}</Button>}</>}
     </ModalBody><ModalFooter><Button color="secondary" onPress={()=>{if (selected) {openEditor({...emptyDraft,to:[selected.from],subject:/^re:/i.test(selected.subject) ? selected.subject : `Re: ${selected.subject}`,threadId:selected.threadId,replyToMessageId:selected.id});setSelected(undefined);setError('');}}}>{t('personalGoogleReply')}</Button></ModalFooter></ModalContent></Modal>
-    <Modal isOpen={Boolean(editing)} onClose={()=>setEditing(undefined)} size="2xl" scrollBehavior="inside"><ModalContent><ModalHeader>{t(editing?.threadId ? 'personalGoogleReply' : 'personalGoogleCompose')}</ModalHeader><ModalBody className="space-y-4">
+    <Modal isOpen={Boolean(editing)} onClose={()=>setEditing(undefined)} size="2xl" scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{t(editing?.threadId ? 'personalGoogleReply' : 'personalGoogleCompose')}</ModalHeader><ModalBody className="space-y-4">
       {editing && <>
         {(['to','cc','bcc'] as const).map(field=><Input key={field} label={t(`personalGoogle${field === 'to' ? 'To' : field === 'cc' ? 'Cc' : 'Bcc'}`)} value={addressText[field]} onValueChange={value=>setAddressText({...addressText,[field]:value})} />)}
         <Input label={t('personalGoogleSubject')} value={editing.subject} onValueChange={subject=>setEditing({...editing,subject})} />

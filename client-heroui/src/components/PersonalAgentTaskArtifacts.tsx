@@ -1,3 +1,5 @@
+import {readPersonalInlineSteps} from '../utils/personalToolSteps';
+import {PersonalSearchToolCard} from './PersonalInlineTools';
 /*
 MIT License
 
@@ -42,5 +44,5 @@ export function PersonalAgentFileThreadCard({clientId,file}:{clientId:string;fil
 export function PersonalAgentTaskArtifacts({clientId,detail,newestFileOnly=false,showResults=true}:{clientId:string;detail:PersonalAgentTaskDetail;newestFileOnly?:boolean;showResults?:boolean}){
   const [browser,setBrowser]=React.useState<PersonalBrowserFrame['session']>();
   const files=[...(detail.files || [])].sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-  return <div className="space-y-3">{detail.browsers?.map(session=><PersonalAgentBrowserSessionCard key={session.id} clientId={clientId} session={session} onOpen={()=>setBrowser(session)}/>)}{(newestFileOnly?files.slice(0,1):files).map(file=><PersonalAgentFileThreadCard key={file.id} clientId={clientId} file={file}/>)}{showResults && detail.turns.map(turn=><PersonalAgentResults key={turn.id} clientId={clientId} turn={turn} canInteract/>)}{browser && <PersonalAgentBrowserControl clientId={clientId} roomId={browser.roomId} isOpen onClose={()=>setBrowser(undefined)}/>}</div>;
+  return <div className="space-y-3">{readPersonalInlineSteps(detail.messages).filter(step=>step.kind==='search').map(step=><PersonalSearchToolCard key={step.id} step={step} active={detail.room.personalAgentTaskStatus==='running'}/>)}{detail.browsers?.map(session=><PersonalAgentBrowserSessionCard key={session.id} clientId={clientId} session={session} onOpen={()=>setBrowser(session)}/>)}{(newestFileOnly?files.slice(0,1):files).map(file=><PersonalAgentFileThreadCard key={file.id} clientId={clientId} file={file}/>)}{showResults && detail.turns.map(turn=><PersonalAgentResults key={turn.id} clientId={clientId} turn={turn} canInteract/>)}{browser && <PersonalAgentBrowserControl clientId={clientId} roomId={browser.roomId} isOpen onClose={()=>setBrowser(undefined)}/>}</div>;
 }

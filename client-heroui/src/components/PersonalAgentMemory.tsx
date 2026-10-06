@@ -34,7 +34,7 @@ interface MemoryMutation { (entry:Memory,content?:string):Promise<void> }
 const MemoryRow:React.FC<{entry:Memory;mutate:MemoryMutation;busy:boolean}> = ({entry,mutate,busy}) => {
   const {t,i18n}=useTranslation(),[editing,setEditing]=React.useState(false),[text,setText]=React.useState(entry.content),[error,setError]=React.useState('');
   const act=async(forget:boolean)=>{setError('');try{await mutate(entry,forget ? undefined : text);setEditing(false);}catch(failure){setError(failure instanceof Error ? failure.message : String(failure));}};
-  return <article className="space-y-2 border-b border-[#dedbd0] pb-4 dark:border-[#30302e]" data-testid="personal-memory-entry">
+  return <article className="space-y-2 border-b border-[#eeeef0] pb-4 dark:border-[#30302e]" data-testid="personal-memory-entry">
     {editing ? <Textarea label={t('personalAgentMemory')} value={text} onValueChange={setText} maxLength={8000} /> : <p className="whitespace-pre-wrap break-words text-sm leading-6">{entry.content}</p>}
     <p className="text-xs text-default-500">{entry.source} · {formatDate(entry.createdAt,i18n.language)}</p>
     <div className="flex gap-2">
@@ -54,7 +54,7 @@ export const PersonalAgentMemory:React.FC<{clientId:string;rooms:Room[];onRoomSe
       else{const saved=await savePersonalAgentMemory(clientId,{kind:entry.kind,title:entry.title,content},entry);setEntries(previous=>previous.map(value=>value.id===entry.id ? saved.memory : value));showSuccess(t('personalMemorySaved'));}
     }finally{setBusy(false);}
   };
-  return <section className="space-y-4 rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 sm:p-6 dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-memory-library">
+  return <section className="space-y-4 rounded-2xl border border-[#eeeef0] bg-[#ffffff] p-5 sm:p-6 dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-memory-library">
     <h3 className="text-base font-semibold">{t('personalAgentMemory')}</h3><p className="text-sm text-default-500">{t('personalMemoryInspect')}</p>
     {loading && <Spinner size="sm" label={t('loading')}/> }
     {entries.map(entry=><MemoryRow key={entry.id} entry={entry} mutate={mutate} busy={busy} />)}

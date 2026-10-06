@@ -1342,12 +1342,12 @@ export const MessagePage: React.FC = () => {
         return <PersonalAgentView
           selectedRoomId={personalChatId}
           conversationSelection={personalChatSelection}
-          conversation={currentRoom?.personalAgentOwnerId && personalChatId === currentRoom.id ? ((openThreads,openComputer) => <PersonalAgentConversation key={currentRoom.id}
+          conversation={currentRoom?.personalAgentOwnerId && personalChatId === currentRoom.id ? ((openThreads,openComputer,openWorkspace) => <PersonalAgentConversation key={currentRoom.id}
           room={currentRoom} clientId={clientId} username={username} roomPermissions={roomPermissions}
           isRoomSessionReady={isCurrentRoomSessionReady} canUseRetainedRoomAccess={canUseRetainedRoomAccess}
           ensureRoomSessionReady={ensureRoomSessionReadyForOperation} messageSyncRequestId={roomSession.messageSyncRequestId}
           onRoomUpdated={applyServerRoom} onRoomDeleted={applyRoomRemoval} onRoomAccessDenied={applyRoomRemoval}
-          showError={setError} onComputer={openComputer} onBack={openThreads} />) : undefined}
+          showError={setError} onOpenWorkspace={openWorkspace} onComputer={openComputer} onBack={openThreads} />) : undefined}
           clientId={clientId}
           roomUpdates={rooms}
           onRoomSelect={handleRoomSelect}
@@ -1491,7 +1491,7 @@ export const MessagePage: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#f5f4ed] text-[#141413] dark:bg-[#141413] dark:text-[#faf9f5]"> {/* 确保根容器是 flex 列且占满屏幕高度 */}
+    <div className={`flex h-full min-h-0 flex-col ${view==='personal'?'bg-[#fcfcfc] text-[#11191c]':'bg-[#f5f4ed] text-[#141413]'} dark:bg-[#141413] dark:text-[#faf9f5]`}> {/* 确保根容器是 flex 列且占满屏幕高度 */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {view !== 'personal' && !(view === 'chat' && currentRoom?.personalAgentOwnerId) && <DesktopSidebar
           clientId={clientId}

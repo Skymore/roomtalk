@@ -9,7 +9,7 @@ export function readPersonalDesktopSteps(messages:Message[]):PersonalDesktopStep
     const result=call.toolCallId?results.get(call.toolCallId):undefined;
     const step:PersonalDesktopStep={id:call.id,turnId:call.turnId,loading:!result};
     if(!result)return step;
-    for(const line of (result.toolOutputPreview || result.content).split('\n')){
+    for(const line of result.content.split('\n')){
       if(!line.trim().startsWith('{'))continue;
       try{
         const receipt=JSON.parse(line);

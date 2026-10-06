@@ -57,6 +57,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "browser":
             _require_write_access(env)
             result = _personal_browser(args, env)
+        elif args.command == "search":
+            result = _read_room_context_path("/personal-search", env, method="PATCH", body={"objective": args.objective, "search_queries": args.query})
+            result = {"success": not bool(result.get("error")), **result, "tool": "PersonalSearch"}
         elif args.command == "choices":
             if args.choices_command == "present":
                 _require_write_access(env)
@@ -166,6 +169,13 @@ def _build_parser() -> argparse.ArgumentParser:
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    search = subparsers.add_parser("search", help="Search the public web using anonymous source excerpts.")
+    search_sub = search.add_subparsers(dest="search_command", required=True)
+    web = search_sub.add_parser("web")
+    web.add_argument("--objective", required=True)
+    web.add_argument("--query", action="append", required=True)
+    web.add_argument("--json", action="store_true")
 
     choices = subparsers.add_parser("choices", help="Present OpenMuse clarification buttons and sourced comparison choices.")
     choices_sub = choices.add_subparsers(dest="choices_command", required=True)

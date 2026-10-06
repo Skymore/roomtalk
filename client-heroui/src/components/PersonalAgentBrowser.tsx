@@ -80,7 +80,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
   };
   const available = Boolean(frame?.screenshot) && !loading;
   return <Modal isOpen={isOpen} onClose={() => void close()} size="5xl" scrollBehavior="inside" classNames={{ base: 'bg-white dark:bg-[#252522]', wrapper: 'px-2 sm:px-4' }}>
-    <ModalContent><ModalHeader className="flex items-center gap-2"><Icon icon="lucide:globe" />{t('personalBrowser')}<span className="ml-2 min-w-0 truncate text-xs font-normal text-default-500">{frame?.session.title}</span></ModalHeader>
+    <ModalContent className="personal-agent-theme"><ModalHeader className="flex items-center gap-2"><Icon icon="lucide:globe" />{t('personalBrowser')}<span className="ml-2 min-w-0 truncate text-xs font-normal text-default-500">{frame?.session.title}</span></ModalHeader>
       <ModalBody className="gap-3 pb-5">
         <p className="text-xs text-default-500">{t('personalBrowserControlHint')}</p>
         <form className="flex gap-2" onSubmit={event => { event.preventDefault(); addressEdited.current = false; void update({ action: 'open', url: /^https?:\/\//i.test(address) ? address : `https://${address}` }); }}>

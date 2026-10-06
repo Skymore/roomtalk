@@ -1,3 +1,5 @@
+import {SearchService} from './services/personalSearch';
+import {registerPersonalSearchContextRoutes} from './routes/personalSearchContextRoutes';
 import {createJevAdapter} from './services/personalChoices/adapter';
 import {personalChoicesConfig} from './services/personalChoices/config';
 import {JevService} from './services/personalChoices/service';
@@ -618,6 +620,7 @@ const personalAgentNotifications = new PersonalAgentNotificationService(store, c
   await notifyPersonalAgentUpdate({store,notification,logger:codeAgentLogger});
 });
 
+const personalSearch = process.env.WEB_SEARCH_ENABLED==='false' ? undefined : new SearchService(new PersonalComputerStore(store));
 const choicesConfig = personalChoicesConfig();
 const choicesAdapter = createJevAdapter(choicesConfig);
 const personalChoices = choicesAdapter ? new JevService({store:new PersonalComputerStore(store),adapter:choicesAdapter,mode:choicesConfig.jevMode as 'sample'|'live'}) : undefined;
@@ -662,6 +665,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     aiStreamOwnerId,
     turnTimeoutMs: codeAgentTurnTimeoutMs,
     personalChoices,
+    personalSearchEnabled:Boolean(personalSearch),
     onPersonalAgentTurnCompleted: (room, message) => personalAgentNotifications.completed(room, message),
   }
 );
@@ -992,6 +996,7 @@ registerCodeAgentRoomContextRoutes(app, {
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
 });
 
+registerPersonalSearchContextRoutes(app,{store,roomContext:codeAgentRoomContextService,search:personalSearch,logger:codeAgentLogger});
 registerPersonalChoiceContextRoutes(app,{store,roomContext:codeAgentRoomContextService,choices:personalChoices,logger:codeAgentLogger});
 registerPersonalAgentComputerContextRoutes(app,{store,roomContext:codeAgentRoomContextService,computer:personalAgentComputer,logger:codeAgentLogger});
 registerPersonalAgentGoogleContextRoutes(app,{choices:personalChoices,store,roomContext:codeAgentRoomContextService,logger:codeAgentLogger,google:personalAgentGoogle});

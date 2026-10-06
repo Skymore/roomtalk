@@ -1092,3 +1092,41 @@ test('replays and selects source interactive choices with explicit scripted Jev 
     await page.screenshot({path:'/tmp/roomtalk-openmuse-choices-mobile.png',fullPage:true});
   }finally{await pool.end();}
 });
+
+test('opens source mail and memory cards from the personal chat with explicit tool response fixtures',async({page,context,request})=>{
+  test.setTimeout(120000);
+  const clientId=await seedClient(context,uniqueName('inline-source-owner'));
+  const mail={id:'mail-inline',threadId:'thread-inline',from:'sender@example.com',sender:'Source fixture sender',to:['owner@example.com'],subject:'Source email card',body:'Complete fixture message body. '.repeat(25),date:'2026-10-06T10:00:00Z',unread:true,label:'Inbox',attachments:[]};
+  await page.route('**/api/personal-agent/mail',route=>route.fulfill({json:{mail:[mail]}}));
+  await page.route('**/api/personal-agent/mail/threads/thread-inline',route=>route.fulfill({json:{mail:[mail,{...mail,id:'second-mail',body:'Second complete thread message'}]}}));
+  await openRoomsPage(page);await page.getByRole('button',{name:'Settings',exact:true}).first().click();
+  await page.getByLabel('User ID password',{exact:true}).first().fill('Personal-inline-test-2026');await page.getByRole('button',{name:'Set password',exact:true}).click();await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Connect Codex',exact:true}).click();await expect(page.getByText('Connected',{exact:true}).first()).toBeVisible({timeout:15000});
+  const token=(await page.evaluate(()=>localStorage.getItem('clientAuthToken')))!;
+  await openPersonalAgent(page);await createSideChat(page,'Source inline cards');await page.setViewportSize({width:390,height:844});
+  const roomId=await page.evaluate(()=>JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+  await page.getByTestId('message-editor').fill('Read my selected thread and research public sources.');await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await expectCompletedTurn(request,clientId,token,roomId);
+  const history=await(await request.get(`${serverURL}/api/rooms/${roomId}/messages?clientId=${clientId}`,{headers:accountHeaders(clientId,token)})).json() as Message[],turnId=history.find(message=>message.turnId)!.turnId;
+  const requireServer=createRequire(new URL('../../server/package.json',import.meta.url)),{createPostgresPool}=requireServer('./dist/src/repositories/postgresPool.js'),{PostgresStore}=requireServer('./dist/src/repositories/postgresStore.js');
+  const logger={debug(){},info(){},warn(){},error(){}},pool=createPostgresPool(process.env.E2E_DATABASE_URL!,logger),store=new PostgresStore(pool,logger);
+  try{
+    for(const [command,result] of [
+      ['roomtalk google thread --id thread-inline --json',{success:true,tool:'PersonalGoogle',messages:[mail],truncated:false}],
+      ['roomtalk search web --objective public --query public --json',{success:true,tool:'PersonalSearch',results:[{url:'https://github.com/CopilotKit/openmuse',title:'Source fixture repository'},{url:'https://github.com/CopilotKit/openmuse',title:'Source fixture repository'}],warnings:[],truncated:false}],
+      ['roomtalk memory save --file memory.json --json',{success:true,tool:'PersonalMemory',memory:{id:'fixture-memory'}}],
+    ] as const){
+      const callId=randomUUID(),common={clientId:'ai',roomId,turnId,timestamp:new Date().toISOString(),username:'Agent',status:'complete'};
+      await store.appendMessage({...common,id:randomUUID(),content:command,messageType:'tool_call',toolCallId:callId,toolName:'exec_command',toolArgs:{cmd:command}});
+      await store.appendMessage({...common,id:randomUUID(),content:JSON.stringify(result),messageType:'tool_result',toolCallId:callId,toolName:'exec_command'});
+    }
+    await page.reload();await expect(page.getByTestId('personal-mail-tool-card')).toContainText('Source email card');
+    await expect(page.getByTestId('personal-search-tool-card').getByRole('link')).toHaveCount(1);
+    await page.screenshot({path:'/tmp/roomtalk-openmuse-inline-cards-mobile.png',fullPage:true});
+    await page.getByRole('button',{name:'Open email',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('Second complete thread message');
+    await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();await page.getByRole('button',{name:'Chat',exact:true}).click();
+    await page.getByRole('button',{name:'View Memory',exact:true}).click();await expect(page.getByTestId('personal-memory-library')).toBeVisible();await expect(page.getByTestId('personal-agent-profile-summary')).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:'/tmp/roomtalk-openmuse-source-memory-mobile.png',fullPage:true});
+  }finally{await pool.end();}
+});

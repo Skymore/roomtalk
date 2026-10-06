@@ -54,9 +54,9 @@ export const PersonalAgentFiles: React.FC<{ clientId: string; initialFileId?:str
         });
       }} />
     </div>
-    {!files.length && <p className="rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-6 text-sm text-default-600 dark:border-[#30302e] dark:bg-[#1d1d1b]">{t('personalFilesEmpty')}</p>}
+    {!files.length && <p className="rounded-2xl border border-[#eeeef0] bg-[#ffffff] p-6 text-sm text-default-600 dark:border-[#30302e] dark:bg-[#1d1d1b]">{t('personalFilesEmpty')}</p>}
     <div className="grid gap-4 sm:grid-cols-2">{files.map(file => <button key={file.id} type="button" disabled={busy} onClick={() => void act(() => open(file))}
-      className="overflow-hidden rounded-2xl border border-[#dedbd0] bg-[#faf9f5] text-left dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-file-card">
+      className="overflow-hidden rounded-2xl border border-[#eeeef0] bg-[#ffffff] text-left dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-file-card">
       <div className="flex h-36 items-center justify-center bg-[#edefea] dark:bg-[#30302e]"><Icon icon="lucide:file-text" className="h-16 w-16 text-[#697176]" /></div>
       <div className="space-y-2 p-5"><h3 className="break-words text-sm font-semibold">{file.name}</h3><p className="text-xs text-default-500">{t('personalFilesPages',{ count: file.pageCount })} · {Math.max(1,Math.round(file.byteSize/1024))} KB</p>
         <div className="flex flex-wrap justify-between gap-2 text-xs text-default-500"><span>{file.parentId ? t('personalFilesFilledCopy') : t('personalFilesImported')}</span><span>{formatDate(file.createdAt,i18n.language)}</span></div>
@@ -65,7 +65,7 @@ export const PersonalAgentFiles: React.FC<{ clientId: string; initialFileId?:str
     {files.length < total && <Button variant="light" isLoading={busy} onPress={() => void act(async () => { const found=await readPersonalAgentFiles(clientId,files.length);setFiles(previous=>[...previous,...found.files]);setTotal(found.total); })}>{t('loadMore')}</Button>}
     </div>
     <Modal isOpen={Boolean(selected)} onClose={() => { setSelected(undefined);setUrl('');onFileClose?.(); }} isDismissable={!busy} scrollBehavior="inside" size="4xl" classNames={{base:'max-h-[90dvh] bg-white dark:bg-[#252522]'}}>
-      <ModalContent>{selected && <><ModalHeader className="break-words">{selected.name}</ModalHeader><ModalBody>
+      <ModalContent className="personal-agent-theme">{selected && <><ModalHeader className="break-words">{selected.name}</ModalHeader><ModalBody>
         {url && <iframe src={url} title={selected.name} className="h-[50dvh] w-full rounded-xl border border-default-200" />}
         <Button variant="flat" onPress={() => { const link=document.createElement('a');link.href=url;link.download=selected.name;link.click(); }} startContent={<Icon icon="lucide:download" />}>{t('personalFilesDownload')}</Button>
         {selected.fields.length > 0 && <section className="space-y-4 rounded-2xl bg-default-50 p-4"><h3 className="font-semibold">{t('personalFilesFill')}</h3><p className="text-sm text-default-600">{t('personalFilesCopyHint')}</p>

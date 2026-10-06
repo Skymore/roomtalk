@@ -76,7 +76,7 @@ export const PersonalAgentResults: React.FC<{ clientId: string; turn: RoomAgentT
     }}>{t('personalResultMore')}</Button>}
     {error && <div className="text-sm" role="alert"><p className="text-danger">{error}</p><Button size="sm" variant="light" onPress={() => setAttempt(value => value + 1)}>{t('retry')}</Button></div>}
     <Modal isOpen={Boolean(preview)} onClose={() => setPreview(undefined)} size="4xl" scrollBehavior="inside" classNames={{ base: 'max-h-[90dvh] bg-white dark:bg-[#252522]' }}>
-      <ModalContent>{preview && <><ModalHeader className="min-w-0 break-words">{preview.result.title}</ModalHeader>
+      <ModalContent className="personal-agent-theme">{preview && <><ModalHeader className="min-w-0 break-words">{preview.result.title}</ModalHeader>
         <ModalBody>
           {preview.result.data ? <PersonalAgentStructuredResult clientId={clientId} result={preview.result} />
             : preview.result.kind === 'web' ? <iframe title={preview.result.title} srcDoc={privateWebPreview(preview.text || '')} sandbox="allow-scripts" referrerPolicy="no-referrer" className="h-[60dvh] min-h-72 w-full rounded-xl border border-default-200 bg-white" />

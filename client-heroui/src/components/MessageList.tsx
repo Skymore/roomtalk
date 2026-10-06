@@ -1,3 +1,4 @@
+import type {PersonalWorkspaceOpener} from '../utils/personalToolSteps';
 import type {PersonalChoiceSender} from '../utils/personalChoiceTranscript';
 import {displayJevUserMessage} from '../utils/personalChoiceActions';
 import {personalChoiceTranscript} from '../utils/personalChoiceTranscript';
@@ -134,6 +135,8 @@ interface MessageListProps {
   presentation?: 'chat' | 'code-agent' | 'personal-agent';
   onOpenPersonalComputer?:()=>void;
   onSendPersonalChoice?:PersonalChoiceSender;
+  onOpenPersonalWorkspace?:PersonalWorkspaceOpener;
+  onRetryPersonalMessage?:(message:Message)=>void;
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
@@ -183,6 +186,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onOpenWorkspaceFile,
   onOpenPersonalComputer,
   onSendPersonalChoice,
+  onOpenPersonalWorkspace,
+  onRetryPersonalMessage,
   onOpenWorkspaceArtifact,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -1209,7 +1214,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   const personalChoiceMessages=presentation==='personal-agent'?messages:EMPTY_PERSONAL_CHOICE_MESSAGES;
   const renderMessage = useCallback((message: Message, turnGrouped = false) => presentation === 'personal-agent' ? (
-    <PersonalAgentMessage key={message.id} message={message} displayText={displayJevUserMessage(message.content,personalChoiceTranscript(personalChoiceMessages.slice(0,personalChoiceMessages.indexOf(message))))} onRetry={handleRetryDelivery} onOpenFile={onOpenWorkspaceFile} canInteract={canUseRetainedRoomAccess} />
+    <PersonalAgentMessage key={message.id} message={message} displayText={displayJevUserMessage(message.content,personalChoiceTranscript(personalChoiceMessages.slice(0,personalChoiceMessages.indexOf(message))))} onRetry={onRetryPersonalMessage} onOpenFile={onOpenWorkspaceFile} canInteract={canUseRetainedRoomAccess} />
   ) : (
     <MessageItem
       key={turnGrouped ? undefined : message.id}
@@ -1241,7 +1246,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     />
   ), [personalChoiceMessages, presentation, aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
     handleCancelQueuedMessage, handleOpenDeleteModal, handleOpenEditModal, handleRefreshAI, handleRetryDelivery,
-    handleSetReaction, handleSteerQueuedMessage, handleUserAction, onOpenWorkspaceFile, onReply,
+    handleSetReaction, handleSteerQueuedMessage, handleUserAction, onRetryPersonalMessage, onOpenWorkspaceFile, onReply,
     roleMemberByClientId, roomCreatorId, roomPermissions, toolResultPairing.resultByCallId, workspaceRoot]);
   const renderAgentMessage = useCallback((message: Message) => renderMessage(message, true), [renderMessage]);
 
@@ -1302,7 +1307,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       )}
       <div
         data-testid="message-list-shell"
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#f5f4ed] dark:bg-[#141413]"
+        className={`flex h-full min-h-0 w-full flex-col overflow-hidden ${presentation==='personal-agent'?'bg-[#fcfcfc]':'bg-[#f5f4ed]'} dark:bg-[#141413]`}
       >
         {presentation === 'code-agent' && codeAgentRoom && (
           <CodeAgentWorkspacePanel
@@ -1339,7 +1344,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           aria-live={isMessageLogLive ? 'polite' : 'off'}
           aria-relevant="additions"
           aria-busy={isLoading}
-          className={`relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 ${presentation !== 'chat' ? 'pt-3' : 'pt-14'}`}
+          className={`relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto ${presentation==='personal-agent'?'px-0':'px-3'} ${presentation !== 'chat' ? 'pt-3' : 'pt-14'}`}
           onScroll={handleScroll}
         >
           <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full shrink-0 flex-col">
@@ -1375,7 +1380,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
                   if (item.kind === 'agent-turn') {
-                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} transcript={messages} busy={room?.codeAgentStatus==='running'} onChoice={onSendPersonalChoice} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} desktopSteps={desktopSteps.filter(step=>step.turnId===item.turn.id)} liveDesktopStepId={desktopSteps.at(-1)?.id} onOpenComputer={onOpenPersonalComputer} renderMessage={renderMessage} />;
+                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} transcript={messages} busy={room?.codeAgentStatus==='running'} onChoice={onSendPersonalChoice} onOpenWorkspace={onOpenPersonalWorkspace} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} desktopSteps={desktopSteps.filter(step=>step.turnId===item.turn.id)} liveDesktopStepId={desktopSteps.at(-1)?.id} onOpenComputer={onOpenPersonalComputer} renderMessage={renderMessage} />;
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}
@@ -1403,9 +1408,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         {presentation !== 'chat' && pendingQueueMessages.length > 0 && (
           <div
             data-testid="code-agent-pending-queue"
-            className="z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto bg-[#f5f4ed]/95 px-4 pb-2 pt-2 backdrop-blur dark:bg-[#141413]/95"
+            className={`z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto px-3 pb-2 pt-3 backdrop-blur ${presentation==='personal-agent'?'bg-[#fcfcfc]/95':'bg-[#f5f4ed]/95'} dark:bg-[#141413]/95`}
           >
-            {pendingQueueMessages.map(message => presentation === 'personal-agent' ? renderMessage(message) : (
+            {presentation==='personal-agent' && <p className="text-[11px] text-default-500">{t('personalQueueUpNext')}</p>}
+            {pendingQueueMessages.map(message => {
+              if(presentation === 'personal-agent')return <div key={message.id} className="flex items-center gap-2" data-testid="personal-pending-message">
+              <p className="line-clamp-2 min-w-0 flex-1 break-words text-sm text-default-500">{displayJevUserMessage(message.content,personalChoiceTranscript(personalChoiceMessages))}</p>
+              <button type="button" className="p-2 text-default-500" aria-label={t('personalQueueRemove',{message:message.content})} disabled={!canUseRetainedRoomAccess || roomPermissions?.canPost!==true || message.clientId!==clientId || message.codeAgentQueuedInput?.state!=='queued'} onClick={()=>void handleCancelQueuedMessage(message.id)}><Icon icon="lucide:x" width={16}/></button>
+            </div>;
+              return (
               <MessageItem
                 key={`pending:${message.id}`}
                 message={message}
@@ -1430,7 +1441,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 isInteractionDisabled={!canUseRetainedRoomAccess}
                 ensureRoomOperationReady={ensureRoomOperationReady}
               />
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

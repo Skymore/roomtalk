@@ -74,7 +74,7 @@ export const PersonalAgentConnections: React.FC<{
       </section> : null;
     })}
     {!rows.length && <p className="text-sm text-default-500">{t('personalAppsNoConnectors')}</p>}
-    <Modal isOpen={Boolean(selected)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent>
+    <Modal isOpen={Boolean(selected)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme">
       <ModalHeader>{selected === 'google' ? t('personalGoogleConnections') : 'OpenBot'}</ModalHeader>
       <ModalBody className="pb-6">{selected === 'google' ? <div className="space-y-4">
         {!status && <Spinner />}

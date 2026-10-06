@@ -770,6 +770,16 @@ describe('MessageList optimistic messages', () => {
     await waitFor(() => expect(editQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'queued-1', 'edited content'));
   });
 
+  it('shows the source personal queue with a remove action without workspace edit controls',async()=>{
+    render(<MessageList roomId="room-1" presentation="personal-agent" roomPermissions={{canPost:true,canUseCodeAgent:true} as RoomPermissions}/>);
+    const queued=message({id:'queued-personal',content:'Next personal task',codeAgentQueuedInput:{state:'queued',queuedAt:'2026-10-06T10:00:00Z',updatedAt:'2026-10-06T10:00:00Z'}});
+    await resolveNextHistory({roomId:'room-1',messages:[queued],snapshotSeq:1,hasMore:false,mode:'replace'});
+    expect(await screen.findByTestId('personal-pending-message')).toBeTruthy();
+    expect(screen.queryByText('edit-queued-queued-personal')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'personalQueueRemove:Next personal task'}));
+    await waitFor(()=>expect(cancelQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1','queued-personal'));
+  });
+
   it('can mark pending messages as failed', async () => {
     const ref = createRef<MessageListHandle>();
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);

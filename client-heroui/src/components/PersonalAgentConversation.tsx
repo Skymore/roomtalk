@@ -1,3 +1,4 @@
+import type {PersonalWorkspaceOpener} from '../utils/personalToolSteps';
 import { PersonalAgentTaskDetailView } from './PersonalAgentTaskDetail';
 import { answerPersonalAgentTaskInput } from '../utils/personalAgent';
 import React from 'react';
@@ -17,7 +18,7 @@ export const PersonalAgentConversation: React.FC<{
   room: Room; clientId: string; username: string; roomPermissions: RoomPermissions | null;
   isRoomSessionReady: boolean; canUseRetainedRoomAccess: boolean; ensureRoomSessionReady: EnsureRoomSessionReady;
   messageSyncRequestId?: number; onRoomUpdated: (room: Room) => void; onRoomDeleted: (roomId: string) => void;
-  onRoomAccessDenied: (roomId: string) => void; onBack: () => void; onComputer:(tab?:'Desktop')=>void; showError: (message: string) => void;
+  onRoomAccessDenied: (roomId: string) => void; onBack: () => void; onComputer:(tab?:'Desktop')=>void;onOpenWorkspace?:PersonalWorkspaceOpener; showError: (message: string) => void;
 }> = props => {
   const { t } = useTranslation();
   const { room, clientId, username, ensureRoomSessionReady, showError } = props;
@@ -36,6 +37,7 @@ export const PersonalAgentConversation: React.FC<{
 
   const running = room.codeAgentStatus === 'running';
   const canSend = props.canUseRetainedRoomAccess && Boolean(props.roomPermissions?.canPost && props.roomPermissions?.canUseCodeAgent);
+  const failedSendImages=React.useRef(new Map<string,string[]>());
   const failedChoice=React.useRef<{content:string;id:string}>();
   const sendChoice=async(content:string,retry=false)=>{
     if(running || sending || !canSend)throw new Error(t('errorSendingMessage'));
@@ -56,6 +58,20 @@ export const PersonalAgentConversation: React.FC<{
       throw error;
     }finally{if(mounted.current)setSending(false);}
   };
+  const retry=async(message:Message)=>{
+    if(sending || !canSend || message.roomId!==room.id || message.clientId!==clientId || message.deliveryStatus!=='failed' || message.messageType!=='text' || !message.clientMessageId)return;
+    setSending(true);
+    try{
+      await ensureRoomSessionReady(room.id);
+      list.current?.addOptimisticMessage({...message,deliveryStatus:'pending',deliveryError:undefined});
+      const params={imageMessageIds:failedSendImages.current.get(message.clientMessageId),roomId:room.id,content:message.content,username:message.username,avatar:message.avatar,clientMessageId:message.clientMessageId,codeAgentMode:'fullAccess' as const,codexPermissionMode:'fullAccess' as const};
+      const saved=running?await queueCodeAgentInput(params):await sendMessageAndAskAI(params);
+      list.current?.replaceOptimisticMessage(message.clientMessageId,'userMessage' in saved?saved.userMessage:saved);
+      if('aiError' in saved && saved.aiError)throw new Error(saved.aiError);
+      failedSendImages.current.delete(message.clientMessageId);
+    }catch(error){const reason=error instanceof Error?error.message:t('errorSendingMessage');list.current?.markOptimisticMessageFailed(message.clientMessageId,reason);showError(reason);}
+    finally{if(mounted.current)setSending(false);}
+  };
   const send = async () => {
     if (!text.trim() || sending || !canSend) return;
     let clientMessageId: string | undefined;
@@ -74,9 +90,11 @@ export const PersonalAgentConversation: React.FC<{
       if (editor.current) editor.current.textContent = '';
       setText('');
       const imageMessageIds = attachments.filter(item => item.mediaAsset?.kind === 'image').map(item => item.id);
+      failedSendImages.current.set(clientMessageId,imageMessageIds);
       const params = { roomId: room.id, content, username, avatar, clientMessageId, imageMessageIds,
         codeAgentMode: 'fullAccess' as const, codexPermissionMode: 'fullAccess' as const };
       const saved = running ? await queueCodeAgentInput(params) : await sendMessageAndAskAI(params);
+      failedSendImages.current.delete(clientMessageId);
       completeDraft();
       if (!mounted.current) return;
       const userMessage = 'userMessage' in saved ? saved.userMessage : saved;
@@ -119,15 +137,15 @@ export const PersonalAgentConversation: React.FC<{
       }
     } catch (error) { if (mounted.current) showError(error instanceof Error ? error.message : t('personalAgentLoadFailed')); }
   };
-  return <section className="flex h-full min-h-0 w-full flex-col bg-[#f7f6f2] dark:bg-[#191917]" data-testid="personal-agent-conversation">
+  return <section className="flex h-full min-h-0 w-full flex-col bg-[#fcfcfc] dark:bg-[#191917]" data-testid="personal-agent-conversation">
     {room.personalAgentThreadKind!=='main' && <header className="relative shrink-0 px-4 py-1"><p className="text-center text-xs text-default-500">{room.name}</p><Button isIconOnly size="sm" variant="light" className="absolute right-0 top-0" aria-label={t('personalTaskDetail')} onPress={()=>setTaskOpen(true)}><Icon icon="lucide:list-checks"/></Button></header>}
-    <div className="relative flex min-h-0 flex-1 flex-col px-1 pt-4 sm:px-6">
-      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onSendPersonalChoice={sendChoice} onOpenPersonalComputer={()=>props.onComputer('Desktop')}
+    <div className="relative flex min-h-0 flex-1 flex-col pt-4">
+      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onSendPersonalChoice={sendChoice} onOpenPersonalWorkspace={props.onOpenWorkspace} onRetryPersonalMessage={message=>void retry(message)} onOpenPersonalComputer={()=>props.onComputer('Desktop')}
         roomPermissions={props.roomPermissions} isRoomSessionReady={props.isRoomSessionReady} canUseRetainedRoomAccess={props.canUseRetainedRoomAccess}
         ensureRoomSessionReady={ensureRoomSessionReady} messageSyncRequestId={props.messageSyncRequestId} onRoomUpdated={props.onRoomUpdated}
         onRoomDeleted={props.onRoomDeleted} onRoomAccessDenied={props.onRoomAccessDenied} onOpenWorkspaceFile={path => void openFile(path)} />
     </div>
-    <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-5 pt-3 sm:px-6">
+    <div className="mx-auto w-full max-w-3xl shrink-0 pb-5 pt-3">
       {attachments.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{attachments.map(item => <span key={item.id} className="flex items-center gap-1 rounded-full bg-default-100 px-3 py-1 text-xs">{item.mediaAsset?.filename || t('attachment')}<button type="button" aria-label={t('remove')} onClick={() => setAttachments(previous => previous.filter(entry => entry.id !== item.id))}><Icon icon="lucide:x" /></button></span>)}</div>}
       <div className="flex items-end gap-2 rounded-3xl border border-default-200 bg-white p-2 shadow-sm dark:bg-[#252522]">
         <input ref={fileInput} type="file" multiple className="hidden" onChange={event => { void upload(Array.from(event.target.files || [])); event.target.value = ''; }} />

@@ -13,4 +13,10 @@ describe('personal desktop receipts from Codex exec_command',()=>{
     expect(readPersonalDesktopSteps([call,message('error',{messageType:'tool_result',toolCallId:'tool',content:'{"success":false,"error":"Computer is stopped","code":"room_context_request_failed"}'})])[0]).toMatchObject({loading:false,error:'Computer is stopped'});
     expect(readPersonalDesktopSteps([call,message('other',{messageType:'tool_result',toolCallId:'tool',content:'noise\n{"tool":"Other","receipt":{"id":"wrong"}}'})])[0].receiptId).toBeUndefined();
   });
+  it('reads the persisted desktop receipt after a truncated workspace preview',()=>{
+    const call=message('call',{toolCallId:'tool',toolArgs:{cmd:'roomtalk computer desktop --file action.json --json'}});
+    const output=message('output',{messageType:'tool_result',toolCallId:'tool',toolOutputPreview:'Process output truncated',content:'x'.repeat(5000)+'\n'+JSON.stringify({tool:'PersonalComputer',receipt:{id:'saved-desktop',command:'desktop: click'}})});
+    expect(readPersonalDesktopSteps([call,output])[0]).toMatchObject({loading:false,receiptId:'saved-desktop',action:'desktop: click'});
+  });
+
 });

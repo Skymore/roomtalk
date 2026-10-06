@@ -64,7 +64,7 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
     <section className="space-y-3 border-t border-default-200 pt-5"><h3 className="text-lg font-semibold">{t('personalGoalCreate')}</h3>
       {categories.map(item=><button key={item.name} type="button" className="flex min-h-10 w-full items-center gap-3 text-left text-default-500" aria-label={t('personalGoalCreateCategory',{category:t(`personalGoalCategory_${item.name}`)})} onClick={()=>{setCategory(item.name);setTitle('');setDescription('');setMilestones('');setError('');}}><Icon icon={item.icon} className="h-6 w-6"/><span className="flex-1">{t(`personalGoalCategory_${item.name}`)}</span><Icon icon="lucide:plus"/></button>)}
     </section>
-    <Modal isOpen={Boolean(category)} onClose={()=>setCategory(undefined)} scrollBehavior="inside"><ModalContent><ModalHeader>{t('personalGoalCreate')}</ModalHeader><ModalBody className="pb-6"><form className="space-y-4" onSubmit={event=>{event.preventDefault();void act(async()=>{
+    <Modal isOpen={Boolean(category)} onClose={()=>setCategory(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{t('personalGoalCreate')}</ModalHeader><ModalBody className="pb-6"><form className="space-y-4" onSubmit={event=>{event.preventDefault();void act(async()=>{
       const saved=await createPersonalAgentGoal(clientId,{title:title.trim(),prompt:description,category,schedule:'manual',time:'09:00',timezone:'UTC',milestones:milestones.split('\n').map(line=>line.trim()).filter(Boolean).map(title=>({id:crypto.randomUUID(),title,done:false}))});onGoalsChange([saved.goal,...goals]);setCategory(undefined);
     });}}>
       <Input label={t('personalGoalYourGoal')} placeholder={t('personalGoalExample')} value={title} onValueChange={setTitle} maxLength={160}/>
@@ -73,7 +73,7 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <Button type="submit" color="secondary" isLoading={busy} isDisabled={!title.trim()}>{t('personalGoalCreateButton')}</Button>
     </form></ModalBody></ModalContent></Modal>
-    <Modal isOpen={Boolean(goal)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent><ModalHeader>{goal?.title}</ModalHeader><ModalBody className="pb-6">{goal && <div className="space-y-3 rounded-2xl border border-default-200 p-4">
+    <Modal isOpen={Boolean(goal)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{goal?.title}</ModalHeader><ModalBody className="pb-6">{goal && <div className="space-y-3 rounded-2xl border border-default-200 p-4">
       <div className="flex justify-between gap-3"><h3 className="font-semibold">{goal.title}</h3><span className="rounded-full bg-[#d7e9fa] px-2 py-1 text-xs dark:bg-[#263744]">{t(status(goal))}</span></div>
       <p className="whitespace-pre-wrap text-sm text-default-500">{goal.prompt}</p>
       <p className="text-xs text-default-500">{t('personalGoalProgress',{done:(goal.milestones || []).filter(item=>item.done).length,total:goal.milestones?.length || 0})}</p>

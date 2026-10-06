@@ -1,3 +1,5 @@
+import {PersonalInlineTools} from './PersonalInlineTools';
+import type {PersonalWorkspaceOpener} from '../utils/personalToolSteps';
 import type {PersonalChoiceSender} from '../utils/personalChoiceTranscript';
 import {PersonalChoiceCards} from './PersonalChoiceCards';
 import {readPersonalTaskSteps} from '../utils/personalTaskSteps';
@@ -20,7 +22,7 @@ export const PersonalAgentMessage: React.FC<{ message: Message; displayText?:str
   if (!message.content.trim()) return null;
   const own = message.messageType === 'text';
   return <div className={`mx-auto flex w-full max-w-3xl ${own ? 'justify-end' : 'justify-start'}`} data-testid={own ? 'personal-user-message' : 'personal-agent-message'}>
-    <div className={`min-w-0 max-w-[92%] rounded-3xl px-5 py-3 text-sm leading-7 ${own ? 'bg-[#ece8e0] dark:bg-[#34332f]' : 'bg-white dark:bg-[#252522]'} ${message.status === 'error' || message.deliveryStatus === 'failed' ? 'border border-danger-200' : ''}`}>
+    <div className={`min-w-0 rounded-[22px] px-4 py-[13px] text-base leading-6 ${own ? 'max-w-[85%] rounded-br-[7px] bg-[#c8e7ff] dark:bg-[#234e6b]' : 'max-w-[95%] rounded-bl-[7px] bg-[#eeeef0] dark:bg-[#252522]'} ${message.status === 'error' || message.deliveryStatus === 'failed' ? 'border border-danger-200' : ''}`}>
       {own ? <p className="whitespace-pre-wrap break-words">{displayText ?? message.content}</p> : <MarkdownContent content={message.content} isStreaming={message.status === 'streaming'} onOpenWorkspaceFile={onOpenFile} />}
       {message.deliveryStatus === 'failed' && <button type="button" className="mt-2 text-danger underline" disabled={!canInteract} onClick={() => onRetry?.(message)}>{t('retry')}</button>}
       {message.codeAgentQueuedInput?.state === 'queued' && <p className="mt-1 text-xs text-default-500">{t('personalAgentQueued')}</p>}
@@ -28,15 +30,21 @@ export const PersonalAgentMessage: React.FC<{ message: Message; displayText?:str
   </div>;
 };
 
-export const PersonalAgentTurn: React.FC<{ clientId: string; transcript?:Message[];busy?:boolean;onChoice?:PersonalChoiceSender;canInteract?: boolean; desktopSteps?:PersonalDesktopStep[];liveDesktopStepId?:string;onOpenComputer?:()=>void;turn: RoomAgentTurn; messages: Message[]; renderMessage: (message: Message) => React.ReactNode }> = ({ clientId, transcript=[],busy=false,onChoice,canInteract = true, turn, messages, renderMessage, desktopSteps=[],liveDesktopStepId,onOpenComputer }) => {
+export const PersonalAgentTurn: React.FC<{ clientId: string; onOpenWorkspace?:PersonalWorkspaceOpener; transcript?:Message[];busy?:boolean;onChoice?:PersonalChoiceSender;canInteract?: boolean; desktopSteps?:PersonalDesktopStep[];liveDesktopStepId?:string;onOpenComputer?:()=>void;turn: RoomAgentTurn; messages: Message[]; renderMessage: (message: Message) => React.ReactNode }> = ({ clientId, onOpenWorkspace, transcript=[],busy=false,onChoice,canInteract = true, turn, messages, renderMessage, desktopSteps=[],liveDesktopStepId,onOpenComputer }) => {
   const { t } = useTranslation();
   const answers = messages.filter(message => message.messageType === 'ai' && message.content.trim());
-  const final = turn.finalMessageId ? answers.find(message => message.id === turn.finalMessageId) : undefined;
+  const results=new Map(messages.filter(message=>message.messageType==='tool_result').map(message=>[message.toolCallId,message]));
   return <div className="space-y-3" data-testid="personal-agent-turn">
-    {messages.filter(message => message.messageType === 'text' || message.messageType === 'media').map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
-    {(final ? [final] : answers).map(message => <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>)}
-    <PersonalChoiceCards messages={messages} transcript={transcript} threadId={turn.roomId} busy={busy} canInteract={canInteract} send={onChoice}/>
-    {canInteract && readPersonalTaskSteps(messages).map(step=><PersonalAgentTaskReceipt key={step.id} clientId={clientId} step={step}/>)}
+    {messages.map(message=>{
+      if(message.messageType==='text' || message.messageType==='media' || message.messageType==='ai')return <React.Fragment key={message.id}>{renderMessage(message)}</React.Fragment>;
+      if(message.messageType!=='tool_call')return null;
+      const receipt=results.get(message.toolCallId),step=receipt?[message,receipt]:[message];
+      return <React.Fragment key={message.id}>
+        <PersonalInlineTools messages={step} active={turn.status==='running'} open={canInteract?onOpenWorkspace:undefined}/>
+        <PersonalChoiceCards messages={step} transcript={transcript} threadId={turn.roomId} busy={busy} canInteract={canInteract} send={onChoice}/>
+        {canInteract && readPersonalTaskSteps(step).map(task=><PersonalAgentTaskReceipt key={task.id} clientId={clientId} step={task}/>)}
+      </React.Fragment>;
+    })}
     {canInteract && desktopSteps.map(step=><DesktopToolCard key={step.id} clientId={clientId} step={step} live={step.id===liveDesktopStepId} onOpen={onOpenComputer}/>)}
     <PersonalAgentBrowserVisits clientId={clientId} turn={turn} canInteract={canInteract} />
     <PersonalAgentResults clientId={clientId} turn={turn} canInteract={canInteract} />

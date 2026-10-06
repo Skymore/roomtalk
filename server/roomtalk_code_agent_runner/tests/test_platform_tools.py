@@ -608,3 +608,17 @@ def test_personal_choices_uses_turn_broker_and_preserves_controlled_failures(tmp
     assert platform_tools.main(["choices", "present", "--file", str(source), "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
     assert len(calls) == before
+
+
+def test_public_search_uses_anonymous_turn_broker_and_reports_failure(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append((path, kwargs)) or {"results": [{"url": "https://example.org/research"}], "warnings": [], "truncated": False})
+    assert platform_tools.main(["search", "web", "--objective", "Find public sources", "--query", "first public query", "--query", "second public query", "--json"]) == 0
+    assert calls == [("/personal-search", {"method": "PATCH", "body": {"objective": "Find public sources", "search_queries": ["first public query", "second public query"]}})]
+    result = json.loads(capsys.readouterr().out)
+    assert result["tool"] == "PersonalSearch"
+    assert result["results"][0]["url"] == "https://example.org/research"
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda *args, **kwargs: {"error": "Search rate limited"})
+    assert platform_tools.main(["search", "web", "--objective", "Find sources", "--query", "public query", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["success"] is False

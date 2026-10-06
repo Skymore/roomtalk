@@ -1,3 +1,4 @@
+import type {PersonalWorkspaceOpener} from '../utils/personalToolSteps';
 import { PersonalAgentComputer } from './PersonalAgentComputer';
 import { PersonalAgentDelegate } from './PersonalAgentDelegate';
 import { PersonalAgentActivity } from './PersonalAgentActivity';
@@ -20,12 +21,12 @@ import { getCodexConnectionStatus, type CodexConnectionStatus } from '../utils/c
 import { pickNewerRoom, sortRoomsByLastActivityDesc } from '../utils/roomState';
 import {
   getPersonalAgent,readPersonalAgentNotifications,personalGoogleRequest, updatePersonalAgentProfile,answerPersonalAgentTaskInput,
-  type PersonalAgentProfile, type PersonalAgentSnapshot,type PersonalGoogleAction,
+  type PersonalAgentProfile, type PersonalAgentSnapshot,type PersonalGoogleAction,type PersonalMail,
 } from '../utils/personalAgent';
 import type { Room } from '../utils/types';
 
 interface PersonalAgentViewProps {
-  conversation?: (openThreads:()=>void,openComputer:(tab?:'Desktop')=>void)=>React.ReactNode;
+  conversation?: (openThreads:()=>void,openComputer:(tab?:'Desktop')=>void,openWorkspace:PersonalWorkspaceOpener)=>React.ReactNode;
   selectedRoomId?:string|null;
   conversationSelection?: number;
   clientId: string;
@@ -48,8 +49,8 @@ const tabs: { key: AgentTab; icon: string; label: string }[] = [
   { key:'goals',icon:'lucide:square-check',label:'personalAgentGoals' },
   { key:'apps',icon:'lucide:shapes',label:'personalAgentApps' },
 ];
-const panelClass = 'rounded-2xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
-const mutedClass = 'text-[#5e5d59] dark:text-[#b0aea5]';
+const panelClass = 'rounded-2xl border border-[#eeeef0] bg-[#ffffff] dark:border-[#30302e] dark:bg-[#1d1d1b]';
+const mutedClass = 'text-[#697176] dark:text-[#b0aea5]';
 
 
 export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
@@ -71,6 +72,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   const [notificationsOpen,setNotificationsOpen]=React.useState(false);
   const [computerOpen,setComputerOpen]=React.useState(false);
   const [computerTab,setComputerTab]=React.useState<'Desktop'>();
+  const [initialMail,setInitialMail]=React.useState<PersonalMail>();
   const [fileId,setFileId]=React.useState<string>();
   const selectingMain=React.useRef(false);
   const [appSearch,setAppSearch] = React.useState('');
@@ -144,9 +146,9 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col" style={{paddingTop:'env(safe-area-inset-top)',paddingBottom:'env(safe-area-inset-bottom)'}} data-testid="personal-agent-view">
-      <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col px-[22px] pt-4 sm:px-[42px] sm:pt-6">
-        <header className="relative h-[122px] shrink-0 sm:h-[146px]">
+    <div className="personal-agent-theme flex h-full min-h-0 w-full flex-col bg-[#fcfcfc] text-[#11191c] dark:bg-[#191917] dark:text-default-800" style={{paddingTop:'env(safe-area-inset-top)',paddingBottom:'env(safe-area-inset-bottom)'}} data-testid="personal-agent-view">
+      <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col">
+        <header className="relative mx-5 h-[122px] shrink-0 pt-0.5 sm:h-[146px] sm:pt-3.5">
           <Button isIconOnly size="sm" variant="light" className="absolute left-0 top-4" aria-label={t('personalAgentConversations')} onPress={()=>setThreadsOpen(true)}><Icon icon="lucide:menu" className="h-5 w-5"/></Button>
           <button type="button" className="mx-auto flex max-w-[70%] flex-col items-center gap-1" onClick={()=>setTab('activity')} aria-label={t('personalSourceOpenActivity',{name:snapshot.profile.name})}>
             <span className={`flex h-[49px] w-[49px] items-center justify-center rounded-full text-3xl sm:h-[58px] sm:w-[58px] ${snapshot.profile.avatar==='sand'?'bg-[#ece4d7]':snapshot.profile.avatar==='lilac'?'bg-[#e7e1f1]':'bg-[#d9e9f4]'}`} aria-hidden="true">🦊</span>
@@ -155,10 +157,10 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           {tab==='chats' && <div className="mt-1 text-center"><Button size="sm" variant="flat" className="h-6 rounded-full text-xs" onPress={()=>{setComputerTab(undefined);setComputerOpen(true);}} startContent={<Icon icon="lucide:monitor"/>}>{t('personalAgentComputer')}</Button></div>}
           <div className="absolute right-0 top-4"><Button isIconOnly size="sm" variant="light" aria-label={t('personalUpdates')} onPress={()=>setNotificationsOpen(true)}><Icon icon="lucide:bell" className="h-5 w-5"/></Button>{pendingNotifications+pendingReviews>0 && <span aria-hidden="true" className="pointer-events-none absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-[#527d99]"/>}</div>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto pb-4" data-testid="personal-agent-content">
+        <div className={`min-h-0 flex-1 overflow-y-auto pb-4 sm:px-[42px] ${tab==='chats'?'px-[17px]':'px-[22px]'}`} data-testid="personal-agent-content">
         {(['files','memory','tracking','mail','calendar'] as AgentTab[]).includes(tab) && <Button size="sm" variant="light" className="mb-[18px]" onPress={()=>setTab('apps')} startContent={<Icon icon="lucide:arrow-left" />}>{t('personalAgentBackToApps')}</Button>}
         {tab!=='chats' && <h2 className="mb-[22px] text-[25px] font-semibold">{t(tab==='activity'?'personalAgentActivity':tab==='ideas'?'personalAgentIdeas':tab==='goals'?'personalAgentGoals':tab==='apps'?'personalAgentApps':tab==='mail'?'personalGoogleMail':tab==='calendar'?'personalGoogleCalendar':tab==='files'?'personalAgentFiles':tab==='tracking'?'personalAgentTracking':'personalAgentPersonalityMemory')}</h2>}
-        {conversation && tab === 'chats' ? <div className="h-full min-h-0">{conversation(()=>setThreadsOpen(true),tab=>{setComputerTab(tab);setComputerOpen(true);})}</div> : <div className="space-y-5">
+        {conversation && tab === 'chats' ? <div className="h-full min-h-0">{conversation(()=>setThreadsOpen(true),tab=>{setComputerTab(tab);setComputerOpen(true);},(target,mail)=>{setInitialMail(mail);setTab(target);})}</div> : <div className="space-y-5">
         {tab === 'apps' && <section className="space-y-5">
           <Input label={t('personalAgentSearchApps')} placeholder={t('personalAppsSearchConnectors')} value={appSearch} onValueChange={setAppSearch} />
           {!isConnected && !appSearch.trim() && <div className={`${panelClass} flex items-center gap-3 p-4`}><span className="text-2xl" aria-hidden="true">🦊</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{t('personalAgentConnection')}</p><p className={`text-xs ${mutedClass}`}>{t(isConnected ? 'codexConnectionStatusConnected' : 'personalAgentConnectionHint')}</p></div>{!isConnected && <Button size="sm" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button>}</div>}
@@ -174,7 +176,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
         </section>}
 
 
-        {tab === 'mail' && <PersonalAgentMail clientId={clientId} showError={showError} onOpenFiles={()=>setTab('files')} />}
+        {tab === 'mail' && <PersonalAgentMail initialMail={initialMail} onMailOpened={()=>setInitialMail(undefined)} clientId={clientId} showError={showError} onOpenFiles={()=>setTab('files')} />}
         {tab === 'calendar' && <PersonalAgentCalendar clientId={clientId} />}
         {tab === 'files' && <PersonalAgentFiles key={clientId} clientId={clientId} initialFileId={fileId} showError={showError} />}
         {tab === 'tracking' && <PersonalAgentTracking key={clientId} clientId={clientId} showError={showError} showSuccess={showSuccess} onTask={setTaskId} />}
@@ -228,7 +230,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
         <PersonalAgentComputer clientId={clientId} mainRoomId={selectedRoomId || snapshot.profile.mainRoomId} available={isConnected} initialTab={computerTab} isOpen={computerOpen} onClose={()=>setComputerOpen(false)} onFiles={file=>{setFileId(file?.id);setTab('files');}}/>
         <PersonalAgentDelegate clientId={clientId} isOpen={delegateOpen} onClose={()=>setDelegateOpen(false)} onTask={room=>{setSnapshot(previous=>previous?{...previous,rooms:[...previous.rooms,room]}:previous);setTaskId(room.id);}}/>
         {taskId && <PersonalAgentTaskDetailView clientId={clientId} roomId={taskId} isOpen onClose={()=>{setTaskId(undefined);void refresh();}} onSubmit={async(request,answer)=>{await answerPersonalAgentTaskInput(clientId,taskId,request.id,answer);}}/>}
-        <Modal isOpen={notificationsOpen && !taskId} onClose={()=>setNotificationsOpen(false)} scrollBehavior="inside"><ModalContent><ModalHeader>{t('personalUpdates')}</ModalHeader><ModalBody className="pb-6"><p className="text-sm text-default-500">{t('personalTaskNotificationsHint')}</p><PersonalAgentUpdates clientId={clientId} rooms={rooms} mode="list" enabled={notificationsOpen} onRoomSelect={room=>{setNotificationsOpen(false);setTaskId(room.id);}} onOpenUpdates={()=>{}} showError={showError}/></ModalBody></ModalContent></Modal>
+        <Modal isOpen={notificationsOpen && !taskId} onClose={()=>setNotificationsOpen(false)} scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{t('personalUpdates')}</ModalHeader><ModalBody className="pb-6"><p className="text-sm text-default-500">{t('personalTaskNotificationsHint')}</p><PersonalAgentUpdates clientId={clientId} rooms={rooms} mode="list" enabled={notificationsOpen} onRoomSelect={room=>{setNotificationsOpen(false);setTaskId(room.id);}} onOpenUpdates={()=>{}} showError={showError}/></ModalBody></ModalContent></Modal>
         <nav className="shrink-0 pb-[7px] pt-[10px] sm:pb-[22px]" aria-label={t('personalAgentSections')}>
           <div className="mx-auto flex w-full max-w-[370px] rounded-[40px] border border-[#f8f8f8] bg-white p-[5px] shadow-sm dark:border-[#30302e] dark:bg-[#252522]">{tabs.map(item => {
             const active=tab===item.key || (item.key==='apps' && ['files','memory','tracking','mail','calendar'].includes(tab));
