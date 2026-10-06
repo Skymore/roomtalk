@@ -52,6 +52,12 @@ describe('PersonalAgentView', () => {
   });
   afterEach(cleanup);
 
+  const openMemorySettings = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    const expand = screen.queryByRole('button', { name: 'personalAgentPersonalityMemory' });
+    if (expand) fireEvent.click(expand);
+  };
+
   const suggestion = (id: string) => ({ id, title: `Suggestion ${id}`, reason: 'A saved decision needs a next step', prompt: 'Read the saved topic',
     source: { kind: 'memory' as const, id: `note-${id}`, title: 'Actual topic', excerpt: 'Confirmed source text', recordedAt: snapshot.profile.updatedAt },
     automatic: false, status: 'new' as const, createdAt: snapshot.profile.createdAt, updatedAt: snapshot.profile.updatedAt });
@@ -92,7 +98,7 @@ describe('PersonalAgentView', () => {
     api.markPersonalAgentNotificationRead.mockResolvedValue({ notification: { ...notice, readAt: snapshot.profile.updatedAt } });
     fireEvent.click(screen.getByRole('button', { name: 'personalUpdateDismiss' }));
     await waitFor(() => expect(screen.queryByTestId('personal-update-card')).toBeNull());
-    fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    openMemorySettings();
     fireEvent.click(screen.getByLabelText('personalShowUpdates'));
     fireEvent.click(screen.getByLabelText('personalPushUpdates'));
     api.updatePersonalAgentProfile.mockResolvedValue({ profile: { ...snapshot.profile, showUpdates: false, pushEnabled: false } });
@@ -253,7 +259,7 @@ describe('PersonalAgentView', () => {
     const callbacks = props();
     render(<PersonalAgentView {...callbacks} />);
     await screen.findByText('Muse');
-    fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    openMemorySettings();
     fireEvent.change(screen.getByLabelText('personalAgentAboutYou'), { target: { value: 'I prefer Chinese.' } });
     fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
     await waitFor(() => expect(api.getPersonalAgent).toHaveBeenCalledTimes(2));
@@ -275,7 +281,7 @@ describe('PersonalAgentView', () => {
   it('refreshes clean memory from the agent after a background update', async () => {
     render(<PersonalAgentView {...props()} />);
     await screen.findByText('Muse');
-    fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    openMemorySettings();
     api.getPersonalAgent.mockResolvedValue({ ...snapshot, profile: { ...snapshot.profile, memory: 'A newly remembered preference.' } });
     fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
     await waitFor(() => expect((screen.getByLabelText('personalAgentAboutYou') as HTMLTextAreaElement).value).toBe('A newly remembered preference.'));
@@ -296,7 +302,7 @@ describe('PersonalAgentView', () => {
     api.createPersonalAgentThread.mockResolvedValue({ room: { ...snapshot.rooms[0], id: 'topic-room', personalAgentMemoryId: first.id } });
     api.mergePersonalAgentMemories.mockResolvedValue({ memory: first });
     const callbacks = props(); render(<PersonalAgentView {...callbacks} />);
-    await screen.findByText('Muse'); fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    await screen.findByText('Muse'); openMemorySettings();
     await screen.findByText('Trip plan');
     fireEvent.click(screen.getAllByRole('button', { name: 'personalMemoryContinueTopic' })[0]);
     await waitFor(() => expect(api.createPersonalAgentThread).toHaveBeenCalledWith('client-1', 'Trip plan', first.id));

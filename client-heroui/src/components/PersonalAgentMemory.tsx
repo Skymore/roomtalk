@@ -45,7 +45,8 @@ export const PersonalAgentMemory: React.FC<{
   };
   const edit = (entry?: Memory) => { setMerging([]); setEditing(entry); setDraft(entry ? { kind: entry.kind, title: entry.title, content: entry.content } : { kind: 'preference', title: '', content: '' }); setOpen(true); };
   const selectedKind = entries.find(entry => entry.id === selected[0])?.kind;
-  return <section className="space-y-4" data-testid="personal-memory-library">
+  return <section className="space-y-4 rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 sm:p-6 dark:border-[#30302e] dark:bg-[#1d1d1b]" data-testid="personal-memory-library">
+    <h3 className="text-base font-semibold">{t('personalAgentMemory')}</h3>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="max-w-lg text-sm text-default-600">{t('personalMemoryLibraryDescription')}</p>
       <div className="flex flex-wrap gap-2">
@@ -59,7 +60,7 @@ export const PersonalAgentMemory: React.FC<{
       setMerging(notes); setEditing(notes[0]); setDraft({ kind: notes[0].kind, title: notes[0].title, content: notes[0].content }); setOpen(true);
     }}>{t('personalMemoryMergeSelected', { count: selected.length })}</Button></div>}
     {!loading && entries.length === 0 && <p className="rounded-2xl bg-default-100 p-6 text-sm text-default-600">{t(query ? 'personalMemoryNoResults' : 'personalMemoryEmpty')}</p>}
-    {entries.map(entry => <article key={entry.id} className="rounded-2xl border border-default-200 bg-background p-5" data-testid="personal-memory-entry">
+    {entries.map(entry => <article key={entry.id} className="space-y-2 border-b border-[#dedbd0] pb-4 last:border-b-0 dark:border-[#30302e]" data-testid="personal-memory-entry">
       <p className="mb-1 text-xs text-default-500">{t(`personalMemoryKind_${entry.kind}`)}</p>
       <h3 className="font-medium">{organizing ? <Checkbox isSelected={selected.includes(entry.id)} isDisabled={busy || (!selected.includes(entry.id) && (selected.length >= 20 || Boolean(selectedKind && selectedKind !== entry.kind)))} onValueChange={checked => setSelected(previous => checked ? [...previous, entry.id] : previous.filter(id => id !== entry.id))}>{entry.title}</Checkbox> : entry.title}</h3>
       <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">{entry.content}</p>

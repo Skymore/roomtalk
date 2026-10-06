@@ -52,6 +52,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   const [isLoading, setIsLoading] = React.useState(true);
   const [requiresSignIn, setRequiresSignIn] = React.useState(false);
   const [isBusy, setIsBusy] = React.useState(false);
+  const [memorySettingsOpen, setMemorySettingsOpen] = React.useState(false);
   const [tab, setTab] = React.useState<AgentTab>(() => new URLSearchParams(window.location.search).get('tab') === 'activity' ? 'activity' : 'chats');
   const profileDirty = React.useRef(false);
 
@@ -161,14 +162,18 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           </button>)}
         </section></>}
 
-        {tab === 'memory' && <><PersonalAgentMemory clientId={clientId} rooms={rooms} onRoomSelect={onRoomSelect} showError={showError} showSuccess={showSuccess} /><form className={`${panelClass} space-y-5 p-5 sm:p-6`} onSubmit={event => { event.preventDefault(); void mutate(async () => {
+        {tab === 'memory' && <section className="space-y-5">
+          <Button variant="flat" onPress={() => setMemorySettingsOpen(!memorySettingsOpen)} aria-expanded={memorySettingsOpen} aria-controls="personal-personality-memory">
+            {t(memorySettingsOpen ? 'personalAgentCloseSettings' : 'personalAgentPersonalityMemory')}
+          </Button>
+          {memorySettingsOpen && <div id="personal-personality-memory" className="space-y-5"><form className={`${panelClass} space-y-5 p-5 sm:p-6`} onSubmit={event => { event.preventDefault(); void mutate(async () => {
           const { profile } = await updatePersonalAgentProfile(clientId, profileDraft, profileDraft.updatedAt);
           profileDirty.current = false;
           setSnapshot(previous => previous ? { ...previous, profile } : previous);
           setProfileDraft(profile);
           showSuccess(t('personalAgentProfileSaved'));
         }); }}>
-          <p className={`text-sm ${mutedClass}`}>{t('personalAgentMemoryDescription')}</p>
+          <h3 className="text-base font-semibold">{t('personalAgentYourAgent')}</h3>
           <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
             <Input label={t('personalAgentName')} value={profileDraft.name} maxLength={100} isRequired onValueChange={name => editProfile({ name })} />
             <Input label={t('personalAgentAvatar')} value={profileDraft.avatar} maxLength={64} isRequired onValueChange={avatar => editProfile({ avatar })} />
@@ -181,7 +186,10 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
             <p className="text-xs text-default-500">{t('personalNotificationPreferencesHint')}</p>
           </div>
           <Button type="submit" color="secondary" isLoading={isBusy} isDisabled={!profileDraft.name.trim() || !profileDraft.avatar.trim()}>{t('save')}</Button>
-        </form></>}
+        </form>
+            <PersonalAgentMemory clientId={clientId} rooms={rooms} onRoomSelect={onRoomSelect} showError={showError} showSuccess={showSuccess} />
+          </div>}
+        </section>}
       </div>
 
 

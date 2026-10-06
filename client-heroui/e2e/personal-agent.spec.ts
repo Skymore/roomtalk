@@ -19,6 +19,18 @@ const openPersonalAgent = async (page: Page) => {
   await expect(page.getByTestId('personal-agent-view')).toBeVisible();
 };
 
+const openMemorySettings = async (page: Page) => {
+  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  const expand = page.getByRole('button', { name: 'Personality & memory', exact: true });
+  if (await expand.isVisible()) {
+    await expect(page.getByLabel('Agent name', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('personal-memory-library')).toHaveCount(0);
+    await expand.click();
+  }
+  await expect(page.getByRole('heading', { name: 'Your agent', exact: true })).toBeVisible();
+  await expect(page.getByTestId('personal-memory-library').getByRole('heading', { name: 'Memory', exact: true })).toBeVisible();
+};
+
 const accountHeaders = (clientId: string, token: string) => ({ 'X-Client-Id': clientId, 'X-Client-Auth-Token': token });
 
 const expectCompletedTurn = async (request: APIRequestContext, clientId: string, token: string, roomId: string) => {
@@ -96,12 +108,12 @@ test('tracks a real page, deduplicates updates, pauses and preserves read/prefer
     await expect(page.getByRole('button', { name: 'Memory', exact: true })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: '/tmp/roomtalk-personal-tracking-mobile.png', fullPage: true });
-    await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await openMemorySettings(page);
     await page.getByRole('checkbox', { name: 'Show background updates on your agent page', exact: true }).uncheck();
     await page.getByRole('checkbox', { name: 'Push background task and page updates', exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByText('Agent preferences and memory saved', { exact: true })).toBeVisible();
-    await page.reload(); await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await page.reload(); await openMemorySettings(page);
     await expect(page.getByRole('checkbox', { name: 'Push background task and page updates', exact: true })).not.toBeChecked();
     await page.getByRole('button', { name: 'Tracking', exact: true }).click();
     await page.getByTestId('personal-watch-card').getByRole('button', { name: 'Delete', exact: true }).click();
@@ -184,7 +196,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   expect(token).toBeTruthy();
 
   await openPersonalAgent(page);
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   await page.getByLabel('Agent name', { exact: true }).fill('Willow');
   await page.getByLabel('How to work with you', { exact: true }).fill('Give me concise, practical answers.');
   await page.getByLabel('About you', { exact: true }).fill('I prefer Chinese and live in Seattle.');
@@ -193,7 +205,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.reload();
   await expect(page.getByTestId('personal-agent-view')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Willow', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   await expect(page.getByLabel('About you', { exact: true })).toHaveValue('I prefer Chinese and live in Seattle.');
   await expect(page.getByLabel('How to work with you', { exact: true })).toHaveValue('Give me concise, practical answers.');
 
@@ -203,7 +215,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByTestId('personal-memory-entry')).toContainText('Please answer in Chinese.');
   await page.reload();
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   await page.getByRole('textbox', { name: 'Search memories', exact: true }).fill('language');
   await expect(page.getByTestId('personal-memory-entry')).toHaveCount(1);
   await page.getByTestId('personal-memory-entry').getByRole('button', { name: 'Edit', exact: true }).click();
@@ -414,7 +426,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.screenshot({ path: '/tmp/roomtalk-personal-goal-tools-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   await page.getByTestId('personal-memory-entry').getByRole('button', { name: 'Forget', exact: true }).click();
   await expect(page.getByTestId('personal-memory-entry')).toHaveCount(0);
 
@@ -473,7 +485,7 @@ test('continues a topic and reviews conflicting memories before an atomic merge'
   const token = (await page.evaluate(() => localStorage.getItem('clientAuthToken')))!;
   const headers = accountHeaders(clientId, token);
   await openPersonalAgent(page);
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   const addTopic = async (title: string, content: string) => {
     await page.getByRole('button', { name: 'Add a memory', exact: true }).click();
     await page.getByRole('dialog').getByLabel('Type', { exact: true }).click();
@@ -501,7 +513,7 @@ test('continues a topic and reviews conflicting memories before an atomic merge'
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expectCompletedTurn(request, clientId, token, room.id);
   await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await openMemorySettings(page);
   await page.getByRole('button', { name: 'Organize memories', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Project handoff', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Related research', exact: true }).click();
@@ -523,7 +535,7 @@ test('continues a topic and reviews conflicting memories before an atomic merge'
   expect(merged[0].id).toBe(first.id); expect(merged[0].provenance.length).toBeGreaterThanOrEqual(3);
   const rebound = await request.get(`${serverURL}/api/clients/${clientId}/rooms/${room.id}`, { headers });
   expect((await rebound.json()).personalAgentMemoryId).toBe(first.id);
-  await page.reload(); await page.getByRole('button', { name: 'Memory', exact: true }).click();
+  await page.reload(); await openMemorySettings(page);
   await expect(card(first.title)).toContainText('book the trip');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
