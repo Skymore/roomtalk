@@ -303,7 +303,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.getByRole('dialog').getByLabel('Milestones', { exact: true }).fill('Prepare a weekly plan');
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Daily planning', exact: true })).toBeVisible();
-  const goalCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Daily planning', exact: true }) });
+  const goalCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Daily planning', exact: true, level: 3 }) });
   await goalCard.getByRole('button', { name: 'Pause', exact: true }).click();
   await expect(goalCard.getByText('Paused', { exact: true })).toBeVisible();
   await goalCard.getByRole('button', { name: 'Edit', exact: true }).click();
