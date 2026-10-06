@@ -101,9 +101,9 @@ Finish and verify one releasable module per iteration. Keep RoomTalk account own
 
 | Order | Module | Existing foundation and next work |
 | --- | --- | --- |
-| 1 | Conversation management | Stable main conversation and side chats; search, rename, archive and restore |
+| 1 | Conversation management | Complete: stable main conversation, side chats, search, rename, archive and restore |
 | 2 | Conversational goals and background tasks | Complete: shared scheduling, chat tools, milestones, actual execution status, cancellation and outcome completion; verified with real Codex |
-| 3 | Memory organization | Preference/fact/topic entries, retrieval, provenance and version checks; improve topic handoff and duplicate/conflicting information |
+| 3 | Memory organization | Complete: topic handoff, duplicate-title checks, reviewed merge, retained provenance and conversation binding; verified with real Codex |
 | 4 | Rich results | Existing file links and previews; usable plan, document and web-result cards |
 | 5 | Browser and takeover | Present browsing and takeover in the personal UI using the existing execution environment |
 | 6 | Suggestions and tracking | Source-backed suggestions with accept/dismiss, condition checks, deduplicated changes and notification preferences |
@@ -135,3 +135,14 @@ Append migration `0036_personal_agent_goal_progress` for milestones and outcome 
 Validation: 28 goal API/service/real PostgreSQL tests; 114 session/context/schedule regressions; 12 focused client tests; 27 Python broker/CLI tests; both builds, i18n and affected ESLint passed. The complete Chrome flow passed weekly/one-time scheduling, milestones, completed reload/reopen, background cancellation, mobile width and account isolation. Chrome uses real PostgreSQL/Redis and a simulated runner; actual Codex and release verification are recorded separately. Runner 0.1.57 and E2B `roomtalk-code-agent-2026-10-06-personal-goals-v1` are built and published.
 
 Release verification: the existing Codex subscription completed five real tool turns and two background executions. Cross-conversation creation, modification/pause, run, outcome confirmation, reopening, cancellation and deletion matched PostgreSQL. The cancelled turn actually reached `cancelled` and released its lease. All seven private execution conversations, temporary goals and sandboxes were cleaned up without changing existing goals or memories. A direct template check confirmed runner 0.1.57 and all goal commands. The initially missed ACP artifact recognition constant was aligned; 21 backend/configuration tests passed.
+
+
+### Module 3: topic handoff and memory organization
+
+Following [OpenMuse document-based topic memory](https://github.com/diggerhq/openmuse/blob/2fff664dac90f8d24b67b754912485106660c034/scripts/templates/memory.ts), continuing a topic creates a private conversation bound to the same memory document. Each turn reads its complete current background, confirmed decisions, sources, verified work and next steps, rather than copying a truncated excerpt. Migration `0037_personal_agent_topic_handoff` persists bindings and provenance in PostgreSQL. Historical room events remain immutable; new events capture committed binding changes.
+
+Normalized same-kind titles reject duplicate additions and return the existing entry for review. Users or the current conversation review full documents when reconciling related or conflicting information; newer timestamps do not establish truth. The independent memory panel supports selection, original-document review and merge. `roomtalk memory merge` uses the same service. A single transaction checks every source revision, retains one ID and all provenance, rebinds existing conversations and removes duplicates. Concurrent changes return a conflict while preserving the editor draft. Forgetting unbinds the document and stops future prompt injection.
+
+Validation: 139 server/API/real PostgreSQL/event/runner-configuration tests; 99 repository and historical-migration tests; 13 focused client tests; 28 Python CLI/broker tests; both builds, i18n and affected ESLint passed. Chrome passed topic handoff, duplicate titles, concurrent-edit conflict, reviewed merging, source retention, conversation rebinding, reload, mobile width and forgetting. Runner 0.1.58 and E2B `roomtalk-code-agent-2026-10-06-personal-topics-v1` are published. Direct template verification and all five CI jobs passed. Actual Codex release verification is recorded separately.
+
+Release verification: the direct template check confirmed runner 0.1.58 and memory merge. Production App, AI Worker and dependencies are healthy, with loopback and both public readiness endpoints passing. The existing Codex subscription completed five actual turns: saving a full sourced topic; reading handoff content beyond 500 characters in a new conversation without searching; merging a user-confirmed correction while retaining sources; reading the current document from the rebound original conversation; and forgetting/unbinding it. PostgreSQL and actual tool execution agree. Temporary goals, conversations, sandboxes and memories were removed. All five CI jobs passed for code commit `76472a99`. Production image `sha256:a12ae066bb1f83999d5c8290b7cd5a582e0273294625f8d76083c1d0d5cf7ff6` preserves the pre-existing local presence work.
