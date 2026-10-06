@@ -4,7 +4,15 @@
 
 用户要求的差异：执行器固定 Codex app-server/fullAccess；入口 🦊；个人聊天留在个人助理里；记忆进入后直接显示；设置默认只读，点击编辑后修改。普通 RoomTalk 对话保留原有功能。
 
-截至 2026-10-06，功能代码已推送并部署，匹配 E2B 运行器已发布，手机生产 UI、实际 Codex 委托任务与 E2B 桌面已验收。Google 仍缺少生产 OAuth client secret 和回调配置，未做真实账号连接；界面 fixture 不算外部服务验收。
+2026-10-06 再次按完整源码复查，发现此前清单遗漏了 JEV 交互式选项，不能把静态比较结果卡片算作完整移植。该模块现已移植原版服务、校验、排序、证据、持久选择、精炼和客户端交互，并接入 Codex。生产没有 TYPESAFE_API_KEY，因此保持原版默认 JEV_MODE=off；sample 仅用于明确标记的自动化测试。Google 的真实连接仍等待 OAuth 密钥、回调和授权范围配置确认。以下历史验收只证明相应模块，不能代替全部功能或外部服务验收。
+
+## 本轮源码复查与修正
+
+- JEV：原版 adapter/domain/service/tools、selection/retry/stale/ranking/grounded evidence 逻辑已移植；RoomTalk 的接受回执在服务器确认选择之后返回，不把执行器的提前启动回执当成成功选择。选择不清空编辑器中尚未发送的草稿。
+- 工具卡片：个人助理的聊天不再丢弃配对后的 tool_result，修复选择一直“准备中”和任务卡片读不到成功回执的问题；普通工作区仍沿用原有配对显示。原版邮件、搜索和通用保存工具的内联展示正在继续逐项对齐。
+- 移动 UI：采用原版的图标导航尺寸、窄内容宽度、连接器搜索和分组；已连接状态不再额外占一张助手卡片；目标/任务/监控说明正确截断；记忆首次加载有实际加载反馈。
+- 测试：原版 JEV adapter 16 项、真实 PostgreSQL restart/race/selection 14 项、owner/turn/evidence HTTP 路由 3 项、运行器工具 29 项、执行器会话与个人上下文 108 项通过。Chrome 中已验证脚本样例选项的真实按钮点击、PostgreSQL 选择、刷新重放及草稿保留；样例不算真实 Jev 服务验收。
+- E2B：新增 `roomtalk choices present/current`，runner 0.1.67 / openmuse-parity-v5 已发布，云沙箱中实际核对 manifest、Python 源版本及 CLI。新增 Google 配置仍未提交，Jev 也没有启用样例冒充真实能力。
 
 ## 页面和操作流程
 

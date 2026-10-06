@@ -585,3 +585,26 @@ def test_personal_task_and_google_commands_use_scoped_broker(tmp_path: Path, mon
     assert platform_tools.main(["google", "propose", "--file", str(source), "--json"]) == 1
     assert len(calls) == before
     assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+
+
+def test_personal_choices_uses_turn_broker_and_preserves_controlled_failures(tmp_path: Path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "write")
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda path, env, **kwargs: calls.append((path, kwargs)) or {"panel": None})
+    payload = {"message": "Plan", "context": "User asked", "title": "Next", "control": "clarification", "options": [{"label": "Plan", "details": [], "sources": []}]}
+    source = tmp_path / "choices.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    assert platform_tools.main(["choices", "present", "--file", str(source), "--json"]) == 0
+    assert calls[-1] == ("/personal-choices", {"method": "PATCH", "body": payload})
+    assert json.loads(capsys.readouterr().out)["tool"] == "PersonalChoices"
+    assert platform_tools.main(["choices", "current", "--json"]) == 0
+    assert calls[-1] == ("/personal-choices", {})
+    capsys.readouterr()
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", lambda *args, **kwargs: {"panel": None, "error": "Read the source page before comparing"})
+    assert platform_tools.main(["choices", "present", "--file", str(source), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["success"] is False
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    before = len(calls)
+    assert platform_tools.main(["choices", "present", "--file", str(source), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+    assert len(calls) == before

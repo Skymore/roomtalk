@@ -36,7 +36,7 @@ export const PersonalAgentTaskCard:React.FC<{room:Room;compact?:boolean;onOpen:(
   return <button type="button" aria-label={t('personalTaskOpen',{title:room.name})} data-testid="personal-activity-room" data-room-id={room.id} className={`block w-full space-y-3 rounded-[22px] bg-[#f0f1f2] text-left dark:bg-[#292b2d] ${compact?'p-4':'p-5'}`} onClick={onOpen}>
     <span className="flex items-center gap-3"><span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#2784bc] ${waiting?'bg-[#f4dccd]':'bg-[#d7e9fa]'}`}><Icon icon="lucide:list-checks" className="h-5 w-5"/></span><span className="min-w-0 flex-1"><span className="block font-semibold">{room.name}</span><span className="mt-1 block text-xs text-default-500">{t(personalTaskStatusKey(room))}{plan.length>0 && ` · ${t('personalTaskStepProgress',{done,total:plan.length})}`}</span></span><Icon icon="lucide:chevron-right" className="shrink-0 text-default-400"/></span>
     {plan.length>0 && <span className="block h-1 overflow-hidden rounded-full bg-default-200"><span className="block h-full bg-[#6aaee0]" style={{width:`${Math.round(done/plan.length*100)}%`}}/></span>}
-    {room.personalAgentTaskSummary && <span className={`block whitespace-pre-wrap text-sm text-default-500 ${compact?'line-clamp-2':'line-clamp-4'}`}>{room.personalAgentTaskSummary}</span>}
+    {room.personalAgentTaskSummary && <span className={`whitespace-pre-wrap text-sm text-default-500 ${compact?'line-clamp-2':'line-clamp-4'}`}>{room.personalAgentTaskSummary}</span>}
     {waiting && <span className="block text-xs font-semibold text-[#2784bc]">{t(room.personalAgentTaskStatus==='waiting_review'?'personalTaskReviewRequested':'personalTaskInputNeeded')}</span>}
   </button>;
 };

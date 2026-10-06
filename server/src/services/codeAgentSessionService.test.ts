@@ -1214,6 +1214,7 @@ const createService = (options: {
   turnTimeoutMs?: number;
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
+  personalChoices?:import('./personalChoices/service').JevService;
   onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   logger?: Logger;
@@ -1270,6 +1271,7 @@ const createService = (options: {
       turnTimeoutMs: options.turnTimeoutMs,
       scheduleTurnDeadline: options.scheduleTurnDeadline,
       clearTurnDeadline: options.clearTurnDeadline,
+      personalChoices:options.personalChoices,
       onPersonalAgentTurnCompleted: options.onPersonalAgentTurnCompleted,
     }
   );
@@ -1277,6 +1279,28 @@ const createService = (options: {
 };
 
 describe('CodeAgentSessionService', () => {
+  it('validates and saves a personal choice before acknowledging it, then sends its continuation to the runner',async()=>{
+    const text='[OpenMuse choice] '+JSON.stringify({panelId:'panel',threadId:'room-1',candidateSetVersion:1,optionId:'plan'});
+    const store=new MemoryCodeAgentStore(room({personalAgentOwnerId:'client-1',codeAgentBackend:'hermes-agent'}),[userMessage(text)]);
+    store.personalAgentProfiles.set('client-1',{clientId:'client-1',name:'Muse',avatar:'sky',instructions:'',memory:'',mainRoomId:'room-1',createdAt:'2026-05-03T00:00:00Z',updatedAt:'2026-05-03T00:00:00Z'});
+    let selected=false;
+    const runner=new FakeCodeAgentRunnerClient([acpFinalEvent('hermes-agent','I will continue the plan.')]);
+    const {service}=createService({store,runner,backend:'hermes-agent',personalChoices:{beginTurn:async(owner:string,thread:string,turn:string,prompt:string)=>{
+      assert.equal(owner,'client-1');assert.equal(thread,'room-1');assert.ok(turn);assert.equal(prompt,text);selected=true;return 'I choose “Plan” from clarification choices. Continue with that preference.';
+    }} as any});
+    await service.startTurn({roomId:'room-1',clientId:'client-1',selectedModel},response=>{assert.equal(response.success,true);assert.equal(selected,true);});
+    assert.match(runner.requests[0].prompt,/I choose “Plan”/);
+    assert.match(runner.requests[0].prompt,/roomtalk choices present/);
+    assert.equal(store.messages.get('room-1')!.find(message=>message.messageType==='text')!.content,text);
+  });
+  it('returns a rejected personal choice to the UI without invoking the runner',async()=>{
+    const store=new MemoryCodeAgentStore(room({personalAgentOwnerId:'client-1',codeAgentBackend:'hermes-agent'}),[userMessage('[OpenMuse choice] invalid')]);
+    const runner=new FakeCodeAgentRunnerClient([]);
+    const {service}=createService({store,runner,backend:'hermes-agent',personalChoices:{beginTurn:async()=>{throw new Error('These choices have been superseded');}} as any});
+    const result=await service.startTurn({roomId:'room-1',clientId:'client-1',selectedModel},response=>{assert.equal(response.success,false);assert.match(response.error!,/superseded/);});
+    assert.equal(result.success,false);assert.equal(runner.requests.length,0);
+  });
+
   it('reloads personal context for every turn without changing saved user messages and reports durable completion', async () => {
     const originalPrompt = userMessage('Plan my day');
     const store = new MemoryCodeAgentStore(room({ personalAgentOwnerId: 'client-1', codeAgentBackend: 'hermes-agent' }), [originalPrompt]);

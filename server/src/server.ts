@@ -1,3 +1,7 @@
+import {createJevAdapter} from './services/personalChoices/adapter';
+import {personalChoicesConfig} from './services/personalChoices/config';
+import {JevService} from './services/personalChoices/service';
+import {registerPersonalChoiceContextRoutes} from './routes/personalChoiceContextRoutes';
 import {registerPersonalAgentComputerContextRoutes} from './routes/personalAgentComputerContextRoutes';
 import {PersonalAgentComputerService} from './services/personalAgentComputer';
 import {ComputerService} from './services/personalComputer/computer';
@@ -614,6 +618,9 @@ const personalAgentNotifications = new PersonalAgentNotificationService(store, c
   await notifyPersonalAgentUpdate({store,notification,logger:codeAgentLogger});
 });
 
+const choicesConfig = personalChoicesConfig();
+const choicesAdapter = createJevAdapter(choicesConfig);
+const personalChoices = choicesAdapter ? new JevService({store:new PersonalComputerStore(store),adapter:choicesAdapter,mode:choicesConfig.jevMode as 'sample'|'live'}) : undefined;
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
@@ -654,6 +661,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     mediaObjectStorage,
     aiStreamOwnerId,
     turnTimeoutMs: codeAgentTurnTimeoutMs,
+    personalChoices,
     onPersonalAgentTurnCompleted: (room, message) => personalAgentNotifications.completed(room, message),
   }
 );
@@ -984,11 +992,12 @@ registerCodeAgentRoomContextRoutes(app, {
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
 });
 
+registerPersonalChoiceContextRoutes(app,{store,roomContext:codeAgentRoomContextService,choices:personalChoices,logger:codeAgentLogger});
 registerPersonalAgentComputerContextRoutes(app,{store,roomContext:codeAgentRoomContextService,computer:personalAgentComputer,logger:codeAgentLogger});
-registerPersonalAgentGoogleContextRoutes(app,{store,roomContext:codeAgentRoomContextService,logger:codeAgentLogger,google:personalAgentGoogle});
+registerPersonalAgentGoogleContextRoutes(app,{choices:personalChoices,store,roomContext:codeAgentRoomContextService,logger:codeAgentLogger,google:personalAgentGoogle});
 registerPersonalAgentTaskContextRoutes(app,{store,roomContext:codeAgentRoomContextService,tasks:personalAgentTasks,logger:codeAgentLogger});
 if (personalAgentBrowser) registerPersonalAgentBrowserContextRoutes(app, {
-  store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
+  choices:personalChoices,store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
 });
 
 if(personalAgentTracking)registerPersonalAgentTrackingContextRoutes(app,{

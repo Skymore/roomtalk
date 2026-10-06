@@ -1,3 +1,4 @@
+import type {JevService} from '../services/personalChoices/service';
 import { Express,Request,Response } from 'express';
 import { z } from 'openmuse-zod';
 import { Logger } from '../logger';
@@ -11,7 +12,7 @@ import { PdfError } from '../services/personalAgentPdf';
 import { PersonalAgentFileError } from '../services/personalAgentFiles';
 
 export function registerPersonalAgentGoogleContextRoutes(app: Express,options: {
-  store:RoomStore;roomContext:CodeAgentRoomContextService;google:PersonalAgentGoogleService;logger:Logger;
+  choices?:JevService;store:RoomStore;roomContext:CodeAgentRoomContextService;google:PersonalAgentGoogleService;logger:Logger;
 }) {
   const run = async (req:Request,res:Response,write:boolean) => {
     const token = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1], claims = token ? options.roomContext.verifyTurnToken(token) : null;
@@ -29,7 +30,12 @@ export function registerPersonalAgentGoogleContextRoutes(app: Express,options: {
         case 'status': output = await google.auth.status(clientId); break;
         case 'mail': output = await google.mail(clientId,typeof input.query === 'string' ? input.query : undefined); break;
         case 'message': output = await google.message(clientId,z.string().parse(input.id)); break;
-        case 'thread': output = await google.thread(clientId,z.string().parse(input.id)); break;
+        case 'thread': {
+          const id=z.string().parse(input.id);
+          output = await google.thread(clientId,id);
+          if ((output as {mail?:unknown[]}).mail?.length) await options.choices?.noteEvidence(clientId,claims.roomId,claims.turnId,'mail',id);
+          break;
+        }
         case 'calendars': output = await google.calendars(clientId); break;
         case 'events': output = await google.events(clientId,{calendarId:input.calendarId,timeMin:input.timeMin,timeMax:input.timeMax}); break;
         case 'drafts': output = await google.drafts(clientId); break;

@@ -57,6 +57,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "browser":
             _require_write_access(env)
             result = _personal_browser(args, env)
+        elif args.command == "choices":
+            if args.choices_command == "present":
+                _require_write_access(env)
+                payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+                result = _read_room_context_path("/personal-choices", env, method="PATCH", body=payload)
+            else:
+                result = _read_room_context_path("/personal-choices", env)
+            result = {"success": not bool(result.get("error")), **result, "tool": "PersonalChoices"}
         elif args.command == "google":
             operation = args.google_command
             query = {"operation": operation}
@@ -158,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    choices = subparsers.add_parser("choices", help="Present OpenMuse clarification buttons and sourced comparison choices.")
+    choices_sub = choices.add_subparsers(dest="choices_command", required=True)
+    present = choices_sub.add_parser("present")
+    present.add_argument("--file", required=True, help="UTF-8 JSON containing prepared factual options.")
+    present.add_argument("--json", action="store_true")
+    current = choices_sub.add_parser("current")
+    current.add_argument("--json", action="store_true")
 
     watch = subparsers.add_parser("watch", help="Track real pages and conditions in a separate saved browser.")
     watch_sub = watch.add_subparsers(dest="watch_command", required=True)

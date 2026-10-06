@@ -1,3 +1,6 @@
+import type {PersonalChoiceSender} from '../utils/personalChoiceTranscript';
+import {displayJevUserMessage} from '../utils/personalChoiceActions';
+import {personalChoiceTranscript} from '../utils/personalChoiceTranscript';
 import {readPersonalDesktopSteps} from '../utils/personalDesktopSteps';
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
@@ -41,6 +44,8 @@ const LOAD_MORE_MESSAGE_COUNT = 80;
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 240;
 const AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS = 160;
 const ignoreReply = () => {};
+
+const EMPTY_PERSONAL_CHOICE_MESSAGES:Message[]=[];
 
 type MessageTimelineItem =
   | { kind: 'message'; message: Message }
@@ -128,6 +133,7 @@ interface MessageListProps {
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
   presentation?: 'chat' | 'code-agent' | 'personal-agent';
   onOpenPersonalComputer?:()=>void;
+  onSendPersonalChoice?:PersonalChoiceSender;
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
@@ -176,6 +182,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onCodeAgentBackendChange,
   onOpenWorkspaceFile,
   onOpenPersonalComputer,
+  onSendPersonalChoice,
   onOpenWorkspaceArtifact,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -327,8 +334,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     return previousToolResultPairing.current;
   }, [messages]);
   const displayMessages = React.useMemo(
-    () => messages.filter(message => !(message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id))),
-    [messages, toolResultPairing.consumed],
+    () => presentation === 'personal-agent' ? messages : messages.filter(message => !(message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id))),
+    [messages, presentation, toolResultPairing.consumed],
   );
   const pendingQueueMessages = React.useMemo(
     () => displayMessages.filter(message => Boolean(message.codeAgentQueuedInput && message.codeAgentQueuedInput.state !== 'started')),
@@ -1200,8 +1207,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // ... loading/empty states ...
   // ... return statement with JSX ...
 
+  const personalChoiceMessages=presentation==='personal-agent'?messages:EMPTY_PERSONAL_CHOICE_MESSAGES;
   const renderMessage = useCallback((message: Message, turnGrouped = false) => presentation === 'personal-agent' ? (
-    <PersonalAgentMessage key={message.id} message={message} onRetry={handleRetryDelivery} onOpenFile={onOpenWorkspaceFile} canInteract={canUseRetainedRoomAccess} />
+    <PersonalAgentMessage key={message.id} message={message} displayText={displayJevUserMessage(message.content,personalChoiceTranscript(personalChoiceMessages.slice(0,personalChoiceMessages.indexOf(message))))} onRetry={handleRetryDelivery} onOpenFile={onOpenWorkspaceFile} canInteract={canUseRetainedRoomAccess} />
   ) : (
     <MessageItem
       key={turnGrouped ? undefined : message.id}
@@ -1231,7 +1239,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       isInteractionDisabled={!canUseRetainedRoomAccess}
       ensureRoomOperationReady={ensureRoomOperationReady}
     />
-  ), [presentation, aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
+  ), [personalChoiceMessages, presentation, aiRequestRoomKind, canUseRetainedRoomAccess, ensureRoomOperationReady,
     handleCancelQueuedMessage, handleOpenDeleteModal, handleOpenEditModal, handleRefreshAI, handleRetryDelivery,
     handleSetReaction, handleSteerQueuedMessage, handleUserAction, onOpenWorkspaceFile, onReply,
     roleMemberByClientId, roomCreatorId, roomPermissions, toolResultPairing.resultByCallId, workspaceRoot]);
@@ -1367,7 +1375,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
                   if (item.kind === 'agent-turn') {
-                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} desktopSteps={desktopSteps.filter(step=>step.turnId===item.turn.id)} liveDesktopStepId={desktopSteps.at(-1)?.id} onOpenComputer={onOpenPersonalComputer} renderMessage={renderMessage} />;
+                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} transcript={messages} busy={room?.codeAgentStatus==='running'} onChoice={onSendPersonalChoice} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} desktopSteps={desktopSteps.filter(step=>step.turnId===item.turn.id)} liveDesktopStepId={desktopSteps.at(-1)?.id} onOpenComputer={onOpenPersonalComputer} renderMessage={renderMessage} />;
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}

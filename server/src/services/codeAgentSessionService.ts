@@ -74,6 +74,8 @@ import {
   displayNameForCodeAgentBackend,
   isCodexCodeAgentBackend,
 } from './codeAgentBackends';
+import {jevActionPrefix} from './personalChoices/domain';
+import type { JevService } from './personalChoices/service';
 import { buildPersonalAgentPrompt } from './personalAgentContext';
 
 const isCodexBackend = (backend: CodeAgentBackend) => (
@@ -177,6 +179,7 @@ export interface CodeAgentSessionServiceOptions {
   turnTimeoutMs?: number;
   scheduleTurnDeadline?: (callback: () => void, delayMs: number) => unknown;
   clearTurnDeadline?: (handle: unknown) => void;
+  personalChoices?: JevService;
   onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   createId?: () => string;
@@ -738,7 +741,7 @@ export class CodeAgentSessionService {
         });
       }, CODE_AGENT_TURN_HEARTBEAT_MS);
       heartbeatTimer.unref?.();
-      ack({ success: true, messageId: aiMessageId });
+      if(!room!.personalAgentOwnerId) ack({ success: true, messageId: aiMessageId });
 
       const promptContext = await this.readLatestPromptContext(
         input.roomId,
@@ -756,6 +759,23 @@ export class CodeAgentSessionService {
         });
         publicFailureMessage = 'Workspace requires the saved text prompt';
         throw new Error(publicFailureMessage);
+      }
+      let preparedChoicePrompt: string | undefined;
+      if(room!.personalAgentOwnerId) {
+        if(promptContext.prompt.startsWith(jevActionPrefix)) {
+          if(!this.options.personalChoices) {
+            publicFailureMessage='Choices are unavailable in this conversation';
+            throw new Error(publicFailureMessage);
+          }
+          try {
+            preparedChoicePrompt=await this.options.personalChoices.beginTurn(input.clientId,input.roomId,turnId,promptContext.prompt);
+          }catch(error) {
+            publicFailureMessage=error instanceof Error?error.message:'Could not select this choice';
+            throw error;
+          }
+        }
+        // A choice ack means the persistent selection was accepted, as in OpenMuse.
+        ack({ success: true, messageId: aiMessageId });
       }
       if (turnBackend === 'codex' && promptContext.imageMessageIds.length > 0) {
         const error = 'Image input requires Codex app-server or Coco';
@@ -909,8 +929,11 @@ export class CodeAgentSessionService {
           room!.personalAgentMemoryId ? this.store.readPersonalAgentMemories?.(profile.clientId, { id: room!.personalAgentMemoryId, kind: 'topic', limit: 1 }) : undefined,
         ]);
         const memories = [...new Map([...(preferences?.memories || []), ...(relevant?.memories || [])].map(memory => [memory.id, memory])).values()];
+        const personalPrompt = preparedChoicePrompt ?? (this.options.personalChoices
+          ? await this.options.personalChoices.beginTurn(profile.clientId, input.roomId, turnId, promptContext.prompt)
+          : promptContext.prompt);
         runnerRequest.prompt = buildPersonalAgentPrompt(
-          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId, topic?.memories[0],
+          profile, personalPrompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId, topic?.memories[0], Boolean(this.options.personalChoices),
         );
         assertTurnWithinDeadline();
       }

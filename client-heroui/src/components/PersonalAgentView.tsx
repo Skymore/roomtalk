@@ -144,8 +144,8 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col" data-testid="personal-agent-view">
-      <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 px-4 pt-4 sm:px-8 sm:pt-6">
+    <div className="flex h-full min-h-0 w-full flex-col" style={{paddingTop:'env(safe-area-inset-top)',paddingBottom:'env(safe-area-inset-bottom)'}} data-testid="personal-agent-view">
+      <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col px-[22px] pt-4 sm:px-[42px] sm:pt-6">
         <header className="relative h-[122px] shrink-0 sm:h-[146px]">
           <Button isIconOnly size="sm" variant="light" className="absolute left-0 top-4" aria-label={t('personalAgentConversations')} onPress={()=>setThreadsOpen(true)}><Icon icon="lucide:menu" className="h-5 w-5"/></Button>
           <button type="button" className="mx-auto flex max-w-[70%] flex-col items-center gap-1" onClick={()=>setTab('activity')} aria-label={t('personalSourceOpenActivity',{name:snapshot.profile.name})}>
@@ -155,22 +155,22 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           {tab==='chats' && <div className="mt-1 text-center"><Button size="sm" variant="flat" className="h-6 rounded-full text-xs" onPress={()=>{setComputerTab(undefined);setComputerOpen(true);}} startContent={<Icon icon="lucide:monitor"/>}>{t('personalAgentComputer')}</Button></div>}
           <div className="absolute right-0 top-4"><Button isIconOnly size="sm" variant="light" aria-label={t('personalUpdates')} onPress={()=>setNotificationsOpen(true)}><Icon icon="lucide:bell" className="h-5 w-5"/></Button>{pendingNotifications+pendingReviews>0 && <span aria-hidden="true" className="pointer-events-none absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-[#527d99]"/>}</div>
         </header>
-        {(['files','memory','tracking','mail','calendar'] as AgentTab[]).includes(tab) && <Button size="sm" variant="light" className="shrink-0 self-start" onPress={()=>setTab('apps')} startContent={<Icon icon="lucide:arrow-left" />}>{t('personalAgentBackToApps')}</Button>}
         <div className="min-h-0 flex-1 overflow-y-auto pb-4" data-testid="personal-agent-content">
-        {tab!=='chats' && <h2 className="mb-[22px] text-[25px] font-semibold">{t(tab==='activity'?'personalAgentActivity':tab==='ideas'?'personalAgentIdeas':tab==='goals'?'personalAgentGoals':tab==='apps'?'personalAgentApps':tab==='mail'?'personalGoogleMail':tab==='calendar'?'personalGoogleCalendar':tab==='files'?'personalAgentFiles':tab==='tracking'?'personalAgentTracking':'personalAgentMemory')}</h2>}
+        {(['files','memory','tracking','mail','calendar'] as AgentTab[]).includes(tab) && <Button size="sm" variant="light" className="mb-[18px]" onPress={()=>setTab('apps')} startContent={<Icon icon="lucide:arrow-left" />}>{t('personalAgentBackToApps')}</Button>}
+        {tab!=='chats' && <h2 className="mb-[22px] text-[25px] font-semibold">{t(tab==='activity'?'personalAgentActivity':tab==='ideas'?'personalAgentIdeas':tab==='goals'?'personalAgentGoals':tab==='apps'?'personalAgentApps':tab==='mail'?'personalGoogleMail':tab==='calendar'?'personalGoogleCalendar':tab==='files'?'personalAgentFiles':tab==='tracking'?'personalAgentTracking':'personalAgentPersonalityMemory')}</h2>}
         {conversation && tab === 'chats' ? <div className="h-full min-h-0">{conversation(()=>setThreadsOpen(true),tab=>{setComputerTab(tab);setComputerOpen(true);})}</div> : <div className="space-y-5">
         {tab === 'apps' && <section className="space-y-5">
-          <Input label={t('personalAgentSearchApps')} value={appSearch} onValueChange={setAppSearch} startContent={<Icon icon="lucide:search" />} />
-          {!appSearch.trim() && <div className={`${panelClass} flex items-center gap-3 p-4`}><span className="text-2xl" aria-hidden="true">🦊</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{t('personalAgentConnection')}</p><p className={`text-xs ${mutedClass}`}>{t(isConnected ? 'codexConnectionStatusConnected' : 'personalAgentConnectionHint')}</p></div>{!isConnected && <Button size="sm" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button>}</div>}
-          <PersonalAgentConnections clientId={clientId} query={appSearch} onOpen={setTab} showError={showError} />
+          <Input label={t('personalAgentSearchApps')} placeholder={t('personalAppsSearchConnectors')} value={appSearch} onValueChange={setAppSearch} />
+          {!isConnected && !appSearch.trim() && <div className={`${panelClass} flex items-center gap-3 p-4`}><span className="text-2xl" aria-hidden="true">🦊</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{t('personalAgentConnection')}</p><p className={`text-xs ${mutedClass}`}>{t(isConnected ? 'codexConnectionStatusConnected' : 'personalAgentConnectionHint')}</p></div>{!isConnected && <Button size="sm" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button>}</div>}
+          <PersonalAgentConnections clientId={clientId} query={appSearch} onOpen={setTab} computerAvailable={isConnected} onComputer={()=>{setComputerTab(undefined);setComputerOpen(true);}} showError={showError} />
           <h3 className="text-sm font-semibold">{t('personalAgentOnComputer')}</h3>
-          <Button className="w-full justify-start" variant="light" onPress={()=>{setComputerTab(undefined);setComputerOpen(true);}} startContent={<Icon icon="lucide:monitor"/>}>{t('personalComputerTitle')}</Button>
           <div className={`${panelClass} divide-y divide-default-200 overflow-hidden`}>{[
             {key:'mail' as const,title:'personalGoogleMail',detail:'personalAgentMailShortcut',icon:'lucide:mail'},
             {key:'calendar' as const,title:'personalGoogleCalendar',detail:'personalAgentCalendarShortcut',icon:'lucide:calendar-days'},
-            {key:'files' as const,title:'personalAgentFiles',detail:'personalFilesDescription',icon:'lucide:file-text'},
+            {key:'computer' as const,title:'personalComputerTitle',detail:'personalAppsBrowserDetail',icon:'lucide:globe'},
+            {key:'files' as const,title:'personalAgentFiles',detail:'personalAppsFilesDetail',icon:'lucide:file-text'},
             {key:'memory' as const,title:'personalAgentPersonalityMemory',detail:'personalAgentMemoryDescription',icon:'lucide:brain'},
-          ].filter(item=>`${t(item.title)} ${t(item.detail)}`.toLowerCase().includes(appSearch.toLowerCase())).map(item=><button key={item.key} type="button" onClick={()=>setTab(item.key)} className="flex w-full items-center gap-3 p-4 text-left"><Icon icon={item.icon} className="h-5 w-5 shrink-0" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{t(item.title)}</span><span className={`mt-1 block text-xs ${mutedClass}`}>{t(item.detail)}</span></span><Icon icon="lucide:chevron-right" /></button>)}</div>
+          ].filter(item=>`${t(item.title)} ${t(item.detail)}`.toLowerCase().includes(appSearch.toLowerCase())).map(item=><button key={item.key} type="button" onClick={()=>{if(item.key==='computer'){setComputerTab(undefined);setComputerOpen(true);}else setTab(item.key);}} className="flex w-full items-center gap-3 p-4 text-left"><Icon icon={item.icon} className="h-5 w-5 shrink-0" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{t(item.title)}</span><span className={`mt-1 block text-xs ${mutedClass}`}>{t(item.detail)}</span></span><Icon icon="lucide:chevron-right" /></button>)}</div>
         </section>}
 
 
@@ -229,8 +229,11 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
         <PersonalAgentDelegate clientId={clientId} isOpen={delegateOpen} onClose={()=>setDelegateOpen(false)} onTask={room=>{setSnapshot(previous=>previous?{...previous,rooms:[...previous.rooms,room]}:previous);setTaskId(room.id);}}/>
         {taskId && <PersonalAgentTaskDetailView clientId={clientId} roomId={taskId} isOpen onClose={()=>{setTaskId(undefined);void refresh();}} onSubmit={async(request,answer)=>{await answerPersonalAgentTaskInput(clientId,taskId,request.id,answer);}}/>}
         <Modal isOpen={notificationsOpen && !taskId} onClose={()=>setNotificationsOpen(false)} scrollBehavior="inside"><ModalContent><ModalHeader>{t('personalUpdates')}</ModalHeader><ModalBody className="pb-6"><p className="text-sm text-default-500">{t('personalTaskNotificationsHint')}</p><PersonalAgentUpdates clientId={clientId} rooms={rooms} mode="list" enabled={notificationsOpen} onRoomSelect={room=>{setNotificationsOpen(false);setTaskId(room.id);}} onOpenUpdates={()=>{}} showError={showError}/></ModalBody></ModalContent></Modal>
-        <nav className="mb-3 flex shrink-0 justify-center" aria-label={t('personalAgentSections')}>
-          <div className="flex w-full max-w-md items-center justify-around rounded-full bg-white p-1 shadow-sm dark:bg-[#252522]">{tabs.map(item => <Button key={item.key} className="min-w-0 flex-1 px-1" size="sm" variant={tab === item.key || (item.key === 'apps' && ['files','memory','tracking','mail','calendar'].includes(tab)) ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-label={t(item.label)} aria-current={tab === item.key ? 'page' : undefined}><span className="flex flex-col items-center gap-1 py-1"><Icon icon={item.icon} className="h-4 w-4" /><span className="text-[10px]">{t(item.label)}</span></span></Button>)}</div>
+        <nav className="shrink-0 pb-[7px] pt-[10px] sm:pb-[22px]" aria-label={t('personalAgentSections')}>
+          <div className="mx-auto flex w-full max-w-[370px] rounded-[40px] border border-[#f8f8f8] bg-white p-[5px] shadow-sm dark:border-[#30302e] dark:bg-[#252522]">{tabs.map(item => {
+            const active=tab===item.key || (item.key==='apps' && ['files','memory','tracking','mail','calendar'].includes(tab));
+            return <button key={item.key} type="button" className={`flex h-[47px] min-w-0 flex-1 items-center justify-center rounded-[28px] ${active?'bg-[#f0f1f2] dark:bg-[#393937]':''}`} onClick={()=>setTab(item.key)} aria-label={t(item.label)} aria-current={active?'page':undefined}><Icon icon={item.icon} className="h-[23px] w-[23px]"/></button>;
+          })}</div>
         </nav>
       </div>
     </div>

@@ -36,6 +36,26 @@ export const PersonalAgentConversation: React.FC<{
 
   const running = room.codeAgentStatus === 'running';
   const canSend = props.canUseRetainedRoomAccess && Boolean(props.roomPermissions?.canPost && props.roomPermissions?.canUseCodeAgent);
+  const failedChoice=React.useRef<{content:string;id:string}>();
+  const sendChoice=async(content:string,retry=false)=>{
+    if(running || sending || !canSend)throw new Error(t('errorSendingMessage'));
+    const clientMessageId=retry && failedChoice.current?.content===content?failedChoice.current.id:crypto.randomUUID();
+    setSending(true);
+    try {
+      await ensureRoomSessionReady(room.id);
+      const avatar={text:getAvatarText(username),color:getAvatarColor(clientId)};
+      list.current?.addOptimisticMessage({id:clientMessageId,clientMessageId,clientId,roomId:room.id,content,timestamp:new Date().toISOString(),username,avatar,messageType:'text',deliveryStatus:'pending',deliveryAction:'ask-ai'});
+      const saved=await sendMessageAndAskAI({roomId:room.id,content,username,avatar,clientMessageId,codeAgentMode:'fullAccess',codexPermissionMode:'fullAccess'});
+      list.current?.replaceOptimisticMessage(clientMessageId,saved.userMessage);
+      if(saved.aiError)throw new Error(saved.aiError);
+      failedChoice.current=undefined;
+      list.current?.scrollToBottom();
+    }catch(error){
+      failedChoice.current={content,id:clientMessageId};
+      list.current?.markOptimisticMessageFailed(clientMessageId,error instanceof Error?error.message:t('errorSendingMessage'));
+      throw error;
+    }finally{if(mounted.current)setSending(false);}
+  };
   const send = async () => {
     if (!text.trim() || sending || !canSend) return;
     let clientMessageId: string | undefined;
@@ -102,7 +122,7 @@ export const PersonalAgentConversation: React.FC<{
   return <section className="flex h-full min-h-0 w-full flex-col bg-[#f7f6f2] dark:bg-[#191917]" data-testid="personal-agent-conversation">
     {room.personalAgentThreadKind!=='main' && <header className="relative shrink-0 px-4 py-1"><p className="text-center text-xs text-default-500">{room.name}</p><Button isIconOnly size="sm" variant="light" className="absolute right-0 top-0" aria-label={t('personalTaskDetail')} onPress={()=>setTaskOpen(true)}><Icon icon="lucide:list-checks"/></Button></header>}
     <div className="relative flex min-h-0 flex-1 flex-col px-1 pt-4 sm:px-6">
-      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onOpenPersonalComputer={()=>props.onComputer('Desktop')}
+      <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onSendPersonalChoice={sendChoice} onOpenPersonalComputer={()=>props.onComputer('Desktop')}
         roomPermissions={props.roomPermissions} isRoomSessionReady={props.isRoomSessionReady} canUseRetainedRoomAccess={props.canUseRetainedRoomAccess}
         ensureRoomSessionReady={ensureRoomSessionReady} messageSyncRequestId={props.messageSyncRequestId} onRoomUpdated={props.onRoomUpdated}
         onRoomDeleted={props.onRoomDeleted} onRoomAccessDenied={props.onRoomAccessDenied} onOpenWorkspaceFile={path => void openFile(path)} />

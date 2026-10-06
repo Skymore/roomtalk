@@ -985,10 +985,15 @@ test('uses the source goal categories, read-only list and milestone-preserving c
   await openPersonalAgent(page);await page.getByRole('button',{name:'Goals',exact:true}).click();
   for(const category of ['Health','Relationships','Finances','Something else'])await expect(page.getByRole('button',{name:`Create ${category} goal`,exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Create Finances goal',exact:true}).click();const sheet=page.getByRole('dialog');
+  const description='Build an emergency fund with a clear budget, regular saving, and a review of expenses. '.repeat(8).trim();
   await sheet.getByLabel('Your goal',{exact:true}).fill('Emergency fund');await sheet.getByLabel('Milestones (one per line)',{exact:true}).fill('Review my budget');
+  await sheet.getByLabel('What does success look like?',{exact:true}).fill(description);
   await expect(sheet.getByLabel('Schedule',{exact:true})).toHaveCount(0);await sheet.getByRole('button',{name:'Create goal',exact:true}).click();
   const row=page.getByRole('button',{name:'Open goal: Emergency fund',exact:true});await expect(row).toBeVisible();
+  const summary=row.getByText(description,{exact:true});
+  expect(await summary.evaluate(element=>element.getBoundingClientRect().height <= parseFloat(getComputedStyle(element).lineHeight)*2+1)).toBe(true);
   await expect(page.getByRole('checkbox',{name:'Review my budget',exact:true})).toHaveCount(0);await row.click();
+  await expect(sheet.getByText(description,{exact:true})).toBeVisible();
   await sheet.getByRole('button',{name:'Complete goal',exact:true}).click();await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
   await expect(sheet.getByRole('checkbox',{name:'Review my budget',exact:true})).not.toBeChecked();
   await sheet.getByRole('button',{name:'Close',exact:true}).click();await page.reload();await page.getByRole('button',{name:'Goals',exact:true}).click();await row.click();
@@ -1001,7 +1006,7 @@ test('uses the source goal categories, read-only list and milestone-preserving c
   await sheet.getByRole('button',{name:'Close',exact:true}).click();await page.reload();await page.getByRole('button',{name:'Goals',exact:true}).click();await row.click();
   await expect(sheet.getByRole('button').filter({hasText:'Plan: Emergency fund'})).toBeVisible();
   const snapshot=await (await request.get(`${serverURL}/api/personal-agent`,{headers:accountHeaders(clientId,token)})).json();
-  expect(snapshot.goals[0].category).toBe('Finances');expect(snapshot.goals[0].prompt).toBe('');expect(snapshot.goals[0].milestones[0].done).toBe(false);expect(task.personalAgentGoalId).toBe(snapshot.goals[0].id);
+  expect(snapshot.goals[0].category).toBe('Finances');expect(snapshot.goals[0].prompt).toBe(description);expect(snapshot.goals[0].milestones[0].done).toBe(false);expect(task.personalAgentGoalId).toBe(snapshot.goals[0].id);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'/tmp/roomtalk-openmuse-goal-detail-mobile.png',fullPage:true});
 });
 
@@ -1040,4 +1045,50 @@ test('uses source task sheets and activity filters to pause, resume and cancel d
   await stopped.click();await expect(sheet.getByRole('button',{name:'Resume',exact:true})).toHaveCount(0);await expect(sheet.getByRole('button',{name:'Continue task',exact:true})).toHaveCount(0);
   const saved=await (await request.get(`${serverURL}/api/personal-agent/tasks/${cancelled.id}`,{headers:accountHeaders(clientId,token)})).json();expect(saved.room.personalAgentTaskControl).toBe('cancelled');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'/tmp/roomtalk-openmuse-task-controls-mobile.png',fullPage:true});
+});
+
+test('replays and selects source interactive choices with explicit scripted Jev and executor fixtures',async({page,context,request})=>{
+  test.skip(process.env.JEV_MODE!=='sample','Requires the explicit upstream scripted Jev fixture');
+  test.setTimeout(120_000);
+  const clientId=await seedClient(context,uniqueName('choices-owner'));
+  await openRoomsPage(page);await page.getByRole('button',{name:'Settings',exact:true}).first().click();
+  await page.getByLabel('User ID password',{exact:true}).first().fill('Personal-choices-test-2026');
+  await page.getByRole('button',{name:'Set password',exact:true}).click();await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Connect Codex',exact:true}).click();await expect(page.getByText('Connected',{exact:true}).first()).toBeVisible({timeout:15000});
+  const token=(await page.evaluate(()=>localStorage.getItem('clientAuthToken')))!;
+  await openPersonalAgent(page);await createSideChat(page,'Interactive choices');await page.setViewportSize({width:390,height:844});
+  const roomId=await page.evaluate(()=>JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+  await page.getByTestId('message-editor').fill('Help me choose the next step.');await page.getByRole('button',{name:'Send message',exact:true}).click();
+  let turnId='';
+  await expect.poll(async()=>{const history=await(await request.get(`${serverURL}/api/rooms/${roomId}/messages?clientId=${clientId}`,{headers:accountHeaders(clientId,token)})).json() as Message[];turnId=history.find(message=>message.turnId)?.turnId || '';return !!turnId;}).toBe(true);
+  const claims={v:1,jti:randomUUID(),roomId,clientId,turnId,mode:'fullAccess',exp:Math.floor(Date.now()/1000)+60};
+  const payload=Buffer.from(JSON.stringify(claims,Object.keys(claims).sort())).toString('base64url');
+  const authorization=`Bearer ${payload}.${createHmac('sha256','e2e-personal-result-context-secret').update(payload).digest('base64url')}`;
+  const response=await request.patch(`${serverURL}/api/code-agent/room-context/personal-choices`,{headers:{authorization},data:{message:'Choose next step',context:'The user asked for help choosing.',title:'What next?',control:'clarification',options:[{id:'plan',label:'Plan my day',details:[],sources:[]},{id:'research',label:'Research options',details:[],sources:[]}]}});
+  expect(response.status()).toBe(200);const {panel}=await response.json();expect(panel.mode).toBe('sample');
+  // Seed the native CLI transcript fixture through the normal durable event writer;
+  // the panel and its selection themselves use the real service, broker and PostgreSQL CAS.
+  const requireServer=createRequire(new URL('../../server/package.json',import.meta.url));
+  const {createPostgresPool}=requireServer('./dist/src/repositories/postgresPool.js');
+  const {PostgresStore}=requireServer('./dist/src/repositories/postgresStore.js');
+  const logger={debug(){},info(){},warn(){},error(){}};
+  const pool=createPostgresPool(process.env.E2E_DATABASE_URL!,logger),store=new PostgresStore(pool,logger);
+  try {
+    const callId=randomUUID();const common={clientId:'ai',roomId,turnId,timestamp:new Date().toISOString(),username:'Agent',status:'complete'};
+    await store.appendMessage({...common,id:randomUUID(),content:'roomtalk choices present',messageType:'tool_call',toolCallId:callId,toolName:'exec_command',toolArgs:{cmd:'roomtalk choices present --file choices.json --json'}});
+    await store.appendMessage({...common,id:randomUUID(),content:JSON.stringify({success:true,tool:'PersonalChoices',panel}),messageType:'tool_result',toolCallId:callId,toolName:'exec_command'});
+    await expectCompletedTurn(request,clientId,token,roomId);await page.reload();
+    await expect(page.getByTestId('personal-choice-card')).toContainText('Sample · scripted decisions');
+    await page.getByTestId('message-editor').fill('Unsent draft stays here');
+    await page.getByRole('button',{name:'Plan my day',exact:true}).click();
+    await expect(page.getByTestId('personal-choice-card')).toContainText('Choice submitted');
+    await expect(page.getByTestId('personal-user-message').filter({hasText:'Selected: Plan my day'})).toBeVisible();
+    expect((await store.readPersonalComputerRecords(clientId,'jev_threads',roomId))[0].data.selectedId).toBe('plan');
+    await expect(page.getByTestId('message-editor')).toHaveText('Unsent draft stays here');
+    await expectCompletedTurn(request,clientId,token,roomId);await page.reload();
+    await expect(page.getByRole('button',{name:'Research options',exact:true})).toBeDisabled();
+    await expect(page.getByTestId('personal-user-message').filter({hasText:'Selected: Plan my day'})).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:'/tmp/roomtalk-openmuse-choices-mobile.png',fullPage:true});
+  }finally{await pool.end();}
 });

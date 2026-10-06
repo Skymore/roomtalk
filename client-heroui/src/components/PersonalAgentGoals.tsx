@@ -57,7 +57,7 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
     <section className="space-y-2 border-t border-default-200 pt-5" aria-label={t('personalAgentGoals')}>
       <h3 className="flex items-center gap-2 text-lg font-semibold text-[#2784bc]"><span className="h-4 w-4 rounded-full border-[5px] border-[#d7e9fa] bg-[#3d9bde]"/>{t('personalAgentGoals')}</h3>
       {goals.map(goal=><button key={goal.id} type="button" className="flex w-full items-center gap-3 py-3 text-left" aria-label={t('personalGoalOpen',{title:goal.title})} onClick={()=>{setSelected(goal.id);setError('');}}>
-        <Icon icon="lucide:square" className={`h-5 w-5 shrink-0 ${goal.completedAt?'fill-success text-success':'text-default-400'}`}/><span className="min-w-0 flex-1"><span className="block">{goal.title}</span><span className="mt-1 line-clamp-2 block text-sm text-default-500">{goal.prompt || t(status(goal))}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/>
+        <Icon icon="lucide:square" className={`h-5 w-5 shrink-0 ${goal.completedAt?'fill-success text-success':'text-default-400'}`}/><span className="min-w-0 flex-1"><span className="block">{goal.title}</span><span className="mt-1 line-clamp-2 text-sm text-default-500">{goal.prompt || t(status(goal))}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/>
       </button>)}
       {!goals.length && <p className="py-3 text-sm text-default-500">{t('personalGoalEmpty')}</p>}
     </section>

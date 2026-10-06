@@ -32,8 +32,8 @@ import { personalGoogleRequest,PersonalGoogleStatus } from '../utils/personalAge
 
 interface OpenBotProbe {state:string}
 export const PersonalAgentConnections: React.FC<{
-  clientId:string;query:string;onOpen:(page:'mail'|'calendar')=>void;showError:(message:string)=>void;
-}> = ({clientId,query,onOpen,showError}) => {
+  clientId:string;query:string;onOpen:(page:'mail'|'calendar')=>void;computerAvailable:boolean;onComputer:()=>void;showError:(message:string)=>void;
+}> = ({clientId,query,onOpen,computerAvailable,onComputer,showError}) => {
   const {t} = useTranslation();
   const [status,setStatus] = React.useState<PersonalGoogleStatus>();
   const [openbot,setOpenbot]=React.useState<OpenBotProbe>();
@@ -57,21 +57,23 @@ export const PersonalAgentConnections: React.FC<{
     finally {setBusy(false);}
   };
   const rows = [
-    {id:'gmail',name:'Gmail',icon:'lucide:mail',connected:status?.connected ?? false,page:'mail' as const},
-    {id:'calendar',name:'Google Calendar',icon:'lucide:calendar-days',connected:status?.connected ?? false,page:'calendar' as const},
-    {id:'openbot',name:'OpenBot',icon:'lucide:sparkles',connected:openbot?.state==='authenticated',page:undefined},
-  ].filter(row=>`${row.name} google`.toLowerCase().includes(query.toLowerCase()));
+    {id:'gmail',name:'Gmail',color:'#ea5b4d',group:'google',icon:'lucide:mail',connected:status?.connected ?? false,page:'mail' as const},
+    {id:'calendar',name:'Google Calendar',color:'#4285f4',group:'google',icon:'lucide:calendar-days',connected:status?.connected ?? false,page:'calendar' as const},
+    {id:'browser',name:t('personalComputerTitle'),color:'#1987cf',group:'browser',icon:'lucide:globe',connected:computerAvailable,page:undefined},
+    {id:'openbot',name:'OpenBot',color:'#6866a6',group:'openbot',icon:'lucide:sparkles',connected:openbot?.state==='authenticated',page:undefined},
+  ].filter(row=>`${row.name} ${row.group}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="space-y-5">
     {[true,false].map(connected=>{
       const group = rows.filter(row=>row.connected === connected);
       return group.length ? <section key={String(connected)}>
         <h3 className="mb-2 pl-3 text-xs text-default-500">{t(connected ? 'personalGoogleConnected' : 'personalGoogleAvailable')}</h3>
-        <div className="divide-y divide-default-200 rounded-3xl bg-[#f3f4f5] px-4 dark:bg-[#252522]">{group.map(row=><button key={row.id} type="button" className="flex min-h-16 w-full items-center gap-3 text-left" onClick={()=>setSelected(row.id === 'openbot' ? 'openbot' : 'google')}>
-          <Icon icon={row.icon} className="h-6 w-6" /><span className="flex-1 text-sm">{row.name}</span>
+        <div className="divide-y divide-default-200 rounded-3xl bg-[#f3f4f5] px-4 dark:bg-[#252522]">{group.map(row=><button key={row.id} type="button" className="flex min-h-16 w-full items-center gap-3 text-left" onClick={()=>row.group==='browser'?onComputer():setSelected(row.group==='openbot'?'openbot':'google')}>
+          <span className="flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[7px] bg-white"><Icon icon={row.icon} className="h-[23px] w-[23px]" style={{color:row.color}}/></span><span className="flex-1 text-sm">{row.name}</span>
           <span className="text-xs text-default-500">{row.connected ? <Icon icon="lucide:chevron-right" /> : t(row.id === 'openbot' ? 'personalGoogleSetup' : 'personalGoogleConnect')}</span>
         </button>)}</div>
       </section> : null;
     })}
+    {!rows.length && <p className="text-sm text-default-500">{t('personalAppsNoConnectors')}</p>}
     <Modal isOpen={Boolean(selected)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent>
       <ModalHeader>{selected === 'google' ? t('personalGoogleConnections') : 'OpenBot'}</ModalHeader>
       <ModalBody className="pb-6">{selected === 'google' ? <div className="space-y-4">
