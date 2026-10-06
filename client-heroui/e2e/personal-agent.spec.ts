@@ -214,6 +214,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
   const onceCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Tomorrow review', exact: true }) });
   await expect(onceCard).toContainText('One time');
+  await expect(onceCard).toContainText(/\d{1,2}:\d{2}/);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/roomtalk-personal-goal-schedules-mobile.png', fullPage: true });
@@ -221,6 +222,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.reload();
   await page.getByRole('button', { name: 'Goals', exact: true }).click();
   await expect(onceCard).toContainText('One time');
+  await expect(onceCard).toContainText(/\d{1,2}:\d{2}/);
   await onceCard.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(onceCard).toHaveCount(0);
 

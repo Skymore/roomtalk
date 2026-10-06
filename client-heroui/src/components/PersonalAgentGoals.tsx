@@ -2,7 +2,6 @@ import React from 'react';
 import { Button, Chip, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { formatDate } from '../utils/formatters';
 import { createPersonalAgentGoal, deletePersonalAgentGoal, runPersonalAgentGoal, updatePersonalAgentGoal,
   type PersonalAgentGoal, type PersonalAgentGoalInput } from '../utils/personalAgent';
 import type { Room } from '../utils/types';
@@ -20,6 +19,9 @@ const localDateTime = (value?: string) => {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 };
+const formatRunDate = (date: string, language: string, timezone: string) => new Intl.DateTimeFormat(language, {
+  timeZone: timezone, dateStyle: 'medium', timeStyle: 'short',
+}).format(new Date(date));
 const newGoal = (): PersonalAgentGoalInput => ({
   title: '', prompt: '', schedule: 'manual', weekday: new Date().getDay(), time: '09:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
@@ -55,9 +57,9 @@ export const PersonalAgentGoals: React.FC<PersonalAgentGoalsProps> = ({ clientId
               <div className="min-w-0"><h3 className="font-medium">{goal.title}</h3><p className={`mt-1 whitespace-pre-wrap text-sm ${mutedClass}`}>{goal.prompt}</p></div>
               <Chip size="sm" variant="flat" color={goal.enabled ? 'success' : 'default'}>{t(goal.schedule === 'once' && goal.lastRunAt && !goal.nextRunAt ? 'personalAgentScheduledRunStarted' : goal.enabled ? 'personalAgentEnabled' : 'personalAgentPaused')}</Chip>
             </div>
-            <p className={`mt-3 flex flex-wrap items-center gap-1.5 text-xs ${mutedClass}`}><Icon icon="lucide:clock" className="h-3.5 w-3.5" />{t(`personalAgentSchedule_${goal.schedule}`)}{goal.schedule === 'weekly' && <> · {new Intl.DateTimeFormat(i18n.language, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 9, 4 + goal.weekday!)))}</>}{goal.schedule === 'once' ? <> · {goal.runAt && formatDate(goal.runAt, i18n.language)}</> : goal.schedule !== 'manual' && <> · {goal.time} · {goal.timezone}</>}</p>
-            {goal.nextRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentNextRun', { date: formatDate(goal.nextRunAt, i18n.language) })}</p>}
-            {goal.lastRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentLastRun', { date: formatDate(goal.lastRunAt, i18n.language) })}</p>}
+            <p className={`mt-3 flex flex-wrap items-center gap-1.5 text-xs ${mutedClass}`}><Icon icon="lucide:clock" className="h-3.5 w-3.5" />{t(`personalAgentSchedule_${goal.schedule}`)}{goal.schedule === 'weekly' && <> · {new Intl.DateTimeFormat(i18n.language, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 9, 4 + goal.weekday!)))}</>}{goal.schedule === 'once' ? <> · {goal.runAt && formatRunDate(goal.runAt, i18n.language, goal.timezone)} · {goal.timezone}</> : goal.schedule !== 'manual' && <> · {goal.time} · {goal.timezone}</>}</p>
+            {goal.nextRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentNextRun', { date: formatRunDate(goal.nextRunAt, i18n.language, goal.timezone) })}</p>}
+            {goal.lastRunAt && <p className={`mt-1 text-xs ${mutedClass}`}>{t('personalAgentLastRun', { date: formatRunDate(goal.lastRunAt, i18n.language, goal.timezone) })}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button size="sm" variant="flat" color="secondary" isDisabled={isBusy || !isConnected} onPress={() => { void mutate(async () => { const { room } = await runPersonalAgentGoal(clientId, goal.id); onRoomSelect(room); }); }} startContent={<Icon icon="lucide:play" className="h-3.5 w-3.5" />}>{t('personalAgentRunNow')}</Button>
               <Button size="sm" variant="light" isDisabled={isBusy} onPress={() => { void mutate(async () => { const { goal: updated } = await updatePersonalAgentGoal(clientId, goal.id, { enabled: !goal.enabled }, goal.updatedAt); onGoalsChange(goals.map(item => item.id === goal.id ? updated : item)); }); }}>{t(goal.enabled ? 'personalAgentPause' : 'personalAgentResume')}</Button>
