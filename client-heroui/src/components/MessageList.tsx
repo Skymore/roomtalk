@@ -1309,7 +1309,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       )}
       <div
         data-testid="message-list-shell"
-        className={`flex h-full min-h-0 w-full flex-col overflow-hidden ${presentation==='personal-agent'?'bg-[#fcfcfc]':'bg-[#f5f4ed]'} dark:bg-[#141413]`}
+        className={`flex h-full min-h-0 w-full flex-col overflow-hidden ${presentation==='personal-agent'?'bg-transparent':'bg-[#f5f4ed] dark:bg-[#141413]'}`}
       >
         {presentation === 'code-agent' && codeAgentRoom && (
           <CodeAgentWorkspacePanel
@@ -1421,7 +1421,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         {presentation !== 'chat' && pendingQueueMessages.length > 0 && (
           <div
             data-testid="code-agent-pending-queue"
-            className={`z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto px-3 pb-2 pt-3 backdrop-blur ${presentation==='personal-agent'?'bg-[#fcfcfc]/95':'bg-[#f5f4ed]/95'} dark:bg-[#141413]/95`}
+            className={`z-20 flex max-h-[40%] flex-shrink-0 flex-col gap-2 overflow-y-auto px-3 pb-2 pt-3 backdrop-blur ${presentation==='personal-agent'?'bg-[#fcfcfc]/95 dark:bg-[#191917]/95':'bg-[#f5f4ed]/95 dark:bg-[#141413]/95'}`}
           >
             {presentation==='personal-agent' && <p className="text-[11px] text-default-500">{t('personalQueueUpNext')}</p>}
             {pendingQueueMessages.map(message => {
