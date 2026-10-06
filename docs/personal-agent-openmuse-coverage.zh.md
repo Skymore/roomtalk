@@ -4,7 +4,7 @@
 
 用户要求的差异：执行器固定 Codex app-server/fullAccess；入口 🦊；个人聊天留在个人助理里；记忆进入后直接显示；设置默认只读，点击编辑后修改。普通 RoomTalk 对话保留原有功能。
 
-截至本次记录，功能代码和本地页面已移植，发布验收进行中。源码推送、匹配 E2B 运行器、生产部署和实际 Google 连接分别记录，不能用界面 fixture 代替真实外部服务验收。
+截至 2026-10-06，功能代码已推送并部署，匹配 E2B 运行器已发布，手机生产 UI、实际 Codex 委托任务与 E2B 桌面已验收。Google 仍缺少生产 OAuth client secret 和回调配置，未做真实账号连接；界面 fixture 不算外部服务验收。
 
 ## 页面和操作流程
 
@@ -31,7 +31,7 @@
 | ArtifactCard | 计划、文档、网页、比较，源版内联卡片及真实结果下载；交互网页与刷新回放通过 |
 | FinanceArtifact / finance.ts | 完整 CSV 解析、收入/支出/分类/日期、事务记录、储蓄目标；单元、数据库、内联卡片、真实 Codex CLI 计算通过 |
 | Chromium / browser sessions | 独立会话、实际截图、接管、输入、关闭/恢复、登录状态、源任务关联；真实 Chromium/Chrome 交互通过 |
-| browser PDF downloads | 实际下载字节、导入个人文件库入口；worker 下载/字节检查通过，浏览器下载→导入→填写联合回归进行中 |
+| browser PDF downloads | 实际下载字节、导入个人文件库入口；worker 下载/字节检查、手机浏览器下载→导入→填写→下载副本联合回归通过，下载的真实 PDF 字段值已确认 |
 | Task file/browser associations | 0058 保存实际源任务、源执行轮次、文件和独立会话；复用邮件附件、跨实例恢复、账号隔离、暂停拒绝写入通过 |
 
 ## 电脑和外部连接
@@ -53,5 +53,17 @@
 - 个人助理服务 73 项、真实 PostgreSQL 86 项、共享执行/路由/迁移契约 124 项通过；暂停路由与任务最后定向检查 19 项通过。
 - Python CLI/broker 40 项、原生截图/计划协议 19 项通过；两端生产构建与 i18n 989 个使用键检查通过。
 - 手机 Chrome：个人助理 14 条常规流程逐项通过（首轮 12 条通过、两条测试因旧定位/GET fixture 出错，修正后补跑通过）；实际 E2B 桌面另 1 条通过。
-- 实际 E2B 运行器 0.1.65 / openmuse-parity-v3 已发布，并验证 CLI、Chromium 和 Codex 截图查看。发现官方 update_plan 默认关闭，现已配置开启并构建 0.1.66 / openmuse-parity-v4；最终运行器验证和生产发布尚待完成。
+- 最终 E2B 运行器为 0.1.66 / openmuse-parity-v4，已构建、发布和实际检查 CLI/Chromium。真实 Codex 保存记忆、排队任务、填写 PDF、计算财务、查看桌面截图和原生 update_plan 均通过，工具错误为 0；验收沙箱已清理。
 - Google fixture 与真实外部连接验收分开；生产缺配置时按源版显示未配置。OCR/扫描表格、其他连接器、APNs/FCM、OpenBot 在线桥接等原项目路线图不宣称已实现。
+
+## 生产发布验收
+
+- 功能源码：`12baa7fc`；浏览器时序/定位修正：`434126f7`、`4acb1ba4`。[实现提交的 CI 五项全部通过](https://github.com/Skymore/roomtalk/actions/runs/37535181815)。
+- 生产通过本仓库 `scripts/local-production.mjs --profile edge build app ai-worker`、`up -d --no-build` 发布，保留原 checkout 的 14 项既有 presence 差异。镜像：`sha256:466b21507f51b90e716233065f1e56356772c0ec18ffd85bbb60735d233c996c`。
+- 迁移 0042–0058 已应用，历史 checksum 没有改写；总计 59 项迁移验证通过。
+- 生产 template 为 `realruitao/roomtalk-code-agent-2026-10-06-openmuse-parity-v4`，artifact 为同名未加 owner 前缀的版本，runner 为 0.1.66；engine sourceRef 保持 `0b5e44eb29ad1bec89b2143737f6917aafa79359`。
+- 个人电脑已启用 `e2b-desktop`。生产手机页面实际启动桌面，命令输出 `PERSONAL_DESKTOP_PRODUCTION_OK`、退出码 0，实时 VNC 显示真实桌面；验收后停止电脑，保留工作区。
+- 已登录生产账号在源版 DelegateSheet 委托计划；真实 Codex app-server/fullAccess 在匹配 v4 沙箱完成，结果 `Production acceptance: three-step release check` 保存于 PostgreSQL。该私人验收任务的 ID 为 `ab89bb71-3988-4281-9484-08df6a8a6d17`，保留回执供查看。
+- 手机 390×844：独立个人聊天与五项导航、🦊、默认只读设置、直接显示记忆、源版 Apps/电脑入口实际可用；普通 RoomTalk 聊天仍独立保留。
+- App、AI Worker、PostgreSQL、Redis、对象存储和两个 Tunnel 健康；本地、room.ruit.me、ai-chat.wenlin.dev 的 `/api/status` 均为 HTTP 200 / ready:true，队列没有积压。
+- 唯一尚需外部输入的生产连接验收是 Google OAuth 的 client secret/回调配置。OpenBot 在线桥接、其他连接器、OCR 等原项目未实现项目仍保持源版状态，不宣称可用。
