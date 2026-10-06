@@ -42,6 +42,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "idea":
+            if args.idea_command == "propose":
+                _require_write_access(env)
+            result = _personal_idea(args, env)
         elif args.command == "browser":
             _require_write_access(env)
             result = _personal_browser(args, env)
@@ -107,6 +111,19 @@ def _build_parser() -> argparse.ArgumentParser:
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    idea = subparsers.add_parser("idea", help="Propose useful work with a saved personal source.")
+    idea_sub = idea.add_subparsers(dest="idea_command", required=True)
+    propose = idea_sub.add_parser("propose")
+    propose.add_argument("--source-kind", choices=("goal", "memory", "result", "browser"), required=True)
+    for field in ("source-id", "title", "reason", "prompt"):
+        propose.add_argument("--" + field, required=True)
+    propose.add_argument("--json", action="store_true")
+    listing = idea_sub.add_parser("list")
+    listing.add_argument("--status", choices=("new", "accepted", "dismissed", "all"), default="new")
+    listing.add_argument("--limit", type=int, default=50)
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--json", action="store_true")
 
     browser = subparsers.add_parser("browser", help="Read and operate your personal agent's actual shared browser.")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
@@ -317,6 +334,18 @@ def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str,
     else:
         result = _read_room_context_path("/personal-memory", env)
     return {**result, "tool": "PersonalMemory"}
+
+
+def _personal_idea(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.idea_command == "propose":
+        result = _read_room_context_path("/personal-ideas", env, method="PATCH", body={
+            "sourceKind": args.source_kind, "sourceId": args.source_id,
+            "title": args.title, "reason": args.reason, "prompt": args.prompt,
+        })
+    else:
+        query = {"status": args.status, "limit": args.limit, "offset": args.offset}
+        result = _read_room_context_path("/personal-ideas?" + urllib_parse.urlencode(query), env)
+    return {**result, "tool": "PersonalIdea"}
 
 
 def _personal_browser(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:

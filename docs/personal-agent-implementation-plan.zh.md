@@ -186,3 +186,12 @@ OpenMuse 的 [engine/service.ts](https://github.com/CopilotKit/openmuse/blob/73a
 模块 5 发布验证：生产 App 和 AI Worker 使用镜像 `sha256:107a55843d87c5fb36aedf2221764fd055271c8e67d530b0c16ad647daa38e93`，迁移 `0039_personal_agent_browser` 和 browser-v1 artifact 已生效。已有订阅在 `codex-app-server` 下完成两个真实 fullAccess 回合：创建并打开实际 HTTP 页面；用户接管输入一个未写入下一次提示的值；下一回合从同一浏览器读回该值并重新加载确认；关闭后以数据库中的加密状态恢复浏览器仍读到该值。旧来源 URL 保持不变。已移除临时目标、聊天、沙箱和六张来源截图，确认无剩余 fixture 或活动 lease。手机缩放后点击验证通过；本地及两个公网 `/api/status` 均为 HTTP 200、`ready: true`。
 
 模块 5 CI 修复：旧 SQL 仓储模拟器未识别新增的浏览器状态清理语句，导致清空历史/媒体清理的两项旧测试失败；已补齐测试模拟器，43 项仓储契约测试通过，实际 PostgreSQL 15 项已通过。此修复只有测试，不需重建已验证的运行版本。
+
+
+### 模块 6 第一阶段：来源建议
+
+新增独立“建议”页面：展示实际理由和保存的来源，用户可修改指令后开始任务，也可忽略。没有步骤的未完成目标可以生成制定计划的建议；记忆、结果和网页建议由代理使用 `roomtalk idea propose` 引用真实记录。来源标题、摘录、时间和所属账号均从数据库读取。
+
+迁移 `0040_personal_agent_ideas` 持久化来源版本与接受/忽略决定。同一来源版本只生成一条建议，接受与私有任务、队列指令在同一个事务提交；并发或重复接受返回同一个任务。来源改变或删除后，旧建议不再启动。Runner 0.1.61 与 ideas-v1 artifact 为匹配版本。
+
+本地验证：实际 PostgreSQL 事务和来源/API 6 项、既有仓储/目标/调度回归 70 项、Python CLI/broker 33 项、客户端 14 项、双方构建与相关 ESLint 通过。Chrome 真实 UI 流程验证修改后接受、重复接受、忽略与刷新，使用实际 PostgreSQL/Redis，模型部分使用测试 runner；390px 手机截图已检查。页面跟踪、变化提醒和通知偏好仍属于模块 6 后续工作，不能将第一阶段视为整个模块完成。生产及真实 Codex 验证另行记录。

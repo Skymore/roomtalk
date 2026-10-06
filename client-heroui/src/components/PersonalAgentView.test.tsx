@@ -6,6 +6,7 @@ import { PersonalAgentView } from './PersonalAgentView';
 import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 
 const api = vi.hoisted(() => ({
+  readPersonalAgentIdeas: vi.fn(), refreshPersonalAgentIdeas: vi.fn(), acceptPersonalAgentIdea: vi.fn(), dismissPersonalAgentIdea: vi.fn(),
   getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
   cancelPersonalAgentGoal: vi.fn(), createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
   mergePersonalAgentMemories: vi.fn(), readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('@heroui/react', () => ({
 }));
 
 const snapshot: PersonalAgentSnapshot = {
+  ideas: [],
   profile: { clientId: 'client-1', name: 'Muse', avatar: '🌱', instructions: '', memory: '', mainRoomId: 'main-1', createdAt: '2026-10-05T12:00:00Z', updatedAt: '2026-10-05T12:00:00Z' },
   rooms: [{ id: 'main-1', name: 'Main chat', type: 'codeAgent', codeAgentBackend: 'codex-app-server', personalAgentOwnerId: 'client-1', personalAgentThreadKind: 'main', createdAt: '2026-10-05T12:00:00Z', creatorId: 'client-1' }],
   goals: [{ id: 'goal-1', clientId: 'client-1', title: 'Morning brief', prompt: 'Review my plan', schedule: 'daily', time: '09:00', timezone: 'America/Los_Angeles', enabled: true, createdAt: '2026-10-05T12:00:00Z', updatedAt: '2026-10-05T12:00:00Z' }],
@@ -46,6 +48,58 @@ describe('PersonalAgentView', () => {
     api.getCodexConnectionStatus.mockResolvedValue({ status: 'connected' });
   });
   afterEach(cleanup);
+
+  const suggestion = (id: string) => ({ id, title: `Suggestion ${id}`, reason: 'A saved decision needs a next step', prompt: 'Read the saved topic',
+    source: { kind: 'memory' as const, id: `note-${id}`, title: 'Actual topic', excerpt: 'Confirmed source text', recordedAt: snapshot.profile.updatedAt },
+    automatic: false, status: 'new' as const, createdAt: snapshot.profile.createdAt, updatedAt: snapshot.profile.updatedAt });
+
+  it('keeps failed edits and only opens a task after acceptance succeeds', async () => {
+    const idea = suggestion('one'), callbacks = props();
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, ideas: [idea] });
+    api.acceptPersonalAgentIdea.mockRejectedValueOnce(new Error('Source changed'));
+    render(<PersonalAgentView {...callbacks} />); await screen.findByText('Muse');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentIdeas' }));
+    expect(screen.getByText('Confirmed source text')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'personalIdeaEdit' }));
+    fireEvent.change(screen.getByLabelText('personalIdeaInstructions'), { target: { value: 'My revised task' } });
+    fireEvent.click(screen.getByRole('button', { name: 'personalIdeaAccept' }));
+    await waitFor(() => expect(callbacks.showError).toHaveBeenCalledWith('Source changed'));
+    expect(callbacks.onRoomSelect).not.toHaveBeenCalled();
+    expect((screen.getByLabelText('personalIdeaInstructions') as HTMLTextAreaElement).value).toBe('My revised task');
+    api.acceptPersonalAgentIdea.mockResolvedValue({ idea: { ...idea, status: 'accepted' }, room: snapshot.rooms[0] });
+    fireEvent.click(screen.getByRole('button', { name: 'personalIdeaAccept' }));
+    await waitFor(() => expect(callbacks.onRoomSelect).toHaveBeenCalledWith(snapshot.rooms[0]));
+    expect(api.acceptPersonalAgentIdea).toHaveBeenLastCalledWith('client-1', idea, 'My revised task');
+    expect(screen.queryByTestId('personal-idea-card')).toBeNull();
+  });
+
+  it('preserves both decisions when different cards resolve concurrently', async () => {
+    const one = suggestion('one'), two = suggestion('two');
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, ideas: [one, two] });
+    let resolveOne!: (value: unknown) => void, resolveTwo!: (value: unknown) => void;
+    api.dismissPersonalAgentIdea.mockImplementation((_client: string, idea: typeof one) => new Promise(resolve => {
+      if (idea.id === one.id) resolveOne = resolve; else resolveTwo = resolve;
+    }));
+    render(<PersonalAgentView {...props()} />); await screen.findByText('Muse');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentIdeas' }));
+    for (const card of screen.getAllByTestId('personal-idea-card')) fireEvent.click(within(card).getByRole('button', { name: 'personalIdeaDismiss' }));
+    resolveOne({ idea: { ...one, status: 'dismissed' } });
+    await waitFor(() => expect(screen.getAllByTestId('personal-idea-card')).toHaveLength(1));
+    resolveTwo({ idea: { ...two, status: 'dismissed' } });
+    await waitFor(() => expect(screen.queryByTestId('personal-idea-card')).toBeNull());
+  });
+
+  it('loads source-backed suggestions beyond the first page', async () => {
+    const first = Array.from({ length: 50 }, (_, index) => suggestion(String(index)));
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, ideas: first });
+    api.readPersonalAgentIdeas.mockResolvedValue({ ideas: [suggestion('last')], total: 51 });
+    render(<PersonalAgentView {...props()} />); await screen.findByText('Muse');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentIdeas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'loadMore' }));
+    await screen.findByText('Suggestion last');
+    expect(api.readPersonalAgentIdeas).toHaveBeenCalledWith('client-1', 50);
+    expect(screen.queryByRole('button', { name: 'loadMore' })).toBeNull();
+  });
 
   it('opens the private main chat and provides the subscription connection action', async () => {
     const callbacks = props();

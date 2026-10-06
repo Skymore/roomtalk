@@ -1,8 +1,9 @@
+import { PersonalAgentIdeaService, PersonalAgentIdeaError, personalIdeaPrompt, personalIdeaRevision } from '../services/personalAgentIdeas';
 import { PersonalAgentBrowserError, PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
-import { PersonalAgentGoalConflictError, RoomStore } from '../repositories/store';
+import { PersonalAgentGoalConflictError, PersonalAgentIdeaConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
 import { PersonalAgentMemoryConflict, readPersonalMemories, savePersonalMemory, forgetPersonalMemory, mergePersonalMemories } from '../services/personalAgentMemory';
 import { savePersonalAgentGoal } from '../services/personalAgentGoals';
@@ -11,6 +12,8 @@ export interface PersonalAgentRouteOptions {
   store: RoomStore;
   results?: PersonalAgentResultService;
   browser?: PersonalAgentBrowserService;
+  ideas?: PersonalAgentIdeaService;
+  acceptIdea?: (clientId: string, id: string, prompt: string, expectedUpdatedAt: string) => Promise<{ idea: import('../types').PersonalAgentIdea; room: Room }>;
   logger: Logger;
   getClientId: (req: Request) => string | null;
   authorizeClientRequest: (req: Request, res: Response, clientId: string, endpoint: string) => Promise<boolean>;
@@ -38,6 +41,8 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (!store.ensurePersonalAgentProfile) return res.status(503).json({ error: 'Personal agents are unavailable' });
       return await handler(req, res, await store.ensurePersonalAgentProfile(clientId));
     } catch (error) {
+      if (error instanceof PersonalAgentIdeaError) return res.status(error.statusCode).json({ error: error.message });
+      if (error instanceof PersonalAgentIdeaConflictError) return res.status(409).json({ error: error.message });
       if (error instanceof PersonalAgentGoalConflictError) return res.status(409).json({ error: error.message });
       if (error instanceof PersonalAgentMemoryConflict) return res.status(409).json({ error: error.message, code: error.existingMemory ? 'personal_memory_duplicate' : 'personal_memory_conflict', ...(error.existingMemory ? { existingMemory: error.existingMemory } : {}) });
       if (error instanceof PersonalAgentBrowserError) return res.status(error.statusCode).json({ error: error.message });
@@ -48,10 +53,29 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   };
 
   app.get('/api/personal-agent', withProfile(async (_req, res, profile) => {
-    const [rooms, goals] = await Promise.all([
+    const [rooms, goals, ideas] = await Promise.all([
       store.readPersonalAgentRooms!(profile.clientId), store.readPersonalAgentGoals!(profile.clientId),
+      options.ideas?.refresh(profile.clientId),
     ]);
-    return res.json({ profile, rooms, goals });
+    return res.json({ profile, rooms, goals, ideas: ideas?.ideas || [] });
+  }));
+
+  app.get('/api/personal-agent/ideas', withProfile(async (req, res, profile) => {
+    if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
+    return res.json(await options.ideas.list(profile.clientId, req.query));
+  }));
+  app.post('/api/personal-agent/ideas/refresh', withProfile(async (_req, res, profile) => {
+    if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
+    return res.json(await options.ideas.refresh(profile.clientId));
+  }));
+  app.patch('/api/personal-agent/ideas/:id', withProfile(async (req, res, profile) => {
+    if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
+    const idea = (await options.ideas.list(profile.clientId, { id: req.params.id, status: 'all', limit: 1 })).ideas[0];
+    if (!idea) return res.status(404).json({ error: 'Suggestion not found' });
+    if (req.body?.action === 'dismiss') return res.json(await options.ideas.dismiss(profile.clientId, idea.id, req.body.expectedUpdatedAt));
+    if (req.body?.action !== 'accept') throw new RangeError('Invalid suggestion decision');
+    if (!options.acceptIdea) return res.status(503).json({ error: 'Suggestion execution is unavailable' });
+    return res.json(await options.acceptIdea(profile.clientId, idea.id, personalIdeaPrompt(req.body.prompt ?? idea.prompt), personalIdeaRevision(req.body.expectedUpdatedAt)));
   }));
 
   app.get('/api/personal-agent/results', withProfile(async (req, res, profile) => {

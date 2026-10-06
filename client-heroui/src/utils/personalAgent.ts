@@ -36,10 +36,24 @@ export interface PersonalAgentGoal {
   updatedAt: string;
 }
 
+export interface PersonalAgentIdea {
+  id: string;
+  title: string;
+  reason: string;
+  prompt: string;
+  automatic: boolean;
+  source: { kind: 'goal' | 'memory' | 'result' | 'browser'; id: string; title: string; excerpt: string; recordedAt: string; roomId?: string; turnId?: string; url?: string };
+  status: 'new' | 'accepted' | 'dismissed';
+  acceptedRoomId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PersonalAgentSnapshot {
   profile: PersonalAgentProfile;
   rooms: Room[];
   goals: PersonalAgentGoal[];
+  ideas: PersonalAgentIdea[];
 }
 
 export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt' | 'milestones'>;
@@ -162,3 +176,11 @@ export const readPersonalBrowserImage = async (clientId: string, id: string): Pr
   if (!response.ok) { const payload = await response.json(); throw new Error(payload?.error || 'Browser image unavailable'); }
   return response.blob();
 };
+
+export const refreshPersonalAgentIdeas = (clientId: string) => request<{ ideas: PersonalAgentIdea[]; total: number }>(clientId, '/ideas/refresh', 'POST');
+export const acceptPersonalAgentIdea = (clientId: string, idea: PersonalAgentIdea, prompt: string) =>
+  request<{ idea: PersonalAgentIdea; room: Room }>(clientId, `/ideas/${encodeURIComponent(idea.id)}`, 'PATCH', { action: 'accept', prompt, expectedUpdatedAt: idea.updatedAt });
+export const dismissPersonalAgentIdea = (clientId: string, idea: PersonalAgentIdea) =>
+  request<{ idea: PersonalAgentIdea }>(clientId, `/ideas/${encodeURIComponent(idea.id)}`, 'PATCH', { action: 'dismiss', expectedUpdatedAt: idea.updatedAt });
+
+export const readPersonalAgentIdeas = (clientId: string, offset = 0) => request<{ ideas: PersonalAgentIdea[]; total: number }>(clientId, `/ideas?status=new&limit=50&offset=${offset}`);

@@ -1,4 +1,5 @@
 import React from 'react';
+import { PersonalAgentIdeas } from './PersonalAgentIdeas';
 import { PersonalAgentMemory } from './PersonalAgentMemory';
 import { PersonalAgentGoals } from './PersonalAgentGoals';
 import { PersonalAgentChats } from './PersonalAgentChats';
@@ -24,10 +25,11 @@ interface PersonalAgentViewProps {
   showError: (message: string) => void;
 }
 
-type AgentTab = 'chats' | 'goals' | 'activity' | 'memory';
+type AgentTab = 'chats' | 'ideas' | 'goals' | 'activity' | 'memory';
 interface AgentAction { (): Promise<void> }
 const tabs: { key: AgentTab; icon: string; label: string }[] = [
   { key: 'chats', icon: 'lucide:message-circle', label: 'personalAgentChats' },
+  { key: 'ideas', icon: 'lucide:lightbulb', label: 'personalAgentIdeas' },
   { key: 'goals', icon: 'lucide:target', label: 'personalAgentGoals' },
   { key: 'activity', icon: 'lucide:activity', label: 'personalAgentActivity' },
   { key: 'memory', icon: 'lucide:brain', label: 'personalAgentMemory' },
@@ -134,6 +136,12 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
             ...previous, rooms: previous.rooms.some(item => item.id === room.id)
               ? previous.rooms.map(item => item.id === room.id ? room : item) : [...previous.rooms, room],
           } : previous)} showSuccess={showSuccess} showError={showError} />}
+
+        {tab === 'ideas' && <PersonalAgentIdeas key={clientId} clientId={clientId} ideas={snapshot.ideas} rooms={rooms} isConnected={isConnected}
+          onRoomSelect={onRoomSelect} onIdeasChange={ideas => setSnapshot(previous => previous ? { ...previous, ideas } : previous)}
+          onIdeaChange={idea => setSnapshot(previous => previous ? { ...previous, ideas: previous.ideas.map(value => value.id === idea.id ? idea : value) } : previous)}
+          onIdeasAppend={ideas => setSnapshot(previous => previous ? { ...previous, ideas: [...previous.ideas, ...ideas.filter(idea => !previous.ideas.some(value => value.id === idea.id))] } : previous)}
+          showSuccess={showSuccess} showError={showError} />}
 
         {tab === 'goals' && <PersonalAgentGoals clientId={clientId} goals={snapshot.goals} rooms={rooms} isConnected={isConnected}
           onRoomSelect={onRoomSelect} onGoalsChange={goals => setSnapshot(previous => previous ? { ...previous, goals } : previous)}

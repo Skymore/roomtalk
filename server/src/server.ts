@@ -1,3 +1,5 @@
+import { PersonalAgentIdeaService } from './services/personalAgentIdeas';
+import { registerPersonalAgentIdeaContextRoutes } from './routes/personalAgentIdeaContextRoutes';
 import { E2EPersonalBrowserSandbox } from './scripts/e2ePersonalBrowserSandbox';
 import { PersonalAgentBrowserService } from './services/personalAgentBrowser';
 import { registerPersonalAgentBrowserContextRoutes } from './routes/personalAgentBrowserContextRoutes';
@@ -886,6 +888,7 @@ if (codeAgentModelGateway) {
   );
 }
 
+const personalAgentIdeas = new PersonalAgentIdeaService(store);
 const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBrowserService(
   store, codeAgentSandboxService, codeAgentSandboxLifecycle, mediaObjectStorage,
   new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),
@@ -893,6 +896,8 @@ const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBr
 
 registerApiRoutes(app, {
   personalAgentBrowser,
+  personalAgentIdeas,
+  personalAgentAcceptIdea: (clientId, id, prompt, expectedUpdatedAt) => personalAgentScheduler.acceptIdea(clientId, id, prompt, expectedUpdatedAt),
   store,
   io,
   redisClient,
@@ -947,6 +952,7 @@ if (personalAgentBrowser) registerPersonalAgentBrowserContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
 });
 
+registerPersonalAgentIdeaContextRoutes(app, { store, roomContext: codeAgentRoomContextService, ideas: personalAgentIdeas, logger: codeAgentLogger });
 registerPersonalAgentResultContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
   results: new PersonalAgentResultService(store, mediaObjectStorage, codeAgentLogger),

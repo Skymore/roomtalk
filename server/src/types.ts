@@ -295,6 +295,31 @@ export interface PersonalAgentResult {
   createdAt: string;
 }
 
+export type PersonalAgentIdeaSourceKind = 'goal' | 'memory' | 'result' | 'browser';
+export interface PersonalAgentIdeaSource {
+  kind: PersonalAgentIdeaSourceKind;
+  id: string;
+  title: string;
+  excerpt: string;
+  recordedAt: string;
+  roomId?: string;
+  turnId?: string;
+  url?: string;
+}
+export interface PersonalAgentIdea {
+  id: string;
+  clientId: string;
+  title: string;
+  reason: string;
+  prompt: string;
+  source: PersonalAgentIdeaSource;
+  automatic: boolean;
+  status: 'new' | 'accepted' | 'dismissed';
+  acceptedRoomId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PersonalAgentGoal {
   id: string;
   clientId: string;

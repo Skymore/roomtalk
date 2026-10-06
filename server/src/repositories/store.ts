@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -12,6 +12,7 @@ import {
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
 export class PersonalAgentGoalConflictError extends Error {}
+export class PersonalAgentIdeaConflictError extends Error {}
 export class PersonalAgentMemoryConflictError extends Error {
   constructor(message: string, readonly existingMemory?: PersonalAgentMemory) { super(message); }
 }
@@ -774,6 +775,11 @@ export interface IdempotentMessageAppendResult {
 }
 
 export interface DurableRoomStore {
+  readPersonalAgentIdeaSource?(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string): Promise<PersonalAgentIdeaSource | null>;
+  readPersonalAgentIdeas?(clientId: string, options?: { id?: string; status?: PersonalAgentIdea['status']; limit?: number; offset?: number }): Promise<{ ideas: PersonalAgentIdea[]; total: number }>;
+  savePersonalAgentIdea?(idea: PersonalAgentIdea, claim?: { roomId: string; turnId: string }): Promise<PersonalAgentIdea | null>;
+  dismissPersonalAgentIdea?(clientId: string, id: string, expectedUpdatedAt: string): Promise<PersonalAgentIdea | null>;
+  acceptPersonalAgentIdea?(input: { clientId: string; id: string; expectedUpdatedAt: string; room: Room; message: Message }): Promise<{ idea: PersonalAgentIdea; room: Room } | null>;
   getPersonalAgentBrowserSession?(clientId: string, roomId: string): Promise<PersonalAgentBrowserSession | null>;
   savePersonalAgentBrowser?(session: PersonalAgentBrowserSession, leaseTurnId: string, observation?: PersonalAgentBrowserObservation): Promise<boolean>;
   readPersonalAgentBrowserObservations?(clientId: string, options: { roomId?: string; turnId?: string; id?: string; limit?: number; offset?: number }): Promise<{ observations: PersonalAgentBrowserObservation[]; total: number }>;
@@ -1012,6 +1018,21 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
   }
 
+  readPersonalAgentIdeaSource(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string) {
+    return this.durableStore.readPersonalAgentIdeaSource!(clientId, kind, id);
+  }
+  readPersonalAgentIdeas(clientId: string, options?: { id?: string; status?: PersonalAgentIdea['status']; limit?: number; offset?: number }) {
+    return this.durableStore.readPersonalAgentIdeas!(clientId, options);
+  }
+  savePersonalAgentIdea(idea: PersonalAgentIdea, claim?: { roomId: string; turnId: string }) {
+    return this.durableStore.savePersonalAgentIdea!(idea, claim);
+  }
+  dismissPersonalAgentIdea(clientId: string, id: string, expectedUpdatedAt: string) {
+    return this.durableStore.dismissPersonalAgentIdea!(clientId, id, expectedUpdatedAt);
+  }
+  acceptPersonalAgentIdea(input: { clientId: string; id: string; expectedUpdatedAt: string; room: Room; message: Message }) {
+    return this.durableStore.acceptPersonalAgentIdea!(input);
+  }
   getPersonalAgentBrowserSession(clientId: string, roomId: string) {
     if (!this.durableStore.getPersonalAgentBrowserSession) throw new Error('Personal browsing requires PostgreSQL');
     return this.durableStore.getPersonalAgentBrowserSession(clientId, roomId);

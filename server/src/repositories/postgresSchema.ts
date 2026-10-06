@@ -2823,4 +2823,27 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX personal_agent_browser_observations_turn ON personal_agent_browser_observations(client_id,room_id,turn_id,created_at DESC);
     `,
   },
+  {
+    id: '0040_personal_agent_ideas',
+    sql: `
+      CREATE TABLE personal_agent_ideas (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('goal','memory','result','browser')),
+        source_id TEXT NOT NULL,
+        source_recorded_at TIMESTAMPTZ NOT NULL,
+        source JSONB NOT NULL,
+        automatic BOOLEAN NOT NULL DEFAULT FALSE,
+        status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','accepted','dismissed')),
+        accepted_room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        UNIQUE (client_id, source_kind, source_id, source_recorded_at)
+      );
+      CREATE INDEX personal_agent_ideas_owner_status ON personal_agent_ideas(client_id,status,created_at DESC);
+    `,
+  },
 ];

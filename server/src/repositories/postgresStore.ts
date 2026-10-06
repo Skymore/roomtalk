@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -535,6 +535,12 @@ const mapPersonalAgentMemory = (row: Record<string, any>): PersonalAgentMemory =
   source: row.source, ...(row.source_room_id ? { sourceRoomId: row.source_room_id } : {}),
   ...(row.source_turn_id ? { sourceTurnId: row.source_turn_id } : {}),
   createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+});
+
+const mapPersonalAgentIdea = (row: Record<string, any>): PersonalAgentIdea => ({
+  id: row.id, clientId: row.client_id, title: row.title, reason: row.reason, prompt: row.prompt,
+  source: parseJsonValue<PersonalAgentIdeaSource>(row.source)!, automatic: row.automatic, status: row.status,
+  acceptedRoomId: row.accepted_room_id || undefined, createdAt: toIsoString(row.created_at), updatedAt: toIsoString(row.updated_at),
 });
 
 const mapPersonalAgentGoal = (row: Record<string, any>): PersonalAgentGoal => ({
@@ -1195,6 +1201,73 @@ export class PostgresStore implements DurableRoomStore {
     private readonly logger: Logger,
     private readonly mediaObjectStorage?: MediaObjectStorage
   ) {}
+
+  async readPersonalAgentIdeaSource(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string): Promise<PersonalAgentIdeaSource | null> {
+    return this.personalIdeaSource(this.pool, clientId, kind, id);
+  }
+  private async personalIdeaSource(query: PostgresQueryable, clientId: string, kind: PersonalAgentIdeaSourceKind, id: string, lock = false): Promise<PersonalAgentIdeaSource | null> {
+    const tables = { goal: 'personal_agent_goals', memory: 'personal_agent_memories', result: 'personal_agent_results', browser: 'personal_agent_browser_observations' };
+    const found = await query.query(`SELECT * FROM ${tables[kind]} WHERE client_id = $1 AND id = $2${lock ? ' FOR SHARE' : ''}`, [clientId,id]);
+    const row = found.rows[0]; if (!row) return null;
+    // A goal already being handled or completed is not new work to propose.
+    if (kind === 'goal' && (!row.enabled || row.completed_at || row.last_run_room_id)) return null;
+    return { kind, id, title: row.title, excerpt: String(row.prompt ?? row.content ?? row.summary ?? row.url ?? '').slice(0,1000),
+      recordedAt: toIsoString(row.updated_at ?? row.created_at), ...(row.room_id || row.source_room_id ? { roomId: row.room_id || row.source_room_id } : {}),
+      ...(row.turn_id || row.source_turn_id ? { turnId: row.turn_id || row.source_turn_id } : {}), ...(row.url ? { url: row.url } : {}) };
+  }
+  async readPersonalAgentIdeas(clientId: string, options: { id?: string; status?: PersonalAgentIdea['status']; limit?: number; offset?: number } = {}): Promise<{ ideas: PersonalAgentIdea[]; total: number }> {
+    const where = 'client_id=$1 AND ($2::text IS NULL OR id=$2) AND ($3::text IS NULL OR status=$3)';
+    const params = [clientId,options.id ?? null,options.status ?? null];
+    const [rows,count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_ideas WHERE ${where} ORDER BY created_at DESC,id LIMIT $4 OFFSET $5`, [...params, options.limit ?? 50, options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_ideas WHERE ${where}`,params),
+    ]);
+    return { ideas: rows.rows.map(mapPersonalAgentIdea), total: Number(count.rows[0].total) };
+  }
+  async savePersonalAgentIdea(idea: PersonalAgentIdea, claim?: { roomId: string; turnId: string }): Promise<PersonalAgentIdea | null> {
+    return this.transaction(async client => {
+      if (claim) {
+        const active = await client.query(`SELECT room.id FROM rooms room WHERE room.id=$1 AND room.creator_id=$2 AND room.personal_agent_owner_id=$2
+          AND EXISTS (SELECT 1 FROM code_agent_room_leases lease WHERE lease.room_id=room.id AND lease.turn_id=$3 AND lease.expires_at>clock_timestamp()) FOR SHARE`,[claim.roomId,idea.clientId,claim.turnId]);
+        if (!active.rows.length) return null;
+      }
+      const source = await this.personalIdeaSource(client,idea.clientId,idea.source.kind,idea.source.id,true);
+      if (!source || source.recordedAt !== idea.source.recordedAt) return null;
+      const inserted = await client.query(`INSERT INTO personal_agent_ideas(id,client_id,title,reason,prompt,source_kind,source_id,source_recorded_at,source,automatic)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) ON CONFLICT (client_id,source_kind,source_id,source_recorded_at) DO NOTHING RETURNING *`,
+        [idea.id,idea.clientId,idea.title,idea.reason,idea.prompt,source.kind,source.id,source.recordedAt,JSON.stringify(source),idea.automatic]);
+      if (inserted.rows[0]) return mapPersonalAgentIdea(inserted.rows[0]);
+      const existing = await client.query('SELECT * FROM personal_agent_ideas WHERE client_id=$1 AND source_kind=$2 AND source_id=$3 AND source_recorded_at=$4',[idea.clientId,source.kind,source.id,source.recordedAt]);
+      return mapPersonalAgentIdea(existing.rows[0]);
+    });
+  }
+  async dismissPersonalAgentIdea(clientId: string, id: string, expectedUpdatedAt: string): Promise<PersonalAgentIdea | null> {
+    const changed = await this.pool.query(`UPDATE personal_agent_ideas SET status='dismissed',updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond')
+      WHERE client_id=$1 AND id=$2 AND status='new' AND date_trunc('milliseconds',updated_at)=$3::timestamptz RETURNING *`,[clientId,id,expectedUpdatedAt]);
+    if (changed.rows[0]) return mapPersonalAgentIdea(changed.rows[0]);
+    const current = (await this.readPersonalAgentIdeas(clientId,{id})).ideas[0];
+    return current?.status === 'new' ? null : current ?? null;
+  }
+  async acceptPersonalAgentIdea(input: { clientId: string; id: string; expectedUpdatedAt: string; room: Room; message: Message }): Promise<{ idea: PersonalAgentIdea; room: Room } | null> {
+    return this.transaction(async client => {
+      const found = await client.query('SELECT * FROM personal_agent_ideas WHERE client_id=$1 AND id=$2 FOR UPDATE',[input.clientId,input.id]);
+      if (!found.rows[0]) return null;
+      const idea = mapPersonalAgentIdea(found.rows[0]);
+      if (idea.status === 'accepted') {
+        const saved = await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id=$1 AND personal_agent_owner_id=$2`,[idea.acceptedRoomId,input.clientId]);
+        return saved.rows[0] ? { idea,room:mapRoom(saved.rows[0]) } : null;
+      }
+      if (idea.status !== 'new' || idea.updatedAt !== input.expectedUpdatedAt) return null;
+      const source = await this.personalIdeaSource(client,input.clientId,idea.source.kind,idea.source.id,true);
+      if (!source || source.recordedAt !== idea.source.recordedAt) return null;
+      if (input.room.creatorId !== input.clientId || input.room.personalAgentOwnerId !== input.clientId || input.message.clientId !== input.clientId || input.message.roomId !== input.room.id) return null;
+      const room = await this.insertPersonalAgentRoom(client,{...input.room,...(source.kind==='goal' ? {personalAgentGoalId:source.id} : {})});
+      await client.query(INSERT_MESSAGE_ROW_SQL,messageParams(input.message,0));
+      if (source.kind==='goal') await client.query(`UPDATE personal_agent_goals SET last_run_room_id=$1,last_run_at=$2,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE client_id=$3 AND id=$4`,[room.id,input.message.timestamp,input.clientId,source.id]);
+      const saved = await client.query(`UPDATE personal_agent_ideas SET status='accepted',accepted_room_id=$1,prompt=$2,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond') WHERE id=$3 RETURNING *`,[room.id,input.message.content,idea.id]);
+      return { idea:mapPersonalAgentIdea(saved.rows[0]),room };
+    });
+  }
 
   async getPersonalAgentProfile(clientId: string): Promise<PersonalAgentProfile | null> {
     const result = await this.pool.query('SELECT * FROM personal_agent_profiles WHERE client_id = $1', [clientId]);

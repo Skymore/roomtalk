@@ -180,3 +180,12 @@ Tracking supports page changes, text presence and USD price thresholds. Record t
 Module 5 release verification: App and AI Worker are healthy on image `sha256:107a55843d87c5fb36aedf2221764fd055271c8e67d530b0c16ad647daa38e93`; migration `0039_personal_agent_browser` and browser-v1 artifact pins are active. Two actual fullAccess `codex-app-server` turns opened a real HTTP page, shared user input in the same browser, recovered the withheld value in the next model turn and confirmed persistence after reload. Closing and reopening Chromium restored that value from the encrypted profile. Original visit sources remain unchanged. Temporary goals, rooms, sandboxes and six screenshot objects were removed; no fixtures or active leases remain. Mobile zoomed clicks passed. Loopback and both public `/api/status` endpoints return HTTP 200 with `ready: true`.
 
 Module 5 CI correction: the old SQL contract simulator lacked the new browser-session cleanup statement, failing two historical clear/media-cleanup tests. The simulator now recognizes it; all 43 store-contract tests pass, alongside 15 actual PostgreSQL tests. This is test-only and requires no rebuild of the verified runtime.
+
+
+### Module 6, first phase: sourced suggestions
+
+An independent Ideas page shows saved evidence and reasons. Users edit task instructions before starting work or dismiss the suggestion. An unfinished goal without steps can receive a planning suggestion; agent-generated memory, result and browser suggestions use `roomtalk idea propose` with actual stored IDs. Source title, excerpt, timestamp and ownership come from PostgreSQL.
+
+Migration `0040_personal_agent_ideas` persists source revisions and decisions. One source revision has one suggestion. Acceptance, private task creation and queued instructions commit together; concurrent/repeated acceptance returns the same task. Changed or deleted sources cannot start obsolete suggestions. Runner 0.1.61 and the ideas-v1 artifact are aligned.
+
+Local validation: six actual PostgreSQL transaction/source/API checks, 70 existing store/goal/scheduler regressions, 33 Python CLI/broker tests, 14 client tests, both production builds and focused ESLint passed. A Chrome UI flow covered edited acceptance, replay, dismissal and reload with PostgreSQL/Redis and a test runner; the 390px mobile screenshot was inspected. Page tracking, change alerts and notification preferences remain module 6 follow-up work. Production and actual Codex verification are recorded separately.

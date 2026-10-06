@@ -43,6 +43,62 @@ test('shows account sign-in guidance to guests', async ({ page, context }) => {
   await expect(page.getByText('Sign in to your RoomTalk account in Settings to create a private personal agent.', { exact: true })).toBeVisible();
 });
 
+test('accepts an edited sourced suggestion exactly once and preserves dismissed decisions', async ({ page, context, request }, testInfo) => {
+  test.setTimeout(90_000);
+  const clientId = await seedClient(context, uniqueName('idea-owner'));
+  await page.addInitScript(() => { window.open = () => null; });
+  await openRoomsPage(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+  await page.getByLabel('User ID password', { exact: true }).first().fill('Personal-ideas-test-2026');
+  await page.getByRole('button', { name: 'Set password', exact: true }).click();
+  await expect(page.getByText('User ID password saved.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Connect Codex', exact: true }).click();
+  await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 15000 });
+  const token = (await page.evaluate(() => localStorage.getItem('clientAuthToken')))!;
+  await openPersonalAgent(page);
+  const headers = accountHeaders(clientId, token);
+  for (const title of ['Prepare my trip', 'Review my reading']) {
+    const saved = await request.post(`${serverURL}/api/personal-agent/goals`, { headers,
+      data: { title, prompt: `Create steps for ${title}`, schedule: 'manual', time: '09:00', timezone: 'UTC' } });
+    expect(saved.status()).toBe(201);
+  }
+  await page.getByRole('button', { name: 'Refresh', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Ideas', exact: true }).click();
+  const card = page.getByTestId('personal-idea-card').filter({ hasText: 'Prepare my trip' });
+  await expect(card).toBeVisible();
+  await card.locator('summary').click();
+  await expect(card.getByText('Create steps for Prepare my trip', { exact: true })).toBeVisible();
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await card.getByLabel('Task instructions', { exact: true }).fill('Prepare a concise itinerary for my trip.');
+  const before = await request.get(`${serverURL}/api/personal-agent/ideas`, { headers });
+  const original = (await before.json()).ideas.find((idea: any) => idea.source.title === 'Prepare my trip');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('personal-ideas-mobile.png'), fullPage: true });
+  copyFileSync(testInfo.outputPath('personal-ideas-mobile.png'), '/tmp/roomtalk-personal-ideas-mobile.png');
+  await card.getByRole('button', { name: 'Start task', exact: true }).click();
+  await expect(page.getByTestId('personal-agent-conversation')).toBeVisible();
+  const roomId = await page.evaluate(() => JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+  await expectCompletedTurn(request, clientId, token, roomId);
+  const replay = await request.patch(`${serverURL}/api/personal-agent/ideas/${original.id}`, { headers,
+    data: { action: 'accept', prompt: 'Retry must not create another task', expectedUpdatedAt: original.updatedAt } });
+  expect(replay.status()).toBe(200); expect((await replay.json()).room.id).toBe(roomId);
+  await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Ideas', exact: true }).click();
+  await expect(page.getByTestId('personal-idea-card')).toHaveCount(1);
+  await page.getByTestId('personal-idea-card').getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(page.getByTestId('personal-idea-card')).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Ideas', exact: true }).click();
+  await expect(page.getByTestId('personal-idea-card')).toHaveCount(0);
+  const final = await request.get(`${serverURL}/api/personal-agent/ideas?status=all`, { headers });
+  expect((await final.json()).ideas.map((idea: any) => idea.status).sort()).toEqual(['accepted', 'dismissed']);
+  const snapshot = await request.get(`${serverURL}/api/personal-agent`, { headers });
+  const rooms = (await snapshot.json()).rooms;
+  expect(rooms.filter((room: Room) => room.personalAgentThreadKind === 'task')).toHaveLength(1);
+  expect(rooms.find((room: Room) => room.id === roomId).codeAgentMode).toBe('fullAccess');
+});
+
 test('creates a private Codex agent, persists memory, runs a task and goal, and denies another account', async ({ page, context, request, browser }, testInfo) => {
   test.setTimeout(120_000);
   const clientId = await seedClient(context, uniqueName('personal-owner'));

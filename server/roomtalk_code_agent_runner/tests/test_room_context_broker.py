@@ -24,6 +24,40 @@ class FakeResponse:
         return self.payload
 
 
+def test_suggestions_cli_uses_private_broker_and_preserves_source_and_page(monkeypatch, capsys):
+    calls = []
+
+    def upstream(request, timeout):
+        calls.append((request.full_url, request.get_method(), request.headers["Authorization"],
+                      json.loads(request.data) if request.data else None))
+        return FakeResponse({"ideas": [], "total": 0} if request.get_method() == "GET" else {"idea": {"id": "saved"}})
+
+    monkeypatch.setattr(room_context_broker.urllib_request, "urlopen", upstream)
+    env = {"ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+           "ROOMTALK_ROOM_CONTEXT_TOKEN": "private-idea-token",
+           "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}"}
+    broker = room_context_broker.start_room_context_broker(env, "turn")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_SOCKET", env["ROOMTALK_ROOM_CONTEXT_SOCKET"])
+    try:
+        assert platform_tools.main(["idea", "propose", "--source-kind", "memory", "--source-id", "real-note",
+                                    "--title", "Follow up", "--reason", "Saved decision", "--prompt", "Create next steps", "--json"]) == 0
+        assert calls[-1][1:] == ("PATCH", "Bearer private-idea-token", {
+            "sourceKind": "memory", "sourceId": "real-note", "title": "Follow up", "reason": "Saved decision", "prompt": "Create next steps"})
+        output = capsys.readouterr().out
+        assert "private-idea-token" not in output
+        assert json.loads(output)["tool"] == "PersonalIdea"
+        monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+        assert platform_tools.main(["idea", "list", "--status", "dismissed", "--limit", "20", "--offset", "50", "--json"]) == 0
+        assert calls[-1][0].endswith("/personal-ideas?status=dismissed&limit=20&offset=50")
+        capsys.readouterr()
+        assert platform_tools.main(["idea", "propose", "--source-kind", "memory", "--source-id", "real-note",
+                                    "--title", "Follow up", "--reason", "Saved decision", "--prompt", "Create next steps", "--json"]) == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+        assert len(calls) == 2
+    finally:
+        broker.close()
+
+
 def test_broker_keeps_token_outside_cli_and_proxies_allowed_read(tmp_path: Path, monkeypatch):
     requested: dict[str, str] = {}
 

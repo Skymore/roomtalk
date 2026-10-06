@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { Logger } from '../logger';
-import { RoomStore } from '../repositories/store';
+import { PersonalAgentIdeaConflictError, RoomStore } from '../repositories/store';
 import { AIModelOption, CodeAgentMode, PersonalAgentGoal, Room } from '../types';
 import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CodexRunSettings, normalizeCodexRunSettings } from './codexRunSettings';
@@ -60,6 +60,16 @@ export class PersonalAgentScheduler {
     return result;
   }
 
+  async acceptIdea(clientId: string, id: string, prompt: string, expectedUpdatedAt: string) {
+    const idea = (await this.store.readPersonalAgentIdeas!(clientId,{id,limit:1})).ideas[0];
+    if (!idea) throw new PersonalAgentIdeaConflictError('Suggestion not found');
+    const {room,message} = await this.prepareTask(clientId,idea.title,prompt);
+    const saved = await this.store.acceptPersonalAgentIdea!({clientId,id,expectedUpdatedAt,room,message});
+    if (!saved) throw new PersonalAgentIdeaConflictError('The suggestion or its source changed. Read it again before accepting.');
+    await this.wakeTask(saved.room);
+    return saved;
+  }
+
   private async runTick(): Promise<void> {
     // This also recovers a committed prompt when the prior App died before it
     // could wake the code-agent queue. Execution itself owns the existing lease.
@@ -76,19 +86,32 @@ export class PersonalAgentScheduler {
 
   private async queueGoal(goal: PersonalAgentGoal, expectedNextRunAt?: string): Promise<{ room: Room } | null> {
     if (!this.store.startPersonalAgentGoalRun) throw new Error('Durable personal agent scheduling is unavailable');
-    const profile = await this.store.getPersonalAgentProfile?.(goal.clientId);
+    const {room,message} = await this.prepareTask(goal.clientId,goal.title,goal.prompt,goal.id);
+    const result = await this.store.startPersonalAgentGoalRun({
+      clientId: goal.clientId, goalId: goal.id, room, message,
+      nextRunAt: nextPersonalAgentGoalRunAt(goal, new Date(message.timestamp)),
+      ...(expectedNextRunAt ? { expectedNextRunAt } : {}),
+    });
+    if (!result) return null;
+    // Queue admission has already committed. A wake/notification failure must
+    // not make the API caller retry an admitted task; the next tick recovers it.
+    await this.wakeTask(result.room);
+    return { room: result.room };
+  }
+  private async prepareTask(clientId: string, title: string, prompt: string, goalId?: string) {
+    const profile = await this.store.getPersonalAgentProfile?.(clientId);
     if (!profile) throw new Error('Personal agent profile not found');
     const mainRoom = await this.store.getRoomById(profile.mainRoomId);
-    if (!mainRoom || mainRoom.personalAgentOwnerId !== goal.clientId) throw new Error('Personal agent workspace not found');
+    if (!mainRoom || mainRoom.personalAgentOwnerId !== clientId) throw new Error('Personal agent workspace not found');
     const now = this.now();
     const room: Room = {
       ...createRoomRecord({
-        roomId: this.createId(), name: goal.title, creatorId: goal.clientId,
+        roomId: this.createId(), name: title, creatorId: clientId,
         type: 'codeAgent', codeAgentBackend: mainRoom.codeAgentBackend || 'codex-app-server', now,
       }),
-      personalAgentOwnerId: goal.clientId,
+      personalAgentOwnerId: clientId,
       personalAgentThreadKind: 'task',
-      personalAgentGoalId: goal.id,
+      ...(goalId ? { personalAgentGoalId: goalId } : {}),
       codeAgentAccess: 'owner',
       codeAgentMode: 'fullAccess',
     };
@@ -97,7 +120,7 @@ export class PersonalAgentScheduler {
       'fullAccess', this.options.codexRunSettings?.serviceTier,
     );
     const message = {
-      ...createUserMessage({ id: this.createId(), clientId: goal.clientId, roomId: room.id, content: goal.prompt, now }),
+      ...createUserMessage({ id: this.createId(), clientId: clientId, roomId: room.id, content: prompt, now }),
       codeAgentQueuedInput: {
         state: 'queued' as const, queuedAt: now.toISOString(), updatedAt: now.toISOString(),
         selectedModel: this.options.selectedModel,
@@ -106,20 +129,15 @@ export class PersonalAgentScheduler {
         requestedMode: room.codeAgentMode, serverOrigin: this.options.serverOrigin,
       },
     };
-    const result = await this.store.startPersonalAgentGoalRun({
-      clientId: goal.clientId, goalId: goal.id, room, message,
-      nextRunAt: nextPersonalAgentGoalRunAt(goal, now),
-      ...(expectedNextRunAt ? { expectedNextRunAt } : {}),
-    });
-    if (!result) return null;
-    // Queue admission has already committed. A wake/notification failure must
-    // not make the API caller retry an admitted task; the next tick recovers it.
+    return {room,message};
+  }
+  private async wakeTask(room: Room) {
     try {
-      await this.options.onRunQueued?.(result.room);
+      await this.options.onRunQueued?.(room);
       await this.sessions.resumeQueuedTurns();
     } catch (error) {
-      this.logger.warn('Personal agent task saved; queue wake will retry', { error, roomId: result.room.id });
+      this.logger.warn('Personal agent task saved; queue wake will retry', { error, roomId: room.id });
     }
-    return { room: result.room };
   }
+
 }

@@ -22,7 +22,7 @@ export const isAcpCodeAgentBackend = (backend: CodeAgentBackend): boolean => (
   backend === 'opencode' || backend === 'hermes-agent'
 );
 
-export const CODE_AGENT_ACP_ARTIFACT_VERSION = 'roomtalk-code-agent-2026-10-06-personal-browser-v1';
+export const CODE_AGENT_ACP_ARTIFACT_VERSION = 'roomtalk-code-agent-2026-10-06-personal-ideas-v1';
 
 export const availableCodeAgentBackends = ({
   codexEnabled,
