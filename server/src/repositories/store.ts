@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -774,6 +774,8 @@ export interface IdempotentMessageAppendResult {
 }
 
 export interface DurableRoomStore {
+  savePersonalAgentResult?(result: PersonalAgentResult): Promise<PersonalAgentResult | null>;
+  readPersonalAgentResults?(clientId: string, options?: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number }): Promise<{ results: PersonalAgentResult[]; total: number }>;
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
   ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
   updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
@@ -1005,6 +1007,16 @@ export class CompositeRoomStore implements RoomStore {
 
   updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string) {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
+  }
+
+  savePersonalAgentResult(result: PersonalAgentResult) {
+    if (!this.durableStore.savePersonalAgentResult) throw new Error('Personal results require PostgreSQL');
+    return this.durableStore.savePersonalAgentResult(result);
+  }
+
+  readPersonalAgentResults(clientId: string, options?: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number }) {
+    if (!this.durableStore.readPersonalAgentResults) throw new Error('Personal results require PostgreSQL');
+    return this.durableStore.readPersonalAgentResults(clientId, options);
   }
 
   readPersonalAgentMemories(clientId: string, options?: { id?: string; query?: string; kind?: string; limit?: number; offset?: number }) {

@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -1231,6 +1231,34 @@ export class PostgresStore implements DurableRoomStore {
       [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null],
     );
     return result.rows[0] ? mapPersonalAgentProfile(result.rows[0]) : null;
+  }
+
+  async savePersonalAgentResult(result: PersonalAgentResult): Promise<PersonalAgentResult | null> {
+    const saved = await this.pool.query(`INSERT INTO personal_agent_results
+      (id,client_id,room_id,turn_id,kind,title,summary,filename,mime_type,byte_size,object_key)
+      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 FROM rooms room
+      JOIN room_agent_turns turn ON turn.room_id = room.id AND turn.id = $4
+      JOIN code_agent_room_leases lease ON lease.room_id = room.id AND lease.turn_id = turn.id
+      WHERE room.id = $3 AND room.personal_agent_owner_id = $2 AND room.creator_id = $2
+        AND turn.status = 'running' AND lease.expires_at > clock_timestamp()
+      RETURNING *`, [result.id,result.clientId,result.roomId,result.turnId,result.kind,result.title,result.summary,result.filename,result.mimeType,result.byteSize,result.objectKey]);
+    return saved.rows[0] ? this.mapPersonalAgentResult(saved.rows[0]) : null;
+  }
+
+  private mapPersonalAgentResult(row: any): PersonalAgentResult {
+    return { id: row.id, clientId: row.client_id, roomId: row.room_id, turnId: row.turn_id,
+      kind: row.kind, title: row.title, summary: row.summary, filename: row.filename, mimeType: row.mime_type,
+      byteSize: Number(row.byte_size), objectKey: row.object_key, createdAt: toIsoString(row.created_at) };
+  }
+
+  async readPersonalAgentResults(clientId: string, options: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number } = {}): Promise<{ results: PersonalAgentResult[]; total: number }> {
+    const where = `client_id = $1 AND ($2::text IS NULL OR id = $2) AND ($3::text IS NULL OR room_id = $3) AND ($4::text IS NULL OR turn_id = $4)`;
+    const params = [clientId, options.id || null, options.roomId || null, options.turnId || null];
+    const [rows, count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_results WHERE ${where} ORDER BY created_at, id LIMIT $5 OFFSET $6`, [...params, options.limit ?? 50, options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_results WHERE ${where}`, params),
+    ]);
+    return { results: rows.rows.map(row => this.mapPersonalAgentResult(row)), total: Number(count.rows[0].total) };
   }
 
   async readPersonalAgentMemories(clientId: string, options: { id?: string; query?: string; kind?: string; limit?: number; offset?: number } = {}): Promise<{ memories: PersonalAgentMemory[]; total: number }> {
@@ -2482,7 +2510,8 @@ export class PostgresStore implements DurableRoomStore {
           `SELECT DISTINCT workspace_checkpoint->>'objectKey' AS object_key
           FROM room_agent_turns
           WHERE room_id = $1
-            AND workspace_checkpoint->>'objectKey' IS NOT NULL`,
+            AND workspace_checkpoint->>'objectKey' IS NOT NULL
+          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1`,
           [roomId],
         );
         orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);
@@ -7301,7 +7330,8 @@ export class PostgresStore implements DurableRoomStore {
           `SELECT DISTINCT workspace_checkpoint->>'objectKey' AS object_key
           FROM room_agent_turns
           WHERE room_id = $1
-            AND workspace_checkpoint->>'objectKey' IS NOT NULL`,
+            AND workspace_checkpoint->>'objectKey' IS NOT NULL
+          UNION SELECT object_key FROM personal_agent_results WHERE room_id = $1`,
           [roomId],
         );
         orphanedCheckpointObjectKeys = checkpoints.rows.map(row => row.object_key);

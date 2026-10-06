@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import http.client
 import json
 import os
@@ -41,6 +42,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "result":
+            if args.result_command in ("save", "get"):
+                _require_write_access(env)
+            result = _personal_result(args, env)
         elif args.command == "goal":
             if args.goal_command != "list":
                 _require_write_access(env)
@@ -151,6 +156,25 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_forget.add_argument("--expected-updated-at", required=True)
     memory_forget.add_argument("--json", action="store_true")
 
+    result = subparsers.add_parser("result", help="Save and reopen private persistent plans, documents and web results.")
+    result_commands = result.add_subparsers(dest="result_command", required=True)
+    result_save = result_commands.add_parser("save")
+    result_save.add_argument("--file", required=True, help="An existing file, at most 4 MiB; text at most 512 KiB.")
+    result_save.add_argument("--kind", required=True, choices=("plan", "document", "web"))
+    result_save.add_argument("--title", required=True)
+    result_save.add_argument("--summary", default="")
+    result_save.add_argument("--json", action="store_true")
+    result_list = result_commands.add_parser("list")
+    result_list.add_argument("--id")
+    result_list.add_argument("--room-id")
+    result_list.add_argument("--limit", type=int, default=50)
+    result_list.add_argument("--offset", type=int, default=0)
+    result_list.add_argument("--json", action="store_true")
+    result_get = result_commands.add_parser("get")
+    result_get.add_argument("--id", required=True)
+    result_get.add_argument("--output", required=True, help="Write the persisted file to this workspace path.")
+    result_get.add_argument("--json", action="store_true")
+
     goal = subparsers.add_parser("goal", help="Manage personal goals and durable background work.")
     goal_commands = goal.add_subparsers(dest="goal_command", required=True)
     goal_list = goal_commands.add_parser("list", help="Read goals, milestones, schedule and actual latest run status.")
@@ -200,6 +224,31 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
         raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
 
     return _read_room_context_path(path, env)
+
+
+def _personal_result(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.result_command == "save":
+        source = Path(args.file)
+        if source.stat().st_size > 4 * 1024 * 1024:
+            raise RunnerError("Results are limited to 4 MiB", code="personal_result_invalid")
+        result = _read_room_context_path("/personal-results", env, method="PATCH", body={
+            "kind": args.kind, "title": args.title, "summary": args.summary,
+            "filename": source.name, "content": base64.b64encode(source.read_bytes()).decode("ascii"),
+        })
+    elif args.result_command == "get":
+        result = _read_room_context_path(f"/personal-results?{urllib_parse.urlencode({'id': args.id, 'content': 'true'})}", env)
+        target = validate_workspace_path(Path(args.output).expanduser().absolute(), env)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(result.pop("content"), validate=True))
+        result["output"] = str(target)
+    else:
+        query = {"limit": args.limit, "offset": args.offset}
+        if args.id:
+            query["id"] = args.id
+        if args.room_id:
+            query["roomId"] = args.room_id
+        result = _read_room_context_path(f"/personal-results?{urllib_parse.urlencode(query)}", env)
+    return {**result, "tool": "PersonalResult"}
 
 
 def _personal_goal(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:

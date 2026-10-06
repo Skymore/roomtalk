@@ -399,3 +399,33 @@ def test_memory_library_save_search_and_forget_send_scoped_operations(tmp_path, 
     assert calls[0] == ('/personal-memory/records', {'method': 'PATCH', 'body': {'kind': 'preference', 'title': 'Language', 'content': '中文', 'action': 'save'}})
     assert '%E4%B8%AD%E6%96%87' in calls[1][0]
     assert calls[2][1]['body']['action'] == 'forget'
+
+
+def test_personal_result_saves_existing_binary_and_reopens_persisted_file(tmp_path: Path, monkeypatch, capsys):
+    import base64
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4\x00binary contents")
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    calls = []
+    def request(path, env, **kwargs):
+        calls.append((path, kwargs))
+        if kwargs.get("method") == "PATCH":
+            return {"success": True, "result": {"id": "saved", "filename": "report.pdf"}}
+        if "content=true" in path:
+            return {"success": True, "result": {"id": "saved"}, "content": base64.b64encode(source.read_bytes()).decode()}
+        return {"success": True, "results": [{"id": "saved"}], "total": 1}
+    monkeypatch.setattr(platform_tools, "_read_room_context_path", request)
+    assert platform_tools.main(["result", "save", "--file", str(source), "--kind", "document", "--title", "Report", "--summary", "Actual PDF", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["id"] == "saved"
+    assert base64.b64decode(calls[0][1]["body"]["content"]) == source.read_bytes()
+    assert calls[0][1]["body"]["filename"] == "report.pdf"
+    target = tmp_path / "reopened.pdf"
+    assert platform_tools.main(["result", "get", "--id", "saved", "--output", str(target), "--json"]) == 0
+    assert target.read_bytes() == source.read_bytes()
+    assert "content" not in json.loads(capsys.readouterr().out)
+    assert platform_tools.main(["result", "list", "--room-id", "private", "--json"]) == 0
+    assert "roomId=private" in calls[-1][0]
+    capsys.readouterr()
+    monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+    assert platform_tools.main(["result", "save", "--file", str(source), "--kind", "document", "--title", "Report", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"

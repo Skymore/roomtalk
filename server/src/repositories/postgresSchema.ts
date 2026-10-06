@@ -2778,4 +2778,24 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         EXECUTE FUNCTION queue_active_room_change();
     `,
   },
+  {
+    id: '0038_personal_agent_results',
+    sql: `
+      CREATE TABLE personal_agent_results (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL REFERENCES room_agent_turns(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('plan', 'document', 'web')),
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size > 0 AND byte_size <= 4194304),
+        object_key TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX personal_agent_results_owner_room_turn ON personal_agent_results(client_id, room_id, turn_id, created_at DESC);
+    `,
+  },
 ];

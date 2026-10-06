@@ -230,3 +230,30 @@ def test_memory_merge_cli_keeps_revisions_and_token_inside_private_broker(tmp_pa
         assert len(requests) == 2
     finally:
         broker.close()
+
+
+def test_large_personal_result_uses_active_private_broker_without_printing_token(tmp_path: Path, monkeypatch, capsys):
+    import base64
+    requests = []
+    content = b"%PDF-1.4\n" + b"x" * 200_000
+    source = tmp_path / "report.pdf"
+    source.write_bytes(content)
+    def fake_fetch(url, token, *, method="GET", body=None):
+        requests.append((url, token, method, body))
+        return {"result": {"id": "saved", "filename": "report.pdf"}} if method == "PATCH" else {"result": {"id": "saved"}, "content": base64.b64encode(content).decode()}
+    monkeypatch.setattr(room_context_broker, "_fetch_room_context", fake_fetch)
+    env = {"ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context", "ROOMTALK_ROOM_CONTEXT_TOKEN": "secret-turn-token",
+        "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}"}
+    broker = room_context_broker.start_room_context_broker(env, "turn-1")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_SOCKET", env["ROOMTALK_ROOM_CONTEXT_SOCKET"])
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    try:
+        assert platform_tools.main(["result", "save", "--file", str(source), "--kind", "document", "--title", "Report", "--json"]) == 0
+        assert "secret-turn-token" not in capsys.readouterr().out
+        assert base64.b64decode(requests[0][3]["content"]) == content
+        target = tmp_path / "reopened.pdf"
+        assert platform_tools.main(["result", "get", "--id", "saved", "--output", str(target), "--json"]) == 0
+        assert target.read_bytes() == content
+        assert "secret-turn-token" not in capsys.readouterr().out
+    finally:
+        broker.close()

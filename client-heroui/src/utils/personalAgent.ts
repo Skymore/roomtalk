@@ -110,3 +110,30 @@ export const forgetPersonalAgentMemory = (clientId: string, entry: PersonalAgent
   request<{ success: true }>(clientId, `/memories/${encodeURIComponent(entry.id)}`, 'DELETE', { expectedUpdatedAt: entry.updatedAt });
 export const mergePersonalAgentMemories = (clientId: string, entry: Pick<PersonalAgentMemory, 'kind' | 'title' | 'content'>, selected: PersonalAgentMemory[]) =>
   request<{ memory: PersonalAgentMemory }>(clientId, '/memories/merge', 'POST', { ...entry, id: selected[0].id, entries: selected.map(({ id, updatedAt }) => ({ id, updatedAt })) });
+
+
+export interface PersonalAgentResult {
+  id: string;
+  roomId: string;
+  turnId: string;
+  kind: 'plan' | 'document' | 'web';
+  title: string;
+  summary: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+}
+export const readPersonalAgentResults = (clientId: string, roomId: string, turnId: string, offset = 0) =>
+  request<{ results: PersonalAgentResult[]; total: number }>(clientId, `/results?${new URLSearchParams({ roomId, turnId, offset: String(offset), limit: '50' })}`);
+export const readPersonalAgentResultFile = async (clientId: string, id: string): Promise<Blob> => {
+  const token = localStorage.getItem('clientAuthToken')?.trim();
+  const response = await fetch(apiPath(`/api/personal-agent/results/${encodeURIComponent(id)}/content?clientId=${encodeURIComponent(clientId)}`), {
+    cache: 'no-store', headers: { 'X-Client-Id': clientId, ...(token ? { 'X-Client-Auth-Token': token } : {}) },
+  });
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(typeof payload?.error === 'string' ? payload.error : `Unable to open result (${response.status})`);
+  }
+  return response.blob();
+};

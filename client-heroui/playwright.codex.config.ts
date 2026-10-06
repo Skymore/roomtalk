@@ -48,6 +48,7 @@ export default defineConfig({
         'E2E_FAKE_AI=true',
         'E2E_FAKE_AI_CHUNK_DELAY_MS=1000',
         'CODE_AGENT_ENABLED=true',
+        'CODE_AGENT_ROOM_CONTEXT_TOKEN_SECRET=e2e-personal-result-context-secret',
         'CODE_AGENT_ALLOWED_USER_IDS=',
         'CODE_AGENT_SANDBOX_PROVIDER=fake',
         'CODE_AGENT_RUNNER_CLIENT=fake',

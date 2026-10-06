@@ -1363,7 +1363,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               <div className="flex flex-col space-y-2">
                 {timelineItems.map((item) => {
                   if (item.kind === 'agent-turn') {
-                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} turn={item.turn} messages={item.messages} renderMessage={renderMessage} />;
+                    if (presentation === 'personal-agent') return <PersonalAgentTurn key={`turn:${item.turn.id}`} clientId={clientId} canInteract={canUseRetainedRoomAccess} turn={item.turn} messages={item.messages} renderMessage={renderMessage} />;
                     return (
                       <AgentTurnItem
                         key={`turn:${item.turn.id}`}

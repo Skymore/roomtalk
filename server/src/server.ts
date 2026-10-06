@@ -1,3 +1,5 @@
+import { PERSONAL_RESULT_API_PATH, PersonalAgentResultService } from './services/personalAgentResults';
+import { registerPersonalAgentResultContextRoutes } from './routes/personalAgentResultContextRoutes';
 // 导入日志类
 import { Logger, httpLogger } from './logger';
 
@@ -180,6 +182,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
     return;
   }
+  if (req.path === PERSONAL_RESULT_API_PATH) { next(); return; }
   defaultJsonParser(req, res, next);
 });
 
@@ -929,6 +932,11 @@ registerCodeAgentRoomContextRoutes(app, {
   service: codeAgentRoomContextService,
   logger: codeAgentLogger,
   listPublishedSites: (roomId, requestBaseUrl) => publishedStaticSiteService.listSitesForRoom(roomId, requestBaseUrl),
+});
+
+registerPersonalAgentResultContextRoutes(app, {
+  store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
+  results: new PersonalAgentResultService(store, mediaObjectStorage, codeAgentLogger),
 });
 
 registerPersonalAgentContextRoutes(app, {

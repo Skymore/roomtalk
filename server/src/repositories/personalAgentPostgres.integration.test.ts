@@ -310,4 +310,55 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.equal(forgotten.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentMemoryId, undefined);
   });
 
+  it('persists result sources across restart and enforces live owned turns before saving', async () => {
+    const sourceRoom = await store.createPersonalAgentThread(owner, 'Document result');
+    const turnId = randomUUID(), startedAt = new Date().toISOString();
+    const turn = { id: turnId, roomId: sourceRoom.id, status: 'running' as const, startedAt,
+      backend: 'codex-app-server' as const, assistantName: 'Codex', updatedAt: startedAt };
+    await store.upsertRoomAgentTurn(turn);
+    const lease = (await store.acquireCodeAgentRoomLease(sourceRoom.id, turnId, 'result-test', startedAt, 60000))!;
+    const result = { id: randomUUID(), clientId: owner, roomId: sourceRoom.id, turnId, kind: 'plan' as const,
+      title: 'Reusable plan', summary: 'Confirmed next steps', filename: 'plan.md', mimeType: 'text/markdown', byteSize: 32,
+      objectKey: `personal-agent-results/${sourceRoom.id}/fixture`, createdAt: startedAt };
+    assert.ok(await store.savePersonalAgentResult(result));
+    const restarted = new PostgresStore(pool, logger as any);
+    const found = await restarted.readPersonalAgentResults(owner, { roomId: sourceRoom.id, turnId });
+    assert.equal(found.total, 1); assert.equal(found.results[0].objectKey, result.objectKey);
+    assert.equal(found.results[0].turnId, turnId);
+    await store.updatePersonalAgentThread(owner, sourceRoom.id, { archived: true });
+    assert.equal((await restarted.readPersonalAgentResults(owner, { id: result.id })).total, 1);
+    assert.equal((await restarted.readPersonalAgentResults('other', { id: result.id })).total, 0);
+    assert.equal(await store.savePersonalAgentResult({ ...result, id: randomUUID(), clientId: 'other' }), null);
+    await store.releaseCodeAgentRoomLease(sourceRoom.id, turnId, 'result-test', lease.fence);
+    assert.equal(await store.savePersonalAgentResult({ ...result, id: randomUUID() }), null);
+    await store.upsertRoomAgentTurn({ ...turn, status: 'complete', completedAt: new Date().toISOString() });
+    assert.equal((await restarted.readPersonalAgentResults(owner, { id: result.id })).total, 1);
+    const removed: string[] = [];
+    const cleanupStore = new PostgresStore(pool, logger as any, { async deleteMediaObject(key: string) { removed.push(key); } } as any);
+    assert.equal(await cleanupStore.deleteRoom(sourceRoom.id, 'other'), false);
+    assert.equal(removed.length, 0);
+    assert.equal(await cleanupStore.deleteRoom(sourceRoom.id, owner), true);
+    assert.ok(removed.includes(result.objectKey));
+    assert.equal((await restarted.readPersonalAgentResults(owner, { id: result.id })).total, 0);
+  });
+
+  it('clears result records and objects when their source history is deliberately cleared', async () => {
+    const sourceRoom = await store.createPersonalAgentThread(owner, 'Clear result history');
+    const turnId = randomUUID(), startedAt = new Date().toISOString();
+    await store.upsertRoomAgentTurn({ id: turnId, roomId: sourceRoom.id, status: 'running', startedAt,
+      backend: 'codex-app-server', assistantName: 'Codex', updatedAt: startedAt });
+    const lease = (await store.acquireCodeAgentRoomLease(sourceRoom.id, turnId, 'clear-result-test', startedAt, 60000))!;
+    const objectKey = `personal-agent-results/${sourceRoom.id}/clear-fixture`;
+    const saved = (await store.savePersonalAgentResult({ id: randomUUID(), clientId: owner, roomId: sourceRoom.id, turnId,
+      kind: 'document', title: 'Clear document', summary: '', filename: 'report.pdf', mimeType: 'application/pdf',
+      byteSize: 20, objectKey, createdAt: startedAt }))!;
+    assert.ok(saved);
+    await store.releaseCodeAgentRoomLease(sourceRoom.id, turnId, 'clear-result-test', lease.fence);
+    const removed: string[] = [];
+    const cleanupStore = new PostgresStore(pool, logger as any, { async deleteMediaObject(key: string) { removed.push(key); } } as any);
+    await cleanupStore.clearRoomMessages(sourceRoom.id);
+    assert.equal((await cleanupStore.readPersonalAgentResults(owner, { id: saved.id })).total, 0);
+    assert.ok(removed.includes(objectKey));
+  });
+
 });

@@ -1,3 +1,4 @@
+import { PersonalAgentResultService } from '../services/personalAgentResults';
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import { PersonalAgentGoalConflictError, RoomStore } from '../repositories/store';
@@ -7,6 +8,7 @@ import { savePersonalAgentGoal } from '../services/personalAgentGoals';
 
 export interface PersonalAgentRouteOptions {
   store: RoomStore;
+  results?: PersonalAgentResultService;
   logger: Logger;
   getClientId: (req: Request) => string | null;
   authorizeClientRequest: (req: Request, res: Response, clientId: string, endpoint: string) => Promise<boolean>;
@@ -47,6 +49,21 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       store.readPersonalAgentRooms!(profile.clientId), store.readPersonalAgentGoals!(profile.clientId),
     ]);
     return res.json({ profile, rooms, goals });
+  }));
+
+  app.get('/api/personal-agent/results', withProfile(async (req, res, profile) => {
+    if (!options.results) return res.status(503).json({ error: 'Personal results are unavailable' });
+    return res.json(await options.results.list(profile.clientId, req.query));
+  }));
+  app.get('/api/personal-agent/results/:id/content', withProfile(async (req, res, profile) => {
+    if (!options.results) return res.status(503).json({ error: 'Personal results are unavailable' });
+    const found = await options.results.get(profile.clientId, req.params.id);
+    if (!found) return res.status(404).json({ error: 'Result not found' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', found.result.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(found.result.filename)}`);
+    return res.send(found.body);
   }));
 
   app.get('/api/personal-agent/memories', withProfile(async (req, res, profile) =>

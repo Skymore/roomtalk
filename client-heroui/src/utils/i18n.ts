@@ -8,6 +8,15 @@ const FALLBACK_LANGUAGE = 'en';
 const resources: Record<string, { translation: Record<string, string> }> = {
   en: {
     translation: {
+      "personalResultOpen": "Open",
+      "personalResultDownload": "Download",
+      "personalResultKind_plan": "Plan",
+      "personalResultKind_document": "Document",
+      "personalResultKind_web": "Web page",
+      "personalResultDownloadHint": "Download this file to open it in your app.",
+      "personalResultMore": "More results",
+      "personalResultCopy": "Copy text",
+      "personalResultCopied": "Copied",
       "personalMemoryOrganize": "Organize memories",
       "personalMemorySelectRelated": "Select related memories of the same type.",
       "personalMemoryMergeSelected": "Merge {{count}} memories",
@@ -1060,6 +1069,15 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   zh: {
     translation: {
+      "personalResultOpen": "打开",
+      "personalResultDownload": "下载",
+      "personalResultKind_plan": "计划",
+      "personalResultKind_document": "文档",
+      "personalResultKind_web": "网页",
+      "personalResultDownloadHint": "下载后可使用对应应用打开。",
+      "personalResultMore": "更多结果",
+      "personalResultCopy": "复制内容",
+      "personalResultCopied": "已复制",
       "personalMemoryOrganize": "整理记忆",
       "personalMemorySelectRelated": "选择同一类型的相关记忆。",
       "personalMemoryMergeSelected": "合并 {{count}} 条记忆",
@@ -2112,6 +2130,15 @@ const resources: Record<string, { translation: Record<string, string> }> = {
   },
   hi: {
     translation: {
+      "personalResultOpen": "खोलें",
+      "personalResultDownload": "डाउनलोड",
+      "personalResultKind_plan": "योजना",
+      "personalResultKind_document": "दस्तावेज़",
+      "personalResultKind_web": "वेब पेज",
+      "personalResultDownloadHint": "इस फ़ाइल को अपने ऐप में खोलने के लिए डाउनलोड करें।",
+      "personalResultMore": "और परिणाम",
+      "personalResultCopy": "पाठ कॉपी करें",
+      "personalResultCopied": "कॉपी किया गया",
       "personalMemoryOrganize": "यादें व्यवस्थित करें",
       "personalMemorySelectRelated": "एक ही प्रकार की संबंधित यादें चुनें।",
       "personalMemoryMergeSelected": "{{count}} यादें मिलाएँ",
@@ -3166,6 +3193,15 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
 resources.ja = {
   translation: {
+      "personalResultOpen": "開く",
+      "personalResultDownload": "ダウンロード",
+      "personalResultKind_plan": "計画",
+      "personalResultKind_document": "ドキュメント",
+      "personalResultKind_web": "ウェブページ",
+      "personalResultDownloadHint": "ダウンロードして対応するアプリで開けます。",
+      "personalResultMore": "他の結果",
+      "personalResultCopy": "テキストをコピー",
+      "personalResultCopied": "コピーしました",
       "personalMemoryOrganize": "メモリを整理",
       "personalMemorySelectRelated": "同じ種類の関連するメモリを選択します。",
       "personalMemoryMergeSelected": "{{count}} 件を統合",
@@ -4187,6 +4223,15 @@ resources.ja = {
 
 resources.ko = {
   translation: {
+      "personalResultOpen": "열기",
+      "personalResultDownload": "다운로드",
+      "personalResultKind_plan": "계획",
+      "personalResultKind_document": "문서",
+      "personalResultKind_web": "웹 페이지",
+      "personalResultDownloadHint": "다운로드한 후 해당 앱에서 열 수 있습니다.",
+      "personalResultMore": "결과 더 보기",
+      "personalResultCopy": "텍스트 복사",
+      "personalResultCopied": "복사됨",
       "personalMemoryOrganize": "기억 정리",
       "personalMemorySelectRelated": "같은 유형의 관련 기억을 선택하세요.",
       "personalMemoryMergeSelected": "기억 {{count}}개 병합",

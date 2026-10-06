@@ -1,5 +1,6 @@
+import { createHmac, randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openRoomsPage, resetE2EData, seedClient, serverURL, uniqueName } from './helpers';
 import type { Message, Room } from '../src/utils/types';
@@ -407,4 +408,95 @@ test('continues a topic and reviews conflicting memories before an atomic merge'
   await card(first.title).getByRole('button', { name: 'Forget', exact: true }).click();
   await expect(page.getByTestId('personal-memory-entry')).toHaveCount(0);
   expect((await (await request.get(`${serverURL}/api/clients/${clientId}/rooms/${room.id}`, { headers })).json()).personalAgentMemoryId).toBeUndefined();
+});
+
+
+test('replays private plan, document and interactive web cards and downloads persisted files', async ({ page, context, request }) => {
+  test.setTimeout(120_000);
+  const clientId = await seedClient(context, uniqueName('result-owner'));
+  await page.addInitScript(() => { window.open = () => null; });
+  await openRoomsPage(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+  await page.getByLabel('User ID password', { exact: true }).first().fill('Personal-result-test-2026');
+  await page.getByRole('button', { name: 'Set password', exact: true }).click();
+  await expect(page.getByText('User ID password saved.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Connect Codex', exact: true }).click();
+  await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible({ timeout: 15000 });
+  const token = (await page.evaluate(() => localStorage.getItem('clientAuthToken')))!;
+  const headers = accountHeaders(clientId, token);
+  await openPersonalAgent(page);
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  await page.getByLabel('Task name', { exact: true }).fill('Reusable results');
+  await page.getByRole('button', { name: 'Start task', exact: true }).click();
+  await expect(page.getByTestId('personal-agent-conversation').getByText('Reusable results', { exact: true })).toBeVisible();
+  const roomId = await page.evaluate(() => JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+  await page.getByTestId('message-editor').fill('Create reusable results.');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  let turnId = '';
+  await expect.poll(async () => {
+    const response = await request.get(`${serverURL}/api/rooms/${roomId}/messages?clientId=${clientId}`, { headers });
+    const messages = await response.json() as Message[];
+    turnId = messages.find(message => message.turnId)?.turnId || '';
+    return Boolean(turnId);
+  }).toBe(true);
+  // Exercise the real broker while the deterministic test executor owns this turn.
+  const claims = { v: 1, jti: randomUUID(), roomId, clientId, turnId, mode: 'fullAccess', exp: Math.floor(Date.now() / 1000) + 60 };
+  const payload = Buffer.from(JSON.stringify(claims, Object.keys(claims).sort())).toString('base64url');
+  const authorization = `Bearer ${payload}.${createHmac('sha256', 'e2e-personal-result-context-secret').update(payload).digest('base64url')}`;
+  const plan = '# Confirmed week plan\n\n- [ ] Monday: finish the confirmed draft.\n- [ ] Tuesday: review the result.\n';
+  const web = '<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:system-ui;padding:24px}button{padding:12px}</style></head><body><h1>Saved week page</h1><button id="next">Complete one step</button><p id="count">0 completed</p><script>let count=0;document.getElementById("next").onclick=()=>document.getElementById("count").textContent=(++count)+" completed";</script></body></html>';
+  const stream = 'BT /F1 18 Tf 20 80 Td (Confirmed report) Tj ET';
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  let pdf = '%PDF-1.4\n'; const offsets = [0];
+  objects.forEach((object, index) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const records = [];
+  for (const item of [ { kind: 'plan', title: 'Confirmed week plan', filename: 'week.md', body: plan },
+    { kind: 'document', title: 'Confirmed report', filename: 'report.pdf', body: pdf },
+    { kind: 'web', title: 'Saved week page', filename: 'week.html', body: web } ]) {
+    const saved = await request.patch(`${serverURL}/api/code-agent/room-context/personal-results`, { headers: { authorization }, data: {
+      kind: item.kind, title: item.title, summary: 'A saved result from this conversation.', filename: item.filename, content: Buffer.from(item.body).toString('base64'),
+    } });
+    expect(saved.status()).toBe(200);
+    const payload = await saved.json(); records.push({ ...item, result: payload.result });
+    expect(payload.result.objectKey).toBeUndefined();
+  }
+  await expectCompletedTurn(request, clientId, token, roomId);
+  await expect(page.getByTestId('personal-result-card')).toHaveCount(3);
+  await page.reload();
+  await expect(page.getByTestId('personal-result-card')).toHaveCount(3);
+  await page.getByTestId('personal-result-card').filter({ hasText: 'Confirmed week plan' }).getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(page.getByRole('dialog').getByText('Monday: finish the confirmed draft.', { exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
+  const pdfCard = page.getByTestId('personal-result-card').filter({ hasText: 'Confirmed report' });
+  const downloadWait = page.waitForEvent('download');
+  await pdfCard.getByRole('button', { name: 'Download', exact: true }).click();
+  const download = await downloadWait;
+  expect(download.suggestedFilename()).toBe('report.pdf');
+  expect(readFileSync((await download.path())!, 'utf8')).toBe(pdf);
+  await pdfCard.getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(page.getByRole('dialog').locator('iframe[title="Confirmed report"]')).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
+  await page.getByTestId('personal-result-card').filter({ hasText: 'Saved week page' }).getByRole('button', { name: 'Open', exact: true }).click();
+  const frame = page.frameLocator('iframe[title="Saved week page"]');
+  await expect(frame.getByRole('heading', { name: 'Saved week page' })).toBeVisible();
+  await frame.getByRole('button', { name: 'Complete one step' }).click();
+  await expect(frame.getByText('1 completed', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-result-web-mobile.png', fullPage: true });
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-result-cards-mobile.png', fullPage: true });
+  const lateSave = await request.patch(`${serverURL}/api/code-agent/room-context/personal-results`, { headers: { authorization }, data: {
+    kind: 'plan', title: 'Too late', filename: 'late.md', content: Buffer.from(plan).toString('base64'),
+  } });
+  expect(lateSave.status()).toBe(403);
+  expect((await request.get(`${serverURL}/api/personal-agent/results/${records[0].result.id}/content?clientId=${clientId}`)).status()).toBe(401);
+  await expect(page.getByRole('button', { name: /Overview|Artifacts|Changes|Codex|Permission|Context|Cost/ })).toHaveCount(0);
 });

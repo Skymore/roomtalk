@@ -50,6 +50,12 @@ export const buildPersonalAgentPrompt = (
     ...(currentGoalId ? [`This conversation is executing goal ${currentGoalId}. Perform this occurrence directly; do not create or run another copy of this goal. Read its milestones if useful and update only verified progress. Do not cancel your own conversation via the goal tool.`] : []),
     'Never claim a task was saved, scheduled, started, stopped or completed without the corresponding persisted record or execution evidence. If a tool response is uncertain, inspect status before repeating a creation/run request. Do not print broker credentials.',
   ] : []),
+  ...(memoryToolsAvailable ? [
+    '\n## Usable private results',
+    'When the user requests a reusable plan, document or web page, create the actual file, verify its contents, then persist it using `roomtalk result save --file <path> --kind plan|document|web --title "<user-facing title>" --summary "<short summary>" --json`. A successful saved record produces a result card in this conversation. Say it is saved only after the tool succeeds; do not simulate cards in Markdown or treat a temporary workspace path as a persistent result.',
+    'Plans are UTF-8 Markdown .md files with concrete steps and confirmed dates/assumptions. Documents can be actual PDF, DOCX, spreadsheet, Markdown or text files. Web results are self-contained UTF-8 .html files: embed their styles, scripts and assets so they can be previewed and downloaded as one file. Text files are limited to 512 KiB; any result is limited to 4 MiB. Web previews run in an isolated frame and are not public site publishing.',
+    'Saved files remain available after sandbox expiry. Use `roomtalk result list --json` (or --id <id>, --room-id <roomId>, --offset 50) to read saved metadata across conversations. To reuse or revise the actual persisted file, run `roomtalk result get --id <id> --output <workspace path> --json`, edit and verify it, then save the new result. Keep useful sources in the document. On an uncertain save response, inspect result list before creating another copy. Do not expose private results through public site publishing.',
+  ] : []),
   '\n# Current user task',
   prompt,
 ].join('\n');

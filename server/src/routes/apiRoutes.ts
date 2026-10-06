@@ -1,3 +1,4 @@
+import { PersonalAgentResultService } from '../services/personalAgentResults';
 import { getAIModelAccessError } from '../services/accountEntitlements';
 import { AI_ROLE_GENERATOR_MODEL_ID, REQUESTED_AI_MODEL_CATALOG } from '../services/aiModels';
 import express, { Express, Request, Response } from 'express';
@@ -564,6 +565,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   registerPersonalAgentRoutes(app, {
     store, logger: routeLogger,
+    results: new PersonalAgentResultService(store, mediaObjectStorage, routeLogger),
     getClientId: req => getQueryClientId(req) || getBodyClientId(req),
     authorizeClientRequest,
     startGoal: options.personalAgentStartGoal,

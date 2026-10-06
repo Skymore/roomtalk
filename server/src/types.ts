@@ -259,6 +259,21 @@ export interface PersonalAgentMemory {
   updatedAt: string;
 }
 
+export interface PersonalAgentResult {
+  id: string;
+  clientId: string;
+  roomId: string;
+  turnId: string;
+  kind: 'plan' | 'document' | 'web';
+  title: string;
+  summary: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  objectKey: string;
+  createdAt: string;
+}
+
 export interface PersonalAgentGoal {
   id: string;
   clientId: string;
