@@ -59,6 +59,7 @@ const normalizeRoomNickname = (value: string): string | null => {
 };
 
 interface ApiRouteOptions {
+  personalAgentCancelGoal?: (goal: PersonalAgentGoal, expectedUpdatedAt?: string) => Promise<PersonalAgentGoal>;
   personalAgentStartGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
   store: RoomStore;
   io: Server;
@@ -566,6 +567,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     getClientId: req => getQueryClientId(req) || getBodyClientId(req),
     authorizeClientRequest,
     startGoal: options.personalAgentStartGoal,
+    cancelGoal: options.personalAgentCancelGoal,
   });
 
   const resolveAccountRoles = async (account: ClientAccount) => {

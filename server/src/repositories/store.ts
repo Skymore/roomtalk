@@ -782,7 +782,7 @@ export interface DurableRoomStore {
   updatePersonalAgentThread?(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }): Promise<Room | null>;
   readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
   savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
-  deletePersonalAgentGoal?(clientId: string, goalId: string): Promise<boolean>;
+  deletePersonalAgentGoal?(clientId: string, goalId: string, expectedUpdatedAt?: string): Promise<boolean>;
   readDuePersonalAgentGoals?(now: string, limit?: number): Promise<PersonalAgentGoal[]>;
   startPersonalAgentGoalRun?(input: {
     clientId: string;
@@ -1039,8 +1039,8 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.savePersonalAgentGoal(goal, expectedUpdatedAt);
   }
 
-  deletePersonalAgentGoal(clientId: string, goalId: string) {
-    return this.durableStore.deletePersonalAgentGoal?.(clientId, goalId) || Promise.resolve(false);
+  deletePersonalAgentGoal(clientId: string, goalId: string, expectedUpdatedAt?: string) {
+    return this.durableStore.deletePersonalAgentGoal?.(clientId, goalId, expectedUpdatedAt) || Promise.resolve(false);
   }
 
   readDuePersonalAgentGoals(now: string, limit?: number) {

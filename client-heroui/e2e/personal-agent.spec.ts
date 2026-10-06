@@ -176,6 +176,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.getByRole('button', { name: 'New goal', exact: true }).click();
   await page.getByLabel('Goal title', { exact: true }).fill('Daily planning');
   await page.getByLabel('What should your agent do?', { exact: true }).fill('Make a concise plan for today.');
+  await page.getByRole('dialog').getByLabel('Milestones', { exact: true }).fill('Prepare a weekly plan');
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Daily planning', exact: true })).toBeVisible();
   const goalCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Daily planning', exact: true }) });
@@ -193,8 +194,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await page.getByLabel('What should your agent do?', { exact: true }).fill('Review my weekly progress.');
   await page.getByRole('dialog').getByLabel('Schedule', { exact: true }).click();
   await page.getByRole('option', { name: 'Every week', exact: true }).click();
-  await page.getByRole('dialog').getByLabel('Weekday', { exact: true }).click();
-  await page.getByRole('option', { name: 'Friday', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Friday', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
   const fridayCard = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Friday review', exact: true }) });
   await expect(fridayCard).toContainText('Friday');
@@ -253,6 +253,43 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await expect(page.getByTestId('personal-agent-message').filter({ hasText: /fake runner received the task/ })).toBeVisible({ timeout: 20000 });
 
   await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Goals', exact: true }).click();
+  await expect(goalCard).toContainText('Latest run: Finished');
+  await goalCard.getByRole('checkbox', { name: 'Prepare a weekly plan', exact: true }).click();
+  await expect(goalCard.getByRole('checkbox', { name: 'Prepare a weekly plan', exact: true })).toBeChecked();
+  await goalCard.getByRole('button', { name: 'Mark complete', exact: true }).click();
+  await expect(goalCard.getByText('Completed', { exact: true })).toBeVisible();
+  await expect(goalCard.getByRole('button', { name: 'Run now', exact: true })).toBeDisabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Goals', exact: true }).click();
+  await expect(goalCard.getByText('Completed', { exact: true })).toBeVisible();
+  await goalCard.getByRole('button', { name: 'Reopen', exact: true }).click();
+  const [cancelRunResponse] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/run') && response.url().includes('/api/personal-agent/goals/') && response.request().method() === 'POST'),
+    goalCard.getByRole('button', { name: 'Run now', exact: true }).click(),
+  ]);
+  expect(cancelRunResponse.ok()).toBeTruthy();
+  const cancelRun = await cancelRunResponse.json() as { room: Room };
+  await expect(page.getByTestId('personal-agent-conversation')).toBeVisible();
+  await expect.poll(async () => {
+    const response = await request.get(`${serverURL}/api/clients/${clientId}/rooms/${cancelRun.room.id}`, { headers: accountHeaders(clientId, token!) });
+    return (await response.json()).codeAgentStatus;
+  }).toBe('running');
+  await page.getByRole('button', { name: 'Back to your agent', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Goals', exact: true }).click();
+  await goalCard.getByRole('button', { name: 'Cancel work', exact: true }).click();
+  await expect(page.getByText('Cancellation requested; checking actual progress.', { exact: true })).toBeVisible();
+  await expect.poll(async () => {
+    const response = await request.get(`${serverURL}/api/personal-agent`, { headers: accountHeaders(clientId, token!) });
+    return (await response.json()).goals.find((item: { lastRunRoomId: string }) => item.lastRunRoomId === cancelRun.room.id)?.lastRun?.status;
+  }).toBe('cancelled');
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(goalCard).toContainText('Latest run: Stopped');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/roomtalk-personal-goal-tools-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.getByRole('button', { name: 'Memory', exact: true }).click();
   await page.getByTestId('personal-memory-entry').getByRole('button', { name: 'Forget', exact: true }).click();
   await expect(page.getByTestId('personal-memory-entry')).toHaveCount(0);
@@ -260,7 +297,7 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   const agentResponse = await request.get(`${serverURL}/api/personal-agent`, { headers: { 'X-Client-Id': clientId, 'X-Client-Auth-Token': token! } });
   expect(agentResponse.ok()).toBeTruthy();
   const snapshot = await agentResponse.json();
-  expect(snapshot.rooms).toHaveLength(4);
+  expect(snapshot.rooms).toHaveLength(5);
   expect(snapshot.goals[0].lastRunRoomId).toBeTruthy();
   expect(snapshot.rooms.every((room: { personalAgentOwnerId: string; codeAgentBackend: string }) => room.personalAgentOwnerId === clientId && room.codeAgentBackend === 'codex-app-server' && (room as Room).codeAgentMode === 'fullAccess')).toBe(true);
 

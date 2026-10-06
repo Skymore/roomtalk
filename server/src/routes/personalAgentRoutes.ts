@@ -10,6 +10,7 @@ export interface PersonalAgentRouteOptions {
   logger: Logger;
   getClientId: (req: Request) => string | null;
   authorizeClientRequest: (req: Request, res: Response, clientId: string, endpoint: string) => Promise<boolean>;
+  cancelGoal?: (goal: PersonalAgentGoal, expectedUpdatedAt?: string) => Promise<PersonalAgentGoal>;
   startGoal?: (goal: PersonalAgentGoal) => Promise<{ room: Room } | { roomId: string }>;
 }
 
@@ -98,9 +99,22 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     return res.json({ goal: await savePersonalAgentGoal(store, profile.clientId, req.body || {}, existing) });
   }));
 
+  app.post('/api/personal-agent/goals/:id/cancel', withProfile(async (req, res, profile) => {
+    const goal = (await store.readPersonalAgentGoals!(profile.clientId)).find(item => item.id === req.params.id);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    if (!options.cancelGoal) return res.status(503).json({ error: 'Personal agent cancellation is unavailable' });
+    return res.json({ goal: await options.cancelGoal(goal, req.body?.expectedUpdatedAt), cancellationRequested: true });
+  }));
+
   app.delete('/api/personal-agent/goals/:id', withProfile(async (req, res, profile) => {
-    const deleted = await store.deletePersonalAgentGoal!(profile.clientId, req.params.id);
-    return deleted ? res.json({ success: true }) : res.status(404).json({ error: 'Goal not found' });
+    const goal = (await store.readPersonalAgentGoals!(profile.clientId)).find(item => item.id === req.params.id);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    if (req.body?.expectedUpdatedAt !== undefined && req.body.expectedUpdatedAt !== goal.updatedAt) {
+      throw new PersonalAgentGoalConflictError('Goal changed. Refresh before deleting.');
+    }
+    const paused = options.cancelGoal ? await options.cancelGoal(goal, goal.updatedAt) : goal;
+    if (!await store.deletePersonalAgentGoal!(profile.clientId, goal.id, paused.updatedAt)) throw new PersonalAgentGoalConflictError('Goal changed before deletion. Refresh and try again.');
+    return res.json({ success: true });
   }));
 
   app.post('/api/personal-agent/goals/:id/run', withProfile(async (req, res, profile) => {

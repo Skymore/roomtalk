@@ -135,7 +135,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
               ? previous.rooms.map(item => item.id === room.id ? room : item) : [...previous.rooms, room],
           } : previous)} showSuccess={showSuccess} showError={showError} />}
 
-        {tab === 'goals' && <PersonalAgentGoals clientId={clientId} goals={snapshot.goals} isConnected={isConnected}
+        {tab === 'goals' && <PersonalAgentGoals clientId={clientId} goals={snapshot.goals} rooms={rooms} isConnected={isConnected}
           onRoomSelect={onRoomSelect} onGoalsChange={goals => setSnapshot(previous => previous ? { ...previous, goals } : previous)}
           showSuccess={showSuccess} showError={showError} />}
 

@@ -41,6 +41,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "goal":
+            if args.goal_command != "list":
+                _require_write_access(env)
+            result = _personal_goal(args, env)
         elif args.command == "memory":
             if args.memory_command in ("set", "save", "forget"):
                 _require_write_access(env)
@@ -143,6 +147,24 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_forget.add_argument("--expected-updated-at", required=True)
     memory_forget.add_argument("--json", action="store_true")
 
+    goal = subparsers.add_parser("goal", help="Manage personal goals and durable background work.")
+    goal_commands = goal.add_subparsers(dest="goal_command", required=True)
+    goal_list = goal_commands.add_parser("list", help="Read goals, milestones, schedule and actual latest run status.")
+    goal_list.add_argument("--id")
+    goal_list.add_argument("--limit", type=int, default=20)
+    goal_list.add_argument("--offset", type=int, default=0)
+    goal_list.add_argument("--json", action="store_true")
+    for action in ("create", "update"):
+        command = goal_commands.add_parser(action)
+        command.add_argument("--file", required=True, help="JSON goal fields; update requires id and expectedUpdatedAt.")
+        command.add_argument("--json", action="store_true")
+    for action in ("run", "pause", "resume", "cancel", "delete"):
+        command = goal_commands.add_parser(action)
+        command.add_argument("--id", required=True)
+        if action != "run":
+            command.add_argument("--expected-updated-at", required=True)
+        command.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -174,6 +196,25 @@ def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[st
         raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
 
     return _read_room_context_path(path, env)
+
+
+def _personal_goal(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.goal_command == "list":
+        query = {"limit": args.limit, "offset": args.offset}
+        if args.id:
+            query["id"] = args.id
+        result = _read_room_context_path(f"/personal-goals?{urllib_parse.urlencode(query)}", env)
+    else:
+        if args.goal_command in ("create", "update"):
+            payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise RunnerError("Goal file must contain a JSON object", code="personal_goal_invalid")
+        else:
+            payload = {"id": args.id}
+            if args.goal_command != "run":
+                payload["expectedUpdatedAt"] = args.expected_updated_at
+        result = _read_room_context_path("/personal-goals", env, method="PATCH", body={**payload, "action": args.goal_command})
+    return {**result, "tool": "PersonalGoal"}
 
 
 def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:

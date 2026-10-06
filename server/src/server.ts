@@ -20,6 +20,8 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
 import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContextRoutes';
+import { cancelPersonalAgentGoal } from './services/personalAgentGoals';
+import { registerPersonalAgentGoalContextRoutes } from './routes/personalAgentGoalContextRoutes';
 import { registerPersonalAgentContextRoutes } from './routes/personalAgentContextRoutes';
 import { PersonalAgentScheduler } from './services/personalAgentScheduler';
 import { notifyPersonalAgentCompletion } from './services/pushNotifications';
@@ -897,6 +899,10 @@ registerApiRoutes(app, {
   codeAgentAvailableBackends,
   codeAgentDefaultBackend: codeAgentRuntimeConfig.backend,
   personalAgentStartGoal: goal => personalAgentScheduler.startGoal(goal),
+  personalAgentCancelGoal: (goal, expectedUpdatedAt) => cancelPersonalAgentGoal(store, goal, {
+    interruptTurn: (roomId, clientId, reason) => codeAgentSessionService.interruptTurn(roomId, clientId, reason),
+    cancelQueuedTurn: (roomId, clientId, messageId) => codeAgentSessionService.cancelQueuedTurn(roomId, clientId, messageId),
+  }, expectedUpdatedAt),
   codexConnections: {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,
@@ -929,6 +935,15 @@ registerPersonalAgentContextRoutes(app, {
   store,
   roomContext: codeAgentRoomContextService,
   logger: codeAgentLogger,
+});
+
+registerPersonalAgentGoalContextRoutes(app, {
+  store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
+  execution: {
+    startGoal: goal => personalAgentScheduler.startGoal(goal),
+    interruptTurn: (roomId, clientId, reason) => codeAgentSessionService.interruptTurn(roomId, clientId, reason),
+    cancelQueuedTurn: (roomId, clientId, messageId) => codeAgentSessionService.cancelQueuedTurn(roomId, clientId, messageId),
+  },
 });
 
 if (codexConnectionService) {

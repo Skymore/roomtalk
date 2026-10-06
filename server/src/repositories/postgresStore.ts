@@ -544,6 +544,13 @@ const mapPersonalAgentGoal = (row: Record<string, any>): PersonalAgentGoal => ({
   time: row.time,
   timezone: row.timezone,
   enabled: row.enabled,
+  milestones: parseJsonValue<PersonalAgentGoal['milestones']>(row.milestones) || [],
+  ...(row.completed_at ? { completedAt: toIsoString(row.completed_at) } : {}),
+  ...(row.run_status ? { lastRun: { status: row.run_status,
+    ...(row.run_completed_at ? { completedAt: toIsoString(row.run_completed_at) } : {}),
+    ...(row.run_final_message_id ? { finalMessageId: row.run_final_message_id } : {}),
+    ...(row.run_phase_message ? { phaseMessage: row.run_phase_message } : {}),
+  } } : {}),
   ...(row.weekday !== null && row.weekday !== undefined ? { weekday: Number(row.weekday) } : {}),
   ...(row.run_at ? { runAt: toIsoString(row.run_at) } : {}),
   ...(row.last_run_at ? { lastRunAt: toIsoString(row.last_run_at) } : {}),
@@ -1286,7 +1293,19 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async readPersonalAgentGoals(clientId: string): Promise<PersonalAgentGoal[]> {
-    const result = await this.pool.query('SELECT * FROM personal_agent_goals WHERE client_id = $1 ORDER BY created_at DESC', [clientId]);
+    const result = await this.pool.query(`SELECT goal.*,
+        CASE WHEN room.id IS NULL THEN NULL WHEN turn.status = 'running' OR EXISTS (SELECT 1 FROM code_agent_room_leases WHERE room_id = room.id AND expires_at > clock_timestamp()) THEN 'running'
+          WHEN queued.state IS NOT NULL THEN 'queued' ELSE COALESCE(turn.status, 'not_running') END AS run_status,
+        turn.completed_at AS run_completed_at, turn.final_message_id AS run_final_message_id,
+        turn.phase_message AS run_phase_message
+      FROM personal_agent_goals AS goal
+      LEFT JOIN rooms AS room ON room.id = goal.last_run_room_id AND room.personal_agent_owner_id = goal.client_id
+      LEFT JOIN LATERAL (SELECT status, completed_at, final_message_id, phase_message FROM room_agent_turns
+        WHERE room_id = room.id ORDER BY started_at DESC, id DESC LIMIT 1) AS turn ON TRUE
+      LEFT JOIN LATERAL (SELECT code_agent_queued_input->>'state' AS state FROM room_messages
+        WHERE room_id = room.id AND code_agent_queued_input->>'state' IN ('queued', 'starting', 'steering')
+        ORDER BY position DESC LIMIT 1) AS queued ON TRUE
+      WHERE goal.client_id = $1 ORDER BY goal.created_at DESC`, [clientId]);
     return result.rows.map(mapPersonalAgentGoal);
   }
 
@@ -1297,29 +1316,32 @@ export class PostgresStore implements DurableRoomStore {
       ? await this.pool.query(
         `UPDATE personal_agent_goals SET title = $3, prompt = $4, schedule = $5, time = $6,
           timezone = $7, enabled = $8, next_run_at = $9, weekday = $11, run_at = $12,
+          milestones = $13::jsonb, completed_at = $14,
           updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
         WHERE id = $1 AND client_id = $2 AND date_trunc('milliseconds', updated_at) = $10::timestamptz
         RETURNING *`,
-        [...values, expectedUpdatedAt, goal.weekday ?? null, goal.runAt ?? null],
+        [...values, expectedUpdatedAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null],
       )
       : await this.pool.query(
-        `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `INSERT INTO personal_agent_goals (id, client_id, title, prompt, schedule, time, timezone, enabled, next_run_at, created_at, weekday, run_at, milestones, completed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, prompt = EXCLUDED.prompt,
           schedule = EXCLUDED.schedule, time = EXCLUDED.time, timezone = EXCLUDED.timezone,
           enabled = EXCLUDED.enabled, next_run_at = EXCLUDED.next_run_at,
           weekday = EXCLUDED.weekday, run_at = EXCLUDED.run_at,
+          milestones = EXCLUDED.milestones, completed_at = EXCLUDED.completed_at,
           updated_at = GREATEST(clock_timestamp(), personal_agent_goals.updated_at + INTERVAL '1 millisecond')
         WHERE personal_agent_goals.client_id = EXCLUDED.client_id
         RETURNING *`,
-        [...values, goal.createdAt, goal.weekday ?? null, goal.runAt ?? null],
+        [...values, goal.createdAt, goal.weekday ?? null, goal.runAt ?? null, JSON.stringify(goal.milestones || []), goal.completedAt ?? null],
       );
     if (!result.rows[0]) throw new PersonalAgentGoalConflictError('This goal changed. Refresh and try again.');
     return mapPersonalAgentGoal(result.rows[0]);
   }
 
-  async deletePersonalAgentGoal(clientId: string, goalId: string): Promise<boolean> {
-    const result = await this.pool.query('DELETE FROM personal_agent_goals WHERE client_id = $1 AND id = $2', [clientId, goalId]);
+  async deletePersonalAgentGoal(clientId: string, goalId: string, expectedUpdatedAt?: string): Promise<boolean> {
+    const result = await this.pool.query(`DELETE FROM personal_agent_goals WHERE client_id = $1 AND id = $2
+      AND ($3::timestamptz IS NULL OR date_trunc('milliseconds', updated_at) = $3::timestamptz)`, [clientId, goalId, expectedUpdatedAt ?? null]);
     return Boolean(result.rowCount);
   }
 
@@ -1339,7 +1361,16 @@ export class PostgresStore implements DurableRoomStore {
       const existing = await client.query('SELECT * FROM personal_agent_goals WHERE id = $1 AND client_id = $2 FOR UPDATE', [input.goalId, input.clientId]);
       if (!existing.rows[0]) return null;
       const goal = mapPersonalAgentGoal(existing.rows[0]);
+      if (goal.completedAt) throw new PersonalAgentGoalConflictError('Reopen the completed goal before running it');
       if (input.expectedNextRunAt && (!goal.enabled || goal.nextRunAt !== input.expectedNextRunAt)) return null;
+      if (!input.expectedNextRunAt && goal.lastRunRoomId) {
+        const pending = await client.query<RoomRow>(`SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1
+          AND personal_agent_owner_id = $2 AND (
+            EXISTS (SELECT 1 FROM code_agent_room_leases WHERE room_id = rooms.id AND expires_at > clock_timestamp())
+            OR EXISTS (SELECT 1 FROM room_messages WHERE room_id = rooms.id AND code_agent_queued_input->>'state' IN ('queued', 'starting', 'steering'))
+          )`, [goal.lastRunRoomId, input.clientId]);
+        if (pending.rows[0]) return { goal, room: mapRoom(pending.rows[0]) };
+      }
       const room = await this.insertPersonalAgentRoom(client, { ...input.room, name: goal.title, personalAgentThreadKind: 'task', personalAgentGoalId: goal.id });
       await client.query(INSERT_MESSAGE_ROW_SQL, messageParams({ ...input.message, content: goal.prompt }, 0));
       const updated = await client.query(

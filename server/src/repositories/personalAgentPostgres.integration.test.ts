@@ -103,6 +103,38 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     assert.equal((await store.readPersonalAgentGoals(owner)).some(item => item.id === saved.id), false);
   });
 
+  it('persists milestone outcomes and derives queue and terminal status without completing the goal', async () => {
+    const profile = await store.ensurePersonalAgentProfile(owner);
+    const goal: PersonalAgentGoal = { id: randomUUID(), clientId: owner, title: 'Outcome', prompt: 'Prepare a plan',
+      schedule: 'manual', time: '09:00', timezone: 'UTC', enabled: true, createdAt: now, updatedAt: now,
+      milestones: [{ id: randomUUID(), title: 'Confirm evidence', done: false }] };
+    const saved = await store.savePersonalAgentGoal(goal);
+    const main = (await store.getRoomById(profile.mainRoomId))!;
+    const room = { ...main, id: randomUUID(), personalAgentThreadKind: 'task' as const };
+    const message = { id: randomUUID(), clientId: owner, roomId: room.id, content: goal.prompt, timestamp: now,
+      messageType: 'text' as const, codeAgentQueuedInput: { state: 'queued' as const, queuedAt: now, updatedAt: now, selectedModel: model } };
+    const admission = (await store.startPersonalAgentGoalRun({ clientId: owner, goalId: saved.id, room, message }))!;
+    assert.equal((await store.readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!.lastRun!.status, 'queued');
+    const otherRoom = { ...room, id: randomUUID() };
+    const repeated = await store.startPersonalAgentGoalRun({ clientId: owner, goalId: saved.id, room: otherRoom, message: { ...message, id: randomUUID(), roomId: otherRoom.id } });
+    assert.equal(repeated!.room.id, admission.room.id); assert.equal(await store.getRoomById(otherRoom.id), null);
+    await store.deleteCodeAgentQueuedMessage(room.id, message.id, 'queued');
+    const turnId = randomUUID();
+    await store.upsertRoomAgentTurn({ id: turnId, roomId: room.id, status: 'complete', startedAt: now, completedAt: now,
+      backend: 'codex-app-server', assistantName: 'Agent', updatedAt: now });
+    const current = (await new PostgresStore(pool, logger as any).readPersonalAgentGoals(owner)).find(item => item.id === goal.id)!;
+    assert.equal(current.lastRun!.status, 'complete'); assert.equal(current.completedAt, undefined);
+    assert.deepEqual(current.milestones, goal.milestones); assert.equal(current.enabled, true);
+    const done = await store.savePersonalAgentGoal({ ...current, enabled: false, nextRunAt: undefined, completedAt: now,
+      milestones: current.milestones!.map(item => ({ ...item, done: true })) }, current.updatedAt);
+    await assert.rejects(store.startPersonalAgentGoalRun({ clientId: owner, goalId: done.id, room: otherRoom, message: { ...message, roomId: otherRoom.id } }));
+    assert.equal(await store.deletePersonalAgentGoal(owner, done.id, saved.updatedAt), false);
+    assert.equal(await store.deletePersonalAgentGoal(owner, done.id, done.updatedAt), true);
+    assert.equal((await store.getRoomById(room.id))!.personalAgentGoalId, undefined);
+    const events = await store.readRoomEvents(room.id, { afterSeq: 0 });
+    assert.equal(events.events.filter(event => event.type === 'room.updated').at(-1)!.payload.room!.personalAgentGoalId, undefined);
+  });
+
   it('blocks another user from joining, reading and saving the private room', async () => {
     const profile = await store.ensurePersonalAgentProfile(owner);
     assert.equal(await store.addRoomMember(profile.mainRoomId, 'other', 'member'), null);

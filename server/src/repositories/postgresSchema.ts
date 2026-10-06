@@ -2729,4 +2729,17 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       );
     `,
   },
+  {
+    id: '0036_personal_agent_goal_progress',
+    sql: `
+      ALTER TABLE personal_agent_goals ADD COLUMN milestones JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE personal_agent_goals ADD COLUMN completed_at TIMESTAMPTZ;
+      ALTER TABLE personal_agent_goals ADD CONSTRAINT personal_agent_goals_completed_check
+        CHECK (completed_at IS NULL OR (enabled = FALSE AND next_run_at IS NULL));
+      CREATE TRIGGER rooms_personal_agent_goal_change_event
+        AFTER UPDATE ON rooms FOR EACH ROW
+        WHEN (NEW.personal_agent_goal_id IS DISTINCT FROM OLD.personal_agent_goal_id)
+        EXECUTE FUNCTION queue_active_room_change();
+    `,
+  },
 ];

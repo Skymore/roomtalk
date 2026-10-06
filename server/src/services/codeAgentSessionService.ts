@@ -905,7 +905,7 @@ export class CodeAgentSessionService {
         ]);
         const memories = [...new Map([...(preferences?.memories || []), ...(relevant?.memories || [])].map(memory => [memory.id, memory])).values()];
         runnerRequest.prompt = buildPersonalAgentPrompt(
-          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories,
+          profile, promptContext.prompt, Boolean(this.options.roomContext && codeAgentModeAllowsWriteTools(turnMode.mode)), memories, room!.personalAgentGoalId,
         );
         assertTurnWithinDeadline();
       }

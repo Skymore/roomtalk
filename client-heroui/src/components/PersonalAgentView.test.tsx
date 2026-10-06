@@ -7,7 +7,7 @@ import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 
 const api = vi.hoisted(() => ({
   getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
-  createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
+  cancelPersonalAgentGoal: vi.fn(), createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
   readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
 }));
 vi.mock('../utils/personalAgent', () => api);
@@ -16,6 +16,7 @@ vi.mock('react-i18next', () => { const t = (key: string) => key; return { useTra
 vi.mock('@iconify/react', () => ({ Icon: () => <span /> }));
 vi.mock('@heroui/react', () => ({
   Button: ({ children, onPress, isDisabled, type = 'button', ...props }: Record<string, any>) => <button type={type} disabled={isDisabled} onClick={onPress} aria-label={props['aria-label']}>{children}</button>,
+  Checkbox: ({ children, isSelected, isDisabled, onValueChange }: Record<string, any>) => <label><input type="checkbox" checked={isSelected} disabled={isDisabled} onChange={event => onValueChange(event.target.checked)} />{children}</label>,
   Chip: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   Spinner: ({ label }: { label: string }) => <span>{label}</span>,
   Input: ({ label, value, onValueChange, type, ...props }: Record<string, any>) => <label>{label}<input aria-label={label || props['aria-label']} value={value} type={type} onChange={event => onValueChange(event.target.value)} /></label>,
@@ -128,6 +129,22 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentRunNow' }));
     await waitFor(() => expect(callbacks.onRoomSelect).toHaveBeenCalledWith(snapshot.rooms[0]));
     expect(api.runPersonalAgentGoal).toHaveBeenCalledWith('client-1', 'goal-1');
+  });
+
+  it('tracks milestones independently from actual run state and requests cancellation', async () => {
+    const goal = { ...snapshot.goals[0], milestones: [{ id: 'm1', title: 'Read sources', done: false }], lastRun: { status: 'running' as const } };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, goals: [goal] });
+    api.updatePersonalAgentGoal.mockImplementation(async (_client: string, _id: string, update: object) => ({ goal: { ...goal, ...update } }));
+    api.cancelPersonalAgentGoal.mockResolvedValue({ goal: { ...goal, enabled: false }, cancellationRequested: true });
+    const callbacks = props(); render(<PersonalAgentView {...callbacks} />);
+    await screen.findByText('Muse'); fireEvent.click(screen.getByRole('button', { name: 'personalAgentGoals' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Read sources' }));
+    await waitFor(() => expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', goal.id, { milestones: [{ id: 'm1', title: 'Read sources', done: true }] }, goal.updatedAt));
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentCancelWork' }));
+    await waitFor(() => expect(api.cancelPersonalAgentGoal).toHaveBeenCalledWith('client-1', goal.id, goal.updatedAt));
+    expect(callbacks.showSuccess).toHaveBeenCalledWith('personalAgentCancellationRequested');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentCompleteGoal' }));
+    await waitFor(() => expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', goal.id, expect.objectContaining({ completed: true }), goal.updatedAt));
   });
 
   it('saves user memory and preferences without losing draft changes to refresh', async () => {

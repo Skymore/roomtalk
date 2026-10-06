@@ -167,3 +167,35 @@ def test_memory_extension_does_not_allow_other_broker_mutations(broker_request):
         assert response["code"] == "room_context_broker_operation_denied"
     finally:
         broker.close()
+
+
+def test_goal_cli_uses_private_broker_for_revisions_and_owner_scoped_status(tmp_path: Path, monkeypatch, capsys):
+    requests = []
+
+    def fake_fetch(url, token, *, method="GET", body=None):
+        requests.append((url, token, method, body))
+        return {"goals": [{"id": "g", "lastRun": {"status": "running"}}]} if method == "GET" else {"goal": {"id": "g"}}
+
+    monkeypatch.setattr(room_context_broker, "_fetch_room_context", fake_fetch)
+    env = {"ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+           "ROOMTALK_ROOM_CONTEXT_TOKEN": "private-goal-token", "ROOMTALK_ROOM_CONTEXT_BROKER_DIR": f"/tmp/rtb-{uuid.uuid4().hex[:8]}"}
+    broker = room_context_broker.start_room_context_broker(env, "goal-turn")
+    try:
+        monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_SOCKET", env["ROOMTALK_ROOM_CONTEXT_SOCKET"])
+        assert platform_tools.main(["goal", "list", "--id", "g", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["goals"][0]["lastRun"]["status"] == "running"
+        assert platform_tools.main(["goal", "cancel", "--id", "g", "--expected-updated-at", "2026-10-06T12:00:00Z", "--json"]) == 0
+        assert "private-goal-token" not in capsys.readouterr().out
+        assert requests[-1][2:] == ("PATCH", {"id": "g", "expectedUpdatedAt": "2026-10-06T12:00:00Z", "action": "cancel"})
+        assert platform_tools.main(["goal", "run", "--id", "g", "--json"]) == 0
+        capsys.readouterr()
+        source = tmp_path / "goal.json"
+        source.write_text(json.dumps({"title": "Review", "prompt": "Review it", "milestones": ["Read", "Summarize"]}))
+        assert platform_tools.main(["goal", "create", "--file", str(source), "--json"]) == 0
+        capsys.readouterr()
+        assert requests[-1][3]["milestones"] == ["Read", "Summarize"]
+        monkeypatch.setenv("ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only")
+        assert platform_tools.main(["goal", "delete", "--id", "g", "--expected-updated-at", "2026-10-06T12:00:00Z", "--json"]) == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "roomtalk_cli_read_only"
+    finally:
+        broker.close()

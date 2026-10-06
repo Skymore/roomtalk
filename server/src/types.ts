@@ -268,6 +268,10 @@ export interface PersonalAgentGoal {
   weekday?: number;
   runAt?: string;
   enabled: boolean;
+  milestones?: { id: string; title: string; done: boolean }[];
+  completedAt?: string;
+  lastRun?: { status: 'queued' | 'running' | 'complete' | 'error' | 'cancelled' | 'not_running';
+    completedAt?: string; finalMessageId?: string; phaseMessage?: string };
   lastRunAt?: string;
   nextRunAt?: string;
   lastRunRoomId?: string;

@@ -25,6 +25,10 @@ export interface PersonalAgentGoal {
   weekday?: number;
   runAt?: string;
   enabled: boolean;
+  milestones?: { id: string; title: string; done: boolean }[];
+  completedAt?: string;
+  lastRun?: { status: 'queued' | 'running' | 'complete' | 'error' | 'cancelled' | 'not_running';
+    completedAt?: string; finalMessageId?: string; phaseMessage?: string };
   lastRunAt?: string;
   lastRunRoomId?: string;
   nextRunAt?: string;
@@ -38,7 +42,7 @@ export interface PersonalAgentSnapshot {
   goals: PersonalAgentGoal[];
 }
 
-export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt'>;
+export type PersonalAgentGoalInput = Pick<PersonalAgentGoal, 'title' | 'prompt' | 'schedule' | 'time' | 'timezone' | 'weekday' | 'runAt' | 'milestones'>;
 
 const request = async <T>(clientId: string, path: string, method = 'GET', data?: Record<string, unknown>): Promise<T> => {
   const token = localStorage.getItem('clientAuthToken')?.trim();
@@ -75,11 +79,13 @@ export const createPersonalAgentGoal = (clientId: string, goal: PersonalAgentGoa
 export const updatePersonalAgentGoal = (
   clientId: string,
   id: string,
-  goal: Partial<PersonalAgentGoalInput> & { enabled?: boolean },
+  goal: Partial<PersonalAgentGoalInput> & { enabled?: boolean; completed?: boolean },
   expectedUpdatedAt?: string,
 ) => request<{ goal: PersonalAgentGoal }>(clientId, `/goals/${encodeURIComponent(id)}`, 'PATCH', { ...goal, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 
-export const deletePersonalAgentGoal = (clientId: string, id: string) => request<{ success: true }>(clientId, `/goals/${encodeURIComponent(id)}`, 'DELETE');
+export const deletePersonalAgentGoal = (clientId: string, id: string, expectedUpdatedAt?: string) => request<{ success: true }>(clientId, `/goals/${encodeURIComponent(id)}`, 'DELETE', { expectedUpdatedAt });
+
+export const cancelPersonalAgentGoal = (clientId: string, id: string, expectedUpdatedAt: string) => request<{ goal: PersonalAgentGoal; cancellationRequested: true }>(clientId, `/goals/${encodeURIComponent(id)}/cancel`, 'POST', { expectedUpdatedAt });
 
 export const runPersonalAgentGoal = (clientId: string, id: string) => request<{ room: Room }>(clientId, `/goals/${encodeURIComponent(id)}/run`, 'POST');
 
