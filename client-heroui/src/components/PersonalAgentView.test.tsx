@@ -6,6 +6,7 @@ import { PersonalAgentView } from './PersonalAgentView';
 import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 
 const api = vi.hoisted(() => ({
+  readPersonalAgentNotifications: vi.fn(), markPersonalAgentNotificationRead: vi.fn(), readPersonalAgentWatches: vi.fn(), createPersonalAgentWatch: vi.fn(), controlPersonalAgentWatch: vi.fn(), removePersonalAgentWatch: vi.fn(),
   readPersonalAgentIdeas: vi.fn(), refreshPersonalAgentIdeas: vi.fn(), acceptPersonalAgentIdea: vi.fn(), dismissPersonalAgentIdea: vi.fn(),
   getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
   cancelPersonalAgentGoal: vi.fn(), createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
@@ -44,6 +45,8 @@ describe('PersonalAgentView', () => {
     vi.clearAllMocks();
     localStorage.clear();
     api.getPersonalAgent.mockResolvedValue(snapshot);
+    api.readPersonalAgentNotifications.mockResolvedValue({ notifications: [], total: 0, unread: 0 });
+    api.readPersonalAgentWatches.mockResolvedValue({ watches: [], total: 0 });
     api.readPersonalAgentMemories.mockResolvedValue({ memories: [], total: 0 });
     api.getCodexConnectionStatus.mockResolvedValue({ status: 'connected' });
   });
@@ -52,6 +55,50 @@ describe('PersonalAgentView', () => {
   const suggestion = (id: string) => ({ id, title: `Suggestion ${id}`, reason: 'A saved decision needs a next step', prompt: 'Read the saved topic',
     source: { kind: 'memory' as const, id: `note-${id}`, title: 'Actual topic', excerpt: 'Confirmed source text', recordedAt: snapshot.profile.updatedAt },
     automatic: false, status: 'new' as const, createdAt: snapshot.profile.createdAt, updatedAt: snapshot.profile.updatedAt });
+
+  it('preserves a failed tracking draft and controls the saved watch with its current revision', async () => {
+    const callbacks = props();
+    const watch = { id: 'watch', roomId: 'watch-room', title: 'Availability', url: 'https://example.org/stock', condition: 'change', value: '',
+      intervalMinutes: 30, status: 'active', updatedAt: snapshot.profile.updatedAt };
+    api.createPersonalAgentWatch.mockRejectedValueOnce(new Error('Try again'));
+    render(<PersonalAgentView {...callbacks} />); await screen.findByText('Muse');
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentTracking' }));
+    fireEvent.click(screen.getByRole('button', { name: 'personalWatchAdd' }));
+    fireEvent.change(screen.getByLabelText('personalWatchTitle'), { target: { value: watch.title } });
+    fireEvent.change(screen.getByLabelText('personalWatchURL'), { target: { value: watch.url } });
+    fireEvent.click(screen.getByRole('button', { name: 'personalWatchStart' }));
+    await waitFor(() => expect(callbacks.showError).toHaveBeenCalledWith('Try again'));
+    expect((screen.getByLabelText('personalWatchURL') as HTMLInputElement).value).toBe(watch.url);
+    api.createPersonalAgentWatch.mockResolvedValue({ watch });
+    api.readPersonalAgentWatches.mockResolvedValue({ watches: [watch], total: 1 });
+    fireEvent.click(screen.getByRole('button', { name: 'personalWatchStart' }));
+    await screen.findByTestId('personal-watch-card');
+    api.controlPersonalAgentWatch.mockResolvedValue({ watch: { ...watch, status: 'paused', updatedAt: '2026-10-06T12:00:00Z' } });
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentPause' }));
+    await screen.findByRole('button', { name: 'personalAgentResume' });
+    expect(api.controlPersonalAgentWatch).toHaveBeenLastCalledWith('client-1', watch, 'pause');
+    expect((screen.getByRole('button', { name: 'personalWatchCheckNow' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('retains failed notification dismissal and saves display/push preferences', async () => {
+    const callbacks = props();
+    const notice = { id: 'notice', roomId: 'main-1', title: 'Completed', body: 'Actual finished response', kind: 'task_complete', createdAt: snapshot.profile.createdAt };
+    api.readPersonalAgentNotifications.mockResolvedValue({ notifications: [notice], total: 1, unread: 1 });
+    api.markPersonalAgentNotificationRead.mockRejectedValueOnce(new Error('Read failed'));
+    render(<PersonalAgentView {...callbacks} />); await screen.findByText('Actual finished response');
+    fireEvent.click(screen.getByRole('button', { name: 'personalUpdateDismiss' }));
+    await waitFor(() => expect(callbacks.showError).toHaveBeenCalledWith('Read failed'));
+    expect(screen.getByTestId('personal-update-card')).toBeTruthy();
+    api.markPersonalAgentNotificationRead.mockResolvedValue({ notification: { ...notice, readAt: snapshot.profile.updatedAt } });
+    fireEvent.click(screen.getByRole('button', { name: 'personalUpdateDismiss' }));
+    await waitFor(() => expect(screen.queryByTestId('personal-update-card')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentMemory' }));
+    fireEvent.click(screen.getByLabelText('personalShowUpdates'));
+    fireEvent.click(screen.getByLabelText('personalPushUpdates'));
+    api.updatePersonalAgentProfile.mockResolvedValue({ profile: { ...snapshot.profile, showUpdates: false, pushEnabled: false } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    await waitFor(() => expect(api.updatePersonalAgentProfile).toHaveBeenCalledWith('client-1', expect.objectContaining({ showUpdates: false, pushEnabled: false }), snapshot.profile.updatedAt));
+  });
 
   it('keeps failed edits and only opens a task after acceptance succeeds', async () => {
     const idea = suggestion('one'), callbacks = props();

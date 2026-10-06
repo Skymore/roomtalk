@@ -1,9 +1,11 @@
 import React from 'react';
+import { PersonalAgentTracking } from './PersonalAgentTracking';
+import { PersonalAgentUpdates } from './PersonalAgentUpdates';
 import { PersonalAgentIdeas } from './PersonalAgentIdeas';
 import { PersonalAgentMemory } from './PersonalAgentMemory';
 import { PersonalAgentGoals } from './PersonalAgentGoals';
 import { PersonalAgentChats } from './PersonalAgentChats';
-import { Button, Input, Spinner, Textarea } from '@heroui/react';
+import { Button, Checkbox, Input, Spinner, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { getCodexConnectionStatus, type CodexConnectionStatus } from '../utils/codexConnection';
@@ -25,11 +27,12 @@ interface PersonalAgentViewProps {
   showError: (message: string) => void;
 }
 
-type AgentTab = 'chats' | 'ideas' | 'goals' | 'activity' | 'memory';
+type AgentTab = 'chats' | 'ideas' | 'tracking' | 'goals' | 'activity' | 'memory';
 interface AgentAction { (): Promise<void> }
 const tabs: { key: AgentTab; icon: string; label: string }[] = [
   { key: 'chats', icon: 'lucide:message-circle', label: 'personalAgentChats' },
   { key: 'ideas', icon: 'lucide:lightbulb', label: 'personalAgentIdeas' },
+  { key: 'tracking', icon: 'lucide:radar', label: 'personalAgentTracking' },
   { key: 'goals', icon: 'lucide:target', label: 'personalAgentGoals' },
   { key: 'activity', icon: 'lucide:activity', label: 'personalAgentActivity' },
   { key: 'memory', icon: 'lucide:brain', label: 'personalAgentMemory' },
@@ -49,7 +52,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   const [isLoading, setIsLoading] = React.useState(true);
   const [requiresSignIn, setRequiresSignIn] = React.useState(false);
   const [isBusy, setIsBusy] = React.useState(false);
-  const [tab, setTab] = React.useState<AgentTab>('chats');
+  const [tab, setTab] = React.useState<AgentTab>(() => new URLSearchParams(window.location.search).get('tab') === 'activity' ? 'activity' : 'chats');
   const profileDirty = React.useRef(false);
 
   const refresh = React.useCallback(async () => {
@@ -131,6 +134,9 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           {tabs.map(item => <Button key={item.key} size="sm" variant={tab === item.key ? 'flat' : 'light'} color={tab === item.key ? 'secondary' : 'default'} onPress={() => setTab(item.key)} aria-current={tab === item.key ? 'page' : undefined} startContent={<Icon icon={item.icon} className="h-4 w-4" />}>{t(item.label)}</Button>)}
         </nav>
 
+        {tab !== 'activity' && <PersonalAgentUpdates key={`${clientId}:banner`} clientId={clientId} rooms={rooms} mode="banner" enabled={snapshot.profile.showUpdates !== false}
+          onRoomSelect={onRoomSelect} onOpenUpdates={() => setTab('activity')} showError={showError} />}
+        {tab === 'tracking' && <PersonalAgentTracking key={clientId} clientId={clientId} showError={showError} showSuccess={showSuccess} />}
         {tab === 'chats' && <PersonalAgentChats clientId={clientId} rooms={rooms} mainRoom={mainRoom}
           onRoomSelect={onRoomSelect} onRoomUpdated={room => setSnapshot(previous => previous ? {
             ...previous, rooms: previous.rooms.some(item => item.id === room.id)
@@ -147,13 +153,13 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           onRoomSelect={onRoomSelect} onGoalsChange={goals => setSnapshot(previous => previous ? { ...previous, goals } : previous)}
           showSuccess={showSuccess} showError={showError} />}
 
-        {tab === 'activity' && <section className={`${panelClass} divide-y divide-[#dedbd0] dark:divide-[#30302e]`} aria-label={t('personalAgentActivity')}>
-          {rooms.map(room => <button key={room.id} type="button" className="flex w-full items-center gap-3 p-4 text-left hover:bg-[#f0eee6] dark:hover:bg-[#242422]" onClick={() => onRoomSelect(room)}>
+        {tab === 'activity' && <><PersonalAgentUpdates key={`${clientId}:updates`} clientId={clientId} rooms={rooms} mode="list" enabled onRoomSelect={onRoomSelect} onOpenUpdates={() => setTab('activity')} showError={showError} /><section className={`${panelClass} divide-y divide-[#dedbd0] dark:divide-[#30302e]`} aria-label={t('personalAgentActivity')}>
+          {rooms.filter(room => room.personalAgentThreadKind !== 'watch').map(room => <button key={room.id} type="button" className="flex w-full items-center gap-3 p-4 text-left hover:bg-[#f0eee6] dark:hover:bg-[#242422]" onClick={() => onRoomSelect(room)}>
             <Icon icon={room.codeAgentStatus === 'running' ? 'lucide:loader-circle' : room.codeAgentStatus === 'error' ? 'lucide:circle-alert' : 'lucide:message-circle'} className={`h-5 w-5 shrink-0 text-secondary ${room.codeAgentStatus === 'running' ? 'animate-spin' : ''}`} />
             <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{room.name}</span><span className={`mt-1 block text-xs ${mutedClass}`}>{t(roomStatusKey(room))}</span></span>
             <span className={`text-right text-xs ${mutedClass}`}>{formatDate(getRoomActivityAt(room), i18n.language)}</span>
           </button>)}
-        </section>}
+        </section></>}
 
         {tab === 'memory' && <><PersonalAgentMemory clientId={clientId} rooms={rooms} onRoomSelect={onRoomSelect} showError={showError} showSuccess={showSuccess} /><form className={`${panelClass} space-y-5 p-5 sm:p-6`} onSubmit={event => { event.preventDefault(); void mutate(async () => {
           const { profile } = await updatePersonalAgentProfile(clientId, profileDraft, profileDraft.updatedAt);
@@ -169,6 +175,11 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
           </div>
           <Textarea label={t('personalAgentInstructions')} description={t('personalAgentInstructionsDescription')} value={profileDraft.instructions} minRows={4} maxLength={8000} onValueChange={instructions => editProfile({ instructions })} />
           <Textarea label={t('personalAgentAboutYou')} description={t('personalAgentMemoryFieldDescription')} value={profileDraft.memory} minRows={6} maxLength={16000} onValueChange={memory => editProfile({ memory })} />
+          <div className="space-y-3">
+            <Checkbox isSelected={profileDraft.showUpdates !== false} onValueChange={showUpdates => editProfile({ showUpdates })}>{t('personalShowUpdates')}</Checkbox>
+            <Checkbox isSelected={profileDraft.pushEnabled !== false} onValueChange={pushEnabled => editProfile({ pushEnabled })}>{t('personalPushUpdates')}</Checkbox>
+            <p className="text-xs text-default-500">{t('personalNotificationPreferencesHint')}</p>
+          </div>
           <Button type="submit" color="secondary" isLoading={isBusy} isDisabled={!profileDraft.name.trim() || !profileDraft.avatar.trim()}>{t('save')}</Button>
         </form></>}
       </div>

@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { Logger } from '../logger';
-import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomEvent, RoomEventPage, RoomEventType, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot, RoomType } from '../types';
 import { getAIStreamFence, getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { AccountAIUsageInput, AccountAIUsageSettlement, AccountCreditGrantInput, AccountMembershipChangeInput, AccountRole, ActiveTaskDispatchQueryOptions, AIStreamClaimResult, AIStreamOwnership, AITerminalTransitionResult, AssistantRunClaim, AssistantRunClaimOptions, AssistantRunClaimToken, AssistantRunProjectionResult, AssistantRunRecord, AssistantRunTerminalPayloadV1, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, ClientPresenceEventInput, CodeAgentCheckpointBoundary, CodeAgentCheckpointRestoreCommitInput, CodeAgentCheckpointRestoreCommitResult, CodeAgentCheckpointRestorePlan, CodeAgentCheckpointRestoreStep, CodeAgentMessageMutationResult, CodeAgentQueueMessageUpdate, CodeAgentRoomLease, CodeAgentTurnClaim, CodeAgentTurnStartInput, CodeAgentTurnStartResult, CodeAgentTurnTerminalInput, CodeAgentTurnTerminalResult, CodeAgentWorkspaceCheckpointRecord, CodeAgentWorkspaceRevisionRecord, CreateGoogleAccountInput, CreatePasswordAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DisconnectGoogleAccountInput, DisconnectGoogleAccountResult, DurableRoomStore, GoogleAccountProfile, GrantAccountRoleInput, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, MessageUpdateResult, OutboxClaimOptions, OutboxClaimToken, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomAIUsageInput, RoomAIUsageSettlement, RoomEventCursorAheadError, RoomEventCursorExpiredError, RoomEventPageOptions, RoomEventPayloadInvalidError, RoomEventRetentionOptions, RoomEventTooLargeError, RoomMessagePageOptions, RoomPaginationBoundaryExpiredError, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput, SetPasswordAccountCredentialsInput, TaskDispatchClaimOptions, TaskDispatchClaimToken, TaskDispatchMetrics, TaskDispatchRecord, UpdateAccountMembershipInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -526,6 +526,7 @@ const mapPersonalAgentProfile = (row: Record<string, any>): PersonalAgentProfile
   instructions: row.instructions,
   memory: row.memory,
   mainRoomId: row.main_room_id || '',
+  showUpdates: row.show_updates, pushEnabled: row.push_enabled,
   createdAt: toIsoString(row.created_at),
   updatedAt: toIsoString(row.updated_at),
 });
@@ -1202,6 +1203,120 @@ export class PostgresStore implements DurableRoomStore {
     private readonly mediaObjectStorage?: MediaObjectStorage
   ) {}
 
+  private mapPersonalWatch(row: Record<string, any>): PersonalAgentWatch {
+    return { id: row.id, clientId: row.client_id, roomId: row.room_id, title: row.title, url: row.url,
+      condition: row.condition, value: row.value, intervalMinutes: row.interval_minutes, status: row.status,
+      epoch: row.epoch, checks: row.checks, failures: row.failures, failureStreak: row.failure_streak, matched: row.matched,
+      ...(row.next_check_at ? { nextCheckAt: toIsoString(row.next_check_at) } : {}),
+      ...(row.last_checked_at ? { lastCheckedAt: toIsoString(row.last_checked_at) } : {}),
+      ...(row.last_url ? { lastUrl: row.last_url, lastTitle: row.last_title, lastText: row.last_text } : {}),
+      ...(row.error ? { error: row.error } : {}), createdAt: toIsoString(row.created_at), updatedAt: toIsoString(row.updated_at) };
+  }
+  private mapPersonalNotification(row: Record<string, any>): PersonalAgentNotification {
+    return { id: row.id, clientId: row.client_id, eventKey: row.event_key, kind: row.kind, title: row.title, body: row.body,
+      ...(row.room_id ? { roomId: row.room_id } : {}), ...(row.watch_id ? { watchId: row.watch_id } : {}),
+      ...(row.source ? { source: typeof row.source === 'string' ? JSON.parse(row.source) : row.source } : {}),
+      ...(row.read_at ? { readAt: toIsoString(row.read_at) } : {}), createdAt: toIsoString(row.created_at) };
+  }
+  async createPersonalAgentWatch(watch: PersonalAgentWatch, room: Room, claim?: {roomId: string;turnId: string}): Promise<PersonalAgentWatch> {
+    if (room.id !== watch.roomId || room.creatorId !== watch.clientId || room.personalAgentOwnerId !== watch.clientId || room.personalAgentThreadKind !== 'watch') throw new RangeError('Invalid watch room');
+    return this.transaction(async client => {
+      if (claim) {
+        const active=await client.query(`SELECT room.id FROM rooms room WHERE room.id=$1 AND room.creator_id=$2 AND room.personal_agent_owner_id=$2
+          AND EXISTS (SELECT 1 FROM code_agent_room_leases lease WHERE lease.room_id=room.id AND lease.turn_id=$3 AND lease.expires_at>clock_timestamp()) FOR SHARE`,[claim.roomId,watch.clientId,claim.turnId]);
+        if(!active.rows[0])throw new RangeError('This agent turn ended before the watch was saved');
+      }
+      // The deferred room FK lets the unique watch admit its private room once.
+      const inserted = await client.query(`INSERT INTO personal_agent_watches(id,client_id,room_id,title,url,condition,value,interval_minutes,next_check_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(client_id,url,condition,value) DO NOTHING RETURNING *`,
+        [watch.id,watch.clientId,watch.roomId,watch.title,watch.url,watch.condition,watch.value,watch.intervalMinutes,watch.nextCheckAt]);
+      if (inserted.rows[0]) { await this.insertPersonalAgentRoom(client, room); return this.mapPersonalWatch(inserted.rows[0]); }
+      const existing = await client.query('SELECT * FROM personal_agent_watches WHERE client_id=$1 AND url=$2 AND condition=$3 AND value=$4', [watch.clientId,watch.url,watch.condition,watch.value]);
+      return this.mapPersonalWatch(existing.rows[0]);
+    });
+  }
+  async readPersonalAgentWatches(clientId: string, options: { id?: string; limit?: number; offset?: number } = {}) {
+    const where='client_id=$1 AND ($2::text IS NULL OR id=$2)', params=[clientId,options.id ?? null];
+    const [rows,count] = await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_watches WHERE ${where} ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, [...params,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total FROM personal_agent_watches WHERE ${where}`,params),
+    ]);
+    return { watches: rows.rows.map(row => this.mapPersonalWatch(row)), total: Number(count.rows[0].total) };
+  }
+  async readDuePersonalAgentWatches(limit: number) {
+    const rows=await this.pool.query(`SELECT watch.* FROM personal_agent_watches watch WHERE status='active' AND next_check_at <= clock_timestamp()
+      AND NOT EXISTS (SELECT 1 FROM code_agent_room_leases lease WHERE lease.room_id=watch.room_id AND lease.expires_at>clock_timestamp())
+      ORDER BY next_check_at,id LIMIT $1`,[limit]);
+    return rows.rows.map(row => this.mapPersonalWatch(row));
+  }
+  async controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string) {
+    const rows=await this.pool.query(`UPDATE personal_agent_watches SET
+      status=CASE WHEN $3='pause' THEN 'paused' WHEN $3='resume' THEN 'active' ELSE status END,
+      next_check_at=CASE WHEN $3='pause' THEN NULL ELSE clock_timestamp() END,
+      failures=CASE WHEN $3='resume' THEN 0 ELSE failures END,error=CASE WHEN $3='resume' THEN NULL ELSE error END,
+      epoch=epoch+1,updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond')
+      WHERE client_id=$1 AND id=$2 AND date_trunc('milliseconds',updated_at)=$4::timestamptz
+        AND ($3<>'check' OR status='active') RETURNING *`,[clientId,id,action,expectedUpdatedAt]);
+    return rows.rows[0] ? this.mapPersonalWatch(rows.rows[0]) : null;
+  }
+  private async insertPersonalNotification(query: PostgresQueryable, notice: PersonalAgentNotification) {
+    const inserted=await query.query(`INSERT INTO personal_agent_notifications(id,client_id,event_key,kind,title,body,room_id,watch_id,source)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT(client_id,event_key) DO NOTHING RETURNING *`,
+      [notice.id,notice.clientId,notice.eventKey,notice.kind,notice.title,notice.body,notice.roomId ?? null,notice.watchId ?? null,notice.source ? JSON.stringify(notice.source) : null]);
+    if (inserted.rows[0]) return { notification:this.mapPersonalNotification(inserted.rows[0]),created:true };
+    const existing=await query.query('SELECT * FROM personal_agent_notifications WHERE client_id=$1 AND event_key=$2',[notice.clientId,notice.eventKey]);
+    return {notification:this.mapPersonalNotification(existing.rows[0]),created:false};
+  }
+  async finishPersonalAgentWatchCheck(outcome: PersonalAgentWatchOutcome) {
+    return this.transaction(async client => {
+      const found=await client.query('SELECT * FROM personal_agent_watches WHERE client_id=$1 AND id=$2 FOR UPDATE',[outcome.clientId,outcome.id]);
+      if (!found.rows[0]) return null;
+      const watch=this.mapPersonalWatch(found.rows[0]);
+      if (watch.status!=='active' || watch.epoch!==outcome.epoch || watch.checks!==outcome.checks) return null;
+      const lease=await client.query(`SELECT room_id FROM code_agent_room_leases WHERE room_id=$1 AND turn_id=$2 AND fence=$3
+        AND expires_at>clock_timestamp() FOR SHARE`,[watch.roomId,`browser-control:${outcome.control.id}`,outcome.control.fence]);
+      if (!lease.rows[0]) return null;
+      const success=outcome.observation, failures=success ? 0 : watch.failures+1;
+      const failureStreak=watch.failureStreak+(!success && watch.failures===0 ? 1 : 0);
+      const paused=failures>=5;
+      const next=new Date(Date.parse(outcome.checkedAt)+(success ? watch.intervalMinutes : Math.min(60,2**failures))*60000).toISOString();
+      const changed=await client.query(`UPDATE personal_agent_watches SET checks=checks+1,failures=$3,failure_streak=$4,
+        status=CASE WHEN $5 THEN 'paused' ELSE status END,next_check_at=CASE WHEN $5 THEN NULL ELSE $6::timestamptz END,
+        last_checked_at=$7,error=$8,last_url=COALESCE($9,last_url),last_title=COALESCE($10,last_title),last_text=COALESCE($11,last_text),
+        matched=COALESCE($12,matched),updated_at=GREATEST(clock_timestamp(),updated_at+INTERVAL '1 millisecond')
+        WHERE client_id=$1 AND id=$2 RETURNING *`,[watch.clientId,watch.id,failures,failureStreak,paused,next,outcome.checkedAt,
+        success ? null : (outcome.error || 'Page check failed').slice(0,500),success?.url ?? null,success?.title ?? null,success?.text ?? null,success?.matched ?? null]);
+      const updated=this.mapPersonalWatch(changed.rows[0]);
+      let notification: PersonalAgentNotification | undefined;
+      if (success?.notify || (!success && (failures===1 || paused))) {
+        const notice: PersonalAgentNotification={id:nanoid(),clientId:watch.clientId,roomId:watch.roomId,watchId:watch.id,
+          eventKey:success ? `watch:${watch.id}:${updated.checks}` : `watch-error:${watch.id}:${failureStreak}:${paused ? 'paused' : 'retry'}`,
+          kind:success ? 'watch_match' : 'watch_error',title:watch.title,
+          body:success ? success.text.slice(0,500) : (outcome.error || 'Page check failed').slice(0,500),
+          ...(success ? {source:{url:success.url,title:success.title,excerpt:success.text.slice(0,1000),checkedAt:outcome.checkedAt}} : {}),createdAt:outcome.checkedAt};
+        const saved=await this.insertPersonalNotification(client,notice); if (saved.created) notification=saved.notification;
+      }
+      return {watch:updated,...(notification ? {notification} : {})};
+    });
+  }
+  async savePersonalAgentNotification(notice: PersonalAgentNotification) { return this.insertPersonalNotification(this.pool,notice); }
+  async readPersonalAgentNotifications(clientId: string, options: { unread?: boolean; limit?: number; offset?: number } = {}) {
+    const [rows,count]=await Promise.all([
+      this.pool.query(`SELECT * FROM personal_agent_notifications WHERE client_id=$1 AND ($2::boolean=false OR read_at IS NULL)
+        ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`,[clientId,options.unread===true,options.limit ?? 50,options.offset ?? 0]),
+      this.pool.query(`SELECT count(*) AS total,count(*) FILTER (WHERE read_at IS NULL) AS unread FROM personal_agent_notifications WHERE client_id=$1`,[clientId]),
+    ]);
+    return {notifications:rows.rows.map(row=>this.mapPersonalNotification(row)),total:Number(options.unread ? count.rows[0].unread : count.rows[0].total),unread:Number(count.rows[0].unread)};
+  }
+  async readPersonalAgentNotification(clientId: string, id: string) {
+    const found=await this.pool.query('SELECT * FROM personal_agent_notifications WHERE client_id=$1 AND id=$2',[clientId,id]);
+    return found.rows[0] ? this.mapPersonalNotification(found.rows[0]) : null;
+  }
+  async markPersonalAgentNotificationRead(clientId: string, id: string) {
+    const found=await this.pool.query('UPDATE personal_agent_notifications SET read_at=COALESCE(read_at,clock_timestamp()) WHERE client_id=$1 AND id=$2 RETURNING *',[clientId,id]);
+    return found.rows[0] ? this.mapPersonalNotification(found.rows[0]) : null;
+  }
+
   async readPersonalAgentIdeaSource(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string): Promise<PersonalAgentIdeaSource | null> {
     return this.personalIdeaSource(this.pool, clientId, kind, id);
   }
@@ -1293,15 +1408,16 @@ export class PostgresStore implements DurableRoomStore {
     });
   }
 
-  async updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null> {
+  async updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null> {
     const result = await this.pool.query(
       `UPDATE personal_agent_profiles SET
         name = COALESCE($2, name), avatar = COALESCE($3, avatar),
         instructions = COALESCE($4, instructions), memory = COALESCE($5, memory),
+        show_updates = COALESCE($7, show_updates), push_enabled = COALESCE($8, push_enabled),
         updated_at = GREATEST(clock_timestamp(), updated_at + INTERVAL '1 millisecond')
       WHERE client_id = $1 AND ($6::timestamptz IS NULL OR date_trunc('milliseconds', updated_at) = $6::timestamptz)
       RETURNING *`,
-      [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null],
+      [clientId, updates.name ?? null, updates.avatar ?? null, updates.instructions ?? null, updates.memory ?? null, expectedUpdatedAt ?? null, updates.showUpdates ?? null, updates.pushEnabled ?? null],
     );
     return result.rows[0] ? mapPersonalAgentProfile(result.rows[0]) : null;
   }
@@ -3361,6 +3477,14 @@ export class PostgresStore implements DurableRoomStore {
         ],
       );
       if (!turn.rows[0]) throw new Error(`Code-agent turn ${claim.turnId} lost its terminal fence`);
+      if (savedMessage && room.rows[0].personal_agent_owner_id && room.rows[0].personal_agent_thread_kind === 'task' && actualOutcome !== 'cancelled') {
+        await this.insertPersonalNotification(client, {
+          id: `task:${savedMessage.id}`, clientId: room.rows[0].personal_agent_owner_id,
+          eventKey: `task:${savedMessage.id}`, kind: actualOutcome === 'complete' ? 'task_complete' : 'task_error',
+          title: room.rows[0].name, body: savedMessage.content.slice(0,500), roomId: claim.roomId, createdAt: input.completedAt,
+        });
+      }
+
 
       if (turn.rows[0].workspace_parent_revision_id) {
         const parentRevisionId = turn.rows[0].workspace_parent_revision_id;

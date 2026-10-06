@@ -149,6 +149,7 @@ export const MessagePage: React.FC = () => {
   const roomPermissionsRequestGenerationRef = useRef(0);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
+    if (new URLSearchParams(window.location.search).get("personal") === "1") return "personal";
     const storedView = getStoredView();
     return storedView === "saved" && isDesktopLayout() ? "rooms" : storedView;
   });
@@ -341,6 +342,8 @@ export const MessagePage: React.FC = () => {
   const clearRoomUrlParam = useCallback(() => {
     const newParams = new URLSearchParams(searchParams);
     newParams.delete("room");
+    newParams.delete("personal");
+    newParams.delete("tab");
     setSearchParams(newParams);
   }, [searchParams, setSearchParams]);
 
@@ -676,7 +679,13 @@ export const MessagePage: React.FC = () => {
   const handleViewChange = useCallback((nextView: AppView) => {
     setError(null);
     setView(nextView);
-  }, []);
+    if (nextView !== 'personal' && searchParams.has('personal')) {
+      const params = new URLSearchParams(searchParams);
+      params.delete('personal');
+      params.delete('tab');
+      setSearchParams(params, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const clearStatusForTask = useCallback(() => {
     setError(null);
@@ -727,6 +736,7 @@ export const MessagePage: React.FC = () => {
     console.log("Attempting to restore room from storage");
     const roomIdFromUrl = searchParams.get("room");
 
+    if (searchParams.get("personal") === "1") return;
     if (roomIdFromUrl) {
       console.log("URL contains room ID, prioritize URL parameter:", roomIdFromUrl);
       // URL参数优先，这个逻辑不变
@@ -1311,6 +1321,7 @@ export const MessagePage: React.FC = () => {
           roomUpdates={rooms}
           onRoomSelect={handleRoomSelect}
           onOpenConnections={() => handleViewChange("settings")}
+          onBack={() => handleViewChange("rooms")}
           showSuccess={showSuccess}
           showError={setError}
         />;

@@ -12,6 +12,7 @@ async function serve() {
   const { chromium } = require('playwright');
   let browser, context, page, sessionId;
   let queue = Promise.resolve();
+  const statuses = new WeakMap();
   async function start(storageState) {
     if (context) return;
     browser = await chromium.launch({ headless: true, channel: 'chromium', args: ['--no-sandbox'],
@@ -19,6 +20,11 @@ async function serve() {
       HOME: process.env.HOME || '/tmp', PATH: process.env.PATH || '/usr/bin:/bin', LANG: 'C.UTF-8',
     } });
     context = await browser.newContext({ viewport, storageState, acceptDownloads: true });
+    context.on('response', response => {
+      if (!response.request().isNavigationRequest()) return;
+      const frame = response.frame();
+      if (frame === frame.page().mainFrame()) statuses.set(frame.page(), response.status());
+    });
     page = await context.newPage();
     context.on('page', opened => { page = opened; opened.setDefaultTimeout(10_000); opened.on('dialog', dialog => void dialog.dismiss()); });
     page.setDefaultTimeout(10_000);
@@ -27,7 +33,7 @@ async function serve() {
   async function observe() {
     if (!page || page.isClosed()) page = context.pages().findLast(candidate => !candidate.isClosed()) || await context.newPage();
     const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
-    return { url: page.url(), title: (await page.title()).slice(0, 300), text: text.slice(0, 30_000), truncated: text.length > 30_000,
+    return { httpStatus: statuses.get(page), url: page.url(), title: (await page.title()).slice(0, 300), text: text.slice(0, 30_000), truncated: text.length > 30_000,
       viewport, screenshot: (await page.screenshot({ type: 'jpeg', quality: 65, timeout: 10_000 })).toString('base64'),
       storageState: await context.storageState({ indexedDB: true }) };
   }

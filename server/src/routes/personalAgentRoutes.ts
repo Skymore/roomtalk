@@ -1,3 +1,5 @@
+import { PersonalAgentTrackingError, PersonalAgentTrackingService } from '../services/personalAgentTracking';
+import { PersonalAgentNotificationService } from '../services/personalAgentNotifications';
 import { PersonalAgentIdeaService, PersonalAgentIdeaError, personalIdeaPrompt, personalIdeaRevision } from '../services/personalAgentIdeas';
 import { PersonalAgentBrowserError, PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
@@ -13,6 +15,8 @@ export interface PersonalAgentRouteOptions {
   results?: PersonalAgentResultService;
   browser?: PersonalAgentBrowserService;
   ideas?: PersonalAgentIdeaService;
+  tracking?: PersonalAgentTrackingService;
+  notifications?: PersonalAgentNotificationService;
   acceptIdea?: (clientId: string, id: string, prompt: string, expectedUpdatedAt: string) => Promise<{ idea: import('../types').PersonalAgentIdea; room: Room }>;
   logger: Logger;
   getClientId: (req: Request) => string | null;
@@ -41,6 +45,7 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       if (!store.ensurePersonalAgentProfile) return res.status(503).json({ error: 'Personal agents are unavailable' });
       return await handler(req, res, await store.ensurePersonalAgentProfile(clientId));
     } catch (error) {
+      if (error instanceof PersonalAgentTrackingError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof PersonalAgentIdeaError) return res.status(error.statusCode).json({ error: error.message });
       if (error instanceof PersonalAgentIdeaConflictError) return res.status(409).json({ error: error.message });
       if (error instanceof PersonalAgentGoalConflictError) return res.status(409).json({ error: error.message });
@@ -58,6 +63,31 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
       options.ideas?.refresh(profile.clientId),
     ]);
     return res.json({ profile, rooms, goals, ideas: ideas?.ideas || [] });
+  }));
+
+  app.get('/api/personal-agent/watches', withProfile(async (req,res,profile) => {
+    if(!options.tracking)return res.status(503).json({error:'Page tracking is unavailable'});
+    return res.json(await options.tracking.list(profile.clientId,req.query));
+  }));
+  app.post('/api/personal-agent/watches', withProfile(async (req,res,profile) => {
+    if(!options.tracking)return res.status(503).json({error:'Page tracking is unavailable'});
+    return res.status(201).json(await options.tracking.create(profile.clientId,req.body || {}));
+  }));
+  app.patch('/api/personal-agent/watches/:id', withProfile(async (req,res,profile) => {
+    if(!options.tracking)return res.status(503).json({error:'Page tracking is unavailable'});
+    return res.json(await options.tracking.control(profile.clientId,req.params.id,req.body || {}));
+  }));
+  app.delete('/api/personal-agent/watches/:id', withProfile(async (req,res,profile) => {
+    if(!options.tracking)return res.status(503).json({error:'Page tracking is unavailable'});
+    return res.json(await options.tracking.remove(profile.clientId,req.params.id));
+  }));
+  app.get('/api/personal-agent/notifications', withProfile(async (req,res,profile) => {
+    if(!options.notifications)return res.status(503).json({error:'Updates are unavailable'});
+    return res.json(await options.notifications.list(profile.clientId,req.query));
+  }));
+  app.post('/api/personal-agent/notifications/:id/read', withProfile(async (req,res,profile) => {
+    if(!options.notifications)return res.status(503).json({error:'Updates are unavailable'});
+    return res.json(await options.notifications.read(profile.clientId,req.params.id));
   }));
 
   app.get('/api/personal-agent/ideas', withProfile(async (req, res, profile) => {
@@ -133,11 +163,15 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     res.json(await forgetPersonalMemory(store, profile.clientId, req.params.id, req.body?.expectedUpdatedAt))));
 
   app.put('/api/personal-agent/profile', withProfile(async (req, res, profile) => {
-    const updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>> = {};
+    const updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>> = {};
     for (const [key, limit] of [['name', 100], ['avatar', 64], ['instructions', 8000], ['memory', 16000]] as const) {
       if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) {
         updates[key] = textField(req.body[key], key, limit, key === 'instructions' || key === 'memory');
       }
+    }
+    for (const key of ['showUpdates','pushEnabled'] as const) if (req.body?.[key] !== undefined) {
+      if (typeof req.body[key] !== 'boolean') throw new RangeError(`Invalid ${key}`);
+      updates[key]=req.body[key];
     }
     const expectedUpdatedAt = req.body?.expectedUpdatedAt;
     if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== 'string' || !Number.isFinite(Date.parse(expectedUpdatedAt)))) throw new RangeError('Invalid expectedUpdatedAt');

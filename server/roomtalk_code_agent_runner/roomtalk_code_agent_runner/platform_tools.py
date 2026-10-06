@@ -42,6 +42,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _unpublish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
+        elif args.command == "watch":
+            if args.watch_command != "list":
+                _require_write_access(env)
+            result = _personal_watch(args, env)
+        elif args.command == "updates":
+            if args.updates_command == "read":
+                _require_write_access(env)
+            result = _personal_updates(args, env)
         elif args.command == "idea":
             if args.idea_command == "propose":
                 _require_write_access(env)
@@ -111,6 +119,37 @@ def _build_parser() -> argparse.ArgumentParser:
     site_unpublish = site_subparsers.add_parser("unpublish", help="Take a published static site offline.")
     site_unpublish.add_argument("--slug", required=True, help="Published site URL slug to take offline.")
     site_unpublish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    watch = subparsers.add_parser("watch", help="Track real pages and conditions in a separate saved browser.")
+    watch_sub = watch.add_subparsers(dest="watch_command", required=True)
+    watch_create = watch_sub.add_parser("create")
+    watch_create.add_argument("--title", required=True)
+    watch_create.add_argument("--url", required=True)
+    watch_create.add_argument("--condition", choices=("change", "contains", "price_below"), required=True)
+    watch_create.add_argument("--value", default="")
+    watch_create.add_argument("--interval-minutes", type=int, default=30)
+    watch_create.add_argument("--json", action="store_true")
+    for action in ("pause", "resume", "check", "remove"):
+        command = watch_sub.add_parser(action)
+        command.add_argument("--id", required=True)
+        if action != "remove":
+            command.add_argument("--expected-updated-at", required=True)
+        command.add_argument("--json", action="store_true")
+    listing = watch_sub.add_parser("list")
+    listing.add_argument("--id")
+    listing.add_argument("--limit", type=int, default=50)
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--json", action="store_true")
+    updates = subparsers.add_parser("updates", help="Read persistent task and page updates.")
+    updates_sub = updates.add_subparsers(dest="updates_command", required=True)
+    listing = updates_sub.add_parser("list")
+    listing.add_argument("--unread", action="store_true")
+    listing.add_argument("--limit", type=int, default=50)
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--json", action="store_true")
+    read_update = updates_sub.add_parser("read")
+    read_update.add_argument("--id", required=True)
+    read_update.add_argument("--json", action="store_true")
 
     idea = subparsers.add_parser("idea", help="Propose useful work with a saved personal source.")
     idea_sub = idea.add_subparsers(dest="idea_command", required=True)
@@ -334,6 +373,34 @@ def _personal_memory(args: argparse.Namespace, env: dict[str, str]) -> dict[str,
     else:
         result = _read_room_context_path("/personal-memory", env)
     return {**result, "tool": "PersonalMemory"}
+
+
+def _personal_watch(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    action = args.watch_command
+    if action == "list":
+        query = {"limit": args.limit, "offset": args.offset}
+        if args.id:
+            query["id"] = args.id
+        result = _read_room_context_path("/personal-watches?" + urllib_parse.urlencode(query), env)
+    else:
+        if action == "create":
+            body = {"action": action, "title": args.title, "url": args.url, "condition": args.condition,
+                    "value": args.value, "intervalMinutes": args.interval_minutes}
+        else:
+            body = {"action": action, "id": args.id}
+            if action != "remove":
+                body["expectedUpdatedAt"] = args.expected_updated_at
+        result = _read_room_context_path("/personal-watches", env, method="PATCH", body=body)
+    return {**result, "tool": "PersonalWatch"}
+
+
+def _personal_updates(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    if args.updates_command == "read":
+        result = _read_room_context_path("/personal-notifications", env, method="PATCH", body={"id": args.id})
+    else:
+        query = {"unread": str(args.unread).lower(), "limit": args.limit, "offset": args.offset}
+        result = _read_room_context_path("/personal-notifications?" + urllib_parse.urlencode(query), env)
+    return {**result, "tool": "PersonalUpdates"}
 
 
 def _personal_idea(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:

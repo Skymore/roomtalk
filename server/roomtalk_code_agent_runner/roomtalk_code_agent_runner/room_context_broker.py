@@ -16,7 +16,7 @@ from .constants import ROOMTALK_CODE_AGENT_USER_AGENT
 ROOM_CONTEXT_SOCKET_ENV = "ROOMTALK_ROOM_CONTEXT_SOCKET"
 MAX_BROKER_REQUEST_BYTES = 6 * 1024 * 1024
 MAX_BROKER_RESPONSE_BYTES = 25 * 1024 * 1024
-_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$|^/personal-ideas(?:\?.*)?$|^/personal-browser(?:\?.*)?$|^/personal-results(?:\?.*)?$|^/personal-goals(?:\?.*)?$|^/personal-memory(?:/records(?:\?.*)?)?$")
+_ALLOWED_PATH = re.compile(r"^/(?:history|delta|search)(?:\?.*)?$|^/messages/[^/?]+$|^/sites$|^/personal-watches(?:\?.*)?$|^/personal-notifications(?:\?.*)?$|^/personal-ideas(?:\?.*)?$|^/personal-browser(?:\?.*)?$|^/personal-results(?:\?.*)?$|^/personal-goals(?:\?.*)?$|^/personal-memory(?:/records(?:\?.*)?)?$")
 
 
 class RoomContextBrokerError(Exception):
@@ -82,7 +82,7 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
                 raise RoomContextBrokerError("Unsupported room context broker path", code="room_context_broker_path_denied")
             method = request.get("method", "GET")
             body = request.get("body")
-            if method != "GET" and not (method == "PATCH" and path in ("/personal-memory", "/personal-memory/records", "/personal-goals", "/personal-results", "/personal-browser", "/personal-ideas") and isinstance(body, dict)):
+            if method != "GET" and not (method == "PATCH" and path in ("/personal-memory", "/personal-memory/records", "/personal-goals", "/personal-results", "/personal-browser", "/personal-ideas", "/personal-watches", "/personal-notifications") and isinstance(body, dict)):
                 raise RoomContextBrokerError("Unsupported room context broker operation", code="room_context_broker_operation_denied")
             server = self.server
             assert isinstance(server, _BrokerServer)

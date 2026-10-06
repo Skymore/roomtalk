@@ -156,7 +156,7 @@ export class PersonalAgentBrowserService {
       throw error;
     }
     return { session: sessionMetadata(session), ...(observation ? { observation: browserObservationMetadata(observation) } : {}),
-      text: observed.text || '', truncated: observed.truncated === true,
+      httpStatus: observed.httpStatus, text: observed.text || '', truncated: observed.truncated === true,
       ...(recordVisit ? {} : { screenshot: observed.screenshot, viewport: observed.viewport }), closed: observed.closed === true };
   }
 }

@@ -213,7 +213,7 @@ export interface Room {
   lastActivityAt?: string;
   creatorId: string;
   personalAgentOwnerId?: string;
-  personalAgentThreadKind?: 'main' | 'task';
+  personalAgentThreadKind?: 'main' | 'task' | 'watch';
   personalAgentGoalId?: string;
   personalAgentMemoryId?: string;
   personalAgentArchivedAt?: string;
@@ -241,6 +241,8 @@ export interface PersonalAgentProfile {
   instructions: string;
   memory: string;
   mainRoomId: string;
+  showUpdates?: boolean;
+  pushEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -293,6 +295,54 @@ export interface PersonalAgentResult {
   byteSize: number;
   objectKey: string;
   createdAt: string;
+}
+
+export interface PersonalAgentWatch {
+  id: string;
+  clientId: string;
+  roomId: string;
+  title: string;
+  url: string;
+  condition: 'change' | 'contains' | 'price_below';
+  value: string;
+  intervalMinutes: number;
+  status: 'active' | 'paused';
+  epoch: number;
+  checks: number;
+  failures: number;
+  failureStreak: number;
+  nextCheckAt?: string;
+  lastCheckedAt?: string;
+  lastUrl?: string;
+  lastTitle?: string;
+  lastText?: string;
+  matched: boolean;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface PersonalAgentNotification {
+  id: string;
+  clientId: string;
+  eventKey: string;
+  kind: 'task_complete' | 'task_error' | 'watch_match' | 'watch_error';
+  title: string;
+  body: string;
+  roomId?: string;
+  watchId?: string;
+  source?: { url: string; title: string; excerpt: string; checkedAt: string };
+  readAt?: string;
+  createdAt: string;
+}
+export interface PersonalAgentWatchOutcome {
+  clientId: string;
+  id: string;
+  epoch: number;
+  checks: number;
+  control: { id: string; fence: number };
+  checkedAt: string;
+  observation?: { url: string; title: string; text: string; matched: boolean; notify: boolean };
+  error?: string;
 }
 
 export type PersonalAgentIdeaSourceKind = 'goal' | 'memory' | 'result' | 'browser';

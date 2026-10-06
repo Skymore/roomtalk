@@ -4,7 +4,7 @@ import webPush from 'web-push';
 import { PushSubscriptionRecord, RoomStore } from '../repositories/store';
 import { Logger } from '../logger';
 import { Message, Room } from '../types';
-import { notifyPersonalAgentCompletion, selectPushRecipients } from './pushNotifications';
+import { notifyPersonalAgentCompletion, notifyPersonalAgentUpdate, selectPushRecipients } from './pushNotifications';
 
 const subscription = (overrides: Partial<PushSubscriptionRecord>): PushSubscriptionRecord => ({
   clientId: 'client-1',
@@ -18,6 +18,27 @@ const subscription = (overrides: Partial<PushSubscriptionRecord>): PushSubscript
 });
 
 describe('personal agent completion notifications', () => {
+  it('honors the saved push preference and opens the personal updates page', async t => {
+    const previousPublic = process.env.WEB_PUSH_VAPID_PUBLIC_KEY, previousPrivate = process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+    t.after(() => {
+      mock.restoreAll();
+      if (previousPublic === undefined) delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY; else process.env.WEB_PUSH_VAPID_PUBLIC_KEY = previousPublic;
+      if (previousPrivate === undefined) delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY; else process.env.WEB_PUSH_VAPID_PRIVATE_KEY = previousPrivate;
+    });
+    process.env.WEB_PUSH_VAPID_PUBLIC_KEY = 'test-public'; process.env.WEB_PUSH_VAPID_PRIVATE_KEY = 'test-private';
+    let enabled = false, deliveries = 0;
+    mock.method(webPush, 'setVapidDetails', () => undefined);
+    mock.method(webPush, 'sendNotification', async (_destination: unknown, payload: string) => {
+      deliveries++; assert.equal(JSON.parse(payload).url, '/?personal=1&tab=activity'); return { statusCode: 201 };
+    });
+    const store = { getPersonalAgentProfile: async () => ({ pushEnabled: enabled }),
+      readPushSubscriptionsByRoom: async () => [subscription({ clientId: 'owner' })],
+      getRoomActiveBrowserInstanceIds: async () => [], readMutedNotificationClientIdsByRoom: async () => [] } as any;
+    const notification = { id: 'notice', clientId: 'owner', roomId: 'private', title: 'Page changed', body: 'Actual source' } as any;
+    await notifyPersonalAgentUpdate({ store, notification, logger: new Logger('PersonalUpdatesTest') }); assert.equal(deliveries, 0);
+    enabled = true;
+    await notifyPersonalAgentUpdate({ store, notification, logger: new Logger('PersonalUpdatesTest') }); assert.equal(deliveries, 1);
+  });
   it('sends AI results to every inactive owner device without leaking to another client', async t => {
     const env = { ...process.env };
     t.after(() => {

@@ -43,6 +43,68 @@ test('shows account sign-in guidance to guests', async ({ page, context }) => {
   await expect(page.getByText('Sign in to your RoomTalk account in Settings to create a private personal agent.', { exact: true })).toBeVisible();
 });
 
+test('tracks a real page, deduplicates updates, pauses and preserves read/preferences across reload', async ({ page, context, request }) => {
+  test.setTimeout(120_000);
+  const { createServer } = await import('node:http');
+  let text = 'Sold out';
+  const fixture = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(`<title>Actual stock</title><h1>${text}</h1>`); });
+  await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve));
+  const address = fixture.address(); if (!address || typeof address === 'string') throw new Error('Fixture did not listen');
+  try {
+    const clientId = await seedClient(context, uniqueName('tracking-owner'));
+    await openRoomsPage(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+    await page.getByLabel('User ID password', { exact: true }).first().fill('Personal-tracking-test-2026');
+    await page.getByRole('button', { name: 'Set password', exact: true }).click();
+    await expect(page.getByText('User ID password saved.', { exact: true })).toBeVisible();
+    await openPersonalAgent(page);
+    const token = (await page.evaluate(() => localStorage.getItem('clientAuthToken')))!;
+    const headers = accountHeaders(clientId, token);
+    const readWatch = async () => (await (await request.get(`${serverURL}/api/personal-agent/watches`, { headers })).json()).watches[0];
+    await page.getByRole('button', { name: 'Tracking', exact: true }).click();
+    await page.getByRole('button', { name: 'Watch a page', exact: true }).click();
+    await page.getByLabel('What to watch', { exact: true }).fill('Stock availability');
+    await page.getByLabel('Page address', { exact: true }).fill(`http://127.0.0.1:${address.port}/`);
+    await page.getByRole('button', { name: 'Start watching', exact: true }).click();
+    await expect(page.getByTestId('personal-watch-card')).toBeVisible();
+    await expect.poll(async () => (await readWatch())?.checks || 0, { timeout: 30000 }).toBe(1);
+    const baseline = await readWatch(); expect(baseline.lastExcerpt).toBe('Sold out');
+    expect((await (await request.get(`${serverURL}/api/personal-agent/notifications`, { headers })).json()).total).toBe(0);
+    text = 'Available for $90';
+    await page.getByRole('button', { name: 'Refresh', exact: true }).last().click();
+    await expect(page.getByTestId('personal-watch-card').getByText(/^Last checked:/)).toBeVisible();
+    await page.getByTestId('personal-watch-card').getByRole('button', { name: 'Check now', exact: true }).click();
+    await expect.poll(async () => (await readWatch()).checks, { timeout: 20000 }).toBe(2);
+    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    const update = page.getByTestId('personal-update-card');
+    await expect(update).toContainText('Available for $90');
+    await update.getByRole('button', { name: 'Mark as read', exact: true }).click();
+    await expect(update.getByRole('button', { name: 'Mark as read', exact: true })).toHaveCount(0);
+    await page.reload(); await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(update).toContainText('Available for $90');
+    await expect(update.getByRole('button', { name: 'Mark as read', exact: true })).toHaveCount(0);
+    const changed = await readWatch();
+    expect((await request.patch(`${serverURL}/api/personal-agent/watches/${changed.id}`, { headers, data: { action: 'check', expectedUpdatedAt: changed.updatedAt } })).ok()).toBe(true);
+    await expect.poll(async () => (await readWatch()).checks, { timeout: 20000 }).toBe(3);
+    expect((await (await request.get(`${serverURL}/api/personal-agent/notifications`, { headers })).json()).total).toBe(1);
+    await page.getByRole('button', { name: 'Tracking', exact: true }).click();
+    await page.getByTestId('personal-watch-card').getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect(page.getByTestId('personal-watch-card').getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+    await page.reload(); await page.getByRole('button', { name: 'Tracking', exact: true }).click();
+    await expect(page.getByTestId('personal-watch-card').getByRole('button', { name: 'Check now', exact: true })).toBeDisabled();
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: '/tmp/roomtalk-personal-tracking-mobile.png', fullPage: true });
+    await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await page.getByRole('checkbox', { name: 'Show background updates on your agent page', exact: true }).uncheck();
+    await page.getByRole('checkbox', { name: 'Push background task and page updates', exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByText('Agent preferences and memory saved', { exact: true })).toBeVisible();
+    await page.reload(); await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await expect(page.getByRole('checkbox', { name: 'Push background task and page updates', exact: true })).not.toBeChecked();
+  } finally { fixture.closeAllConnections(); await new Promise<void>(resolve => fixture.close(() => resolve())); }
+});
+
 test('accepts an edited sourced suggestion exactly once and preserves dismissed decisions', async ({ page, context, request }, testInfo) => {
   test.setTimeout(90_000);
   const clientId = await seedClient(context, uniqueName('idea-owner'));

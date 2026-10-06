@@ -1,3 +1,6 @@
+import { registerPersonalAgentTrackingContextRoutes } from './routes/personalAgentTrackingContextRoutes';
+import { PersonalAgentTrackingService } from './services/personalAgentTracking';
+import { PersonalAgentNotificationService } from './services/personalAgentNotifications';
 import { PersonalAgentIdeaService } from './services/personalAgentIdeas';
 import { registerPersonalAgentIdeaContextRoutes } from './routes/personalAgentIdeaContextRoutes';
 import { E2EPersonalBrowserSandbox } from './scripts/e2ePersonalBrowserSandbox';
@@ -31,7 +34,7 @@ import { cancelPersonalAgentGoal } from './services/personalAgentGoals';
 import { registerPersonalAgentGoalContextRoutes } from './routes/personalAgentGoalContextRoutes';
 import { registerPersonalAgentContextRoutes } from './routes/personalAgentContextRoutes';
 import { PersonalAgentScheduler } from './services/personalAgentScheduler';
-import { notifyPersonalAgentCompletion } from './services/pushNotifications';
+import { notifyPersonalAgentUpdate } from './services/pushNotifications';
 import { registerCodeAgentCodexAuthRoutes } from './routes/codeAgentCodexAuthRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
@@ -594,6 +597,11 @@ const codexRunnerEnv = {
   CODE_AGENT_WORKSPACE_ROOT: codeAgentRuntimeConfig.runnerEnv.CODE_AGENT_WORKSPACE_ROOT || codeAgentRuntimeConfig.e2bWorkspace || DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
 };
+const personalAgentNotifications = new PersonalAgentNotificationService(store, codeAgentLogger, async notification => {
+  io.to(notification.clientId).emit('personal_agent_update', { notificationId: notification.id });
+  await notifyPersonalAgentUpdate({store,notification,logger:codeAgentLogger});
+});
+
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
@@ -634,9 +642,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     mediaObjectStorage,
     aiStreamOwnerId,
     turnTimeoutMs: codeAgentTurnTimeoutMs,
-    onPersonalAgentTurnCompleted: (room, message) => notifyPersonalAgentCompletion({
-      store, room, message, logger: codeAgentLogger,
-    }),
+    onPersonalAgentTurnCompleted: (room, message) => personalAgentNotifications.completed(room, message),
   }
 );
 
@@ -872,6 +878,7 @@ infrastructureReady
     assistantRunDispatchRelay.start();
     assistantRunQueueReconciler.start();
     personalAgentScheduler.start();
+    personalAgentTracking?.start();
   })
   .catch(error => {
     assistantRunLogger.error('Assistant run queue services did not start because infrastructure initialization failed', { error });
@@ -894,9 +901,13 @@ const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBr
   new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),
 ) : undefined;
 
+const personalAgentTracking = personalAgentBrowser ? new PersonalAgentTrackingService(store, personalAgentBrowser, codeAgentSandboxService,
+  codeAgentLogger, notice => personalAgentNotifications.deliver(notice)) : undefined;
+
 registerApiRoutes(app, {
   personalAgentBrowser,
   personalAgentIdeas,
+  personalAgentTracking, personalAgentNotifications,
   personalAgentAcceptIdea: (clientId, id, prompt, expectedUpdatedAt) => personalAgentScheduler.acceptIdea(clientId, id, prompt, expectedUpdatedAt),
   store,
   io,
@@ -952,6 +963,9 @@ if (personalAgentBrowser) registerPersonalAgentBrowserContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, browser: personalAgentBrowser, logger: codeAgentLogger,
 });
 
+if(personalAgentTracking)registerPersonalAgentTrackingContextRoutes(app,{
+  store,roomContext:codeAgentRoomContextService,tracking:personalAgentTracking,notifications:personalAgentNotifications,logger:codeAgentLogger,
+});
 registerPersonalAgentIdeaContextRoutes(app, { store, roomContext: codeAgentRoomContextService, ideas: personalAgentIdeas, logger: codeAgentLogger });
 registerPersonalAgentResultContextRoutes(app, {
   store, roomContext: codeAgentRoomContextService, logger: codeAgentLogger,
@@ -1063,6 +1077,7 @@ const shutdown = () => {
     assistantRunDispatchRelay.stop(),
     assistantRunQueueReconciler.stop(),
     personalAgentScheduler.stop(),
+    personalAgentTracking?.stop() || Promise.resolve(),
   ]).then(() => Promise.allSettled([
     assistantRunQueue.close(),
     codeAgentProviderAdmissionConnection?.quit() || Promise.resolve(),

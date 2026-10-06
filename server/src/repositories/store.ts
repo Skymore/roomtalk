@@ -1,4 +1,4 @@
-import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
+import { AICost, AIModelOption, AIModelProvider, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, PersonalAgentGoal, PersonalAgentWatch, PersonalAgentWatchOutcome, PersonalAgentNotification, PersonalAgentIdea, PersonalAgentIdeaSource, PersonalAgentIdeaSourceKind, PersonalAgentMemory, PersonalAgentProfile, PersonalAgentBrowserSession, PersonalAgentBrowserObservation, PersonalAgentResult, Room, RoomAgentTurn, RoomAICostTotal, RoomEvent, RoomEventPage, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus, RoomSnapshot } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { CodeAgentWorkspaceCheckpointManifest } from '../services/codeAgentSandboxService';
 import {
@@ -775,6 +775,16 @@ export interface IdempotentMessageAppendResult {
 }
 
 export interface DurableRoomStore {
+  createPersonalAgentWatch?(watch: PersonalAgentWatch, room: Room, claim?: {roomId: string;turnId: string}): Promise<PersonalAgentWatch>;
+  readPersonalAgentWatches?(clientId: string, options?: { id?: string; limit?: number; offset?: number }): Promise<{ watches: PersonalAgentWatch[]; total: number }>;
+  readDuePersonalAgentWatches?(limit: number): Promise<PersonalAgentWatch[]>;
+  controlPersonalAgentWatch?(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string): Promise<PersonalAgentWatch | null>;
+  finishPersonalAgentWatchCheck?(outcome: PersonalAgentWatchOutcome): Promise<{ watch: PersonalAgentWatch; notification?: PersonalAgentNotification } | null>;
+  savePersonalAgentNotification?(notification: PersonalAgentNotification): Promise<{ notification: PersonalAgentNotification; created: boolean }>;
+  readPersonalAgentNotifications?(clientId: string, options?: { unread?: boolean; limit?: number; offset?: number }): Promise<{ notifications: PersonalAgentNotification[]; total: number; unread: number }>;
+  readPersonalAgentNotification?(clientId: string, id: string): Promise<PersonalAgentNotification | null>;
+  markPersonalAgentNotificationRead?(clientId: string, id: string): Promise<PersonalAgentNotification | null>;
+
   readPersonalAgentIdeaSource?(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string): Promise<PersonalAgentIdeaSource | null>;
   readPersonalAgentIdeas?(clientId: string, options?: { id?: string; status?: PersonalAgentIdea['status']; limit?: number; offset?: number }): Promise<{ ideas: PersonalAgentIdea[]; total: number }>;
   savePersonalAgentIdea?(idea: PersonalAgentIdea, claim?: { roomId: string; turnId: string }): Promise<PersonalAgentIdea | null>;
@@ -787,7 +797,7 @@ export interface DurableRoomStore {
   readPersonalAgentResults?(clientId: string, options?: { id?: string; roomId?: string; turnId?: string; limit?: number; offset?: number }): Promise<{ results: PersonalAgentResult[]; total: number }>;
   getPersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile | null>;
   ensurePersonalAgentProfile?(clientId: string): Promise<PersonalAgentProfile>;
-  updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
+  updatePersonalAgentProfile?(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string): Promise<PersonalAgentProfile | null>;
   readPersonalAgentMemories?(clientId: string, options?: { id?: string; query?: string; kind?: string; limit?: number; offset?: number }): Promise<{ memories: PersonalAgentMemory[]; total: number }>;
   savePersonalAgentMemory?(memory: PersonalAgentMemory, expectedUpdatedAt?: string): Promise<PersonalAgentMemory | null>;
   mergePersonalAgentMemories?(memory: PersonalAgentMemory, entries: { id: string; updatedAt: string }[]): Promise<PersonalAgentMemory | null>;
@@ -1014,9 +1024,19 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.ensurePersonalAgentProfile(clientId);
   }
 
-  updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>>, expectedUpdatedAt?: string) {
+  updatePersonalAgentProfile(clientId: string, updates: Partial<Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>>, expectedUpdatedAt?: string) {
     return this.durableStore.updatePersonalAgentProfile?.(clientId, updates, expectedUpdatedAt) || Promise.resolve(null);
   }
+
+  createPersonalAgentWatch(watch: PersonalAgentWatch, room: Room, claim?: {roomId: string;turnId: string}) { return this.durableStore.createPersonalAgentWatch!(watch, room, claim); }
+  readPersonalAgentWatches(clientId: string, options?: { id?: string; limit?: number; offset?: number }) { return this.durableStore.readPersonalAgentWatches!(clientId, options); }
+  readDuePersonalAgentWatches(limit: number) { return this.durableStore.readDuePersonalAgentWatches!(limit); }
+  controlPersonalAgentWatch(clientId: string, id: string, action: 'pause' | 'resume' | 'check', expectedUpdatedAt: string) { return this.durableStore.controlPersonalAgentWatch!(clientId, id, action, expectedUpdatedAt); }
+  finishPersonalAgentWatchCheck(outcome: PersonalAgentWatchOutcome) { return this.durableStore.finishPersonalAgentWatchCheck!(outcome); }
+  savePersonalAgentNotification(notification: PersonalAgentNotification) { return this.durableStore.savePersonalAgentNotification!(notification); }
+  readPersonalAgentNotifications(clientId: string, options?: { unread?: boolean; limit?: number; offset?: number }) { return this.durableStore.readPersonalAgentNotifications!(clientId, options); }
+  readPersonalAgentNotification(clientId: string, id: string) { return this.durableStore.readPersonalAgentNotification!(clientId, id); }
+  markPersonalAgentNotificationRead(clientId: string, id: string) { return this.durableStore.markPersonalAgentNotificationRead!(clientId, id); }
 
   readPersonalAgentIdeaSource(clientId: string, kind: PersonalAgentIdeaSourceKind, id: string) {
     return this.durableStore.readPersonalAgentIdeaSource!(clientId, kind, id);

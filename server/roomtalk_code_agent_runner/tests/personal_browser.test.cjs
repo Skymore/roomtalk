@@ -16,6 +16,7 @@ test('real browser shares page actions and restores saved login state in a fresh
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
     if (new URL(req.url, 'http://localhost').pathname === '/login') { res.setHeader('Set-Cookie', 'session=confirmed; HttpOnly; Path=/'); res.writeHead(302, { Location: '/' }); res.end(); return; }
+    if (req.url === '/unavailable') { res.writeHead(503); res.end('<title>Unavailable</title><p>Temporary outage</p>'); return; }
     res.end(`<!doctype html><title>Actual browser fixture</title><h1>Real page</h1><button id="counter" onclick="this.textContent=Number(this.textContent)+1">0</button><form action="/login"><input id="name" name="name"><button id="login">Sign in</button></form><p id="session">${req.headers.cookie?.includes('session=confirmed') ? 'Signed in' : 'Signed out'}</p><script>localStorage.setItem('visited','confirmed')</script><div style="height:1400px"></div><p>End of page</p>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -25,7 +26,7 @@ test('real browser shares page actions and restores saved login state in a fresh
   try {
     for (let n = 0; !fs.existsSync(socketPath); n++) { assert.ok(n < 100, diagnostics); await new Promise(resolve => setTimeout(resolve, 50)); }
     const first = await request({ action: 'open', url });
-    assert.equal(first.success, true, first.error); assert.equal(first.title, 'Actual browser fixture');
+    assert.equal(first.success, true, first.error); assert.equal(first.httpStatus, 200); assert.equal(first.title, 'Actual browser fixture');
     assert.match(first.text, /Real page/); assert.match(first.text, /Signed out/);
     assert.equal(Buffer.from(first.screenshot, 'base64').subarray(0, 2).toString('hex'), 'ffd8');
     const clicked = await request({ action: 'click', selector: '#counter' });
@@ -39,6 +40,9 @@ test('real browser shares page actions and restores saved login state in a fresh
     assert.equal((await request({ action: 'close' })).closed, true);
     const restored = await request({ action: 'open', url, storageState: confirmed.storageState });
     assert.equal(restored.success, true, restored.error); assert.match(restored.text, /Signed in/);
+    const unavailable = await request({ action: 'open', url: `${url}unavailable` });
+    assert.equal(unavailable.httpStatus, 503); assert.match(unavailable.text, /Temporary outage/);
+    assert.equal((await request({ action: 'read' })).httpStatus, 503);
     const invalid = await request({ action: 'open', url: 'javascript:alert(1)' });
     assert.equal(invalid.success, false); assert.match(invalid.error, /URL/);
     assert.equal((await request({ action: 'read' })).success, true);

@@ -1,7 +1,7 @@
 import webPush from 'web-push';
 import { Logger } from '../logger';
 import { PushSubscriptionRecord, RoomStore } from '../repositories/store';
-import { Message, Room } from '../types';
+import { Message, PersonalAgentNotification, Room } from '../types';
 
 type PushConfig = {
   enabled: boolean;
@@ -170,14 +170,29 @@ export const notifyPersonalAgentCompletion = async (params: {
   logger: Logger;
 }) => {
   const { store, room, message, logger } = params;
-  const ownerId = room.personalAgentOwnerId;
-  const config = getPushConfig();
-  if (!ownerId || !config.enabled) return;
+  if (!room.personalAgentOwnerId) return;
+  return sendPersonalAgentPush({ store, logger, ownerId: room.personalAgentOwnerId, roomId: room.id,
+    payload: { type: 'room_message', roomId: room.id, messageId: message.id, title: room.name || 'Personal Agent',
+      body: getMessagePreview(message), url: `/?room=${encodeURIComponent(room.id)}` } });
+};
+
+export const notifyPersonalAgentUpdate = async (params: { store: RoomStore; notification: PersonalAgentNotification; logger: Logger }) => {
+  const {store,notification,logger}=params;
+  if (!notification.roomId) return;
+  return sendPersonalAgentPush({store,logger,ownerId:notification.clientId,roomId:notification.roomId,
+    payload:{type:'personal_agent_update',roomId:notification.roomId,notificationId:notification.id,title:notification.title,
+      body:notification.body,url:'/?personal=1&tab=activity'}});
+};
+
+const sendPersonalAgentPush = async (params: { store: RoomStore; logger: Logger; ownerId: string; roomId: string; payload: Record<string,unknown> }) => {
+  const {store,logger,ownerId,roomId}=params;
+  const config=getPushConfig();
+  if(!config.enabled || (await store.getPersonalAgentProfile?.(ownerId))?.pushEnabled===false)return;
 
   const [subscriptions, activeBrowsers, mutedClients] = await Promise.all([
-    store.readPushSubscriptionsByRoom(room.id),
-    store.getRoomActiveBrowserInstanceIds(room.id),
-    store.readMutedNotificationClientIdsByRoom(room.id),
+    store.readPushSubscriptionsByRoom(roomId),
+    store.getRoomActiveBrowserInstanceIds(roomId),
+    store.readMutedNotificationClientIdsByRoom(roomId),
   ]);
   const recipients = selectPushRecipients(
     subscriptions.filter(subscription => subscription.clientId === ownerId),
@@ -186,14 +201,8 @@ export const notifyPersonalAgentCompletion = async (params: {
     new Set(mutedClients),
   );
   webPush.setVapidDetails(config.subject, config.publicKey, config.privateKey);
-  const payload = JSON.stringify({
-    type: 'room_message',
-    roomId: room.id,
-    messageId: message.id,
-    title: room.name || 'Personal Agent',
-    body: getMessagePreview(message),
-    url: `/?room=${encodeURIComponent(room.id)}`,
-  });
+  const payload = JSON.stringify(params.payload);
+
   await Promise.all([...recipients.values()].map(async subscription => {
     try {
       await webPush.sendNotification({
@@ -207,8 +216,8 @@ export const notifyPersonalAgentCompletion = async (params: {
       } else {
         logger.warn('Failed to send personal agent completion notification', {
           error,
-          roomId: room.id,
-          messageId: message.id,
+          roomId,
+          notificationId: params.payload.notificationId,
           recipientClientId: ownerId,
         });
       }

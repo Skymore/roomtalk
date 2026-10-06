@@ -8,6 +8,8 @@ export interface PersonalAgentProfile {
   instructions: string;
   memory: string;
   mainRoomId: string;
+  showUpdates?: boolean;
+  pushEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -79,7 +81,7 @@ export const getPersonalAgent = (clientId: string) => request<PersonalAgentSnaps
 
 export const updatePersonalAgentProfile = (
   clientId: string,
-  profile: Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory'>,
+  profile: Pick<PersonalAgentProfile, 'name' | 'avatar' | 'instructions' | 'memory' | 'showUpdates' | 'pushEnabled'>,
   expectedUpdatedAt?: string,
 ) => request<{ profile: PersonalAgentProfile }>(clientId, '/profile', 'PUT', { ...profile, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 
@@ -184,3 +186,22 @@ export const dismissPersonalAgentIdea = (clientId: string, idea: PersonalAgentId
   request<{ idea: PersonalAgentIdea }>(clientId, `/ideas/${encodeURIComponent(idea.id)}`, 'PATCH', { action: 'dismiss', expectedUpdatedAt: idea.updatedAt });
 
 export const readPersonalAgentIdeas = (clientId: string, offset = 0) => request<{ ideas: PersonalAgentIdea[]; total: number }>(clientId, `/ideas?status=new&limit=50&offset=${offset}`);
+
+export interface PersonalAgentWatch {
+  id: string; roomId: string; title: string; url: string;
+  condition: 'change' | 'contains' | 'price_below'; value: string; intervalMinutes: number;
+  status: 'active' | 'paused'; checks: number; failures: number;
+  nextCheckAt?: string; lastCheckedAt?: string; lastUrl?: string; lastTitle?: string; lastExcerpt?: string;
+  error?: string; createdAt: string; updatedAt: string;
+}
+export interface PersonalAgentNotification {
+  id: string; kind: 'task_complete' | 'task_error' | 'watch_match' | 'watch_error'; title: string; body: string;
+  roomId?: string; watchId?: string; source?: {url: string; title: string; excerpt: string; checkedAt: string};
+  readAt?: string; createdAt: string;
+}
+export const readPersonalAgentWatches = (clientId: string, offset = 0) => request<{watches: PersonalAgentWatch[]; total: number}>(clientId, `/watches?limit=50&offset=${offset}`);
+export const createPersonalAgentWatch = (clientId: string, body: Pick<PersonalAgentWatch,'title'|'url'|'condition'|'value'|'intervalMinutes'>) => request<{watch: PersonalAgentWatch}>(clientId, '/watches', 'POST', body);
+export const controlPersonalAgentWatch = (clientId: string, watch: PersonalAgentWatch, action: 'pause'|'resume'|'check') => request<{watch: PersonalAgentWatch}>(clientId, `/watches/${encodeURIComponent(watch.id)}`, 'PATCH', {action,expectedUpdatedAt:watch.updatedAt});
+export const removePersonalAgentWatch = (clientId: string, id: string) => request<{removed: boolean}>(clientId, `/watches/${encodeURIComponent(id)}`, 'DELETE');
+export const readPersonalAgentNotifications = (clientId: string, unread = false, offset = 0) => request<{notifications: PersonalAgentNotification[]; total: number; unread: number}>(clientId, `/notifications?unread=${unread}&limit=50&offset=${offset}`);
+export const markPersonalAgentNotificationRead = (clientId: string, id: string) => request<{notification: PersonalAgentNotification}>(clientId, `/notifications/${encodeURIComponent(id)}/read`, 'POST');

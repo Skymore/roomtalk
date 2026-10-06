@@ -2846,4 +2846,41 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX personal_agent_ideas_owner_status ON personal_agent_ideas(client_id,status,created_at DESC);
     `,
   },
+  {
+    id: '0041_personal_agent_tracking_notifications',
+    sql: `
+      ALTER TABLE rooms DROP CONSTRAINT rooms_personal_agent_thread_kind_check;
+      ALTER TABLE rooms ADD CONSTRAINT rooms_personal_agent_thread_kind_check
+        CHECK (personal_agent_thread_kind IN ('main','task','watch'));
+      ALTER TABLE personal_agent_profiles ADD COLUMN show_updates BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE personal_agent_profiles ADD COLUMN push_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+      CREATE TABLE personal_agent_watches (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        room_id TEXT NOT NULL UNIQUE REFERENCES rooms(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+        title TEXT NOT NULL, url TEXT NOT NULL,
+        condition TEXT NOT NULL CHECK (condition IN ('change','contains','price_below')),
+        value TEXT NOT NULL DEFAULT '',
+        interval_minutes INTEGER NOT NULL CHECK (interval_minutes BETWEEN 1 AND 1440),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused')),
+        epoch INTEGER NOT NULL DEFAULT 0, checks INTEGER NOT NULL DEFAULT 0,
+        failures INTEGER NOT NULL DEFAULT 0, failure_streak INTEGER NOT NULL DEFAULT 0,
+        next_check_at TIMESTAMPTZ, last_checked_at TIMESTAMPTZ,
+        last_url TEXT, last_title TEXT, last_text TEXT, matched BOOLEAN NOT NULL DEFAULT FALSE,
+        error TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        UNIQUE (client_id,url,condition,value)
+      );
+      CREATE INDEX personal_agent_watches_due ON personal_agent_watches(next_check_at) WHERE status='active';
+      CREATE TABLE personal_agent_notifications (
+        id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES personal_agent_profiles(client_id) ON DELETE CASCADE,
+        event_key TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('task_complete','task_error','watch_match','watch_error')),
+        title TEXT NOT NULL, body TEXT NOT NULL,
+        room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+        watch_id TEXT REFERENCES personal_agent_watches(id) ON DELETE SET NULL,
+        source JSONB, read_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        UNIQUE (client_id,event_key)
+      );
+      CREATE INDEX personal_agent_notifications_owner_created ON personal_agent_notifications(client_id,created_at DESC,id);
+    `,
+  },
 ];
