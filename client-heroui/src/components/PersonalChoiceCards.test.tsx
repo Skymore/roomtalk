@@ -4,7 +4,7 @@ import {PersonalChoiceCards} from './PersonalChoiceCards';
 import {personalChoiceTranscript,personalChoiceResult} from '../utils/personalChoiceTranscript';
 import {displayJevUserMessage,selectionText} from '../utils/personalChoiceActions';
 import type {Message} from '../utils/types';
-import type {JevPanel} from '../../../server/src/services/personalChoices/domain';
+import type {JevPanel} from '../utils/personalChoiceDomain';
 vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string,options?:Record<string,string>)=>key==='personalChoicesSource'?`Source: ${options?.title}`:key})}));
 vi.mock('@iconify/react',()=>({Icon:()=>null}));
 vi.mock('@heroui/react',()=>({Button:({children,onPress,isDisabled,isLoading,...props}:Record<string,any>)=><button aria-label={props['aria-label']} aria-pressed={props['aria-pressed']} disabled={isDisabled || isLoading} onClick={onPress}>{children}</button>,Spinner:()=>null}));

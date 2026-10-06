@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "vitest";
-import type { JevPanel } from "../../../server/src/services/personalChoices/domain";
+import type { JevPanel } from "./personalChoiceDomain";
 import {
   choiceAvailability,
   confirmedJevSelection,

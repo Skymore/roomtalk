@@ -6,7 +6,7 @@ import {
   jevActionPrefix,
   jevToolResultSchema,
   parseJevAction,
-} from "../../../server/src/services/personalChoices/domain";
+} from "./personalChoiceDomain";
 
 export function parseJevResult(value: unknown): JevToolResult | null {
   let result = value;

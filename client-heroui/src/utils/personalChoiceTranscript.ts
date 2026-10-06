@@ -1,6 +1,6 @@
 import type {Message} from './types';
 import {parseJevResult} from './personalChoiceActions';
-import type {JevToolResult} from '../../../server/src/services/personalChoices/domain';
+import type {JevToolResult} from './personalChoiceDomain';
 
 export function isPersonalChoicesCall(message:Message):boolean {
   const command=message.toolArgs?.command ?? message.toolArgs?.cmd;

@@ -46,6 +46,7 @@
     "lucide-react": "^0.564.0",
     "markdown-to-jsx": "^7.7.4",
     "mermaid": "^10.9.6",
+    "openmuse-zod": "npm:zod@4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^16.6.6",

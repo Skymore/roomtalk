@@ -4,7 +4,7 @@ import {Button,Spinner} from '@heroui/react';
 import {Icon} from '@iconify/react';
 import {useTranslation} from 'react-i18next';
 import type {Message} from '../utils/types';
-import type {JevPanel,JevToolResult} from '../../../server/src/services/personalChoices/domain';
+import type {JevPanel,JevToolResult} from '../utils/personalChoiceDomain';
 import {choiceAvailability,confirmedJevSelection,latestJevPanelId,retryChoiceAvailable,selectionText} from '../utils/personalChoiceActions';
 import {personalChoiceSteps,personalChoiceTranscript} from '../utils/personalChoiceTranscript';
 
