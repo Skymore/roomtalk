@@ -28,3 +28,16 @@ it('opens memory and goals directly from their saved receipts',()=>{
  fireEvent.click(screen.getByRole('button'));expect(open).toHaveBeenCalledWith('memory');
  rerender(<PersonalInlineTools messages={history('roomtalk goal create --file goal.json --json',{tool:'PersonalGoal',success:true,goal:{id:'goal'}})} active={false} open={open}/>);fireEvent.click(screen.getByRole('button'));expect(open).toHaveBeenCalledWith('goals');
 });
+it('shows successful redirected searches as saved results and preserves actual failures',()=>{
+ const messages=history('/bin/sh -lc "roomtalk search web --objective research --query public --json > /workspace/ski-search.json"',null);
+ messages[1]={...messages[1],content:'',exitCode:0,isError:false};
+ const {rerender}=render(<PersonalInlineTools messages={messages} active={false}/>);
+ expect(screen.getByText('personalToolSearchCompleted {"count":0}')).toBeTruthy();
+ expect(screen.getByText('personalToolSearchSavedToFile')).toBeTruthy();expect(screen.queryByRole('alert')).toBeNull();
+ rerender(<PersonalInlineTools messages={[messages[0],{...messages[1],exitCode:1,isError:true}]} active={false}/>);
+ expect(screen.getByRole('alert').textContent).toBe('personalToolSearchUnreadable');expect(screen.queryByText('personalToolSearchSavedToFile')).toBeNull();
+ rerender(<PersonalInlineTools messages={[messages[0],{...messages[1],exitCode:1,isError:true,content:JSON.stringify({success:false,error:'Parallel search failed: rate limited'})}]} active={false}/>);
+ expect(screen.getByRole('alert').textContent).toBe('Parallel search failed: rate limited');
+ rerender(<PersonalInlineTools messages={history('roomtalk search web --objective research --query public --json',null).map(message=>({...message,exitCode:0,content:message.messageType==='tool_result'?'':message.content}))} active={false}/>);
+ expect(screen.getByRole('alert').textContent).toBe('personalToolSearchUnreadable');
+});

@@ -1250,8 +1250,19 @@ test('opens source mail and memory cards from the personal chat with explicit to
       await store.appendMessage({...common,id:randomUUID(),content:command,messageType:'tool_call',toolCallId:callId,toolName:'exec_command',toolArgs:{cmd:command}});
       await store.appendMessage({...common,id:randomUUID(),content:JSON.stringify(result),messageType:'tool_result',toolCallId:callId,toolName:'exec_command'});
     }
+    // Replay the two successful searches whose output was redirected in the reported chat.
+    for(const filename of ['ski-search.json','ski-search2.json']){
+      const callId=randomUUID(),command=`/bin/sh -lc "roomtalk search web --objective public --query public --json > /workspace/${filename}"`;
+      const common={clientId:'ai',roomId,turnId,timestamp:new Date().toISOString(),username:'Agent',status:'complete'};
+      await store.appendMessage({...common,id:randomUUID(),content:command,messageType:'tool_call',toolCallId:callId,toolName:'shell',toolArgs:{command}});
+      await store.appendMessage({...common,id:randomUUID(),content:'',messageType:'tool_result',toolCallId:callId,toolName:'shell',exitCode:0,isError:false});
+    }
     await page.reload();await expect(page.getByTestId('personal-mail-tool-card')).toContainText('Source email card');
     await expect(page.getByTestId('personal-search-tool-card').getByRole('link')).toHaveCount(1);
+    await expect(page.getByText('Search completed',{exact:true})).toHaveCount(2);
+    await expect(page.getByText('Results were saved to a file.',{exact:true})).toHaveCount(2);
+    await expect(page.getByText('Search failed',{exact:true})).toHaveCount(0);
+    await expect(page.getByText('Search did not return readable results.',{exact:true})).toHaveCount(0);
     await page.screenshot({path:'/tmp/roomtalk-openmuse-inline-cards-mobile.png',fullPage:true});
     await page.getByRole('button',{name:'Open email',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('Second complete thread message');
     await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();await page.getByRole('button',{name:'Chat',exact:true}).click();

@@ -3,7 +3,7 @@ import type {PersonalMail} from './personalAgent';
 export type PersonalWorkspaceTarget='mail'|'goals'|'memory'|'activity';
 export type PersonalWorkspaceOpener=(tab:PersonalWorkspaceTarget,mail?:PersonalMail)=>void;
 export type PersonalInlineKind='mail-search'|'mail-thread'|'search'|'goal'|'memory'|'status';
-export interface PersonalInlineStep {id:string;kind:PersonalInlineKind;loading:boolean;result:unknown}
+export interface PersonalInlineStep {id:string;kind:PersonalInlineKind;loading:boolean;result:unknown;savedToFile?:boolean}
 const sourceKinds:Record<string,PersonalInlineKind>={search_mail:'mail-search',read_mail_thread:'mail-thread',search_web:'search',create_goal:'goal',remember_fact:'memory',agent_status:'status'};
 export function personalToolReceipt(message:Message):unknown {
   // Full durable output is necessary: the workspace preview can stop before the JSON receipt.
@@ -29,6 +29,7 @@ export function readPersonalInlineSteps(messages:Message[]):PersonalInlineStep[]
     }
     if(!kind)return [];
     const result=call.toolCallId?results.get(call.toolCallId):undefined;
-    return [{id:call.id,kind,loading:!result,result:result?personalToolReceipt(result):null}];
+    const savedToFile=kind==='search' && typeof command==='string' && /--json\s*>{1,2}\s*\S/.test(command) && result?.exitCode===0 && !result.isError && !result.content.trim();
+    return [{id:call.id,kind,loading:!result,result:result?personalToolReceipt(result):null,savedToFile}];
   });
 }

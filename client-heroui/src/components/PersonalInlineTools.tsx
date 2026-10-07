@@ -63,10 +63,11 @@ export function PersonalMailToolCard({step,active,open}:{step:PersonalInlineStep
 // OpenMuse search-tool-card.tsx: deduplicated real URLs, honest stopped/error/empty/truncated states.
 export function PersonalSearchToolCard({step,active}:{step:PersonalInlineStep;active:boolean}){
   const {t}=useTranslation(),failure=errorSchema.safeParse(step.result),parsed=searchSchema.safeParse(step.result);
-  const error=failure.success?failure.data.error:!step.loading && !parsed.success?t('personalToolSearchUnreadable'):'';
+  const error=failure.success?failure.data.error:!step.loading && !parsed.success && !step.savedToFile?t('personalToolSearchUnreadable'):'';
   const sources=parsed.success?[...new Map(parsed.data.results.map(source=>[source.url,source])).values()]:[];
   return <div className="w-full max-w-[440px] space-y-2.5 rounded-[23px] bg-content2 p-3.5" data-testid="personal-search-tool-card">
-    <div className="flex items-center gap-2.5 text-[15px]">{step.loading && active?<Spinner size="sm"/>:<Icon icon="lucide:search" width={18} className="text-secondary"/>}<span>{t(error?'personalToolSearchFailed':step.loading?active?'personalToolSearching':'personalToolSearchStopped':sources.length?'personalToolSourcesFound':'personalToolSourcesEmpty',{count:sources.length})}</span></div>
+    <div className="flex items-center gap-2.5 text-[15px]">{step.loading && active?<Spinner size="sm"/>:<Icon icon="lucide:search" width={18} className="text-secondary"/>}<span>{t(error?'personalToolSearchFailed':step.loading?active?'personalToolSearching':'personalToolSearchStopped':step.savedToFile?'personalToolSearchCompleted':sources.length?'personalToolSourcesFound':'personalToolSourcesEmpty',{count:sources.length})}</span></div>
+    {step.savedToFile && <p className="text-[11px] text-default-500">{t('personalToolSearchSavedToFile')}</p>}
     {!step.loading && parsed.success && <>{sources.map(source=><a key={source.url} className="block break-words text-[15px] leading-[23px] text-foreground underline" href={source.url} target="_blank" rel="noopener noreferrer">{source.title || source.url}</a>)}{parsed.data.truncated && <p className="text-[11px] text-default-500">{t('personalToolSearchTruncated')}</p>}{[...new Set(parsed.data.warnings)].map(warning=><p key={warning} className="break-words text-[11px] text-default-500">{warning}</p>)}</>}
     {error && <ErrorNotice error={error}/>}
   </div>;
