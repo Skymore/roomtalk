@@ -766,7 +766,7 @@ test('keeps one app entry, searches all tools and opens connected apps directly 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const search=page.getByPlaceholder('Search apps',{exact:true});
   await search.fill('  Files  ');
-  await expect(page.getByRole('button',{name:/^Files PDFs/})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:'Files',exact:true})).toHaveCount(1);
   await expect(page.getByText('No matching apps.',{exact:true})).toHaveCount(0);
   await search.fill('no-such-app');
   await expect(page.getByText('No matching apps.',{exact:true})).toBeVisible();
@@ -775,7 +775,7 @@ test('keeps one app entry, searches all tools and opens connected apps directly 
   await search.press('Backspace');
   await expect(search).toHaveValue('');
   connected=true;
-  await page.getByRole('button',{name:/^Files PDFs/}).click();
+  await page.getByRole('button',{name:'Files',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Files',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Back to Apps',exact:true}).click();
   await page.getByRole('button',{name:'Gmail',exact:true}).click();
