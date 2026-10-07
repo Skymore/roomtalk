@@ -740,6 +740,34 @@ test('imports a real fillable PDF and downloads a distinct saved copy on mobile'
   expect(forbidden.status()).toBe(401);
 });
 
+test('shows a side chat title once while work is starting on mobile',async({page,context})=>{
+  await page.setViewportSize({width:390,height:844});
+  await seedClient(context,uniqueName('side-chat-title-owner'));
+  let runningRoomId:string | undefined;
+  await page.route('**/api/personal-agent?*',async route=>{
+    const response=await route.fetch();
+    const snapshot=await response.json();
+    if(runningRoomId)snapshot.rooms=snapshot.rooms.map((room:Record<string,unknown>)=>room.id===runningRoomId?{...room,personalAgentTaskStatus:'running',personalAgentTaskPlan:undefined}:room);
+    await route.fulfill({response,json:snapshot});
+  });
+  await openRoomsPage(page);
+  await page.getByRole('button',{name:'Settings',exact:true}).first().click();
+  await page.getByLabel('User ID password',{exact:true}).first().fill('Side-chat-title-ui-2026');
+  await page.getByRole('button',{name:'Set password',exact:true}).click();
+  await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
+  await openPersonalAgent(page);
+  await createSideChat(page,'Side chat');
+  runningRoomId=await page.evaluate(()=>JSON.parse(localStorage.getItem('roomtalk_current_room')!).id as string);
+  await page.getByRole('button',{name:'Activity',exact:true}).click();
+  const status=page.getByRole('button',{name:'Open My Agent activity and approvals',exact:true});
+  await expect(status.getByText('Working on it…',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await expect(page.getByText('Side chat',{exact:true})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:'Task details',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:'/tmp/roomtalk-side-chat-title-fixed-mobile.png',fullPage:true});
+});
+
 test('keeps one app entry, searches all tools and opens connected apps directly on mobile',async({page,context})=>{
   test.setTimeout(90000);
   await page.setViewportSize({width:390,height:844});

@@ -118,7 +118,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   const mainRoom = rooms.find(room => room.id === snapshot?.profile.mainRoomId);
   React.useEffect(()=>{if(mainRoom && !selectedRoomId && !selectingMain.current){selectingMain.current=true;(onMainRoomSelect || onRoomSelect)(mainRoom);}},[mainRoom,selectedRoomId,onMainRoomSelect,onRoomSelect]);
   const activeTask=rooms.find(room=>room.personalAgentTaskStatus==='waiting_input' || room.personalAgentTaskStatus==='waiting_review') || rooms.find(room=>room.personalAgentTaskStatus==='running');
-  const agentStatus=activeTask?activeTask.personalAgentTaskStatus==='waiting_review'?t('personalSourceReadyReview',{title:activeTask.name}):activeTask.personalAgentTaskStatus==='waiting_input'?t('personalSourceNeedsInput',{title:activeTask.name}):activeTask.personalAgentTaskPlan?.find(step=>step.status==='in_progress')?.step || activeTask.name:rooms.some(room=>room.personalAgentTaskStatus==='queued' && room.personalAgentTaskKind)?t('personalSourcePickingUp'):t('personalSourceHere');
+  const agentStatus=activeTask?activeTask.personalAgentTaskStatus==='waiting_review'?t('personalSourceReadyReview',{title:activeTask.name}):activeTask.personalAgentTaskStatus==='waiting_input'?t('personalSourceNeedsInput',{title:activeTask.name}):activeTask.personalAgentTaskPlan?.find(step=>step.status==='in_progress')?.step || t('personalAgentThinking'):rooms.some(room=>room.personalAgentTaskStatus==='queued' && room.personalAgentTaskKind)?t('personalSourcePickingUp'):t('personalSourceHere');
 
   const isConnected = connection?.status === 'connected';
 

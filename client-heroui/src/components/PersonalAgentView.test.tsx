@@ -67,6 +67,14 @@ describe('PersonalAgentView', () => {
     source: { kind: 'memory' as const, id: `note-${id}`, title: 'Actual topic', excerpt: 'Confirmed source text', recordedAt: snapshot.profile.updatedAt },
     automatic: false, status: 'new' as const, createdAt: snapshot.profile.createdAt, updatedAt: snapshot.profile.updatedAt });
 
+  it.each(['main', 'task'] as const)('shows work status without repeating the %s conversation title before a plan exists', async kind => {
+    const room = { ...snapshot.rooms[0], id: kind === 'main' ? 'main-1' : 'side-1', name: kind === 'main' ? 'Main chat' : 'Side chat', personalAgentThreadKind: kind, personalAgentTaskStatus: 'running' as const };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, rooms: kind === 'main' ? [room] : [...snapshot.rooms, room] });
+    render(<PersonalAgentView {...props()} selectedRoomId={room.id} conversation={() => <p>{room.name}</p>} />);
+    await screen.findByText('personalAgentThinking');
+    expect(screen.getAllByText(room.name)).toHaveLength(1);
+  });
+
   it('preserves a failed tracking draft and controls the saved watch with its current revision', async () => {
     const callbacks = props();
     const watch = { id: 'watch', roomId: 'watch-room', title: 'Availability', url: 'https://example.org/stock', condition: 'change', value: '',
