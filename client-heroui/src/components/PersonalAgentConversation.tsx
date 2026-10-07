@@ -145,13 +145,13 @@ export const PersonalAgentConversation: React.FC<{
         ensureRoomSessionReady={ensureRoomSessionReady} messageSyncRequestId={props.messageSyncRequestId} onRoomUpdated={props.onRoomUpdated}
         onRoomDeleted={props.onRoomDeleted} onRoomAccessDenied={props.onRoomAccessDenied} onOpenWorkspaceFile={path => void openFile(path)} />
     </div>
-    <div className="mx-auto w-full max-w-3xl shrink-0 pb-5 pt-3">
+    <div className="mx-auto w-full max-w-3xl shrink-0 pt-3">
       {attachments.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{attachments.map(item => <span key={item.id} className="flex items-center gap-1 rounded-full bg-default-100 px-3 py-1 text-xs">{item.mediaAsset?.filename || t('attachment')}<button type="button" aria-label={t('remove')} onClick={() => setAttachments(previous => previous.filter(entry => entry.id !== item.id))}><Icon icon="lucide:x" /></button></span>)}</div>}
       <div className="flex items-end gap-2 rounded-3xl border border-default-200 bg-content1 p-2 shadow-sm">
         <input ref={fileInput} type="file" multiple className="hidden" onChange={event => { void upload(Array.from(event.target.files || [])); event.target.value = ''; }} />
         <Button isIconOnly variant="light" radius="full" aria-label={t('personalAgentAttach')} isDisabled={!canSend || sending} onPress={() => fileInput.current?.click()}><Icon icon="lucide:plus" className="h-5 w-5" /></Button>
         <div ref={editor} contentEditable={canSend && !sending} role="textbox" aria-label={t('personalAgentMessageInput')} aria-multiline="true" data-testid="message-editor" data-placeholder={t('personalAgentMessagePlaceholder')}
-          className="max-h-40 min-h-10 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words px-1 py-2 text-sm outline-none empty:before:pointer-events-none empty:before:text-default-400 empty:before:content-[attr(data-placeholder)] focus-visible:ring-2 focus-visible:ring-secondary"
+          className="max-h-40 min-h-10 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words px-1 py-2 text-sm outline-none empty:before:pointer-events-none empty:before:text-default-400 empty:before:content-[attr(data-placeholder)]"
           onInput={event => { const value = event.currentTarget.innerText; setText(value); saveDraft(value); }}
           onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
         {running && <Button isIconOnly radius="full" color="secondary" aria-label={t('personalAgentStop')} isLoading={stopping} isDisabled={!canSend} onPress={() => { setStopping(true); void ensureRoomSessionReady(room.id).then(() => interruptCodeAgentTurn(room.id)).catch(error => showError(error.message)).finally(() => { if (mounted.current) setStopping(false); }); }}><Icon icon="lucide:square" className="h-4 w-4 fill-current" /></Button>}

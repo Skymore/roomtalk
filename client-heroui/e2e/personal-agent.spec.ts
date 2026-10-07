@@ -766,6 +766,26 @@ test('shows a side chat title once while work is starting on mobile',async({page
   await expect(page.getByRole('button',{name:'Task details',exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:'/tmp/roomtalk-side-chat-title-fixed-mobile.png',fullPage:true});
+  const editor=page.getByTestId('message-editor');
+  for(const height of [844,420]){
+    await page.setViewportSize({width:390,height});
+    await editor.click();
+    await expect(editor).toBeFocused();
+    const layout=await editor.evaluate(element=>{
+      const style=getComputedStyle(element);
+      const composer=element.parentElement!.getBoundingClientRect();
+      const menu=document.querySelector('nav[aria-label="Personal agent sections"] > div')!.getBoundingClientRect();
+      return {shadow:style.boxShadow,outline:style.outlineStyle,border:style.borderWidth,gap:menu.top-composer.bottom,composerBottom:composer.bottom,menuBottom:menu.bottom,height:innerHeight};
+    });
+    expect(layout.shadow).toBe('none');
+    expect(layout.outline).toBe('none');
+    expect(layout.border).toBe('0px');
+    expect(layout.gap).toBeGreaterThanOrEqual(0);
+    expect(layout.gap).toBeLessThanOrEqual(12);
+    expect(layout.composerBottom).toBeLessThanOrEqual(height);
+    expect(layout.menuBottom).toBeLessThanOrEqual(height);
+    await page.screenshot({path:`/tmp/roomtalk-composer-${height}-fixed-mobile.png`,fullPage:true});
+  }
 });
 
 test('keeps one app entry, searches all tools and opens connected apps directly on mobile',async({page,context})=>{
