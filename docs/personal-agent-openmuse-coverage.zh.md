@@ -4,7 +4,7 @@
 
 用户要求的差异：执行器固定 Codex app-server/fullAccess；入口 🦊；个人聊天留在个人助理里；记忆进入后直接显示；设置默认只读，点击编辑后修改。普通 RoomTalk 对话保留原有功能。
 
-2026-10-06 再次按完整源码复查，发现此前清单遗漏了 JEV 交互式选项，不能把静态比较结果卡片算作完整移植。该模块现已移植原版服务、校验、排序、证据、持久选择、精炼和客户端交互，并接入 Codex。生产没有 TYPESAFE_API_KEY，因此保持原版默认 JEV_MODE=off；sample 仅用于明确标记的自动化测试。Google 的真实连接仍等待 OAuth 密钥、回调和授权范围配置确认。以下历史验收只证明相应模块，不能代替全部功能或外部服务验收。
+2026-10-06 再次按完整源码复查，发现此前清单遗漏了 JEV 交互式选项，不能把静态比较结果卡片算作完整移植。该模块现已移植原版服务、校验、排序、证据、持久选择、精炼和客户端交互，并接入 Codex。生产没有 TYPESAFE_API_KEY，因此保持原版默认 JEV_MODE=off；sample 仅用于明确标记的自动化测试。Google OAuth 已于 2026-10-07 完成独立客户端、生产凭据、回调、五项范围和真实账号连接；Gmail 列表与线程读取已验证。Calendar API 尚等待使用条款确认，日历 live 验收未完成。以下历史验收只证明相应模块，不能代替全部功能或外部服务验收。
 
 ## 本轮源码复查与修正
 
@@ -55,8 +55,8 @@
 | --- | --- |
 | Computer workspace | Docker/E2B Desktop、账号电脑租约、持久命令/退出/超时回执、实际文件编辑、PDF 导入/导出，源版 Browser / Desktop / Terminal / Files 页 |
 | Desktop stream / tool cards | 真实 VNC、截图/点击/键盘、操作 ID、暂停/冷恢复、持久截图；原项目 39 项协议检查、实际 E2B HTTP 验收和手机桌面/终端/文件流程通过；真实 Codex view_image 已确认 |
-| Google OAuth | PKCE、一次性状态、加密凭据、重连代际、刷新、断开/撤销；真实 PostgreSQL 通过。生产仍缺少 client secret/回调配置，未连接真实 Google 账号 |
-| Mail / thread / attachment | 完整 MIME 正文/线程、搜索、已读状态、附件导入；原项目接口测试通过，浏览器使用明确 Google 响应 fixture |
+| Google OAuth | PKCE、一次性状态、加密凭据、重连代际、刷新、断开/撤销；真实 PostgreSQL 通过。独立 Personal Agent 客户端、Keychain 密钥、回调、范围和真实账号连接已验证；原普通登录客户端保留 |
+| Mail / thread / attachment | 完整 MIME 正文/线程、搜索、已读状态、附件导入；原项目接口与 fixture 流程通过；2026-10-07 生产真实 Gmail 列表及邮件详情读取通过 |
 | Draft / reply / send / ReviewDetail | 持久草稿、回复引用、附件、具体内容确认、发送回执与任务续跑；并发一次、取消/暂停、版本/未知结果检查及刷新恢复通过。审阅属于源版产品流程，执行器没有权限审批页面 |
 | Calendar / EventEditor | 日历选择、日期范围、时区、事件增删改、ETag 版本审阅；接口、持久回执、手机编辑/保存/重载通过；真实 Google 日历尚未验收 |
 | OpenBot | 按源版保留禁用适配器及协议/身份测试；不伪装在线连接 |
@@ -102,3 +102,11 @@
 - 暗色复查：对话 canvas 继承个人页面背景，避免嵌套黑色矩形；来源链接采用原版浅蓝 palette，保证深色卡片上的可读性。本地、room.ruit.me、ai-chat.wenlin.dev 均 ready。最终部署证据单独保存在 `/tmp/roomtalk-openmuse-verification-20261006.json`。
 - Google OAuth 回调、权限范围仍为未提交草稿；没有新建 secret、启用 Gmail/Calendar API、或声称真实账号连接成功。Jev live 缺少 TYPESAFE_API_KEY，保持源版默认 off。
 - 跨标签页复查发现：普通房间记录被另一个标签页覆盖后，个人页面刷新会加入主聊，却仍选中侧聊，导致一直加载。恢复流程现优先使用个人助理自己的已选对话；53 项页面测试通过，包含根路径、个人入口和普通聊天独立恢复的回归。
+
+## OAuth 真实账号连接复核（2026-10-07）
+
+- RoomTalk 项目 `roomtalk-499220` 的独立 Web 客户端为 RoomTalk Personal Agent，回调为 `https://room.ruit.me/api/personal-agent/google/callback`。新密钥已存入生产 Keychain 并部署，普通 RoomTalk 登录客户端保留。
+- Google Cloud 显示 Data access changes saved；范围为 gmail.readonly、gmail.send、calendar.calendarlist.readonly、calendar.events.readonly、calendar.events。Gmail API 状态为 Enabled。
+- 真实账号连接后的 Google 回调显示 Google is connected；RoomTalk 刷新显示账号与断开连接入口。生产 Gmail 列表与完整邮件详情已实际读取，写权限在 Google 授权页已勾选并授予；未发送任意测试邮件。
+- Google 仍显示应用未验证，尚未提交应用审核。Calendar API 页面要求接受使用条款，等待用户单独确认；日历 API 启用及真实事件读取尚未完成，不能把 OAuth 已连接当成日历可用证明。
+- 当前截图、连接结果和未完成事项记录于 `/tmp/roomtalk-openmuse-verification-20261006.json`。

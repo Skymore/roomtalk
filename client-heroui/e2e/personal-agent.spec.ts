@@ -362,14 +362,6 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await goalRow.click();
   await sheet.getByRole('button',{name:'Pause',exact:true}).click();await expect(sheet.getByText('Paused',{exact:true})).toBeVisible();
   await sheet.getByRole('button',{name:'Resume',exact:true}).click();await expect(sheet.getByText('Active',{exact:true})).toBeVisible();
-  await sheet.getByRole('button',{name:'Complete goal',exact:true}).click();
-  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
-  await expect(sheet.getByRole('checkbox',{name:'Prepare a weekly plan',exact:true})).not.toBeChecked();
-  await sheet.getByRole('button',{name:'Close',exact:true}).click();await page.reload();
-  await page.getByRole('button',{name:'Goals',exact:true}).click();await goalRow.click();
-  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
-  await expect(sheet.getByRole('checkbox',{name:'Prepare a weekly plan',exact:true})).not.toBeChecked();
-  await sheet.getByRole('button',{name:'Resume',exact:true}).click();
   const [runResponse]=await Promise.all([
     page.waitForResponse(response=>response.url().endsWith('/api/personal-agent/tasks') && response.request().method()==='POST'),
     sheet.getByRole('button',{name:'Plan next steps',exact:true}).click(),
@@ -384,6 +376,16 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   await expect(sheet.getByRole('checkbox',{name:'Prepare a weekly plan',exact:true})).toBeChecked();
   await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:'/tmp/roomtalk-openmuse-goal-detail-mobile.png',fullPage:true});
+  await sheet.getByRole('button',{name:'Complete goal',exact:true}).click();
+  await expect(sheet).toHaveCount(0);await expect(goalRow).not.toBeVisible();
+  const completed=page.getByTestId('personal-completed-goals');
+  await expect(completed).not.toHaveAttribute('open','');
+  await completed.locator('summary').click();await goalRow.click();
+  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
+  await expect(sheet.getByRole('checkbox',{name:'Prepare a weekly plan',exact:true})).toBeChecked();
+  await expect(sheet.getByRole('checkbox',{name:'Prepare a weekly plan',exact:true})).toBeDisabled();
+  await expect(sheet.getByRole('button',{name:'Resume',exact:true})).toHaveCount(0);
+  await expect(sheet.getByRole('button',{name:'Plan next steps',exact:true})).toHaveCount(0);
   await sheet.getByRole('button',{name:'Close',exact:true}).click();
   await page.getByRole('button',{name:'Create Health goal',exact:true}).click();
   await sheet.getByLabel('Your goal',{exact:true}).fill('A short walk');
@@ -994,10 +996,6 @@ test('uses the source goal categories, read-only list and milestone-preserving c
   expect(await summary.evaluate(element=>element.getBoundingClientRect().height <= parseFloat(getComputedStyle(element).lineHeight)*2+1)).toBe(true);
   await expect(page.getByRole('checkbox',{name:'Review my budget',exact:true})).toHaveCount(0);await row.click();
   await expect(sheet.getByText(description,{exact:true})).toBeVisible();
-  await sheet.getByRole('button',{name:'Complete goal',exact:true}).click();await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
-  await expect(sheet.getByRole('checkbox',{name:'Review my budget',exact:true})).not.toBeChecked();
-  await sheet.getByRole('button',{name:'Close',exact:true}).click();await page.reload();await page.getByRole('button',{name:'Goals',exact:true}).click();await row.click();
-  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();await sheet.getByRole('button',{name:'Resume',exact:true}).click();
   await expect(sheet.getByText('Active',{exact:true})).toBeVisible();
   const [response]=await Promise.all([page.waitForResponse(response=>response.url().endsWith('/api/personal-agent/tasks') && response.request().method()==='POST'),sheet.getByRole('button',{name:'Plan next steps',exact:true}).click()]);
   expect(response.ok()).toBe(true);const task=(await response.json()).room as Room;
@@ -1007,6 +1005,20 @@ test('uses the source goal categories, read-only list and milestone-preserving c
   await expect(sheet.getByRole('button').filter({hasText:'Plan: Emergency fund'})).toBeVisible();
   const snapshot=await (await request.get(`${serverURL}/api/personal-agent`,{headers:accountHeaders(clientId,token)})).json();
   expect(snapshot.goals[0].category).toBe('Finances');expect(snapshot.goals[0].prompt).toBe(description);expect(snapshot.goals[0].milestones[0].done).toBe(false);expect(task.personalAgentGoalId).toBe(snapshot.goals[0].id);
+  await sheet.getByRole('button',{name:'Complete goal',exact:true}).click();await expect(sheet).toHaveCount(0);
+  const completed=page.getByTestId('personal-completed-goals');
+  await expect(row).not.toBeVisible();await completed.locator('summary').click();await row.click();
+  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
+  await expect(sheet.getByRole('checkbox',{name:'Review my budget',exact:true})).not.toBeChecked();
+  await expect(sheet.getByRole('checkbox',{name:'Review my budget',exact:true})).toBeDisabled();
+  await expect(sheet.getByRole('button',{name:'Resume',exact:true})).toHaveCount(0);
+  await expect(sheet.getByRole('button',{name:'Plan next steps',exact:true})).toHaveCount(0);
+  await sheet.getByRole('button',{name:'Close',exact:true}).click();await page.reload();
+  await page.getByRole('button',{name:'Goals',exact:true}).click();await expect(row).not.toBeVisible();
+  await completed.locator('summary').click();await row.click();
+  await expect(sheet.getByText('Completed',{exact:true})).toBeVisible();
+  await expect(sheet.getByRole('checkbox',{name:'Review my budget',exact:true})).not.toBeChecked();
+  await expect(sheet.getByRole('button').filter({hasText:'Plan: Emergency fund'})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'/tmp/roomtalk-openmuse-goal-detail-mobile.png',fullPage:true});
 });
 
