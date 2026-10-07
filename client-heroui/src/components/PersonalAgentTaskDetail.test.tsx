@@ -37,7 +37,7 @@ const open=()=>render(<PersonalAgentTaskDetailView clientId="owner" roomId="task
 describe('OpenMuse task detail layout',()=>{
   it('shows the final outcome and deliverables before sources and timeline without duplicating chat search cards',async()=>{
     const data=detail();
-    data.messages.push({...data.messages[1],id:'second-search',toolCallId:'second-call'}, {...data.messages[2],id:'second-receipt',toolCallId:'second-call'});
+    data.messages.push({...data.messages[1],id:'second-search',toolCallId:'second-call'}, {...data.messages[2],id:'second-receipt',toolCallId:'second-call',content:JSON.stringify({...searchResult,results:[{...searchResult.results[0],title:'Repeated source'}]})});
     api.readPersonalAgentTask.mockResolvedValue(data);
     open();
     const outcome=await screen.findByTestId('personal-task-outcome');
@@ -46,6 +46,7 @@ describe('OpenMuse task detail layout',()=>{
     const sources=screen.getByTestId('personal-task-sources'),timeline=screen.getByTestId('personal-task-timeline');
     for(const [before,after] of [[outcome,files],[files,saved],[saved,sources],[sources,timeline]])expect(before.compareDocumentPosition(after)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(sources).getAllByRole('link')).toHaveLength(1);
+    expect(within(sources).getByText('Resort opening dates')).toBeTruthy();
     expect(within(sources).getByText('December opening confirmed.')).toBeTruthy();
     expect(within(sources).getByRole('link').getAttribute('href')).toBe(searchResult.results[0].url);
     expect(within(timeline).getByText('Checking resort dates')).toBeTruthy();
@@ -75,5 +76,12 @@ describe('OpenMuse task detail layout',()=>{
     expect(screen.queryByTestId('personal-task-outcome')).toBeNull();
     expect(screen.getByRole('button',{name:'personalTaskContinue'})).toBeTruthy();
     expect(within(screen.getByTestId('personal-task-timeline')).getByText('Which departure city should I use?')).toBeTruthy();
+  });
+  it('keeps source excerpts to the original 500 character evidence limit',async()=>{
+    const data=detail();data.messages[2].content=JSON.stringify({...searchResult,results:[{...searchResult.results[0],excerpts:['A'.repeat(300),'B'.repeat(900)]}]});
+    api.readPersonalAgentTask.mockResolvedValue(data);open();
+    const sources=await screen.findByTestId('personal-task-sources');
+    const excerpt=sources.querySelector('p.text-default-500')!;
+    expect(excerpt.textContent).toBe('A'.repeat(300)+'\n'+'B'.repeat(199));
   });
 });

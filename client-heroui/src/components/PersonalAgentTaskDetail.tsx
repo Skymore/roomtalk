@@ -64,10 +64,14 @@ export const PersonalAgentTaskDetailView:React.FC<{clientId:string;roomId:string
   const latestPlan=messages.filter(message=>message.toolName==='update_plan' && Array.isArray(message.toolArgs?.plan)).at(-1)?.toolArgs?.plan as {step:string;status:string}[]|undefined;
   const latestTurn=detail?.turns.at(-1);
   const finalMessage=messages.find(message=>message.id===latestTurn?.finalMessageId);
-  const sources=[...new Map(readPersonalInlineSteps(messages).filter(step=>step.kind==='search').flatMap(step=>{
+  const sourceMap=new Map<string,{url:string;title?:string|null;excerpt:string}>();
+  for(const step of readPersonalInlineSteps(messages).filter(step=>step.kind==='search')){
     const parsed=searchEvidenceSchema.safeParse(step.result);
-    return parsed.success?parsed.data.results:[];
-  }).map(source=>[source.url,source])).values()];
+    if(parsed.success)for(const source of parsed.data.results){
+      if(!sourceMap.has(source.url))sourceMap.set(source.url,{url:source.url,title:source.title,excerpt:(source.excerpts || []).join('\n').slice(0,500)});
+    }
+  }
+  const sources=[...sourceMap.values()];
   const status=detail?.room.personalAgentTaskStatus;
   const outcome=status==='complete' && latestTurn?.status==='complete'?finalMessage:undefined;
   const cancelled=status==='cancelled',paused=status==='paused';
@@ -89,7 +93,7 @@ export const PersonalAgentTaskDetailView:React.FC<{clientId:string;roomId:string
       {outcome?.content.trim() && <section className="rounded-[22px] bg-success/10 p-[18px]" data-testid="personal-task-outcome"><MarkdownContent content={outcome.content}/></section>}
       {latestTurn?.status==='error' && <p role="alert" className="text-sm text-danger">{finalMessage?.content || t('personalAgentTaskFailed')}</p>}
       <PersonalAgentTaskArtifacts clientId={clientId} detail={detail}/>
-      {sources.length>0 && <section className="space-y-3.5" data-testid="personal-task-sources"><h3 className="text-sm font-semibold">{t('personalTaskSources')}</h3>{sources.map(source=><div key={source.url} className="space-y-1 border-l-2 border-secondary pl-3"><p className="break-words text-xs font-semibold">{source.title || source.url}</p>{source.excerpts?.map((excerpt,index)=><p key={index} className="whitespace-pre-wrap break-words text-xs text-default-500">{excerpt}</p>)}<a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center rounded-full bg-content2 px-4 py-2 text-xs font-semibold">{t('personalTaskOpenSource')}</a></div>)}</section>}
+      {sources.length>0 && <section className="space-y-3.5" data-testid="personal-task-sources"><h3 className="text-sm font-semibold">{t('personalTaskSources')}</h3>{sources.map(source=><div key={source.url} className="space-y-1 border-l-2 border-secondary pl-3"><p className="break-words text-xs font-semibold">{source.title || source.url}</p>{source.excerpt && <p className="whitespace-pre-wrap break-words text-xs text-default-500">{source.excerpt}</p>}<a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center rounded-full bg-content2 px-4 py-2 text-xs font-semibold">{t('personalTaskOpenSource')}</a></div>)}</section>}
       <section className="space-y-4" data-testid="personal-task-timeline"><h3 className="text-sm font-semibold">{t('personalTaskRuns')}</h3>
         {(hasMoreOlder ?? detail.hasMore) && <Button size="sm" variant="light" isLoading={loadingMore} onPress={()=>{const beforeMessageId=messages[0]?.id;if(!beforeMessageId)return;setLoadingMore(true);void readPersonalAgentTask(clientId,roomId,beforeMessageId).then(page=>{setOlderMessages(previous=>[...page.messages,...previous]);setHasMoreOlder(page.hasMore);}).catch(failure=>setError(failure.message)).finally(()=>setLoadingMore(false));}}>{t('personalTaskMoreHistory')}</Button>}
         {detail.turns.map(turn=><article key={turn.id} className="space-y-1 border-l-2 border-default-200 pl-3.5"><div className="text-xs text-default-500"><time>{new Date(turn.startedAt).toLocaleString()}</time> · {t(requests.some(request=>request.turnId===turn.id) ? 'personalTaskWaitingInput' : turnStatus(turn))}</div>
