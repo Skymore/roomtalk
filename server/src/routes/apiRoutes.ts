@@ -3,6 +3,7 @@ import { PersonalAgentTaskService } from '../services/personalAgentTasks';
 import { PersonalAgentFileService } from '../services/personalAgentFiles';
 import { PersonalAgentTrackingService } from '../services/personalAgentTracking';
 import { PersonalAgentNotificationService } from '../services/personalAgentNotifications';
+import { PersonalAgentChatTitleService } from '../services/personalAgentChatTitles';
 import { PersonalAgentIdeaService } from '../services/personalAgentIdeas';
 import { PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
@@ -70,6 +71,7 @@ interface ApiRouteOptions {
   personalAgentComputer?: import('../services/personalAgentComputer').PersonalAgentComputerService;
   personalAgentGoogle?: PersonalAgentGoogleService;
   personalAgentBrowser?: PersonalAgentBrowserService;
+  personalAgentChatTitles?: PersonalAgentChatTitleService;
   personalAgentIdeas?: PersonalAgentIdeaService;
   personalAgentTracking?: PersonalAgentTrackingService;
   personalAgentNotifications?: PersonalAgentNotificationService;
@@ -588,7 +590,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     reviewDecided:options.personalAgentReviewDecided,
     files: new PersonalAgentFileService(store, mediaObjectStorage, routeLogger),
     browser: options.personalAgentBrowser,
-    ideas: options.personalAgentIdeas,
+    ideas: options.personalAgentIdeas, chatTitles: options.personalAgentChatTitles,
     tracking: options.personalAgentTracking, notifications: options.personalAgentNotifications,
     acceptIdea: options.personalAgentAcceptIdea,
     getClientId: req => getQueryClientId(req) || getBodyClientId(req),

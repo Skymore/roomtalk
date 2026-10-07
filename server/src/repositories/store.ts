@@ -710,7 +710,7 @@ export interface AccountCreditGrantInput {
   now?: string;
 }
 
-export type AccountAIUsageSource = 'assistant_run' | 'code_agent_gateway' | 'ai_role_draft';
+export type AccountAIUsageSource = 'assistant_run' | 'code_agent_gateway' | 'ai_role_draft' | 'personal_chat_title';
 
 export interface AccountAIUsageInput {
   id: string;
@@ -823,7 +823,7 @@ export interface DurableRoomStore {
   deletePersonalAgentMemory?(clientId: string, id: string, expectedUpdatedAt: string): Promise<boolean>;
   readPersonalAgentRooms?(clientId: string): Promise<Room[]>;
   createPersonalAgentThread?(clientId: string, name: string, memoryId?: string): Promise<Room>;
-  updatePersonalAgentThread?(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }): Promise<Room | null>;
+  updatePersonalAgentThread?(clientId: string, roomId: string, updates: { name?: string; archived?: boolean; autoTitle?: boolean }): Promise<Room | null>;
   readPersonalAgentGoals?(clientId: string): Promise<PersonalAgentGoal[]>;
   savePersonalAgentGoal?(goal: PersonalAgentGoal, expectedUpdatedAt?: string): Promise<PersonalAgentGoal>;
   deletePersonalAgentGoal?(clientId: string, goalId: string, expectedUpdatedAt?: string): Promise<boolean>;
@@ -1163,7 +1163,7 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.createPersonalAgentThread(clientId, name, memoryId);
   }
 
-  updatePersonalAgentThread(clientId: string, roomId: string, updates: { name?: string; archived?: boolean }) {
+  updatePersonalAgentThread(clientId: string, roomId: string, updates: { name?: string; archived?: boolean; autoTitle?: boolean }) {
     if (!this.durableStore.updatePersonalAgentThread) throw new Error('Personal agents require PostgreSQL');
     return this.durableStore.updatePersonalAgentThread(clientId, roomId, updates);
   }

@@ -8,7 +8,7 @@ import type { PersonalAgentSnapshot } from '../utils/personalAgent';
 const api = vi.hoisted(() => ({
   personalGoogleRequest:vi.fn(),readPersonalAgentNotifications: vi.fn(), markPersonalAgentNotificationRead: vi.fn(), readPersonalAgentWatches: vi.fn(), createPersonalAgentWatch: vi.fn(), controlPersonalAgentWatch: vi.fn(), removePersonalAgentWatch: vi.fn(),
   readPersonalAgentIdeas: vi.fn(), refreshPersonalAgentIdeas: vi.fn(), acceptPersonalAgentIdea: vi.fn(), dismissPersonalAgentIdea: vi.fn(),
-  delegatePersonalAgentTask: vi.fn(), getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
+  generatePersonalAgentChatTitle: vi.fn(), delegatePersonalAgentTask: vi.fn(), getPersonalAgent: vi.fn(), getCodexConnectionStatus: vi.fn(), createPersonalAgentThread: vi.fn(), updatePersonalAgentThread: vi.fn(),
   cancelPersonalAgentGoal: vi.fn(), createPersonalAgentGoal: vi.fn(), updatePersonalAgentGoal: vi.fn(), deletePersonalAgentGoal: vi.fn(),
   mergePersonalAgentMemories: vi.fn(), readPersonalAgentMemories: vi.fn(), savePersonalAgentMemory: vi.fn(), forgetPersonalAgentMemory: vi.fn(), runPersonalAgentGoal: vi.fn(), updatePersonalAgentProfile: vi.fn(),
 }));
@@ -24,6 +24,10 @@ vi.mock('@heroui/react', () => ({
   Spinner: ({ label }: { label: string }) => <span>{label}</span>,
   Input: ({ label, value, onValueChange, type, ...props }: Record<string, any>) => <label>{label}<input aria-label={label || props['aria-label']} value={value} type={type} onChange={event => onValueChange(event.target.value)} /></label>,
   Textarea: ({ label, value, onValueChange }: Record<string, any>) => <label>{label}<textarea aria-label={label} value={value} onChange={event => onValueChange(event.target.value)} /></label>,
+  Dropdown: ({ children }: any) => <div>{children}</div>,
+  DropdownTrigger: ({ children }: any) => <div>{children}</div>,
+  DropdownMenu: ({ children }: any) => <div>{children}</div>,
+  DropdownItem: ({ children, onPress }: any) => <button onClick={onPress}>{children}</button>,
   Modal: ({ children, isOpen }: Record<string, any>) => isOpen ? <div role="dialog">{children}</div> : null,
   ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ModalHeader: ({ children }: { children: React.ReactNode }) => <h3>{children}</h3>,
@@ -185,6 +189,19 @@ describe('PersonalAgentView', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('fills an existing default chat title when the conversation menu opens', async () => {
+    const room = { ...snapshot.rooms[0], id: 'side-title', name: 'Side chat', personalAgentThreadKind: 'task' as const, personalAgentAutoTitle: true };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, rooms: [...snapshot.rooms, room] });
+    api.generatePersonalAgentChatTitle.mockResolvedValue({ room: { ...room, name: '十二月滑雪', personalAgentAutoTitle: false } });
+    render(<PersonalAgentView {...props()} />);
+    await screen.findByText('Muse');
+    expect(api.generatePersonalAgentChatTitle).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'personalAgentConversations' }));
+    await screen.findByText('十二月滑雪');
+    expect(api.generatePersonalAgentChatTitle).toHaveBeenCalledOnce();
+    expect(api.generatePersonalAgentChatTitle).toHaveBeenCalledWith('client-1', 'side-title');
+  });
+
   it('creates a distinct task conversation through the API', async () => {
     const room = { ...snapshot.rooms[0], id: 'task-1', name: 'Trip planning', personalAgentThreadKind: 'task' };
     api.createPersonalAgentThread.mockResolvedValue({ room });
@@ -222,7 +239,7 @@ describe('PersonalAgentView', () => {
     fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByText('personalAgentRestoreChat'));
     await screen.findByText('personalAgentNoArchivedChats');
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentShowActiveChats' }));
-    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByRole('button', { name: /Summer trip/ }));
+    fireEvent.click(within(screen.getByTestId('personal-agent-chat-card')).getByRole('button', { name: /^personalAgentOpenConversation: Summer trip$/ }));
     expect(callbacks.onRoomSelect).toHaveBeenCalledWith(expect.objectContaining({ id: room.id, name: 'Summer trip', personalAgentArchivedAt: undefined }));
     expect(callbacks.showSuccess).toHaveBeenCalledWith('personalAgentConversationRestored');
     expect(screen.queryByRole('button', { name: 'personalAgentOpenMainChat' })).toBeNull();

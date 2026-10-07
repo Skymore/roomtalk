@@ -89,6 +89,9 @@ export const updatePersonalAgentProfile = (
 
 export const createPersonalAgentThread = (clientId: string, name: string, memoryId?: string) => request<{ room: Room }>(clientId, '/threads', 'POST', { name, ...(memoryId ? { memoryId } : {}) });
 
+export const generatePersonalAgentChatTitle = (clientId: string, id: string) =>
+  request<{ room: Room }>(clientId, `/threads/${encodeURIComponent(id)}/title`, 'POST', {});
+
 export const updatePersonalAgentThread = (clientId: string, id: string, updates: { name?: string; archived?: boolean }) =>
   request<{ room: Room }>(clientId, `/threads/${encodeURIComponent(id)}`, 'PATCH', updates);
 

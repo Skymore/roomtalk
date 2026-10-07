@@ -9,6 +9,7 @@ import { PersonalAgentFileService, PersonalAgentFileError } from '../services/pe
 import { PdfError } from '../services/personalAgentPdf';
 import { PersonalAgentTrackingError, PersonalAgentTrackingService } from '../services/personalAgentTracking';
 import { PersonalAgentNotificationService } from '../services/personalAgentNotifications';
+import { PersonalAgentChatTitleService } from '../services/personalAgentChatTitles';
 import { PersonalAgentIdeaService, PersonalAgentIdeaError, personalIdeaPrompt, personalIdeaRevision } from '../services/personalAgentIdeas';
 import { PersonalAgentBrowserError, PersonalAgentBrowserService } from '../services/personalAgentBrowser';
 import { PersonalAgentResultService } from '../services/personalAgentResults';
@@ -27,6 +28,7 @@ export interface PersonalAgentRouteOptions {
   computer?: PersonalAgentComputerService;
   tasks?: PersonalAgentTaskService;
   browser?: PersonalAgentBrowserService;
+  chatTitles?: PersonalAgentChatTitleService;
   ideas?: PersonalAgentIdeaService;
   tracking?: PersonalAgentTrackingService;
   notifications?: PersonalAgentNotificationService;
@@ -311,6 +313,12 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
     const memoryId = req.body?.memoryId === undefined ? undefined : textField(req.body.memoryId, 'memoryId', 100);
     const room = await store.createPersonalAgentThread!(profile.clientId, textField(req.body?.name, 'name', 100), memoryId);
     return res.status(201).json({ room });
+  }));
+
+  app.post('/api/personal-agent/threads/:id/title', withProfile(async (req, res, profile) => {
+    if (!options.chatTitles) return res.status(503).json({ error: 'Chat titles are unavailable' });
+    const room = await options.chatTitles.generate(profile.clientId, req.params.id);
+    return room ? res.json({ room }) : res.status(404).json({ error: 'Conversation not found' });
   }));
 
   app.patch('/api/personal-agent/threads/:id', withProfile(async (req, res, profile) => {

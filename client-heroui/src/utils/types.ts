@@ -210,6 +210,7 @@ export interface Room {
   personalAgentTaskPlan?: {step:string;status:string}[];
   personalAgentTaskSummary?: string;
   personalAgentThreadKind?: 'main' | 'task' | 'watch' | 'browser';
+  personalAgentAutoTitle?: boolean;
   personalAgentGoalId?: string;
   personalAgentArchivedAt?: string;
   hasPassword?: boolean;

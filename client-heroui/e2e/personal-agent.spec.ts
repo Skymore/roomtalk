@@ -46,7 +46,8 @@ const createSideChat=async(page:Page,name:string)=>{
   await expect(page.getByTestId('personal-agent-conversation')).toBeVisible();
   await openThreads(page);
   const row=page.getByTestId('personal-agent-chat-card').filter({hasText:'Side chat'}).first();
-  await row.getByRole('button',{name:'Rename',exact:true}).click();await page.getByLabel('Conversation name',{exact:true}).fill(name);
+  await row.getByRole('button',{name:/^Conversation actions:/}).click();
+  await page.getByRole('menuitem',{name:'Rename',exact:true}).click();await page.getByLabel('Conversation name',{exact:true}).fill(name);
   await page.getByRole('button',{name:'Save name',exact:true}).click();await page.getByTestId('personal-agent-chat-card').filter({hasText:name}).getByRole('button').first().click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 };
@@ -306,12 +307,14 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
 
   // Organizing a topic keeps the same room, transcript, shared memory and main chat.
   const topicCard = page.getByTestId('personal-agent-chat-card').filter({ hasText: 'Plan my week' });
-  await topicCard.getByRole('button', { name: 'Rename', exact: true }).click();
+  await topicCard.getByRole('button', { name: /^Conversation actions:/ }).click();
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Conversation name', { exact: true }).fill('My weekly plan');
   await page.getByRole('dialog').getByRole('button', { name: 'Save name', exact: true }).click();
   const renamedCard = page.getByTestId('personal-agent-chat-card').filter({ hasText: 'My weekly plan' });
   await expect(renamedCard).toBeVisible();
-  await renamedCard.getByRole('button', { name: 'Archive', exact: true }).click();
+  await renamedCard.getByRole('button', { name: /^Conversation actions:/ }).click();
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click();
   await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
   await page.reload();
   await expect(page.getByTestId('personal-agent-conversation')).toBeVisible();
@@ -331,7 +334,8 @@ test('creates a private Codex agent, persists memory, runs a task and goal, and 
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('roomtalk_current_room')!).id)).toBe(topicRoomId);
   await openThreads(page);
   if(await page.getByRole('button',{name:'Archived',exact:true}).count())await page.getByRole('button',{name:'Archived',exact:true}).click();
-  await renamedCard.getByRole('button', { name: 'Restore', exact: true }).click();
+  await renamedCard.getByRole('button', { name: /^Conversation actions:/ }).click();
+  await page.getByRole('menuitem', { name: 'Restore', exact: true }).click();
   await expect(page.getByTestId('personal-agent-chat-card')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show active', exact: true }).click();
   await expect(renamedCard).toBeVisible();
@@ -738,6 +742,41 @@ test('imports a real fillable PDF and downloads a distinct saved copy on mobile'
   expect(await originalRead.body()).toEqual(original);
   const forbidden = await request.get(`${serverURL}/api/personal-agent/files/${source.id}/content`, { headers: accountHeaders('other-owner',token) });
   expect(forbidden.status()).toBe(401);
+});
+
+test('automatically titles a new side chat and preserves a manual rename across reload', async ({page,context,request}) => {
+  test.skip(!process.env.E2E_TITLE_PROVIDER_FIXTURE, 'Requires the local OpenRouter title response fixture');
+  test.setTimeout(90000);
+  await page.setViewportSize({width:390,height:844});
+  const clientId=await seedClient(context,uniqueName('automatic-title-owner'));
+  await openRoomsPage(page);
+  await page.getByRole('button',{name:'Settings',exact:true}).first().click();
+  await page.getByLabel('User ID password',{exact:true}).first().fill('Automatic-title-ui-2026');
+  await page.getByRole('button',{name:'Set password',exact:true}).click();
+  await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Connect Codex',exact:true}).click();
+  await expect(page.getByText('Connected',{exact:true}).first()).toBeVisible({timeout:15000});
+  await openPersonalAgent(page);await openThreads(page);
+  await page.getByRole('button',{name:'New side chat',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByTestId('message-editor').fill('我想计划12月去滑雪 给我几个方案');
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await expect(page.getByTestId('personal-agent-conversation').getByText('十二月滑雪计划',{exact:true})).toBeVisible({timeout:20000});
+  await openThreads(page);
+  const row=page.getByTestId('personal-agent-chat-card').filter({hasText:'十二月滑雪计划'});
+  await row.getByRole('button',{name:/^Conversation actions:/}).click();
+  await page.getByRole('menuitem',{name:'Rename',exact:true}).click();
+  await page.getByLabel('Conversation name',{exact:true}).fill('我的雪季');
+  await page.getByRole('button',{name:'Save name',exact:true}).click();
+  await expect(page.getByTestId('personal-agent-chat-card').filter({hasText:'我的雪季'})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:'/tmp/roomtalk-chat-titles-menu-mobile.png',fullPage:true});
+  await closeThreads(page);await page.reload();await openThreads(page);
+  await expect(page.getByTestId('personal-agent-chat-card').filter({hasText:'我的雪季'})).toBeVisible();
+  const token=await page.evaluate(()=>localStorage.getItem('clientAuthToken')!);
+  const snapshot=await (await request.get(`${serverURL}/api/personal-agent?clientId=${clientId}`,{headers:accountHeaders(clientId,token)})).json();
+  const room=snapshot.rooms.find((item:Room)=>item.name==='我的雪季');
+  expect(room.personalAgentAutoTitle).toBe(false);
 });
 
 test('shows a side chat title once while work is starting on mobile',async({page,context})=>{

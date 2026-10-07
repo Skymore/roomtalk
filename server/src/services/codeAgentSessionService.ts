@@ -181,6 +181,7 @@ export interface CodeAgentSessionServiceOptions {
   clearTurnDeadline?: (handle: unknown) => void;
   personalChoices?: JevService;
   personalSearchEnabled?:boolean;
+  onPersonalAgentPrompt?: (room: Room) => Promise<void>;
   onPersonalAgentTurnCompleted?: (room: Room, message: Message) => Promise<void>;
   now?: () => Date;
   createId?: () => string;
@@ -760,6 +761,9 @@ export class CodeAgentSessionService {
         });
         publicFailureMessage = 'Workspace requires the saved text prompt';
         throw new Error(publicFailureMessage);
+      }
+      if (room!.personalAgentOwnerId && this.options.onPersonalAgentPrompt) {
+        void this.options.onPersonalAgentPrompt(room!).catch(error => this.logger.warn('Could not generate personal chat title', { error, roomId: input.roomId }));
       }
       let preparedChoicePrompt: string | undefined;
       if(room!.personalAgentOwnerId) {

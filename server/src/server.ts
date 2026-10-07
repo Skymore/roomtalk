@@ -19,6 +19,7 @@ import { registerPersonalAgentFileContextRoutes } from './routes/personalAgentFi
 import { registerPersonalAgentTrackingContextRoutes } from './routes/personalAgentTrackingContextRoutes';
 import { PersonalAgentTrackingService } from './services/personalAgentTracking';
 import { PersonalAgentNotificationService } from './services/personalAgentNotifications';
+import { PersonalAgentChatTitleService } from './services/personalAgentChatTitles';
 import { PersonalAgentIdeaService } from './services/personalAgentIdeas';
 import { registerPersonalAgentIdeaContextRoutes } from './routes/personalAgentIdeaContextRoutes';
 import { E2EPersonalBrowserSandbox } from './scripts/e2ePersonalBrowserSandbox';
@@ -624,6 +625,8 @@ const personalSearch = process.env.WEB_SEARCH_ENABLED==='false' ? undefined : ne
 const choicesConfig = personalChoicesConfig();
 const choicesAdapter = createJevAdapter(choicesConfig);
 const personalChoices = choicesAdapter ? new JevService({store:new PersonalComputerStore(store),adapter:choicesAdapter,mode:choicesConfig.jevMode as 'sample'|'live'}) : undefined;
+const personalAgentChatTitles = new PersonalAgentChatTitleService(store, normalizeAIModel('gpt-6-luna'), getAIClientForModel,
+  room => io.to(room.creatorId).emit('room_updated', room));
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
@@ -666,6 +669,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     turnTimeoutMs: codeAgentTurnTimeoutMs,
     personalChoices,
     personalSearchEnabled:Boolean(personalSearch),
+    onPersonalAgentPrompt: room => personalAgentChatTitles.generate(room.personalAgentOwnerId!, room.id).then(() => {}),
     onPersonalAgentTurnCompleted: (room, message) => personalAgentNotifications.completed(room, message),
   }
 );
@@ -943,7 +947,7 @@ registerApiRoutes(app, {
   personalAgentReviewDecided:()=>personalAgentScheduler.tick(),
   personalAgentTasks,
   personalAgentComputer, personalAgentBrowser,
-  personalAgentIdeas,
+  personalAgentIdeas, personalAgentChatTitles,
   personalAgentTracking, personalAgentNotifications,
   personalAgentAcceptIdea: (clientId, id, prompt, expectedUpdatedAt) => personalAgentScheduler.acceptIdea(clientId, id, prompt, expectedUpdatedAt),
   store,

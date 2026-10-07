@@ -182,7 +182,8 @@ const ROOM_KEYS = [
 ] as const;
 
 const validateRoomRow = (value: unknown, path: string, roomId: string): void => {
-  const row = exactKeys(value, path, ROOM_KEYS, ['personal_agent_owner_id', 'personal_agent_thread_kind', 'personal_agent_goal_id', 'personal_agent_archived_at', 'personal_agent_memory_id']);
+  const row = exactKeys(value, path, ROOM_KEYS, ['personal_agent_auto_title', 'personal_agent_owner_id', 'personal_agent_thread_kind', 'personal_agent_goal_id', 'personal_agent_archived_at', 'personal_agent_memory_id']);
+  if (row.personal_agent_auto_title !== undefined && typeof row.personal_agent_auto_title !== 'boolean') fail(`${path}.personal_agent_auto_title`, 'a boolean');
   ['personal_agent_owner_id', 'personal_agent_thread_kind', 'personal_agent_goal_id', 'personal_agent_archived_at', 'personal_agent_memory_id'].forEach(key => {
     if (row[key] !== undefined) nullableString(row[key], `${path}.${key}`);
   });

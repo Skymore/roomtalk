@@ -3053,4 +3053,37 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       ALTER TABLE personal_agent_browser_observations ADD COLUMN browser_session_id TEXT REFERENCES personal_agent_browser_sessions(id) ON DELETE SET NULL;
       UPDATE personal_agent_browser_observations observation SET browser_session_id=session.id FROM personal_agent_browser_sessions session WHERE session.room_id=observation.room_id;`,
   },
+  {
+    id: '0059_personal_agent_chat_titles',
+    sql: `ALTER TABLE rooms ADD COLUMN personal_agent_auto_title BOOLEAN NOT NULL DEFAULT FALSE;
+      UPDATE rooms SET personal_agent_auto_title = TRUE
+        WHERE personal_agent_owner_id IS NOT NULL AND personal_agent_thread_kind = 'task'
+          AND personal_agent_goal_id IS NULL AND name IN ('Side chat', '侧聊天')
+          AND NOT EXISTS (SELECT 1 FROM personal_agent_tasks task WHERE task.room_id = rooms.id);
+      CREATE OR REPLACE FUNCTION capture_personal_agent_room_event_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE metadata JSONB;
+      BEGIN
+        IF NEW.event_type = 'room.updated' THEN
+          SELECT jsonb_build_object(
+            'personal_agent_owner_id', personal_agent_owner_id,
+            'personal_agent_thread_kind', personal_agent_thread_kind,
+            'personal_agent_goal_id', personal_agent_goal_id,
+            'personal_agent_archived_at', personal_agent_archived_at,
+            'personal_agent_memory_id', personal_agent_memory_id,
+            'personal_agent_auto_title', personal_agent_auto_title
+          ) INTO metadata FROM rooms WHERE id = NEW.room_id AND personal_agent_owner_id IS NOT NULL;
+          IF metadata IS NOT NULL THEN
+            NEW.payload := jsonb_set(NEW.payload, '{roomRow}', (NEW.payload->'roomRow') || metadata);
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      ALTER TABLE account_ai_usage_events DROP CONSTRAINT account_ai_usage_events_source_check;
+      ALTER TABLE account_ai_usage_events ADD CONSTRAINT account_ai_usage_events_source_check
+        CHECK (source IN ('assistant_run', 'code_agent_gateway', 'ai_role_draft', 'personal_chat_title'));
+      ALTER TABLE guest_ai_usage_events DROP CONSTRAINT guest_ai_usage_events_source_check;
+      ALTER TABLE guest_ai_usage_events ADD CONSTRAINT guest_ai_usage_events_source_check
+        CHECK (source IN ('assistant_run', 'code_agent_gateway', 'ai_role_draft', 'personal_chat_title'));`,
+  },
 ];

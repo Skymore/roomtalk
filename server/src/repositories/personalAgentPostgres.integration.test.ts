@@ -34,6 +34,22 @@ describe('personal agent PostgreSQL persistence', { skip: !databaseUrl }, () => 
     }
   });
 
+  it('persists title eligibility and never overwrites a manual name with an automatic title', async () => {
+    await store.ensurePersonalAgentProfile(owner);
+    const room = await store.createPersonalAgentThread(owner, 'Side chat');
+    assert.equal(room.personalAgentAutoTitle, true);
+    assert.equal((await store.updatePersonalAgentThread(owner, room.id, { name: '十二月滑雪', autoTitle: true }))?.personalAgentAutoTitle, false);
+    assert.equal(await store.updatePersonalAgentThread(owner, room.id, { name: 'Overwrite', autoTitle: true }), null);
+    const pending = await store.createPersonalAgentThread(owner, 'Side chat');
+    await store.updatePersonalAgentThread(owner, pending.id, { name: 'Side chat' });
+    assert.equal(await store.updatePersonalAgentThread(owner, pending.id, { name: 'Overwrite', autoTitle: true }), null);
+    const manual = await store.createPersonalAgentThread(owner, 'Manual title');
+    assert.equal(manual.personalAgentAutoTitle, false);
+    const events = await store.readRoomEvents(room.id, { afterSeq: 0 });
+    assert.equal(events.events.filter(event => event.type === 'room.updated').at(-1)?.payload.room?.personalAgentAutoTitle, false);
+    await pool.query('DELETE FROM rooms WHERE id = ANY($1::text[])', [[room.id, pending.id, manual.id]]);
+  });
+
   it('creates one main room under concurrent initialization and captures private metadata in events', async () => {
     const [first, second] = await Promise.all([store.ensurePersonalAgentProfile(owner), store.ensurePersonalAgentProfile(owner)]);
     assert.equal(first.mainRoomId, second.mainRoomId);
