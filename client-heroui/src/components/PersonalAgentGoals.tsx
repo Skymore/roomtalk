@@ -49,16 +49,25 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
   const [busy,setBusy]=React.useState(false);
   const [error,setError]=React.useState('');
   const goal=goals.find(item=>item.id===selected);
+  const activeGoals=goals.filter(item=>!item.completedAt);
+  const completedGoals=goals.filter(item=>item.completedAt);
   async function act(action:GoalAction){if(busy)return;setBusy(true);setError('');try{await action();}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setBusy(false);}}
   const update=(body:Parameters<typeof updatePersonalAgentGoal>[2])=>act(async()=>{
     if(!goal)return;const saved=await updatePersonalAgentGoal(clientId,goal.id,body,goal.updatedAt);onGoalsChange(goals.map(item=>item.id===goal.id?saved.goal:item));
+    if(saved.goal.completedAt && !goal.completedAt)setSelected(undefined);
   });
+  const renderGoal=(goal:PersonalAgentGoal)=><button key={goal.id} type="button" className="flex w-full items-center gap-3 py-3 text-left" aria-label={t('personalGoalOpen',{title:goal.title})} onClick={()=>{setSelected(goal.id);setError('');}}>
+    <Icon icon="lucide:square" className={`h-5 w-5 shrink-0 ${goal.completedAt?'fill-success text-success':'text-default-400'}`}/><span className="min-w-0 flex-1"><span className="block">{goal.title}</span><span className="mt-1 line-clamp-2 text-sm text-default-500">{goal.completedAt ? t(status(goal)) : goal.prompt || t(status(goal))}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/>
+  </button>;
+
   return <>
     <section className="space-y-2 border-t border-default-200 pt-5" aria-label={t('personalAgentGoals')}>
       <h3 className="flex items-center gap-2 text-lg font-semibold text-secondary"><span className="h-4 w-4 rounded-full border-[5px] border-secondary/20 bg-secondary"/>{t('personalAgentGoals')}</h3>
-      {goals.map(goal=><button key={goal.id} type="button" className="flex w-full items-center gap-3 py-3 text-left" aria-label={t('personalGoalOpen',{title:goal.title})} onClick={()=>{setSelected(goal.id);setError('');}}>
-        <Icon icon="lucide:square" className={`h-5 w-5 shrink-0 ${goal.completedAt?'fill-success text-success':'text-default-400'}`}/><span className="min-w-0 flex-1"><span className="block">{goal.title}</span><span className="mt-1 line-clamp-2 text-sm text-default-500">{goal.prompt || t(status(goal))}</span></span><Icon icon="lucide:chevron-right" className="text-default-400"/>
-      </button>)}
+      {activeGoals.map(renderGoal)}
+      {completedGoals.length>0 && <details className="pt-2" data-testid="personal-completed-goals">
+        <summary className="cursor-pointer py-2 text-sm text-default-500">{t('personalAgentGoalCompleted')} ({completedGoals.length})</summary>
+        {completedGoals.map(renderGoal)}
+      </details>}
       {!goals.length && <p className="py-3 text-sm text-default-500">{t('personalGoalEmpty')}</p>}
     </section>
     <section className="space-y-3 border-t border-default-200 pt-5"><h3 className="text-lg font-semibold">{t('personalGoalCreate')}</h3>
@@ -74,15 +83,15 @@ export const PersonalAgentGoals:React.FC<PersonalAgentGoalsProps>=({clientId,goa
       <Button type="submit" color="secondary" isLoading={busy} isDisabled={!title.trim()}>{t('personalGoalCreateButton')}</Button>
     </form></ModalBody></ModalContent></Modal>
     <Modal isOpen={Boolean(goal)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme"><ModalHeader>{goal?.title}</ModalHeader><ModalBody className="pb-6">{goal && <div className="space-y-3 rounded-2xl border border-default-200 p-4">
-      <div className="flex justify-between gap-3"><h3 className="font-semibold">{goal.title}</h3><span className="rounded-full bg-secondary/15 px-2 py-1 text-xs">{t(status(goal))}</span></div>
+      <div className="flex justify-between gap-3"><h3 className="font-semibold">{goal.title}</h3><span className={`rounded-full px-2 py-1 text-xs ${goal.completedAt?'bg-success/15 text-success-700':'bg-secondary/15'}`}>{t(status(goal))}</span></div>
       <p className="whitespace-pre-wrap text-sm text-default-500">{goal.prompt}</p>
-      <p className="text-xs text-default-500">{t('personalGoalProgress',{done:(goal.milestones || []).filter(item=>item.done).length,total:goal.milestones?.length || 0})}</p>
-      {(goal.milestones || []).map(milestone=><Checkbox key={milestone.id} className="flex" isDisabled={busy} isSelected={milestone.done} onValueChange={done=>void update({milestones:goal.milestones!.map(item=>item.id===milestone.id?{...item,done}:item)})}>{milestone.title}</Checkbox>)}
+      {Boolean(goal.milestones?.length) && <p className="text-xs text-default-500">{t('personalGoalProgress',{done:goal.milestones!.filter(item=>item.done).length,total:goal.milestones!.length})}</p>}
+      {(goal.milestones || []).map(milestone=><Checkbox key={milestone.id} className="flex" isDisabled={busy || Boolean(goal.completedAt)} isSelected={milestone.done} onValueChange={done=>void update({milestones:goal.milestones!.map(item=>item.id===milestone.id?{...item,done}:item)})}>{milestone.title}</Checkbox>)}
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-      <div className="flex flex-wrap gap-2"><Button size="sm" isLoading={busy} onPress={()=>void update({enabled:!goal.enabled,completed:false})}>{t(goal.enabled?'personalAgentPause':'personalAgentResume')}</Button>
-        {!goal.completedAt && <Button size="sm" isLoading={busy} onPress={()=>void update({completed:true})}>{t('personalAgentCompleteGoal')}</Button>}
+      {!goal.completedAt && <div className="flex flex-wrap gap-2"><Button size="sm" isLoading={busy} onPress={()=>void update({enabled:!goal.enabled,completed:false})}>{t(goal.enabled?'personalAgentPause':'personalAgentResume')}</Button>
+        <Button size="sm" isLoading={busy} onPress={()=>void update({completed:true})}>{t('personalAgentCompleteGoal')}</Button>
         <Button size="sm" color="secondary" isLoading={busy} onPress={()=>void act(async()=>{const saved=await delegatePersonalAgentTask(clientId,{kind:'plan',title:`Plan: ${goal.title}`,prompt:`Create a practical plan for this goal: ${goal.title}. ${goal.prompt}`,goalId:goal.id,input:{}});setSelected(undefined);setTaskId(saved.room.id);})}>{t('personalGoalPlan')}</Button>
-      </div>
+      </div>}
       {rooms.filter(room=>room.personalAgentGoalId===goal.id).map(room=><button key={room.id} type="button" className="block w-full rounded-xl border border-default-200 p-3 text-left text-sm" onClick={()=>{setSelected(undefined);setTaskId(room.id);}}>{room.name}<span className="mt-1 block text-xs text-default-500">{t('personalAgentViewWork')}</span></button>)}
     </div>}</ModalBody></ModalContent></Modal>
     {taskId && <PersonalAgentTaskDetailView clientId={clientId} roomId={taskId} isOpen onClose={()=>setTaskId(undefined)} onSubmit={async(request,answer)=>{await answerPersonalAgentTaskInput(clientId,taskId,request.id,answer);}}/>}

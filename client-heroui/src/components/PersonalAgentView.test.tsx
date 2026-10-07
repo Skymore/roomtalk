@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonalAgentView } from './PersonalAgentView';
 import type { PersonalAgentSnapshot } from '../utils/personalAgent';
@@ -258,6 +258,47 @@ describe('PersonalAgentView', () => {
     await waitFor(() => expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', goal.id, { milestones: [{ id: 'm1', title: 'Read sources', done: true }] }, goal.updatedAt));
     fireEvent.click(screen.getByRole('button', { name: 'personalAgentCompleteGoal' }));
     await waitFor(() => expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1', goal.id, expect.objectContaining({ completed: true }), goal.updatedAt));
+  });
+
+  it('keeps completed goals in collapsed history with read-only details and saved work', async () => {
+    const goal = { ...snapshot.goals[0], enabled: false, completedAt: snapshot.profile.createdAt, milestones: [] };
+    const room = { ...snapshot.rooms[0], personalAgentGoalId: goal.id };
+    api.getPersonalAgent.mockResolvedValue({ ...snapshot, goals: [goal], rooms: [room] });
+    render(<PersonalAgentView {...props()} />);
+    await screen.findByText('Muse');fireEvent.click(screen.getByRole('button',{name:'personalAgentGoals'}));
+    const history=screen.getByTestId('personal-completed-goals') as HTMLDetailsElement;
+    expect(history.open).toBe(false);
+    expect(history.querySelector('summary')?.textContent).toContain('(1)');
+    expect(screen.getByRole('button',{name:'personalGoalOpen'}).closest('details')).toBe(history);
+    fireEvent.click(within(history).getByRole('button',{name:'personalGoalOpen',hidden:true}));
+    const dialog=screen.getByRole('dialog');
+    expect(within(dialog).getByText('personalAgentGoalCompleted')).toBeTruthy();
+    expect(within(dialog).queryByRole('button',{name:'personalAgentResume'})).toBeNull();
+    expect(within(dialog).queryByRole('button',{name:'personalGoalPlan'})).toBeNull();
+    expect(within(dialog).queryByText('personalGoalProgress')).toBeNull();
+    fireEvent.click(within(dialog).getByText('personalAgentViewWork'));
+    await screen.findByTestId('source-task-detail');
+    expect(api.updatePersonalAgentGoal).not.toHaveBeenCalled();
+    expect(api.delegatePersonalAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('moves a newly completed goal out of the main list and closes its action dialog', async () => {
+    const goal=snapshot.goals[0];
+    api.updatePersonalAgentGoal.mockImplementation(async()=>{
+      const completed={...goal,enabled:false,completedAt:snapshot.profile.createdAt};
+      api.getPersonalAgent.mockResolvedValue({...snapshot,goals:[completed]});
+      return {goal:completed};
+    });
+    render(<PersonalAgentView {...props()} />);
+    await screen.findByText('Muse');
+    await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'personalAgentGoals'}));});
+    fireEvent.click(screen.getByRole('button',{name:'personalGoalOpen'}));
+    fireEvent.click(screen.getByRole('button',{name:'personalAgentCompleteGoal'}));
+    await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+    const history=await screen.findByTestId('personal-completed-goals') as HTMLDetailsElement;
+    expect(screen.getByRole('button',{name:'personalGoalOpen'}).closest('details')).toBe(history);
+    expect(history.open).toBe(false);
+    expect(api.updatePersonalAgentGoal).toHaveBeenCalledWith('client-1',goal.id,{completed:true},goal.updatedAt);
   });
 
   it('saves user memory and preferences without losing draft changes to refresh', async () => {
