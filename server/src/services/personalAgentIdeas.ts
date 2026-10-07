@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { PersonalAgentIdeaConflictError, RoomStore } from '../repositories/store';
 import { PersonalAgentIdea, PersonalAgentIdeaSourceKind } from '../types';
 import type {Mail} from './personalAgentGoogleTypes';
-import type {PersonalAgentGoogleService} from './personalAgentGoogle';
 
 export class PersonalAgentIdeaError extends Error {
   constructor(message: string, readonly statusCode: number) { super(message); }
@@ -19,7 +18,7 @@ export const personalIdeaRevision = (value: unknown) => {
 };
 
 export class PersonalAgentIdeaService {
-  constructor(private readonly store: RoomStore,private readonly google?:Pick<PersonalAgentGoogleService,'auth'|'mail'>) {}
+  constructor(private readonly store: RoomStore) {}
 
   async list(clientId: string, query: Record<string, unknown> = {}) {
     const limit = Number(query.limit ?? 50), offset = Number(query.offset ?? 0);
@@ -51,7 +50,6 @@ export class PersonalAgentIdeaService {
 
   async refresh(clientId: string) {
     // OpenMuse refreshIdeas: PDF forms, coordination mail and goals without milestones.
-    if(this.google && (await this.google.auth.status(clientId)).connected)await this.google.mail(clientId);
     const goals = await this.store.readPersonalAgentGoals!(clientId);
     for (const goal of goals.filter(item => item.enabled && !item.completedAt && !item.milestones?.length)) {
       try { await this.propose(clientId, { sourceKind: 'goal', sourceId: goal.id, title: `Let's make a plan for ${goal.title}`,taskKind:'plan',

@@ -201,6 +201,9 @@ export function registerPersonalAgentRoutes(app: Express, options: PersonalAgent
   }));
   app.post('/api/personal-agent/ideas/refresh', withProfile(async (_req, res, profile) => {
     if (!options.ideas) return res.status(503).json({ error: 'Suggestions are unavailable' });
+    if (options.google && (await options.google.auth.status(profile.clientId)).connected) {
+      await options.google.mail(profile.clientId);
+    }
     await options.ideas.refresh(profile.clientId);
     return res.json(await options.ideas.list(profile.clientId,{status:'all'}));
   }));

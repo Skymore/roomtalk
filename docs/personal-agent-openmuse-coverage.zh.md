@@ -57,8 +57,8 @@
 | Desktop stream / tool cards | 真实 VNC、截图/点击/键盘、操作 ID、暂停/冷恢复、持久截图；原项目 39 项协议检查、实际 E2B HTTP 验收和手机桌面/终端/文件流程通过；真实 Codex view_image 已确认 |
 | Google OAuth | PKCE、一次性状态、加密凭据、重连代际、刷新、断开/撤销；真实 PostgreSQL 通过。独立 Personal Agent 客户端、Keychain 密钥、回调、范围和真实账号连接已验证；原普通登录客户端保留 |
 | Mail / thread / attachment | 完整 MIME 正文/线程、搜索、已读状态、附件导入；原项目接口与 fixture 流程通过；2026-10-07 生产真实 Gmail 列表及邮件详情读取通过 |
-| Draft / reply / send / ReviewDetail | 持久草稿、回复引用、附件、具体内容确认、发送回执与任务续跑；并发一次、取消/暂停、版本/未知结果检查及刷新恢复通过。审阅属于源版产品流程，执行器没有权限审批页面 |
-| Calendar / EventEditor | 日历选择、日期范围、时区、事件增删改、ETag 版本审阅；接口、持久回执、手机编辑/保存/重载通过；2026-10-07 生产真实三个日历及订阅日历事件详情读取通过，主日历创建入口已启用；未写入任意测试事件 |
+| Draft / reply / send / ReviewDetail | 持久草稿、回复引用、附件、具体内容确认、发送回执与任务续跑；并发一次、取消/暂停、版本/未知结果检查及刷新恢复通过。2026-10-07 生产向连接账号自身发送测试邮件，Google 返回消息 ID，收件箱打开并核对正文通过。审阅属于源版产品流程，执行器没有权限审批页面 |
+| Calendar / EventEditor | 日历选择、日期范围、时区、事件增删改、ETag 版本审阅；接口、持久回执、手机编辑/保存/重载通过；2026-10-07 生产三个日历及订阅日历详情读取、主日历无参会人的测试事件创建/改名/删除通过，创建和修改后均实际重新读取，测试事件已清理 |
 | OpenBot | 按源版保留禁用适配器及协议/身份测试；不伪装在线连接 |
 
 ## 前一轮 v4 验收记录
@@ -107,8 +107,9 @@
 
 - RoomTalk 项目 `roomtalk-499220` 的独立 Web 客户端为 RoomTalk Personal Agent，回调为 `https://room.ruit.me/api/personal-agent/google/callback`。新密钥已存入生产 Keychain 并部署，普通 RoomTalk 登录客户端保留。
 - Google Cloud 显示 Data access changes saved；范围为 gmail.readonly、gmail.send、calendar.calendarlist.readonly、calendar.events.readonly、calendar.events。Gmail API 和 Calendar API 状态均为 Enabled。
-- 真实账号连接后的 Google 回调显示 Google is connected；RoomTalk 刷新显示账号与断开连接入口。生产 Gmail 列表与完整邮件详情已实际读取，写权限在 Google 授权页已勾选并授予；未发送任意测试邮件。
-- 用户于 2026-10-07 确认接受 Calendar API 条款后，Google Cloud 显示 Enabled。生产读到三个真实日历；主日历未来 30 天为空，创建入口可用；订阅的美国节假日日历返回四项事件，并打开 Columbus Day 的日期、时区和描述详情。只读日历的创建、删除和审阅按钮保持禁用；未写入任意测试事件。
-- 线上部署期间首次加载失败，重试后恢复。曾显示 Gmail 每分钟配额错误，随后真实邮件列表复查成功。Google 应用审核尚未提交，不将已连接账号的验收扩大为公开应用审核通过。
+- 真实账号连接后的 Google 回调显示 Google is connected；RoomTalk 刷新显示账号与断开连接入口。生产 Gmail 列表与完整邮件详情已实际读取，写权限在 Google 授权页已勾选并授予。用户要求真实测试后，通过生产 UI 向当前连接账号自身发送 `RoomTalk OAuth live mail test 2026-10-07`，Gmail 回执消息 ID `1a115be834e1e766`；收件箱刷新后打开该邮件，收件人和完整正文均一致，无附件或其他收件人。
+- 用户于 2026-10-07 确认接受 Calendar API 条款后，Google Cloud 显示 Enabled。生产读到三个真实日历；订阅的美国节假日日历返回四项事件，并打开 Columbus Day 详情。用户要求真实测试后，通过生产 UI 在主日历创建 `RoomTalk OAuth live test 2026-10-07`，时间为 2026-10-08 09:00–10:00 America/Los_Angeles，无参会人。Google 返回事件 ID `10eevkigm1itaq2544fegogl84`，重新读取可见；更新标题为 `RoomTalk OAuth live test 2026-10-07 UPDATED` 并重新读取通过；最后删除同一测试事件，Google 回执 Completed，日期列表为空。只读日历的创建、删除和审阅按钮保持禁用。
+- 真实测试反复遇到 Gmail 每分钟配额错误。代码确认个人助理每次快照轮询都会通过建议服务同步 Gmail，错误连带阻断快照。现将 Google 同步留在明确的建议刷新请求中，快照只用已保存的邮件/目标生成建议，与原版快照读取本地数据的边界一致；Google 错误仍在主动刷新时如实显示。
+- Google Verification Center 的 Prepare for verification 按钮禁用，提示必须先验证并发布品牌。Branding 缺少必填的公开隐私政策链接，已请求用户提供；尚未提交审核，不将已连接账号的验收扩大为公开应用审核通过。
 - 完成目标的旧 E2E 断言已更新；18 项组件测试、个人助理全流程、手机目标及长对话浏览器检查通过。提交 `593b1a94` 的 [CI 五项全部通过](https://github.com/Skymore/roomtalk/actions/runs/37597423310)。本轮仅更新验收记录与 Google Cloud 配置，无需重建应用或 E2B。
 - 当前截图、连接结果和未完成事项记录于 `/tmp/roomtalk-openmuse-verification-20261006.json`。

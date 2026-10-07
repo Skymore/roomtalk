@@ -924,7 +924,7 @@ const personalAgentGoogle = new PersonalAgentGoogleService(store,new PersonalAge
   clientId:process.env.GOOGLE_CLIENT_ID,clientSecret:process.env.GOOGLE_CLIENT_SECRET,
   redirectUri:process.env.GOOGLE_REDIRECT_URI,encryptionKey:codexConnectionConfig.authEncryptionKey,
 }),new PersonalAgentFileService(store,mediaObjectStorage,codeAgentLogger));
-const personalAgentIdeas = new PersonalAgentIdeaService(store,personalAgentGoogle);
+const personalAgentIdeas = new PersonalAgentIdeaService(store);
 const personalAgentBrowser = codexConnectionConfig.enabled ? new PersonalAgentBrowserService(
   store, codeAgentSandboxService, codeAgentSandboxLifecycle, mediaObjectStorage,
   new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),

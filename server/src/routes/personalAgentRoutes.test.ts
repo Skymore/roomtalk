@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { AddressInfo } from 'node:net';
 import express from 'express';
-import { registerPersonalAgentRoutes } from './personalAgentRoutes';
+import { registerPersonalAgentRoutes, PersonalAgentRouteOptions } from './personalAgentRoutes';
+import { PersonalGoogleError } from '../services/personalAgentGoogleAuth';
 import { getRoomActor, authorizeRoomAction } from '../socket/roomAuthorization';
 import { PersonalAgentGoal, PersonalAgentProfile, Room } from '../types';
 
@@ -19,7 +20,7 @@ const profile: PersonalAgentProfile = {
 const closes: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(closes.splice(0).map(close => close())); });
 
-async function startServer() {
+async function startServer(services: Pick<PersonalAgentRouteOptions, 'google' | 'ideas'> = {}) {
   const profiles = new Map([['owner', { ...profile }], ['other', { ...profile, clientId: 'other', mainRoomId: 'other-main' }]]);
   const goals = new Map<string, PersonalAgentGoal>();
   const rooms = new Map<string, Room>([[privateRoom.id, { ...privateRoom }]]);
@@ -48,6 +49,7 @@ async function startServer() {
   };
   const app = express(); app.use(express.json());
   registerPersonalAgentRoutes(app, {
+    ...services,
     store: store as any, logger: { error() {} } as any,
     getClientId: req => String(req.query.clientId || req.body?.clientId || ''),
     authorizeClientRequest: async (req, res, clientId) => {
@@ -67,6 +69,46 @@ async function startServer() {
 }
 
 describe('personal agent API', () => {
+  it('reads snapshots without synchronizing Gmail, even when Gmail is over quota', async () => {
+    let mailCalls = 0;
+    let localRefreshes = 0;
+    const { request } = await startServer({
+      google: { auth: { status: async () => ({ connected: true }) }, mail: async () => {
+        mailCalls++; throw new PersonalGoogleError('Gmail quota exceeded', 403);
+      } } as any,
+      ideas: { refresh: async () => { localRefreshes++; }, list: async () => ({ ideas: [], total: 0 }) } as any,
+    });
+    for (let poll = 0; poll < 2; poll++) {
+      const response = await request('/api/personal-agent?clientId=owner');
+      assert.equal(response.status, 200);
+      assert.deepEqual((await response.json()).ideas, []);
+    }
+    assert.equal(localRefreshes, 2);
+    assert.equal(mailCalls, 0);
+    const refresh = await request('/api/personal-agent/ideas/refresh', 'owner', 'POST', {});
+    assert.equal(refresh.status, 403);
+    assert.equal((await refresh.json()).error, 'Gmail quota exceeded');
+    assert.equal(mailCalls, 1);
+    assert.equal(localRefreshes, 2);
+  });
+
+  it('synchronizes connected mail before explicitly refreshing suggestions', async () => {
+    const calls: string[] = [];
+    let connected = true;
+    const { request } = await startServer({
+      google: { auth: { status: async () => ({ connected }) }, mail: async (clientId: string) => {
+        assert.equal(clientId, 'owner'); calls.push('mail');
+      } } as any,
+      ideas: { refresh: async () => { calls.push('ideas'); }, list: async () => ({ ideas: [], total: 0 }) } as any,
+    });
+    assert.equal((await request('/api/personal-agent/ideas/refresh', 'owner', 'POST', {})).status, 200);
+    assert.deepEqual(calls, ['mail', 'ideas']);
+    connected = false;
+    calls.length = 0;
+    assert.equal((await request('/api/personal-agent/ideas/refresh', 'owner', 'POST', {})).status, 200);
+    assert.deepEqual(calls, ['ideas']);
+  });
+
   it('requires a signed-in account and rejects impersonation', async () => {
     const { base, request } = await startServer();
     assert.equal((await fetch(`${base}/api/personal-agent?clientId=owner`)).status, 401);
