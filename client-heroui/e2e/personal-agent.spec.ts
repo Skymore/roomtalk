@@ -956,6 +956,15 @@ test('ports calendar zone-aware editing and read-only choices with explicit Goog
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:'/tmp/roomtalk-openmuse-calendar-mobile.png',fullPage:true,animations:'disabled'});
+  // Reproduce the disabled Calendar API error observed in production.
+  const apiError='Google API (403): Google Calendar API is disabled. Enable it by visiting https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview then retry.';
+  await page.route('**/api/personal-agent/calendar/events?**',route=>route.fulfill({status:403,json:{error:apiError}}));
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.getByRole('alert')).toHaveText(apiError);
+  await expect(page.getByText('No events in this time range.',{exact:true})).toHaveCount(0);
+  expect(await page.getByRole('alert').evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:'/tmp/roomtalk-calendar-error-fixed-mobile.png',fullPage:true,animations:'disabled'});
 });
 
 
