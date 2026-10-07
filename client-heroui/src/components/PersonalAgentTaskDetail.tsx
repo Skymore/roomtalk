@@ -31,8 +31,9 @@ import {controlPersonalAgentTask,readPersonalAgentTask,type PersonalAgentInputRe
 import {PersonalAgentGoogleReview} from './PersonalAgentGoogleReview';
 import type {PersonalGoogleAction} from '../utils/personalAgent';
 import {PersonalAgentTaskArtifacts} from './PersonalAgentTaskArtifacts';
-import {PersonalAgentResults} from './PersonalAgentResults';
-import {PersonalAgentBrowserVisits} from './PersonalAgentBrowser';
+import {MarkdownContent} from './MarkdownContent';
+import {readPersonalInlineSteps} from '../utils/personalToolSteps';
+import {z} from 'openmuse-zod';
 import type {RoomAgentTurn} from '../utils/types';
 interface SubmitInput { (request:PersonalAgentInputRequest,answer:NonNullable<PersonalAgentInputRequest['answer']>):Promise<void> }
 const InputRequest:React.FC<{request:PersonalAgentInputRequest;onSubmit:SubmitInput}> = ({request,onSubmit}) => {
@@ -48,6 +49,7 @@ const InputRequest:React.FC<{request:PersonalAgentInputRequest;onSubmit:SubmitIn
   </form>;
 };
 const turnStatus=(turn:RoomAgentTurn) => turn.status==='running' ? 'personalAgentWorking' : turn.status==='complete' ? 'personalTaskSucceeded' : turn.status==='cancelled' ? 'personalAgentStopped' : 'personalAgentTaskFailed';
+const searchEvidenceSchema=z.object({results:z.array(z.object({url:z.url({protocol:/^https?$/}),title:z.string().nullish(),excerpts:z.array(z.string()).optional()}))});
 export const PersonalAgentTaskDetailView:React.FC<{clientId:string;roomId:string;isOpen:boolean;onClose:()=>void;onSubmit:SubmitInput}> = ({clientId,roomId,isOpen,onClose,onSubmit}) => {
   const {t}=useTranslation(),[detail,setDetail]=React.useState<PersonalAgentTaskDetail>(),[error,setError]=React.useState('');
   const [review,setReview]=React.useState<PersonalGoogleAction>();
@@ -60,13 +62,20 @@ export const PersonalAgentTaskDetailView:React.FC<{clientId:string;roomId:string
   React.useEffect(()=>{if(!isOpen)return;let live=true;const refresh=()=>{void readPersonalAgentTask(clientId,roomId).then(value=>{if(live){setDetail(value);setError('');}}).catch(failure=>{if(live)setError(failure.message);});};refresh();const timer=window.setInterval(()=>{if(!document.hidden)refresh();},5000);return()=>{live=false;window.clearInterval(timer);};},[clientId,roomId,isOpen]);
   const messages=[...olderMessages,...(detail?.messages || [])].filter((message,index,all)=>all.findIndex(item=>item.id===message.id)===index);
   const latestPlan=messages.filter(message=>message.toolName==='update_plan' && Array.isArray(message.toolArgs?.plan)).at(-1)?.toolArgs?.plan as {step:string;status:string}[]|undefined;
+  const latestTurn=detail?.turns.at(-1);
+  const finalMessage=messages.find(message=>message.id===latestTurn?.finalMessageId);
+  const sources=[...new Map(readPersonalInlineSteps(messages).filter(step=>step.kind==='search').flatMap(step=>{
+    const parsed=searchEvidenceSchema.safeParse(step.result);
+    return parsed.success?parsed.data.results:[];
+  }).map(source=>[source.url,source])).values()];
   const status=detail?.room.personalAgentTaskStatus;
+  const outcome=status==='complete' && latestTurn?.status==='complete'?finalMessage:undefined;
   const cancelled=status==='cancelled',paused=status==='paused';
   const act=(action:'pause'|'resume'|'retry'|'cancel')=>{setBusy(true);setError('');void controlPersonalAgentTask(clientId,roomId,action).then(()=>load()).catch(failure=>setError(failure.message)).finally(()=>setBusy(false));};
   const requests=status!=='waiting_input'?[]:detail?.requests.filter(request=>!request.answeredAt) || [];
   return <><Modal isOpen={isOpen && !review} onClose={onClose} scrollBehavior="inside" size="3xl" classNames={{base:'max-h-[90dvh] bg-content1'}}><ModalContent className="personal-agent-theme"><ModalHeader>{detail?.room.name || t('personalTaskDetail')}</ModalHeader><ModalBody><div className="space-y-5 pb-6">
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-    {detail && <><p className="text-xs text-default-500">{t(status==='scheduled'?'personalWatchActive':status==='paused'?'personalAgentPaused':status==='queued'?'personalTaskQueued':status==='waiting_input'?'personalTaskWaitingInput':status==='waiting_review'?'personalGoogleNeedsReview':status==='complete'?'personalTaskSucceeded':status==='error'?'personalAgentTaskFailed':status==='cancelled'?'personalAgentStopped':'personalAgentWorking')}</p><p className="whitespace-pre-wrap text-sm">{detail.task?.prompt || messages.find(message=>message.messageType==='text')?.content}</p>
+    {detail && <><p className="text-xs text-default-500"><span>{t(status==='scheduled'?'personalWatchActive':status==='paused'?'personalAgentPaused':status==='queued'?'personalTaskQueued':status==='waiting_input'?'personalTaskWaitingInput':status==='waiting_review'?'personalGoogleNeedsReview':status==='complete'?'personalTaskSucceeded':status==='error'?'personalAgentTaskFailed':status==='cancelled'?'personalAgentStopped':'personalAgentWorking')}</span> · <time>{new Date(latestTurn?.updatedAt || detail.room.updatedAt || detail.room.createdAt).toLocaleString()}</time></p><p className="whitespace-pre-wrap text-sm">{detail.task?.prompt || messages.find(message=>message.messageType==='text')?.content}</p>
       <div className="flex flex-wrap gap-2">
         {status && ['scheduled','queued','running','waiting_input','waiting_review'].includes(status) && <Button size="sm" variant="flat" isDisabled={busy} onPress={()=>act('pause')}>{t('personalAgentPause')}</Button>}
         {paused && <Button size="sm" variant="flat" isDisabled={busy} onPress={()=>act('resume')}>{t('personalAgentResume')}</Button>}
@@ -76,12 +85,17 @@ export const PersonalAgentTaskDetailView:React.FC<{clientId:string;roomId:string
       {!cancelled && !paused && detail.actions?.filter(action=>action.status==='awaiting_review').map(action=><section key={action.id} className="space-y-3 rounded-2xl bg-warning/10 p-4"><h3 className="font-semibold">{t('personalTaskReadyReview')}</h3><p className="text-sm text-default-500">{t('personalTaskReviewHint')}</p><Button color="secondary" size="sm" onPress={()=>setReview(action)}>{t('personalTaskReviewAction')}</Button></section>)}
       {requests.map(request=><InputRequest key={request.id} request={request} onSubmit={async(...args)=>{await onSubmit(...args);await load();}} />)}
       {detail.watch && <section className="space-y-3 rounded-2xl bg-content2 p-4"><div className="flex items-center gap-2"><Icon icon="lucide:eye"/><h3 className="font-semibold">{t('personalAgentTracking')}</h3></div><p className="break-all text-xs text-default-500">{detail.watch.url}</p><p className="text-xs text-default-500">{t('personalWatchSourceChecks',{minutes:detail.watch.intervalMinutes,count:detail.watch.checks})}</p><p className="text-xs text-default-500">{t('personalWatchLastChecked',{time:detail.watch.lastCheckedAt?new Date(detail.watch.lastCheckedAt).toLocaleString():'—'})}</p>{detail.watch.lastExcerpt && <p className="whitespace-pre-wrap text-sm text-default-500">{detail.watch.lastExcerpt}</p>}{detail.watch.error && <p role="alert" className="text-sm text-danger">{detail.watch.error}</p>}</section>}
-      {latestPlan && <section className="space-y-2"><h3 className="text-sm font-semibold">{t('personalTaskSteps')}</h3>{latestPlan.map((step,index)=><p key={index} className="text-sm">{step.status==='completed' ? '✓' : `${index+1}.`} {step.step}</p>)}</section>}
-      {(hasMoreOlder ?? detail.hasMore) && <Button size="sm" variant="light" isLoading={loadingMore} onPress={()=>{const beforeMessageId=messages[0]?.id;if(!beforeMessageId)return;setLoadingMore(true);void readPersonalAgentTask(clientId,roomId,beforeMessageId).then(page=>{setOlderMessages(previous=>[...page.messages,...previous]);setHasMoreOlder(page.hasMore);}).catch(failure=>setError(failure.message)).finally(()=>setLoadingMore(false));}}>{t('personalTaskMoreHistory')}</Button>}
-      <PersonalAgentTaskArtifacts clientId={clientId} detail={detail} showResults={false}/>
-      <section className="space-y-4"><h3 className="text-sm font-semibold">{t('personalTaskRuns')}</h3>{[...detail.turns].reverse().map(turn=><article key={turn.id} className="space-y-3 rounded-2xl border border-default-200 p-4"><div className="flex flex-wrap justify-between gap-2 text-xs text-default-500"><span>{t(requests.some(request=>request.turnId===turn.id) ? 'personalTaskWaitingInput' : turnStatus(turn))}</span><time>{new Date(turn.startedAt).toLocaleString()}</time></div>
-        <PersonalAgentResults clientId={clientId} turn={turn} canInteract /><PersonalAgentBrowserVisits clientId={clientId} turn={turn} canInteract />
-        {messages.filter(message=>message.turnId===turn.id && message.messageType==='ai' && message.content.trim()).map(message=><div key={message.id} className="border-l-2 border-default-200 pl-4"><p className="whitespace-pre-wrap break-words text-sm text-default-500">{message.content}</p></div>)}
-      </article>)}</section></>}
+      {Boolean(latestPlan?.length) && <section className="space-y-[15px] rounded-[22px] bg-content2 p-[18px]"><h3 className="text-sm font-semibold">{t('personalTaskSteps')}</h3>{latestPlan!.map((step,index)=><div key={index} className="flex items-start gap-2.5 text-sm"><span className={step.status==='completed'?'text-secondary':'text-default-500'}>{step.status==='completed' ? '✓' : `${index+1}.`}</span><div><p>{step.step}</p><p className="mt-1 text-xs text-default-500">{t(step.status==='completed'?'personalTaskSucceeded':step.status==='in_progress'?'personalAgentWorking':'personalTaskQueued')}</p></div></div>)}</section>}
+      {outcome?.content.trim() && <section className="rounded-[22px] bg-success/10 p-[18px]" data-testid="personal-task-outcome"><MarkdownContent content={outcome.content}/></section>}
+      {latestTurn?.status==='error' && <p role="alert" className="text-sm text-danger">{finalMessage?.content || t('personalAgentTaskFailed')}</p>}
+      <PersonalAgentTaskArtifacts clientId={clientId} detail={detail}/>
+      {sources.length>0 && <section className="space-y-3.5" data-testid="personal-task-sources"><h3 className="text-sm font-semibold">{t('personalTaskSources')}</h3>{sources.map(source=><div key={source.url} className="space-y-1 border-l-2 border-secondary pl-3"><p className="break-words text-xs font-semibold">{source.title || source.url}</p>{source.excerpts?.map((excerpt,index)=><p key={index} className="whitespace-pre-wrap break-words text-xs text-default-500">{excerpt}</p>)}<a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center rounded-full bg-content2 px-4 py-2 text-xs font-semibold">{t('personalTaskOpenSource')}</a></div>)}</section>}
+      <section className="space-y-4" data-testid="personal-task-timeline"><h3 className="text-sm font-semibold">{t('personalTaskRuns')}</h3>
+        {(hasMoreOlder ?? detail.hasMore) && <Button size="sm" variant="light" isLoading={loadingMore} onPress={()=>{const beforeMessageId=messages[0]?.id;if(!beforeMessageId)return;setLoadingMore(true);void readPersonalAgentTask(clientId,roomId,beforeMessageId).then(page=>{setOlderMessages(previous=>[...page.messages,...previous]);setHasMoreOlder(page.hasMore);}).catch(failure=>setError(failure.message)).finally(()=>setLoadingMore(false));}}>{t('personalTaskMoreHistory')}</Button>}
+        {detail.turns.map(turn=><article key={turn.id} className="space-y-1 border-l-2 border-default-200 pl-3.5"><div className="text-xs text-default-500"><time>{new Date(turn.startedAt).toLocaleString()}</time> · {t(requests.some(request=>request.turnId===turn.id) ? 'personalTaskWaitingInput' : turnStatus(turn))}</div>
+          {messages.filter(message=>message.turnId===turn.id && message.id!==outcome?.id && message.messageType==='ai' && message.content.trim()).map(message=><p key={message.id} className="whitespace-pre-wrap break-words text-sm text-default-500">{message.content}</p>)}
+        </article>)}
+        {!detail.turns.length && <p className="text-sm text-default-500">{t('personalTaskTimelineEmpty')}</p>}
+      </section></>}
   </div></ModalBody></ModalContent></Modal>{review && <PersonalAgentGoogleReview clientId={clientId} action={review} onClose={()=>setReview(undefined)} onDone={()=>void load()}/>}</>;
 };
