@@ -10,7 +10,7 @@ import {DesktopStream} from './DesktopStream';
 // OpenMuse computer-workspace.tsx, with native controls mapped to the existing web components.
 // MIT notice is in drafts.tsx in this directory.
 interface ComputerFileAction { (): Promise<void> }
-const panel='space-y-3 rounded-2xl border border-default-200 bg-white p-4 dark:bg-[#252522]';
+const panel='space-y-3 rounded-2xl border border-default-200 bg-content1 p-4';
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
 export function LinuxWorkspace({clientId,tab,onSnapshot,onDocument}:{clientId:string;tab:'Terminal'|'Files'|'Desktop';onSnapshot:(snapshot:ComputerSnapshot)=>void;onDocument:(file:PersonalAgentFile)=>void}){
   const {t}=useTranslation();
@@ -53,7 +53,7 @@ export function LinuxWorkspace({clientId,tab,onSnapshot,onDocument}:{clientId:st
   }
   const running=snapshot?.status==='running',commandRunning=executing || commandActive;
   return <div className="space-y-4" data-testid="personal-computer-workspace">
-    <section className="space-y-3 rounded-2xl bg-[#d9e9f4] p-4 dark:bg-[#263744]">
+    <section className="space-y-3 rounded-2xl bg-secondary/10 p-4">
       <div className="flex items-center gap-3"><Icon icon="lucide:terminal" className="h-6 w-6"/><div><h3 className="font-semibold">{t('personalComputerLinux')}</h3><p className="text-sm text-default-600">{t(running?'personalComputerRunning':snapshot?.status==='stopped'?'personalComputerStopped':snapshot?.status==='unconfigured'?'personalComputerUnconfigured':snapshot?.status==='error'?'personalComputerConnectionError':'loading')}</p></div>{!snapshot && !error && <Spinner size="sm"/>}</div>
       {snapshot?.message && <p className="text-xs text-default-600">{snapshot.message}</p>}
       {snapshot?.enabled && <div className="flex flex-wrap gap-2"><Button color={running?'default':'secondary'} isLoading={busy} onPress={()=>void control(running?'stop':'start')}>{t(running?'personalComputerStop':'personalComputerStart')}</Button><Button isDisabled={busy} onPress={()=>{void refresh();setError('');}}>{t('refresh')}</Button></div>}
@@ -63,7 +63,7 @@ export function LinuxWorkspace({clientId,tab,onSnapshot,onDocument}:{clientId:st
     {snapshot?.enabled && <>
       <div className={tab==='Terminal'?'space-y-4':'hidden'}>
         {editingCommand || command.length!==0 || snapshot.commands.length===0 ?
-        <div className="space-y-3 rounded-2xl bg-[#f1f3f4] p-4 dark:bg-[#30302e]">
+        <div className="space-y-3 rounded-2xl bg-content2 p-4">
           <p className="font-mono text-xs text-default-500">{t('personalComputerTab_Terminal').toUpperCase()}</p>
           <Input label={t('personalComputerCwd')} value={cwd} onValueChange={setCwd} classNames={{input:'font-mono'}} autoCapitalize="none" autoCorrect="off"/>
           <Textarea label={t('personalComputerCommand')} placeholder={t('personalComputerCommandExample')} value={command} onValueChange={setCommand} maxLength={16000} minRows={3} classNames={{input:'font-mono'}} autoCapitalize="none" autoCorrect="off" spellCheck="false"/>

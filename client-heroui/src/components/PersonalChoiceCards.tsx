@@ -35,19 +35,19 @@ const ChoiceCard:React.FC<{result:JevToolResult|null;loading:boolean;interaction
   };
   const button=(option:JevPanel['options'][number],position:number)=>{
     const caption=panel.type==='comparison'?t(/exhibit/i.test(panel.title)?'personalChoicesExhibit':'personalChoicesOption'):option.label;
-    return <Button size="sm" className="h-auto min-h-9 max-w-full whitespace-normal bg-[#ddeaf8] px-4 py-2 text-[#17202a]" aria-label={panel.type==='comparison'?`${caption}: ${option.label} (option ${position})`:option.label} aria-pressed={selectedId===option.id}
+    return <Button size="sm" className="h-auto min-h-9 max-w-full whitespace-normal bg-secondary/15 px-4 py-2 text-foreground" aria-label={panel.type==='comparison'?`${caption}: ${option.label} (option ${position})`:option.label} aria-pressed={selectedId===option.id}
       isDisabled={availability!=='ready'} isLoading={submittingId===option.id} onPress={()=>void choose(option.id)}>{selectedId===option.id && <Icon icon="lucide:check"/>}{caption}</Button>;
   };
-  return <div className="w-full max-w-[440px] space-y-[13px] rounded-[20px] border border-default-200 bg-white p-[17px] dark:bg-[#252522]" data-testid="personal-choice-card">
+  return <div className="w-full max-w-[440px] space-y-[13px] rounded-[20px] border border-default-200 bg-content1 p-[17px]" data-testid="personal-choice-card">
     <div className="space-y-1"><h3 className="text-lg font-semibold">{panel.title}</h3><p className="text-xs text-default-500">{t(panel.mode==='sample'?'personalChoicesSample':'personalChoicesLive')}</p>
       {preferred && !selectedId && <p className="text-xs text-default-500">{t('personalChoicesPrevious',{label:preferred.label})}</p>}
       {(availability==='wrong-thread' || availability==='stale') && <p className="text-xs text-default-500">{t('personalChoicesEarlier')}</p>}
       {selectedId && <p className="text-xs text-default-500">{t('personalChoicesSubmitted')}</p>}
     </div>
     {panel.type==='clarification'?<div className="flex flex-wrap gap-2">{panel.options.map((option,index)=><React.Fragment key={option.id}>{button(option,index+1)}</React.Fragment>)}</div>:
-      <div className="space-y-2.5">{panel.options.map((option,index)=><div key={option.id} className="space-y-2 rounded-2xl bg-[#f6f7f8] p-3.5 dark:bg-default-100"><p className="font-semibold">{option.label}</p>
+      <div className="space-y-2.5">{panel.options.map((option,index)=><div key={option.id} className="space-y-2 rounded-2xl bg-content2 p-3.5"><p className="font-semibold">{option.label}</p>
         {!!option.details.length && <ul className="list-inside list-disc text-sm text-default-600">{option.details.map((detail,index)=><li key={index}>{detail}</li>)}</ul>}
-        <div className="space-y-1">{option.sources.map(source=><a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" aria-label={t('personalChoicesSource',{title:source.title})} className="flex items-center gap-1 break-words text-xs text-[#315e83] underline">{source.title}<Icon icon="lucide:external-link"/></a>)}</div>
+        <div className="space-y-1">{option.sources.map(source=><a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" aria-label={t('personalChoicesSource',{title:source.title})} className="flex items-center gap-1 break-words text-xs text-secondary underline">{source.title}<Icon icon="lucide:external-link"/></a>)}</div>
         {button(option,index+1)}</div>)}</div>}
     {submitError && <p role="alert" className="text-sm text-danger">{submitError}</p>}
     {failedOptionId && !selectedId && <Button size="sm" variant="light" isDisabled={!canRetry} onPress={()=>void choose(failedOptionId,true)}>{t('personalChoicesRetry')}</Button>}

@@ -22,7 +22,7 @@ export const PersonalAgentMessage: React.FC<{ message: Message; displayText?:str
   if (!message.content.trim()) return null;
   const own = message.messageType === 'text';
   return <div className={`mx-auto flex w-full max-w-3xl ${own ? 'justify-end' : 'justify-start'}`} data-testid={own ? 'personal-user-message' : 'personal-agent-message'}>
-    <div className={`min-w-0 rounded-[22px] px-4 py-[13px] text-base leading-6 ${own ? 'max-w-[85%] rounded-br-[7px] bg-[#c8e7ff] dark:bg-[#234e6b]' : 'max-w-[95%] rounded-bl-[7px] bg-[#eeeef0] dark:bg-[#252522]'} ${message.status === 'error' || message.deliveryStatus === 'failed' ? 'border border-danger-200' : ''}`}>
+    <div className={`min-w-0 rounded-[22px] px-4 py-[13px] text-base leading-6 ${own ? 'max-w-[85%] rounded-br-[7px] bg-secondary/15' : 'max-w-[95%] rounded-bl-[7px] bg-content2'} ${message.status === 'error' || message.deliveryStatus === 'failed' ? 'border border-danger-200' : ''}`}>
       {own ? <p className="whitespace-pre-wrap break-words">{displayText ?? message.content}</p> : <MarkdownContent content={message.content} isStreaming={message.status === 'streaming'} onOpenWorkspaceFile={onOpenFile} />}
       {message.deliveryStatus === 'failed' && <button type="button" className="mt-2 text-danger underline" disabled={!canInteract} onClick={() => onRetry?.(message)}>{t('retry')}</button>}
       {message.codeAgentQueuedInput?.state === 'queued' && <p className="mt-1 text-xs text-default-500">{t('personalAgentQueued')}</p>}

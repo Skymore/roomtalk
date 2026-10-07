@@ -147,7 +147,7 @@ export const PersonalAgentConversation: React.FC<{
     </div>
     <div className="mx-auto w-full max-w-3xl shrink-0 pb-5 pt-3">
       {attachments.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{attachments.map(item => <span key={item.id} className="flex items-center gap-1 rounded-full bg-default-100 px-3 py-1 text-xs">{item.mediaAsset?.filename || t('attachment')}<button type="button" aria-label={t('remove')} onClick={() => setAttachments(previous => previous.filter(entry => entry.id !== item.id))}><Icon icon="lucide:x" /></button></span>)}</div>}
-      <div className="flex items-end gap-2 rounded-3xl border border-default-200 bg-white p-2 shadow-sm dark:bg-[#252522]">
+      <div className="flex items-end gap-2 rounded-3xl border border-default-200 bg-content1 p-2 shadow-sm">
         <input ref={fileInput} type="file" multiple className="hidden" onChange={event => { void upload(Array.from(event.target.files || [])); event.target.value = ''; }} />
         <Button isIconOnly variant="light" radius="full" aria-label={t('personalAgentAttach')} isDisabled={!canSend || sending} onPress={() => fileInput.current?.click()}><Icon icon="lucide:plus" className="h-5 w-5" /></Button>
         <div ref={editor} contentEditable={canSend && !sending} role="textbox" aria-label={t('personalAgentMessageInput')} aria-multiline="true" data-testid="message-editor" data-placeholder={t('personalAgentMessagePlaceholder')}

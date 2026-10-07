@@ -25,10 +25,10 @@ export function DesktopToolCard({clientId,step,live,onOpen}:{clientId:string;ste
     return()=>{alive=false;clearInterval(interval);document.removeEventListener('visibilitychange',refresh);};
   },[clientId,live,starting,step.loading,snapshot?.status]);
   const running=snapshot?.status==='running';
-  return <section className="mx-auto w-full max-w-3xl space-y-3 rounded-2xl bg-[#eeeef0] p-4 dark:bg-[#30302e]" data-testid="personal-desktop-step">
+  return <section className="mx-auto w-full max-w-3xl space-y-3 rounded-2xl bg-content2 p-4" data-testid="personal-desktop-step">
     <div className="flex items-center gap-3"><Icon icon="lucide:monitor" className="h-6 w-6"/><div className="min-w-0 flex-1"><h3 className="text-sm font-semibold">{t('personalComputerTab_Desktop')}</h3><p className="truncate text-xs text-default-500">{step.loading?t('personalDesktopWorking'):step.error?t('personalDesktopFailed'):step.action || t('personalDesktopStep')}</p></div>{step.loading && <Spinner size="sm"/>}</div>
     {(step.error || error) && <p role="alert" className="text-sm text-danger">{step.error || error}</p>}
-    {live && snapshot && !running?<div className="space-y-3 rounded-xl bg-white p-4 dark:bg-[#252522]"><p className="text-xs text-default-500">{t('personalDesktopOffline')}</p>{snapshot.enabled && <Button size="sm" isLoading={starting} onPress={()=>{setStarting(true);setError('');void changeComputer(clientId,'start').then(setSnapshot).catch(error=>setError(error.message)).finally(()=>setStarting(false));}}>{t('personalComputerStart')}</Button>}</div>:live && running?<DesktopStream clientId={clientId} running/>:null}
+    {live && snapshot && !running?<div className="space-y-3 rounded-xl bg-content1 p-4"><p className="text-xs text-default-500">{t('personalDesktopOffline')}</p>{snapshot.enabled && <Button size="sm" isLoading={starting} onPress={()=>{setStarting(true);setError('');void changeComputer(clientId,'start').then(setSnapshot).catch(error=>setError(error.message)).finally(()=>setStarting(false));}}>{t('personalComputerStart')}</Button>}</div>:live && running?<DesktopStream clientId={clientId} running/>:null}
     {onOpen && <Button size="sm" onPress={onOpen}>{t('personalDesktopOpenTab')}</Button>}
   </section>;
 }

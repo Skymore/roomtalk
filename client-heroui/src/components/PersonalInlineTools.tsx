@@ -36,8 +36,8 @@ const mailSchema=z.object({id:z.string(),threadId:z.string(),sender:z.string(),f
 const threadSchema=z.object({messages:z.array(mailSchema),truncated:z.boolean()});
 const mailSearchSchema=z.object({matches:z.array(z.object({id:z.string()})),truncated:z.boolean()});
 const searchSchema=z.object({results:z.array(z.object({url:z.url({protocol:/^https?$/}),title:z.string().nullish()})),warnings:z.array(z.string()),truncated:z.boolean()});
-const ErrorNotice=({error}:{error:string})=><p role="alert" className="rounded-[14px] bg-[#fbefed] p-4 text-sm text-[#aa4a45] dark:bg-danger-50">{error}</p>;
-const actionClass='inline-flex min-h-[35px] items-center justify-center gap-2 rounded-3xl bg-[#f1f2f3] px-4 py-2 text-sm font-semibold text-[#11191c] disabled:opacity-50 dark:bg-default-100 dark:text-default-800';
+const ErrorNotice=({error}:{error:string})=><p role="alert" className="rounded-[14px] bg-danger-50 p-4 text-sm text-danger-700">{error}</p>;
+const actionClass='inline-flex min-h-[35px] items-center justify-center gap-2 rounded-3xl bg-content2 px-4 py-2 text-sm font-semibold text-foreground disabled:opacity-50';
 
 // OpenMuse mail-tool-card.tsx, adapted from React Native to DOM with the same states and actions.
 export function PersonalMailToolCard({step,active,open}:{step:PersonalInlineStep;active:boolean;open?:PersonalWorkspaceOpener}){
@@ -53,8 +53,8 @@ export function PersonalMailToolCard({step,active,open}:{step:PersonalInlineStep
   if(!parsed.success)return <ErrorNotice error={t('personalToolMailUnreadable')}/>;
   const message=parsed.data.messages.at(-1);
   if(!message)return <p className="text-sm text-default-500">{t('personalToolThreadEmpty')}</p>;
-  return <div className="w-full max-w-[440px] space-y-3.5 rounded-[23px] bg-[#f0eff2] p-[18px] dark:bg-default-100" data-testid="personal-mail-tool-card">
-    <div className="flex items-center gap-2.5"><span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[13px] bg-[#e9f5fc] text-[#1473c8]"><Icon icon="lucide:mail" width={20}/></span><div className="min-w-0"><p className="break-words text-[15px] font-semibold">{message.sender}</p><p className="text-[11px] text-default-500">{t('personalToolMailMessages',{count:parsed.data.messages.length})}</p></div></div>
+  return <div className="w-full max-w-[440px] space-y-3.5 rounded-[23px] bg-content2 p-[18px]" data-testid="personal-mail-tool-card">
+    <div className="flex items-center gap-2.5"><span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[13px] bg-secondary/15 text-secondary"><Icon icon="lucide:mail" width={20}/></span><div className="min-w-0"><p className="break-words text-[15px] font-semibold">{message.sender}</p><p className="text-[11px] text-default-500">{t('personalToolMailMessages',{count:parsed.data.messages.length})}</p></div></div>
     <h3 className="break-words text-base font-semibold">{message.subject}</h3><p className="line-clamp-3 whitespace-pre-wrap break-words text-sm leading-[21px] text-default-500">{message.body}</p>
     {parsed.data.truncated && <p className="text-[11px] text-default-500">{t('personalToolMailExcerpt')}</p>}
     <button type="button" className={actionClass} disabled={!open} onClick={()=>open?.('mail',message)}><Icon icon="lucide:mail" width={16}/>{t('personalToolOpenMail')}</button>
@@ -65,9 +65,9 @@ export function PersonalSearchToolCard({step,active}:{step:PersonalInlineStep;ac
   const {t}=useTranslation(),failure=errorSchema.safeParse(step.result),parsed=searchSchema.safeParse(step.result);
   const error=failure.success?failure.data.error:!step.loading && !parsed.success?t('personalToolSearchUnreadable'):'';
   const sources=parsed.success?[...new Map(parsed.data.results.map(source=>[source.url,source])).values()]:[];
-  return <div className="w-full max-w-[440px] space-y-2.5 rounded-[23px] bg-[#eeeef0] p-3.5 dark:bg-default-100" data-testid="personal-search-tool-card">
-    <div className="flex items-center gap-2.5 text-[15px]">{step.loading && active?<Spinner size="sm"/>:<Icon icon="lucide:search" width={18} className="text-[#1473c8]"/>}<span>{t(error?'personalToolSearchFailed':step.loading?active?'personalToolSearching':'personalToolSearchStopped':sources.length?'personalToolSourcesFound':'personalToolSourcesEmpty',{count:sources.length})}</span></div>
-    {!step.loading && parsed.success && <>{sources.map(source=><a key={source.url} className="block break-words text-[15px] leading-[23px] text-[#1473c8] dark:text-[#c8e7ff]" href={source.url} target="_blank" rel="noopener noreferrer">{source.title || source.url}</a>)}{parsed.data.truncated && <p className="text-[11px] text-default-500">{t('personalToolSearchTruncated')}</p>}{[...new Set(parsed.data.warnings)].map(warning=><p key={warning} className="break-words text-[11px] text-default-500">{warning}</p>)}</>}
+  return <div className="w-full max-w-[440px] space-y-2.5 rounded-[23px] bg-content2 p-3.5" data-testid="personal-search-tool-card">
+    <div className="flex items-center gap-2.5 text-[15px]">{step.loading && active?<Spinner size="sm"/>:<Icon icon="lucide:search" width={18} className="text-secondary"/>}<span>{t(error?'personalToolSearchFailed':step.loading?active?'personalToolSearching':'personalToolSearchStopped':sources.length?'personalToolSourcesFound':'personalToolSourcesEmpty',{count:sources.length})}</span></div>
+    {!step.loading && parsed.success && <>{sources.map(source=><a key={source.url} className="block break-words text-[15px] leading-[23px] text-secondary" href={source.url} target="_blank" rel="noopener noreferrer">{source.title || source.url}</a>)}{parsed.data.truncated && <p className="text-[11px] text-default-500">{t('personalToolSearchTruncated')}</p>}{[...new Set(parsed.data.warnings)].map(warning=><p key={warning} className="break-words text-[11px] text-default-500">{warning}</p>)}</>}
     {error && <ErrorNotice error={error}/>}
   </div>;
 }
@@ -76,7 +76,7 @@ export function PersonalServerToolCard({step,open}:{step:PersonalInlineStep;open
   const {t}=useTranslation(),failure=errorSchema.safeParse(step.result);
   const label=t(step.kind==='goal'?'personalAgentGoals':step.kind==='memory'?'personalAgentMemory':'personalToolAgentProgress');
   const tab=step.kind==='goal'?'goals':step.kind==='memory'?'memory':'activity';
-  return <div className="w-full space-y-2.5 rounded-[23px] bg-white p-4 dark:bg-[#252522]" data-testid="personal-server-tool-card"><h3 className="text-base font-semibold">{step.loading?t('personalToolSaving',{name:label}):label}</h3>
+  return <div className="w-full space-y-2.5 rounded-[23px] bg-content1 p-4" data-testid="personal-server-tool-card"><h3 className="text-base font-semibold">{step.loading?t('personalToolSaving',{name:label}):label}</h3>
     {failure.success?<ErrorNotice error={failure.data.error}/>:<p className="text-sm text-default-500">{t(step.loading?'personalToolServerWaiting':'personalToolSavedResult')}</p>}
     <button type="button" className={actionClass} disabled={!open} onClick={()=>open?.(tab)}>{t('personalToolView',{name:label})}</button>
   </div>;

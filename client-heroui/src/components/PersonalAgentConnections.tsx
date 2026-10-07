@@ -67,8 +67,8 @@ export const PersonalAgentConnections: React.FC<{
       const group = rows.filter(row=>row.connected === connected);
       return group.length ? <section key={String(connected)}>
         <h3 className="mb-2 pl-3 text-xs text-default-500">{t(connected ? 'personalGoogleConnected' : 'personalGoogleAvailable')}</h3>
-        <div className="divide-y divide-default-200 rounded-3xl bg-[#f3f4f5] px-4 dark:bg-[#252522]">{group.map(row=><button key={row.id} type="button" className="flex min-h-16 w-full items-center gap-3 text-left" onClick={()=>row.group==='browser'?onComputer():setSelected(row.group==='openbot'?'openbot':'google')}>
-          <span className="flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[7px] bg-white"><Icon icon={row.icon} className="h-[23px] w-[23px]" style={{color:row.color}}/></span><span className="flex-1 text-sm">{row.name}</span>
+        <div className="divide-y divide-default-200 rounded-3xl bg-content2 px-4">{group.map(row=><button key={row.id} type="button" className="flex min-h-16 w-full items-center gap-3 text-left" onClick={()=>row.group==='browser'?onComputer():setSelected(row.group==='openbot'?'openbot':'google')}>
+          <span className="flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[7px] bg-content1"><Icon icon={row.icon} className="h-[23px] w-[23px]" style={{color:row.color}}/></span><span className="flex-1 text-sm">{row.name}</span>
           <span className="text-xs text-default-500">{row.connected ? <Icon icon="lucide:chevron-right" /> : t(row.id === 'openbot' ? 'personalGoogleSetup' : 'personalGoogleConnect')}</span>
         </button>)}</div>
       </section> : null;

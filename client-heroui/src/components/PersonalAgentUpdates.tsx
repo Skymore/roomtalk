@@ -71,8 +71,8 @@ export const PersonalAgentUpdates: React.FC<{
     {mode==='list'&&!loading&&!updates.length&&<div className="space-y-2 py-8 text-center"><Icon icon="lucide:bell" className="mx-auto h-6 w-6 text-default-400"/><p className="font-medium">{t('personalNotificationCaughtUp')}</p><p className="text-sm text-default-500">{t('personalNotificationEmptyHint')}</p></div>}
     {visible.map(notice=>{
       const room=rooms.find(value=>value.id===notice.roomId);
-      return <article key={notice.id} className={`space-y-2 rounded-[22px] p-5 ${notice.readAt?'bg-[#f0f1f2] dark:bg-[#292b2d]':'bg-[#d7e9fa] dark:bg-[#263744]'}`} data-testid="personal-update-card">
-      <div className="flex items-start justify-between gap-3"><h4 className="break-words font-semibold">{notice.title}</h4>{!notice.readAt && <span className="shrink-0 rounded-full bg-white/60 px-2 py-1 text-xs dark:bg-black/20">{t('personalNotificationNew')}</span>}</div>
+      return <article key={notice.id} className={`space-y-2 rounded-[22px] p-5 ${notice.readAt?'bg-content2':'bg-secondary/15'}`} data-testid="personal-update-card">
+      <div className="flex items-start justify-between gap-3"><h4 className="break-words font-semibold">{notice.title}</h4>{!notice.readAt && <span className="shrink-0 rounded-full bg-content1/60 px-2 py-1 text-xs dark:bg-black/20">{t('personalNotificationNew')}</span>}</div>
       <p className="whitespace-pre-wrap break-words text-sm text-default-500">{notice.body}</p>
       <time className="block text-xs text-default-500">{new Date(notice.createdAt).toLocaleString()}</time>
       <div className="flex flex-wrap gap-2"><Button size="sm" isDisabled={Boolean(busy)} onPress={()=>{void markRead(notice).then(saved=>{if(saved && room)onRoomSelect(room);});}}>{t(room?'personalUpdateViewTask':notice.readAt?'personalNotificationRead':'personalUpdateRead')}</Button>

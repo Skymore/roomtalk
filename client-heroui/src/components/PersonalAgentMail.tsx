@@ -96,13 +96,13 @@ export const PersonalAgentMail: React.FC<{clientId:string;showError:(message:str
   const matchingDrafts = drafts.filter(draft=>`${draft.to.join(' ')} ${draft.subject} ${draft.body}`.toLowerCase().includes(query.toLowerCase()));
   return <section className="space-y-5">
     <div className="flex items-center gap-3"><Input variant="bordered" labelPlacement="outside" aria-label={t('personalGoogleSearchMail')} placeholder={t('personalGoogleSearchMail')} value={query} onValueChange={setQuery} startContent={<Icon icon="lucide:search" />} /><Button color="secondary" onPress={()=>{setError('');openEditor({...emptyDraft});}}>{t('personalGoogleCompose')}</Button></div>
-    <div className="rounded-3xl border border-default-200 bg-white p-5 dark:bg-[#20201f]">
+    <div className="rounded-3xl border border-default-200 bg-content1 p-5">
       <div className="mb-4 flex flex-wrap gap-2">{(['all','unread','drafts'] as const).map(value=><Button key={value} size="sm" variant={value === tab ? 'flat' : 'light'} onPress={()=>setTab(value)}>{t(`personalGoogleMail_${value}`)}</Button>)}<Button size="sm" variant="light" isLoading={busy} onPress={()=>void refresh()}>{t('refresh')}</Button></div>
       {error && !selected && !editing && <p className="mb-3 text-sm text-danger" role="alert">{error}</p>}
       {tab === 'drafts' ? matchingDrafts.map(draft=><button key={draft.id} type="button" className="block w-full border-t border-default-200 py-5 text-left" onClick={()=>{setError('');openEditor(draft);}}><span className="block text-sm font-medium">{draft.subject}</span><span className="mt-1 block text-xs text-default-500">{draft.to.join(', ')}</span></button>) : items.map(message=><button key={message.id} type="button" className="flex w-full gap-3 border-t border-default-200 py-5 text-left" onClick={()=>void openThread(message)}>
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8edf2] text-sm text-[#38414a]">{message.sender.slice(0,1)}</span>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-content2 text-sm text-foreground">{message.sender.slice(0,1)}</span>
         <span className="min-w-0 flex-1"><span className="flex justify-between gap-3"><span className={`text-sm ${message.unread ? 'font-semibold' : ''}`}>{message.sender}</span><span className="text-xs text-default-500">{formatDate(message.date,i18n.language)}</span></span><span className="mt-1 block text-sm font-medium">{message.subject}</span><span className="mt-1 block truncate text-xs text-default-500">{message.body.replace(/\n/g,' ')}</span>{message.attachments.length>0 && <Icon icon="lucide:paperclip" className="mt-2 h-3 w-3" />}</span>
-        {message.unread && <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#83b5d3]" />}
+        {message.unread && <span className="mt-2 h-1.5 w-1.5 rounded-full bg-secondary" />}
       </button>)}
       {(tab === 'drafts' ? !matchingDrafts.length : !items.length) && <p className="py-8 text-center text-sm text-default-500">{t(tab === 'drafts' ? 'personalGoogleNoDrafts' : 'personalGoogleNoMail')}</p>}
     </div>

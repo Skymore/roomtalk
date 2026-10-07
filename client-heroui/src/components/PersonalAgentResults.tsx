@@ -62,7 +62,7 @@ export const PersonalAgentResults: React.FC<{ clientId: string; turn: RoomAgentT
     finally { if (mounted.current) setBusy(''); }
   };
   return <div className="mx-auto w-full max-w-3xl space-y-3 px-1">
-    {results.map(result => <article key={result.id} className="space-y-3 rounded-[22px] bg-[#f0f1f2] p-[18px] dark:bg-[#292b2d]" data-testid="personal-result-card">
+    {results.map(result => <article key={result.id} className="space-y-3 rounded-[22px] bg-content2 p-[18px]" data-testid="personal-result-card">
       {result.kind!=='finance' && <><div className="flex items-start justify-between gap-3"><h3 className="break-words text-base font-semibold">{result.title}</h3><span className="shrink-0 rounded-full bg-default-100 px-2 py-1 text-xs text-default-500">{t(`personalResultKind_${result.kind}`)}</span></div>{result.summary && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-default-600">{result.summary}</p>}</>}
       {result.data?<div className="mt-3"><PersonalAgentStructuredResult clientId={clientId} result={result}/></div>:<div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" color="secondary" variant="flat" isDisabled={!canInteract || Boolean(busy)} isLoading={busy === result.id} onPress={() => void open(result)}>{t('personalResultOpen')}</Button>
@@ -75,7 +75,7 @@ export const PersonalAgentResults: React.FC<{ clientId: string; turn: RoomAgentT
         .catch(failure => { if (mounted.current) setError(failure.message); }).finally(() => { if (mounted.current) setBusy(''); });
     }}>{t('personalResultMore')}</Button>}
     {error && <div className="text-sm" role="alert"><p className="text-danger">{error}</p><Button size="sm" variant="light" onPress={() => setAttempt(value => value + 1)}>{t('retry')}</Button></div>}
-    <Modal isOpen={Boolean(preview)} onClose={() => setPreview(undefined)} size="4xl" scrollBehavior="inside" classNames={{ base: 'max-h-[90dvh] bg-white dark:bg-[#252522]' }}>
+    <Modal isOpen={Boolean(preview)} onClose={() => setPreview(undefined)} size="4xl" scrollBehavior="inside" classNames={{ base: 'max-h-[90dvh] bg-content1' }}>
       <ModalContent className="personal-agent-theme">{preview && <><ModalHeader className="min-w-0 break-words">{preview.result.title}</ModalHeader>
         <ModalBody>
           {preview.result.data ? <PersonalAgentStructuredResult clientId={clientId} result={preview.result} />

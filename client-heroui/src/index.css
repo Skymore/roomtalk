@@ -212,40 +212,16 @@ body {
   }
 }
 
-/* OpenMuse ui.tsx palette, scoped to the personal workspace and its dialogs. */
-.personal-agent-theme {
-  --heroui-secondary: 206 100% 89%;
-  --heroui-secondary-foreground: 196 24% 9%;
-  --heroui-primary: 206 81% 43%;
-  --heroui-primary-foreground: 0 0% 100%;
-  --heroui-content1: 0 0% 100%;
-  --heroui-content2: 210 8% 95%;
-  --heroui-content3: 240 6% 94%;
-  --heroui-divider: 240 6% 94%;
-  --heroui-default-100: 210 8% 95%;
-  --heroui-default-200: 240 6% 94%;
-  --heroui-default-500: 203 6% 44%;
-}
-.dark .personal-agent-theme {
-  --heroui-secondary: 206 51% 28%;
-  --heroui-secondary-foreground: 206 100% 89%;
-  --heroui-content1: 240 4% 15%;
-  --heroui-content2: 240 4% 19%;
-  --heroui-content3: 240 4% 22%;
-  --heroui-default-100: 240 4% 19%;
-  --heroui-default-200: 240 4% 25%;
-  --heroui-default-500: 203 6% 64%;
-}
-
+/* Keep OpenMuse field geometry while inheriting the main RoomTalk theme. */
 .personal-agent-theme [data-slot="input-wrapper"] {
-  background-color: #fff;
-  border: 1px solid #eeeef0;
+  background-color: hsl(var(--heroui-content1));
+  border: 1px solid hsl(var(--heroui-divider));
   border-radius: 19px;
   box-shadow: none;
   min-height: 45px;
 }
 .personal-agent-theme [data-slot="base"]:has([data-slot="input-wrapper"]) [data-slot="label"] {
-  color: #11191c;
+  color: hsl(var(--heroui-foreground));
   font-size: 11px;
   font-weight: 600;
   line-height: 14px;
@@ -265,11 +241,4 @@ body {
   position: static;
   transform: none !important;
   margin-bottom: 7px;
-}
-.dark .personal-agent-theme [data-slot="input-wrapper"] {
-  background-color: #252522;
-  border-color: #39393b;
-}
-.dark .personal-agent-theme [data-slot="base"]:has([data-slot="input-wrapper"]) [data-slot="label"] {
-  color: #e7e7e8;
 }

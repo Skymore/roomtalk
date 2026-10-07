@@ -79,7 +79,7 @@ export const PersonalAgentBrowserControl: React.FC<{ clientId: string; roomId: s
     }
   };
   const available = Boolean(frame?.screenshot) && !loading;
-  return <Modal isOpen={isOpen} onClose={() => void close()} size="5xl" scrollBehavior="inside" classNames={{ base: 'bg-white dark:bg-[#252522]', wrapper: 'px-2 sm:px-4' }}>
+  return <Modal isOpen={isOpen} onClose={() => void close()} size="5xl" scrollBehavior="inside" classNames={{ base: 'bg-content1', wrapper: 'px-2 sm:px-4' }}>
     <ModalContent className="personal-agent-theme"><ModalHeader className="flex items-center gap-2"><Icon icon="lucide:globe" />{t('personalBrowser')}<span className="ml-2 min-w-0 truncate text-xs font-normal text-default-500">{frame?.session.title}</span></ModalHeader>
       <ModalBody className="gap-3 pb-5">
         <p className="text-xs text-default-500">{t('personalBrowserControlHint')}</p>
@@ -148,7 +148,7 @@ export const PersonalAgentBrowserVisits: React.FC<{ clientId: string; turn: Room
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [clientId, latestId, canInteract]);
   if (!canInteract || (!latest && !error)) return null;
-  return <div className="mx-auto w-full max-w-3xl rounded-2xl border border-default-200 bg-white p-4 dark:bg-[#252522]" data-testid="personal-browser-visit">
+  return <div className="mx-auto w-full max-w-3xl rounded-2xl border border-default-200 bg-content1 p-4" data-testid="personal-browser-visit">
     {latest && <>
       <div className="flex min-w-0 items-center gap-2"><Icon icon="lucide:globe" /><span className="min-w-0 truncate text-sm font-medium">{latest.title || t('personalBrowser')}</span></div>
       <p className="mt-1 break-all text-xs text-default-500">{latest.url}</p>
