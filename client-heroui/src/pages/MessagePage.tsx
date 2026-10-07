@@ -753,7 +753,7 @@ export const MessagePage: React.FC = () => {
     console.log("Attempting to restore room from storage");
     const roomIdFromUrl = searchParams.get("room");
 
-    if (searchParams.get("personal") === "1") return;
+    if (searchParams.get("personal") === "1" && !personalChatId) return;
     if (roomIdFromUrl) {
       console.log("URL contains room ID, prioritize URL parameter:", roomIdFromUrl);
       // URL参数优先，这个逻辑不变
@@ -763,16 +763,19 @@ export const MessagePage: React.FC = () => {
     // 如果没有URL房间参数，且当前没有活跃房间，尝试从localStorage恢复
     if (!currentRoom) {
       const storedRoom = getStoredRoom();
+      const personalRoomId = view === 'personal' ? personalChatId : null;
+      const roomIdToRestore = personalRoomId || storedRoom?.id;
+      const fallbackRoom = storedRoom?.id === roomIdToRestore ? storedRoom : undefined;
 
-      if (storedRoom) {
-        console.log("Found stored room, attempting to restore:", storedRoom.id);
+      if (roomIdToRestore) {
+        console.log("Found stored room, attempting to restore:", roomIdToRestore);
         const savedView = getStoredView();
-        const storedPermissions = getStoredRoomPermissions(storedRoom.id, clientId);
+        const storedPermissions = getStoredRoomPermissions(roomIdToRestore, clientId);
         console.log("Restored stored room shell with saved view:", savedView);
         if (storedPermissions) {
           commitRoomPermissions(storedPermissions);
           logRoomSessionDiagnostic("retained-access-restored", {
-            roomId: storedRoom.id,
+            roomId: roomIdToRestore,
             clientId,
             role: storedPermissions.role,
             canPost: storedPermissions.canPost,
@@ -780,12 +783,12 @@ export const MessagePage: React.FC = () => {
         }
 
         if (savedView === "chat" && view !== "chat") {
-          setView(storedRoom.personalAgentOwnerId ? "personal" : "chat");
+          setView(personalRoomId || fallbackRoom?.personalAgentOwnerId ? "personal" : "chat");
         }
 
         void ensureActiveRoomSession({
-          roomId: storedRoom.id,
-          fallbackRoom: storedRoom,
+          roomId: roomIdToRestore,
+          fallbackRoom,
           source: "storage",
         }).then((roomInfo) => {
           if (roomInfo) {

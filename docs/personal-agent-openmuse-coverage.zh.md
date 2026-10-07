@@ -101,3 +101,4 @@
 - 功能版本 `4c563e14` 的 [CI 五项全部通过](https://github.com/Skymore/roomtalk/actions/runs/37548702259)。43 项运行器、66 项相关客户端、3 项 artifact 契约通过；Chrome 390×844 验证记忆直接显示、设置查看/编辑/取消、目标说明截断、原版欢迎页及网站监控入口。
 - 暗色复查：对话 canvas 继承个人页面背景，避免嵌套黑色矩形；来源链接采用原版浅蓝 palette，保证深色卡片上的可读性。本地、room.ruit.me、ai-chat.wenlin.dev 均 ready。最终部署证据单独保存在 `/tmp/roomtalk-openmuse-verification-20261006.json`。
 - Google OAuth 回调、权限范围仍为未提交草稿；没有新建 secret、启用 Gmail/Calendar API、或声称真实账号连接成功。Jev live 缺少 TYPESAFE_API_KEY，保持源版默认 off。
+- 跨标签页复查发现：普通房间记录被另一个标签页覆盖后，个人页面刷新会加入主聊，却仍选中侧聊，导致一直加载。恢复流程现优先使用个人助理自己的已选对话；53 项页面测试通过，包含根路径、个人入口和普通聊天独立恢复的回归。
