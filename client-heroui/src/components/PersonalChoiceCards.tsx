@@ -47,7 +47,7 @@ const ChoiceCard:React.FC<{result:JevToolResult|null;loading:boolean;interaction
     {panel.type==='clarification'?<div className="flex flex-wrap gap-2">{panel.options.map((option,index)=><React.Fragment key={option.id}>{button(option,index+1)}</React.Fragment>)}</div>:
       <div className="space-y-2.5">{panel.options.map((option,index)=><div key={option.id} className="space-y-2 rounded-2xl bg-content2 p-3.5"><p className="font-semibold">{option.label}</p>
         {!!option.details.length && <ul className="list-inside list-disc text-sm text-default-600">{option.details.map((detail,index)=><li key={index}>{detail}</li>)}</ul>}
-        <div className="space-y-1">{option.sources.map(source=><a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" aria-label={t('personalChoicesSource',{title:source.title})} className="flex items-center gap-1 break-words text-xs text-secondary underline">{source.title}<Icon icon="lucide:external-link"/></a>)}</div>
+        <div className="space-y-1">{option.sources.map(source=><a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" aria-label={t('personalChoicesSource',{title:source.title})} className="flex items-center gap-1 break-words text-xs text-foreground underline">{source.title}<Icon icon="lucide:external-link"/></a>)}</div>
         {button(option,index+1)}</div>)}</div>}
     {submitError && <p role="alert" className="text-sm text-danger">{submitError}</p>}
     {failedOptionId && !selectedId && <Button size="sm" variant="light" isDisabled={!canRetry} onPress={()=>void choose(failedOptionId,true)}>{t('personalChoicesRetry')}</Button>}
