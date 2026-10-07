@@ -740,6 +740,68 @@ test('imports a real fillable PDF and downloads a distinct saved copy on mobile'
   expect(forbidden.status()).toBe(401);
 });
 
+test('keeps one app entry, searches all tools and opens connected apps directly on mobile',async({page,context})=>{
+  test.setTimeout(90000);
+  await page.setViewportSize({width:390,height:844});
+  await seedClient(context,uniqueName('apps-ui-owner'));
+  let connected=false;
+  await page.route('**/api/personal-agent/google',route=>route.fulfill({json:{configured:true,connected,account:connected?'owner@example.com':undefined,canSend:false,canEditCalendar:false}}));
+  await page.route('**/api/personal-agent/mail',route=>route.fulfill({json:{mail:[]}}));
+  await page.route('**/api/personal-agent/calendars',route=>route.fulfill({json:{calendars:[]}}));
+  await page.route('**/api/personal-agent/calendar/events?**',route=>route.fulfill({json:{events:[]}}));
+  await openRoomsPage(page);
+  await page.getByRole('button',{name:'Settings',exact:true}).first().click();
+  await page.getByLabel('User ID password',{exact:true}).first().fill('Apps-navigation-ui-2026');
+  await page.getByRole('button',{name:'Set password',exact:true}).click();
+  await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
+  await openPersonalAgent(page);
+  const apps=async()=>{await page.getByRole('button',{name:'Apps',exact:true}).click();};
+  await apps();
+  await expect(page.getByRole('button',{name:/^Agent computer/})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:/^Google Calendar/})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:/^Mail /})).toHaveCount(0);
+  await page.getByRole('button',{name:'Gmail Connect',exact:true}).click();
+  await expect(page.getByRole('dialog').getByRole('button',{name:'Connect Google',exact:true})).toBeVisible();
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const search=page.getByPlaceholder('Search apps',{exact:true});
+  await search.fill('  Files  ');
+  await expect(page.getByRole('button',{name:/^Files PDFs/})).toHaveCount(1);
+  await expect(page.getByText('No matching apps.',{exact:true})).toHaveCount(0);
+  await search.fill('no-such-app');
+  await expect(page.getByText('No matching apps.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Tools',exact:true})).toHaveCount(0);
+  await search.press('ControlOrMeta+A');
+  await search.press('Backspace');
+  await expect(search).toHaveValue('');
+  connected=true;
+  await page.getByRole('button',{name:/^Files PDFs/}).click();
+  await expect(page.getByRole('heading',{name:'Files',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Back to Apps',exact:true}).click();
+  await page.getByRole('button',{name:'Gmail',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Compose',exact:true})).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await apps();
+  await page.getByRole('button',{name:'Manage connection: Gmail',exact:true}).click();
+  await expect(page.getByRole('dialog').getByText('owner@example.com',{exact:true})).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('button',{name:'Disconnect Google',exact:true})).toBeVisible();
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button',{name:'Google Calendar',exact:true}).click();
+  await expect(page.getByRole('button',{name:'New event',exact:true})).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await apps();
+  await page.getByRole('button',{name:/^Personality & memory/}).click();
+  await expect(page.getByTestId('personal-memory-library')).toBeVisible();
+  for(const tab of ['Activity','Ideas','Goals','Apps']){
+    await page.getByRole('button',{name:tab,exact:true}).click();
+    await expect(page.getByRole('heading',{name:tab,exact:true}).first()).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+    await expect(page.getByRole('button',{name:'Apps',exact:true})).toBeInViewport();
+  }
+  await page.screenshot({path:'/tmp/roomtalk-apps-fixed-mobile.png',fullPage:true});
+});
+
 test('ports OpenMuse mail/thread/review UI with Google response fixtures and persists real drafts', async ({page,context,request})=>{
   test.setTimeout(90000);
   const clientId = await seedClient(context,uniqueName('google-ui-owner'));
@@ -767,8 +829,7 @@ test('ports OpenMuse mail/thread/review UI with Google response fixtures and per
   await openPersonalAgent(page);
   await page.getByRole('button',{name:'Apps',exact:true}).click();
   await page.getByRole('button',{name:'Gmail',exact:true}).click();
-  await expect(page.getByRole('dialog').getByText('owner@example.com',{exact:true})).toBeVisible();
-  await page.getByRole('dialog').getByRole('button',{name:'Gmail',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('button').filter({hasText:'Complete conversation'}).click();
   await expect(page.getByText('A second message outside the inbox.',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Write a reply',exact:true}).click();
@@ -792,7 +853,7 @@ test('ports OpenMuse mail/thread/review UI with Google response fixtures and per
   const drafts = (await durable.json()).drafts;
   expect(drafts).toHaveLength(1);expect(drafts[0].body).toBe('A privately saved reply.');expect(drafts[0].threadId).toBe('thread-1');
   await page.reload();await page.getByRole('button',{name:'Apps',exact:true}).click();
-  await page.getByRole('button',{name:'Gmail',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'Gmail',exact:true}).click();
+  await page.getByRole('button',{name:'Gmail',exact:true}).click();
   await page.getByRole('button',{name:'Drafts',exact:true}).click();await expect(page.getByRole('button').filter({hasText:'Re: Complete conversation'})).toBeVisible();
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
@@ -876,7 +937,7 @@ test('ports calendar zone-aware editing and read-only choices with explicit Goog
   await expect(page.getByText('User ID password saved.',{exact:true})).toBeVisible();
   await openPersonalAgent(page);await page.getByRole('button',{name:'Apps',exact:true}).click();
   await page.getByRole('button',{name:'Google Calendar',exact:true}).click();
-  await page.getByRole('dialog').getByRole('button',{name:'Google Calendar',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button',{name:'New event',exact:true})).toBeEnabled();
   await page.getByRole('button').filter({hasText:'Calendar zone meeting'}).click();
   await expect(page.getByLabel('Start time',{exact:true})).toHaveValue('13:00');

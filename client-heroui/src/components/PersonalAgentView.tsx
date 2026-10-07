@@ -162,17 +162,9 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
         {tab!=='chats' && <h2 className="mb-[22px] text-[25px] font-semibold">{t(tab==='activity'?'personalAgentActivity':tab==='ideas'?'personalAgentIdeas':tab==='goals'?'personalAgentGoals':tab==='apps'?'personalAgentApps':tab==='mail'?'personalGoogleMail':tab==='calendar'?'personalGoogleCalendar':tab==='files'?'personalAgentFiles':tab==='tracking'?'personalAgentTracking':'personalAgentPersonalityMemory')}</h2>}
         {conversation && tab === 'chats' ? <div className="h-full min-h-0">{conversation(()=>setThreadsOpen(true),tab=>{setComputerTab(tab);setComputerOpen(true);},(target,mail)=>{setInitialMail(mail);setTab(target);})}</div> : <div className="space-y-5">
         {tab === 'apps' && <section className="space-y-5">
-          <Input variant="bordered" labelPlacement="outside" label={t('personalAgentSearchApps')} placeholder={t('personalAppsSearchConnectors')} value={appSearch} onValueChange={setAppSearch} />
+          <Input variant="bordered" labelPlacement="outside" label={t('personalAgentSearchApps')} placeholder={t('personalAgentSearchApps')} value={appSearch} onValueChange={setAppSearch} />
           {!isConnected && !appSearch.trim() && <div className={`${panelClass} flex items-center gap-3 p-4`}><span className="text-2xl" aria-hidden="true">🦊</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{t('personalAgentConnection')}</p><p className={`text-xs ${mutedClass}`}>{t(isConnected ? 'codexConnectionStatusConnected' : 'personalAgentConnectionHint')}</p></div>{!isConnected && <Button size="sm" onPress={onOpenConnections}>{t('personalAgentConnectAccount')}</Button>}</div>}
-          <PersonalAgentConnections clientId={clientId} query={appSearch} onOpen={setTab} computerAvailable={isConnected} onComputer={()=>{setComputerTab(undefined);setComputerOpen(true);}} showError={showError} />
-          <h3 className="text-sm font-semibold">{t('personalAgentOnComputer')}</h3>
-          <div className={`${panelClass} divide-y divide-default-200 overflow-hidden`}>{[
-            {key:'mail' as const,title:'personalGoogleMail',detail:'personalAgentMailShortcut',icon:'lucide:mail'},
-            {key:'calendar' as const,title:'personalGoogleCalendar',detail:'personalAgentCalendarShortcut',icon:'lucide:calendar-days'},
-            {key:'computer' as const,title:'personalComputerTitle',detail:'personalAppsBrowserDetail',icon:'lucide:globe'},
-            {key:'files' as const,title:'personalAgentFiles',detail:'personalAppsFilesDetail',icon:'lucide:file-text'},
-            {key:'memory' as const,title:'personalAgentPersonalityMemory',detail:'personalAgentMemoryDescription',icon:'lucide:brain'},
-          ].filter(item=>`${t(item.title)} ${t(item.detail)}`.toLowerCase().includes(appSearch.toLowerCase())).map(item=><button key={item.key} type="button" onClick={()=>{if(item.key==='computer'){setComputerTab(undefined);setComputerOpen(true);}else setTab(item.key);}} className="flex w-full items-center gap-3 p-4 text-left"><Icon icon={item.icon} className="h-5 w-5 shrink-0" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{t(item.title)}</span><span className={`mt-1 block text-xs ${mutedClass}`}>{t(item.detail)}</span></span><Icon icon="lucide:chevron-right" /></button>)}</div>
+          <PersonalAgentConnections clientId={clientId} query={appSearch} onOpen={setTab} computerAvailable={isConnected} onComputer={()=>{if(!isConnected){onOpenConnections();return;}setComputerTab(undefined);setComputerOpen(true);}} showError={showError} />
         </section>}
 
 

@@ -172,6 +172,9 @@ describe('PersonalAgentView', () => {
     fireEvent.click(screen.getByRole('button',{name:'personalAgentApps'}));
     fireEvent.click(screen.getByRole('button',{name:'personalAgentConnectAccount'}));
     expect(callbacks.onOpenConnections).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button',{name:'personalComputerTitle personalGoogleConnect'}));
+    expect(callbacks.onOpenConnections).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('creates a distinct task conversation through the API', async () => {

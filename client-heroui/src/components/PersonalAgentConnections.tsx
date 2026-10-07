@@ -32,13 +32,14 @@ import { personalGoogleRequest,PersonalGoogleStatus } from '../utils/personalAge
 
 interface OpenBotProbe {state:string}
 export const PersonalAgentConnections: React.FC<{
-  clientId:string;query:string;onOpen:(page:'mail'|'calendar')=>void;computerAvailable:boolean;onComputer:()=>void;showError:(message:string)=>void;
+  clientId:string;query:string;onOpen:(page:'mail'|'calendar'|'files'|'memory')=>void;computerAvailable:boolean;onComputer:()=>void;showError:(message:string)=>void;
 }> = ({clientId,query,onOpen,computerAvailable,onComputer,showError}) => {
   const {t} = useTranslation();
   const [status,setStatus] = React.useState<PersonalGoogleStatus>();
   const [openbot,setOpenbot]=React.useState<OpenBotProbe>();
   const [selected,setSelected] = React.useState<'google'|'openbot'>();
   const [busy,setBusy] = React.useState(false);
+  const [loading,setLoading] = React.useState(true);
   const refresh = React.useCallback(async()=>{
     try {
       const google=personalGoogleRequest<PersonalGoogleStatus>(clientId,'/google');
@@ -46,8 +47,9 @@ export const PersonalAgentConnections: React.FC<{
       const [result,probe]=await Promise.all([google,bot]);setStatus(result);setOpenbot(probe);
     }
     catch(error) {showError(error instanceof Error ? error.message : String(error));}
+    finally {setLoading(false);}
   },[clientId,showError]);
-  React.useEffect(()=>{void refresh();},[refresh]);
+  React.useEffect(()=>{void refresh();window.addEventListener('focus',refresh);return()=>window.removeEventListener('focus',refresh);},[refresh]);
   const connect = async (capability:'read'|'write') => {
     setBusy(true);
     try {
@@ -56,24 +58,36 @@ export const PersonalAgentConnections: React.FC<{
     } catch (error) {showError(error instanceof Error ? error.message : String(error));}
     finally {setBusy(false);}
   };
+  const search=query.trim().toLowerCase();
+  const tools = [
+    {page:'files' as const,title:'personalAgentFiles',detail:'personalAppsFilesDetail',icon:'lucide:file-text'},
+    {page:'memory' as const,title:'personalAgentPersonalityMemory',detail:'personalAgentMemoryDescription',icon:'lucide:brain'},
+  ].filter(item=>`${t(item.title)} ${t(item.detail)}`.toLowerCase().includes(search));
   const rows = [
-    {id:'gmail',name:'Gmail',color:'#ea5b4d',group:'google',icon:'lucide:mail',connected:status?.connected ?? false,page:'mail' as const},
-    {id:'calendar',name:'Google Calendar',color:'#4285f4',group:'google',icon:'lucide:calendar-days',connected:status?.connected ?? false,page:'calendar' as const},
+    {id:'gmail',name:t('personalGoogleGmail'),color:'#ea5b4d',group:'google',icon:'lucide:mail',connected:status?.connected ?? false,page:'mail' as const},
+    {id:'calendar',name:t('personalGoogleCalendar'),color:'#4285f4',group:'google',icon:'lucide:calendar-days',connected:status?.connected ?? false,page:'calendar' as const},
     {id:'browser',name:t('personalComputerTitle'),color:'#1987cf',group:'browser',icon:'lucide:globe',connected:computerAvailable,page:undefined},
     {id:'openbot',name:'OpenBot',color:'#6866a6',group:'openbot',icon:'lucide:sparkles',connected:openbot?.state==='authenticated',page:undefined},
-  ].filter(row=>`${row.name} ${row.group}`.toLowerCase().includes(query.toLowerCase()));
+  ].filter(row=>`${row.name} ${row.group}`.toLowerCase().includes(search));
   return <div className="space-y-5">
-    {[true,false].map(connected=>{
+    {loading ? <Spinner label={t('personalAgentLoading')} /> : [true,false].map(connected=>{
       const group = rows.filter(row=>row.connected === connected);
       return group.length ? <section key={String(connected)}>
         <h3 className="mb-2 pl-3 text-xs text-default-500">{t(connected ? 'personalGoogleConnected' : 'personalGoogleAvailable')}</h3>
-        <div className="divide-y divide-default-200 rounded-3xl bg-content2 px-4">{group.map(row=><button key={row.id} type="button" className="flex min-h-16 w-full items-center gap-3 text-left" onClick={()=>row.group==='browser'?onComputer():setSelected(row.group==='openbot'?'openbot':'google')}>
-          <span className="flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[7px] bg-content1"><Icon icon={row.icon} className="h-[23px] w-[23px]" style={{color:row.color}}/></span><span className="flex-1 text-sm">{row.name}</span>
-          <span className="text-xs text-default-500">{row.connected ? <Icon icon="lucide:chevron-right" /> : t(row.id === 'openbot' ? 'personalGoogleSetup' : 'personalGoogleConnect')}</span>
-        </button>)}</div>
+        <div className="divide-y divide-default-200 rounded-3xl bg-content2 px-4">{group.map(row=><div key={row.id} className="flex items-center gap-2">
+          <button type="button" className="flex min-h-16 min-w-0 flex-1 items-center gap-3 text-left" onClick={()=>{if(row.group==='browser')onComputer();else if(row.connected && row.page)onOpen(row.page);else setSelected(row.group==='openbot'?'openbot':'google');}}>
+            <span className="flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[7px] bg-content1"><Icon icon={row.icon} className="h-[23px] w-[23px]" style={{color:row.color}}/></span><span className="min-w-0 flex-1 break-words text-sm">{row.name}</span>
+            <span className="shrink-0 text-xs text-default-500">{row.connected ? <Icon icon="lucide:chevron-right" /> : t(row.id === 'openbot' ? 'personalGoogleSetup' : 'personalGoogleConnect')}</span>
+          </button>
+          {row.connected && row.group==='google' && <Button isIconOnly size="sm" variant="light" aria-label={`${t('personalAgentManageConnection')}: ${row.name}`} title={t('personalAgentManageConnection')} onPress={()=>setSelected('google')}><Icon icon="lucide:settings" className="h-4 w-4" /></Button>}
+        </div>)}</div>
       </section> : null;
     })}
-    {!rows.length && <p className="text-sm text-default-500">{t('personalAppsNoConnectors')}</p>}
+    {tools.length>0 && <section className="space-y-3">
+      <h3 className="text-sm font-semibold">{t('personalAgentTools')}</h3>
+      <div className="divide-y divide-default-200 overflow-hidden rounded-2xl border border-divider bg-content1">{tools.map(item=><button key={item.page} type="button" onClick={()=>onOpen(item.page)} className="flex w-full items-center gap-3 p-4 text-left"><Icon icon={item.icon} className="h-5 w-5 shrink-0" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{t(item.title)}</span><span className="mt-1 block break-words text-xs text-default-500">{t(item.detail)}</span></span><Icon icon="lucide:chevron-right" className="shrink-0" /></button>)}</div>
+    </section>}
+    {!loading && !rows.length && !tools.length && <p className="text-sm text-default-500">{t('personalAppsNoApps')}</p>}
     <Modal isOpen={Boolean(selected)} onClose={()=>setSelected(undefined)} scrollBehavior="inside"><ModalContent className="personal-agent-theme">
       <ModalHeader>{selected === 'google' ? t('personalGoogleConnections') : 'OpenBot'}</ModalHeader>
       <ModalBody className="pb-6">{selected === 'google' ? <div className="space-y-4">
