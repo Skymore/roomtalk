@@ -137,7 +137,7 @@ export const PersonalAgentConversation: React.FC<{
       }
     } catch (error) { if (mounted.current) showError(error instanceof Error ? error.message : t('personalAgentLoadFailed')); }
   };
-  return <section className="flex h-full min-h-0 w-full flex-col bg-[#fcfcfc] dark:bg-[#191917]" data-testid="personal-agent-conversation">
+  return <section className="flex h-full min-h-0 w-full flex-col bg-background" data-testid="personal-agent-conversation">
     {room.personalAgentThreadKind!=='main' && <header className="relative shrink-0 px-4 py-1"><p className="text-center text-xs text-default-500">{room.name}</p><Button isIconOnly size="sm" variant="light" className="absolute right-0 top-0" aria-label={t('personalTaskDetail')} onPress={()=>setTaskOpen(true)}><Icon icon="lucide:list-checks"/></Button></header>}
     <div className="relative flex min-h-0 flex-1 flex-col pt-4">
       <MessageList key={room.id} ref={list} roomId={room.id} room={room} currentRoom={room} presentation="personal-agent" onSendPersonalChoice={sendChoice} onSendPersonalPrompt={canSend && !sending && !running ? content=>void sendChoice(content).catch(error=>showError(error.message)) : undefined} onOpenPersonalWorkspace={props.onOpenWorkspace} onRetryPersonalMessage={message=>void retry(message)} onOpenPersonalComputer={()=>props.onComputer('Desktop')}

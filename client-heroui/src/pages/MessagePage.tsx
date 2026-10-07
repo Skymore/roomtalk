@@ -1494,7 +1494,7 @@ export const MessagePage: React.FC = () => {
   };
 
   return (
-    <div className={`flex h-full min-h-0 flex-col ${view==='personal'?'bg-[#fcfcfc] text-[#11191c]':'bg-[#f5f4ed] text-[#141413]'} dark:bg-[#141413] dark:text-[#faf9f5]`}> {/* 确保根容器是 flex 列且占满屏幕高度 */}
+    <div className={`flex h-full min-h-0 flex-col bg-background ${view==='personal'?'text-[#11191c]':'text-[#141413]'} dark:text-[#faf9f5]`}> {/* 确保根容器是 flex 列且占满屏幕高度 */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {view !== 'personal' && !(view === 'chat' && currentRoom?.personalAgentOwnerId) && <DesktopSidebar
           clientId={clientId}

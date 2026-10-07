@@ -146,7 +146,7 @@ export const PersonalAgentView: React.FC<PersonalAgentViewProps> = ({
   );
 
   return (
-    <div className="personal-agent-theme flex h-full min-h-0 w-full flex-col bg-[#fcfcfc] text-[#11191c] dark:bg-[#191917] dark:text-default-800" style={{paddingTop:'env(safe-area-inset-top)',paddingBottom:'env(safe-area-inset-bottom)'}} data-testid="personal-agent-view">
+    <div className="personal-agent-theme flex h-full min-h-0 w-full flex-col bg-background text-[#11191c] dark:text-default-800" style={{paddingTop:'env(safe-area-inset-top)',paddingBottom:'env(safe-area-inset-bottom)'}} data-testid="personal-agent-view">
       <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col">
         <header className="relative mx-5 h-[122px] shrink-0 pt-0.5 sm:h-[146px] sm:pt-3.5">
           <Button isIconOnly size="sm" variant="light" className="absolute left-0 top-4" aria-label={t('personalAgentConversations')} onPress={()=>setThreadsOpen(true)}><Icon icon="lucide:menu" className="h-5 w-5"/></Button>
