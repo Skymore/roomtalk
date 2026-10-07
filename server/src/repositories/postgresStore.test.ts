@@ -786,7 +786,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT personal_agent_resumed_turn_id, personal_agent_task_control, id, name, description,[\s\S]*code_agent_backend, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT personal_agent_auto_title, personal_agent_resumed_turn_id, personal_agent_task_control, id, name, description,[\s\S]*code_agent_backend, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },

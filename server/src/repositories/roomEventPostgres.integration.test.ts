@@ -3276,7 +3276,8 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         ADD COLUMN IF NOT EXISTS personal_agent_archived_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS personal_agent_memory_id TEXT,
         ADD COLUMN IF NOT EXISTS personal_agent_task_control TEXT,
-        ADD COLUMN IF NOT EXISTS personal_agent_resumed_turn_id TEXT`);
+        ADD COLUMN IF NOT EXISTS personal_agent_resumed_turn_id TEXT,
+        ADD COLUMN IF NOT EXISTS personal_agent_auto_title BOOLEAN NOT NULL DEFAULT FALSE`);
       await migrationPool.query(`ALTER TABLE room_messages
         ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
@@ -3342,7 +3343,7 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
       );
 
       // These columns only let the current store seed the historical fixture.
-      // Remove them so 0032 still creates and validates its actual schema.
+      // Remove them so the later migrations still create and validate their actual schema.
       await migrationPool.query(`ALTER TABLE rooms
         DROP COLUMN personal_agent_owner_id,
         DROP COLUMN personal_agent_thread_kind,
@@ -3350,7 +3351,8 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
         DROP COLUMN personal_agent_archived_at,
         DROP COLUMN personal_agent_memory_id,
         DROP COLUMN personal_agent_task_control,
-        DROP COLUMN personal_agent_resumed_turn_id`);
+        DROP COLUMN personal_agent_resumed_turn_id,
+        DROP COLUMN personal_agent_auto_title`);
       for (const migration of POSTGRES_MIGRATIONS.slice(aggregateMigrationIndex)) {
         await migrationPool.query(migration.sql);
       }
