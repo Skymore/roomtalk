@@ -159,19 +159,37 @@ Local start and backup:
 
 ```bash
 cp .env.compose.example .env.compose
-docker compose --env-file .env.compose up -d --build
+docker compose --env-file .env.compose --profile local-storage up -d --build
 docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. Local S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. SeaweedFS and its S3 port bind only to the private Compose network and loopback. `MEDIA_STORAGE_ENDPOINT` keeps server traffic on the Compose network while `MEDIA_STORAGE_PUBLIC_ENDPOINT` signs browser uploads/downloads for the edge hostname.
+`--env-file` is required so Compose interpolation uses the configured ports and PostgreSQL credentials. S3 credentials are injected from macOS Keychain by `scripts/local-production.mjs`; they are not committed. App and Worker use `MEDIA_STORAGE_ENDPOINT`, `MEDIA_STORAGE_REGION`, `MEDIA_STORAGE_FORCE_PATH_STYLE`, and the standard AWS credential variables. For bundled SeaweedFS, the helper enables the `local-storage` profile and selects the local keys. With a remote endpoint, SeaweedFS is optional and readiness probes the configured bucket. `MEDIA_STORAGE_PUBLIC_ENDPOINT` signs browser uploads/downloads; R2 requires its S3 API endpoint rather than a custom domain.
 
-Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and object store, then writes a matching PostgreSQL custom archive and SeaweedFS data snapshot before starting those exact stopped containers again. The recovery path deliberately uses `compose start`, not `compose up`, so a backup cannot reconcile a newer Compose definition against an older image and become an accidental deployment. Queue Redis is operational state rather than a business backup source: restoring PostgreSQL into an empty queue is supported because pending dispatch is relayed and acknowledged-but-active dispatch is rebuilt by reconciliation. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
+Run `node scripts/backup-local-production.mjs` for a consistent maintenance backup. It briefly stops the edge, app, and Worker, then writes a PostgreSQL custom archive before starting those exact stopped containers again. With local SeaweedFS, it also stops that service and writes its matching data snapshot. With remote object storage, the result reports the remote endpoint and no local object archive; that database dump is not an independent backup of remote objects. The recovery path deliberately uses `compose start`, not `compose up`, so a backup cannot reconcile a newer Compose definition against an older image and become an accidental deployment. Queue Redis is operational state rather than a business backup source: restoring PostgreSQL into an empty queue is supported because pending dispatch is relayed and acknowledged-but-active dispatch is rebuilt by reconciliation. Local backups are not off-host backups; production still needs encrypted external copies and restore drills.
 
 Long-running Compose services use bounded JSON log rotation (10 MB per file, five files). Database-backed observability, `assistant_runs`, dispatch intent, and turn records remain durable PostgreSQL data; the Docker limit applies only to process stdout/stderr. Redis uses a named volume, AOF `everysec`, and `noeviction` for active BullMQ jobs.
 
 Health is not one optimistic boolean. `/api/health/live` is an App process probe. `/api/status` and `/api/health/ready` test a real table read, realtime Redis, S3, and the Socket adapter. A serving failure returns HTTP 503 and `rooms: null`; queue-only failure keeps the App ready but reports `degraded` and deferred dispatch. Every `ai-worker` renews a shared queue-Redis TTL heartbeat, so a dead Worker also degrades public status even while Redis itself still answers. Status exposes PostgreSQL pending/processing dispatch plus BullMQ waiting/active/delayed/failed counts and oldest queued time. `ai-worker` retains its own health probe for PostgreSQL, queue Redis, transient Redis, and local worker state. AWS should map these separately and alert on host/disk, expired Worker heartbeat, and sustained queue age.
 
 GitHub CI uses Node 24.18, starts PostgreSQL 17 and Redis 7, and sets `ROOM_EVENT_TEST_DATABASE_URL` plus `BULLMQ_TEST_REDIS_URL`. Trigger/transaction/fencing tests and real BullMQ dedupe, processor retry, missing-job rebuild, and exhausted-job reconciliation tests therefore fail the job instead of silently skipping.
+
+## Move local objects to R2
+
+Keep the source bucket and local data directory intact throughout the migration. The existing S3 migration copies every prefix without changing object keys or database rows, preserves content headers, verifies copied bytes, and skips verified objects on a rerun. It does not delete objects from either bucket.
+
+1. Create a private R2 Standard bucket, configure CORS for the production `CLIENT_URLS` with `GET`, `HEAD`, and `PUT`, and create a bucket-scoped Object Read & Write token. Store its S3 credentials in Keychain, never in the repository. Use region `auto` and the same account S3 endpoint for both media endpoints.
+2. Save the complete original production Keychain configuration for rollback. Create `roomtalk-seaweedfs-env` with canonical S3 fields and the loopback endpoint `http://127.0.0.1:8333`, and `roomtalk-r2-env` with the R2 fields.
+3. Inventory and copy while the old service remains available:
+
+   ```sh
+   node scripts/migrate-production-object-storage.mjs roomtalk-seaweedfs-env roomtalk-r2-env
+   node scripts/migrate-production-object-storage.mjs roomtalk-seaweedfs-env roomtalk-r2-env --execute --concurrency 4
+   ```
+
+4. Pause App and Worker writes, rerun the copy for the final delta, and verify the target object count, keys, sizes, and contents. Update only the production S3 fields and credentials, then deploy through `scripts/local-production.mjs --profile edge up -d --no-build` when the application image is unchanged.
+5. Verify local and public readiness, authenticated browser upload/completion, older attachments, and published sites. Retain the local directory and original configuration. Keep the old read endpoint available through the lifetime of previously issued URLs before stopping SeaweedFS.
+
+For rollback after R2 accepts new writes, first copy those new objects back to the local store before restoring its configuration. Restoring only the old endpoint would hide new R2-only objects. The backup helper does not copy remote objects back automatically.
 
 ## Immutable-event production migration
 

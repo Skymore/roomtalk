@@ -52,8 +52,9 @@ const verifyReadinessUrl = async url => {
   }
 }
 
-const verifyProduction = async ({ composePrefix, composeEnv, edgeEnabled, roomtalkPort }) => {
-  const expectedServices = ['app', 'ai-worker', 'postgres', 'redis', 'object-storage']
+const verifyProduction = async ({ composePrefix, composeEnv, edgeEnabled, roomtalkPort, localObjectStorage }) => {
+  const expectedServices = ['app', 'ai-worker', 'postgres', 'redis']
+  if (localObjectStorage) expectedServices.push('object-storage')
   if (edgeEnabled) expectedServices.push('cloudflared', 'cloudflared-wenlin')
   const publicStatusUrls = [
     process.env.ROOMTALK_PUBLIC_STATUS_URL || 'https://room.ruit.me/api/status',
@@ -111,6 +112,12 @@ if (!storedEnv || Array.isArray(storedEnv) || typeof storedEnv !== 'object') {
   throw new Error(`Keychain item ${keychainItem} does not contain an environment object`)
 }
 
+const localObjectStorage = !storedEnv.MEDIA_STORAGE_ENDPOINT || storedEnv.MEDIA_STORAGE_ENDPOINT === 'http://object-storage:8333'
+if (localObjectStorage) {
+  storedEnv.AWS_ACCESS_KEY_ID = storedEnv.LOCAL_S3_ACCESS_KEY_ID
+  storedEnv.AWS_SECRET_ACCESS_KEY = storedEnv.LOCAL_S3_SECRET_ACCESS_KEY
+}
+
 const entries = Object.entries(storedEnv).sort(([left], [right]) => left.localeCompare(right))
 for (const [name, value] of entries) {
   if (!/^[A-Z_][A-Z0-9_]*$/.test(name) || typeof value !== 'string') {
@@ -130,6 +137,7 @@ const composeArguments = process.argv.length > 2
   ? process.argv.slice(2)
   : ['--profile', 'edge', 'up', '-d', '--build']
 const composePrefix = ['compose', '--env-file', '.env.compose', '--env-file', generatedEnvPath]
+if (localObjectStorage) composePrefix.push('--profile', 'local-storage')
 const composeEnv = { ...process.env, ROOMTALK_APP_ENV_FILE: generatedEnvPath }
 
 try {
@@ -153,6 +161,7 @@ try {
       composeEnv,
       edgeEnabled: composeArguments.includes('edge'),
       roomtalkPort: storedEnv.ROOMTALK_PORT || process.env.ROOMTALK_PORT || '3012',
+      localObjectStorage,
     })
   }
 } finally {

@@ -159,19 +159,37 @@ Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让�
 
 ```bash
 cp .env.compose.example .env.compose
-docker compose --env-file .env.compose up -d --build
+docker compose --env-file .env.compose --profile local-storage up -d --build
 docker compose --env-file .env.compose --profile ops run --rm postgres-backup
 ```
 
-必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。本地 S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。SeaweedFS 与 S3 端口只对 Compose 私网和 loopback 开放；`MEDIA_STORAGE_ENDPOINT` 让服务端流量留在 Compose 网络，`MEDIA_STORAGE_PUBLIC_ENDPOINT` 为 edge hostname 生成浏览器上传/下载签名。
+必须带 `--env-file`，Compose interpolation 才会使用配置的端口和 PostgreSQL 凭据。S3 凭据由 `scripts/local-production.mjs` 从 macOS Keychain 注入，不写入仓库。App 和 Worker 使用 `MEDIA_STORAGE_ENDPOINT`、region、path-style 与标准 AWS 凭据变量。使用本地 SeaweedFS 时，helper 自动开启 `local-storage` profile 并选择本地凭据；使用远程 endpoint 时，SeaweedFS 为可选服务，readiness 检查配置的远程桶。`MEDIA_STORAGE_PUBLIC_ENDPOINT` 用于浏览器上传/下载签名；R2 必须使用其 S3 API endpoint，不能使用自定义域名。
 
-运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、app 与 object store，同时输出 PostgreSQL custom archive 和 SeaweedFS data snapshot，然后原样启动刚才停下的容器。恢复路径刻意使用 `compose start`，而不是 `compose up`，避免新 Compose 定义在旧镜像上被提前 reconcile，让备份意外变成部署。Queue Redis 是运行状态，不是业务备份源：PostgreSQL 恢复到空队列时，pending dispatch 会由 relay 投递，已经 ack 但仍 active 的 dispatch 会由 reconciler 重建。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
+运行 `node scripts/backup-local-production.mjs` 可生成一致的维护备份：脚本会短暂停止 edge、App 和 Worker，生成 PostgreSQL custom archive，再原样启动刚才停下的容器。配置本地 SeaweedFS 时，还会停止该服务并输出配套 data snapshot；配置远程对象存储时，结果报告远程 endpoint，且不生成本地对象归档，数据库 dump 不等于远程对象的独立备份。恢复路径刻意使用 `compose start`，而不是 `compose up`，避免新 Compose 定义在旧镜像上被提前 reconcile，让备份意外变成部署。Queue Redis 是运行状态，不是业务备份源：PostgreSQL 恢复到空队列时，pending dispatch 会由 relay 投递，已经 ack 但仍 active 的 dispatch 会由 reconciler 重建。本地 `backups/` 仍不等于异地备份，生产必须有加密外部副本和实际 restore 演练。
 
 长期运行的 Compose 服务使用有界 JSON 日志轮转（单文件 10 MB、保留 5 份）。数据库里的 observability、`assistant_runs`、dispatch intent 与 turn 仍是 PostgreSQL durable data；这个限制只作用于进程 stdout/stderr。Redis 使用 named volume、AOF `everysec` 与 `noeviction` 保护 active BullMQ job。
 
 健康状态不是一个乐观 boolean。`/api/health/live` 只探测 App 进程；`/api/status` 与 `/api/health/ready` 检查真实表读取、realtime Redis、S3 与 Socket adapter。Serving dependency 失败时返回 HTTP 503 与 `rooms: null`；只有 queue 故障时 App 仍 ready，但报告 `degraded` 和 deferred dispatch。每个 `ai-worker` 会续租一个共享 queue-Redis TTL heartbeat，所以 Worker 已死但 Redis 仍在线时，公开状态也会 degraded。状态同时输出 PostgreSQL pending/processing dispatch、BullMQ waiting/active/delayed/failed 和 oldest queued time。`ai-worker` 仍有独立健康检查；AWS 需要对宿主磁盘、Worker heartbeat 过期和持续 queue age 告警。
 
 GitHub CI 使用 Node 24.18，同时启动 PostgreSQL 17 与 Redis 7，并设置 `ROOM_EVENT_TEST_DATABASE_URL` 和 `BULLMQ_TEST_REDIS_URL`。Trigger/transaction/fence 与真实 BullMQ 去重、processor retry、missing-job rebuild、exhausted-job reconciliation 测试都会执行，不会因为缺依赖静默 skip。
+
+## 把本地对象迁移到 R2
+
+迁移期间完整保留源桶与本地数据目录。现有 S3 迁移工具复制全部前缀，保持 object key 与数据库记录不变，保留内容头，校验复制内容，并在重跑时跳过已验证对象。工具不会删除任何一侧的对象。
+
+1. 创建私有 R2 Standard 桶，为生产 `CLIENT_URLS` 配置 `GET`、`HEAD`、`PUT` CORS，创建仅限该桶的 Object Read & Write token。凭据只存 Keychain。region 使用 `auto`，两个 media endpoint 都使用账号的 S3 API endpoint。
+2. 在 Keychain 保存完整原生产配置以便回退。`roomtalk-seaweedfs-env` 保存本地标准 S3 配置与 loopback endpoint `http://127.0.0.1:8333`，`roomtalk-r2-env` 保存 R2 配置。
+3. 保持旧服务可用，先盘点再复制：
+
+   ```sh
+   node scripts/migrate-production-object-storage.mjs roomtalk-seaweedfs-env roomtalk-r2-env
+   node scripts/migrate-production-object-storage.mjs roomtalk-seaweedfs-env roomtalk-r2-env --execute --concurrency 4
+   ```
+
+4. 暂停 App 和 Worker 写入，重跑复制补齐最后增量，校验目标对象数量、key、大小和内容。只更新生产 S3 字段与凭据；应用镜像未变时，通过 `scripts/local-production.mjs --profile edge up -d --no-build` 切换。
+5. 验证本地与公网 readiness、登录浏览器上传及完成确认、旧附件和已发布网站。保留本地目录和原配置；旧签名 URL 到期后再停止 SeaweedFS。
+
+R2 接受新写入后若要回退，应先把新增对象复制回本地，再恢复配置；只恢复旧 endpoint 会让 R2 独有的新对象不可见。备份 helper 不会自动把远程对象复制回本地。
 
 ## 不可变事件生产 migration
 
