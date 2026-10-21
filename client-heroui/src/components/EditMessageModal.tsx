@@ -155,11 +155,11 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             placeholder={t('enterYourMessage')} // Use translation for placeholder
           />
           </ModalBody>
-          <ModalFooter className="flex-wrap gap-2 border-t border-[#e5e2d9] px-5 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 dark:border-[#30302e]">
+          <ModalFooter className="flex-nowrap gap-1 border-t border-[#e5e2d9] px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 dark:border-[#30302e] sm:gap-2 sm:px-5">
             <Button
               variant="light"
               onPress={onClose}
-              className="min-h-11 text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e] sm:min-h-9"
+              className="min-h-11 min-w-0 shrink-0 whitespace-nowrap px-2 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e] sm:min-h-9 sm:px-4 sm:text-sm"
             >
               {t('cancel')}
             </Button>
@@ -168,18 +168,18 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
               color="primary"
               onPress={handleSaveClick}
               title={t('saveTitle')}
-              className="min-h-11 text-[#30302e] transition-colors hover:bg-[#e8e6dc] dark:text-[#faf9f5] dark:hover:bg-[#30302e] sm:min-h-9"
+              className="min-h-11 min-w-0 shrink-0 gap-1 whitespace-nowrap px-2 text-xs text-[#30302e] transition-colors hover:bg-[#e8e6dc] dark:text-[#faf9f5] dark:hover:bg-[#30302e] sm:min-h-9 sm:px-4 sm:text-sm"
             >
-              <Icon icon="lucide:save" className="mr-1" width={14} height={14}/> {t('save')}
+              <Icon icon="lucide:save" className="shrink-0" width={14} height={14}/> {t('save')}
             </Button>
             {showSaveAndAskAI && (
               <Button
                 color="secondary"
                 onPress={handleSaveAndAskAIClick}
                 title={t('saveAndAskAITitle')}
-                className="min-h-11 bg-secondary font-semibold text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:min-h-9"
+                className="min-h-11 min-w-0 shrink-0 gap-1 whitespace-nowrap bg-secondary px-2 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:min-h-9 sm:px-4 sm:text-sm"
               >
-                <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
+                <Icon icon="lucide:sparkles" className="shrink-0" width={14} height={14}/> {t('saveAndAskAI')}
               </Button>
             )}
           </ModalFooter>
