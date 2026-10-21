@@ -146,14 +146,14 @@ AI placeholder、`assistant_runs`、room event 与 dispatch row 在一个 Postgr
 
 当前 Mac 生产、保留的 Fly 回滚目标与未来 AWS 使用同一个根 `Dockerfile`，差异只来自环境变量：
 
-| 当前 Mac 生产 | 保留的云端回滚目标 | AWS 目标 |
+| 当前生产（Mac + R2） | 保留的云端回滚目标 | AWS 目标 |
 | --- | --- | --- |
 | 同镜像的 app + ai-worker | Fly Machine | ECS Fargate services 或 EKS deployments |
 | PostgreSQL 17 volume | Supabase/托管 PostgreSQL | RDS PostgreSQL |
 | Redis 7，AOF realtime + BullMQ | 托管 Redis | ElastiCache for Redis OSS |
-| SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
+| 私有 Cloudflare R2 Standard 桶 | Tigris/S3-compatible | S3 |
 
-Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是 App/Worker 共享镜像、PostgreSQL schema/dump/WAL、BullMQ Redis contract、可分离的 `REDIS_URL` / `QUEUE_REDIS_URL`，以及 S3 API。Realtime/cache key 可自然预热；零停机迁移应排空或迁移 active job，维护窗口则可在旧 Worker 停止后让新 queue 空启动，因为 pending dispatch 会由 relay 投递，已 ack 但仍 active 的 run 会从 PostgreSQL 重建。当前生产使用 SeaweedFS，回滚部署使用 Tigris，未来 AWS 使用 S3，object key 与 API 不变。
+Kubernetes 是可选项，不是单台 MacBook 的前置条件。K8s 无法让一台物理机变成高可用；真正可迁移的是 App/Worker 共享镜像、PostgreSQL schema/dump/WAL、BullMQ Redis contract、可分离的 `REDIS_URL` / `QUEUE_REDIS_URL`，以及 S3 API。Realtime/cache key 可自然预热；零停机迁移应排空或迁移 active job，维护窗口则可在旧 Worker 停止后让新 queue 空启动，因为 pending dispatch 会由 relay 投递，已 ack 但仍 active 的 run 会从 PostgreSQL 重建。App、Worker、PostgreSQL 和 Redis 仍在 Mac 上，当前对象使用 R2，本地保留切换前的 SeaweedFS 副本；Tigris 属于更早的云端回滚部署。未来 AWS 可使用 S3，object key 与 API 不变。
 
 本地启动与备份：
 
@@ -188,6 +188,8 @@ GitHub CI 使用 Node 24.18，同时启动 PostgreSQL 17 与 Redis 7，并设置
 
 4. 暂停 App 和 Worker 写入，重跑复制补齐最后增量，校验目标对象数量、key、大小和内容。只更新生产 S3 字段与凭据；应用镜像未变时，通过 `scripts/local-production.mjs --profile edge up -d --no-build` 切换。
 5. 验证本地与公网 readiness、登录浏览器上传及完成确认、旧附件和已发布网站。保留本地目录和原配置；旧签名 URL 到期后再停止 SeaweedFS。
+
+2026-10-21 切换时，全部 3,509 个对象（1,881,726,161 字节）已复制到北美西部的私有 `roomtalk-media` Standard 桶，并完整读回校验。CORS 允许 `https://room.ruit.me`、`https://roomtalk.ruit.me` 和 `https://ai-chat.wenlin.dev`。Keychain 保存 `roomtalk-r2-env`、`roomtalk-seaweedfs-env` 和完整原配置 `roomtalk-production-pre-r2-20261020`，本地 `runtime/object-storage` 目录完整保留。维护数据库备份为 `backups/roomtalk-pre-r2-20261021T102932Z.dump`。使用原应用镜像切换后，公网 readiness 通过，Chrome 成功上传并确认 3,147,060 字节图片，R2 读回内容完全一致，已有发布网站的响应也与切换前一致。新上传对象未写入本地桶，确认新写入使用 R2。
 
 R2 接受新写入后若要回退，应先把新增对象复制回本地，再恢复配置；只恢复旧 endpoint 会让 R2 独有的新对象不可见。备份 helper 不会自动把远程对象复制回本地。
 

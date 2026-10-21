@@ -146,14 +146,14 @@ This is why Socket delivery itself has no durable outbox: room data is already r
 
 The same root `Dockerfile` runs on the current Mac production host, the retained Fly rollback target, and later on AWS. Platform differences are environment variables:
 
-| Current Mac production | Retained rollback cloud | AWS target |
+| Current production (Mac + R2) | Retained rollback cloud | AWS target |
 | --- | --- | --- |
 | app + ai-worker from one image | Fly Machine | ECS Fargate services or EKS deployments |
 | PostgreSQL 17 volume | managed PostgreSQL/Supabase | RDS PostgreSQL |
 | Redis 7, AOF realtime + BullMQ | managed Redis | ElastiCache for Redis OSS |
-| SeaweedFS 4.29 S3-compatible store | Tigris/S3-compatible | S3 |
+| Private Cloudflare R2 Standard bucket | Tigris/S3-compatible | S3 |
 
-Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the shared App/Worker image, PostgreSQL schema/dump/WAL contracts, BullMQ's Redis contract, separate `REDIS_URL` / `QUEUE_REDIS_URL` boundaries, and the S3 API. Realtime/cache keys may warm naturally after migration. A zero-downtime queue move should drain or migrate active jobs; a maintenance restore may start with an empty queue after old Workers stop, because pending dispatch is relayed and acknowledged-but-active runs are reconstructed from PostgreSQL. Current production uses SeaweedFS, the rollback deployment uses Tigris, and AWS will use S3 without changing object keys or APIs.
+Kubernetes is optional. On one MacBook, Compose is the smaller operational surface; Kubernetes does not make one physical host highly available. Portability comes from the shared App/Worker image, PostgreSQL schema/dump/WAL contracts, BullMQ's Redis contract, separate `REDIS_URL` / `QUEUE_REDIS_URL` boundaries, and the S3 API. Realtime/cache keys may warm naturally after migration. A zero-downtime queue move should drain or migrate active jobs; a maintenance restore may start with an empty queue after old Workers stop, because pending dispatch is relayed and acknowledged-but-active runs are reconstructed from PostgreSQL. App, Worker, PostgreSQL, and Redis remain on the Mac; current objects use R2, with the pre-cutover SeaweedFS copy retained locally. Tigris belongs to the older cloud rollback deployment. AWS can use S3 without changing object keys or APIs.
 
 Local start and backup:
 
@@ -188,6 +188,8 @@ Keep the source bucket and local data directory intact throughout the migration.
 
 4. Pause App and Worker writes, rerun the copy for the final delta, and verify the target object count, keys, sizes, and contents. Update only the production S3 fields and credentials, then deploy through `scripts/local-production.mjs --profile edge up -d --no-build` when the application image is unchanged.
 5. Verify local and public readiness, authenticated browser upload/completion, older attachments, and published sites. Retain the local directory and original configuration. Keep the old read endpoint available through the lifetime of previously issued URLs before stopping SeaweedFS.
+
+The 2026-10-21 cutover copied and fully read back all 3,509 objects (1,881,726,161 bytes) into the private `roomtalk-media` Standard bucket in Western North America. CORS allows `https://room.ruit.me`, `https://roomtalk.ruit.me`, and `https://ai-chat.wenlin.dev`. Keychain holds `roomtalk-r2-env`, `roomtalk-seaweedfs-env`, and the complete original `roomtalk-production-pre-r2-20261020` configuration. The local `runtime/object-storage` directory remains intact. The maintenance database archive is `backups/roomtalk-pre-r2-20261021T102932Z.dump`. After switching the unchanged application image, public readiness passed, Chrome uploaded and completed a 3,147,060-byte image whose R2 readback matched exactly, and an existing published site returned identical content to its pre-cutover response. The new upload was absent from the local bucket, confirming that new writes use R2.
 
 For rollback after R2 accepts new writes, first copy those new objects back to the local store before restoring its configuration. Restoring only the old endpoint would hide new R2-only objects. The backup helper does not copy remote objects back automatically.
 

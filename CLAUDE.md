@@ -85,7 +85,7 @@ All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` con
 - `aiClients.ts` — OpenRouter/direct API client factory
 - `aiStreamRecovery.ts` + `aiTerminalPersistReconciler.ts` — lease streaming owners, retry terminal persistence in-process, and recover only expired owners
 - `assistantRunQueue.ts` + `taskDispatchRelay.ts` + `assistantRunQueueReconciler.ts` + `assistantRunBullProcessor.ts` — enqueue ordinary chat AI runs through BullMQ, bridge and reconcile the PostgreSQL dispatch outbox, expose Worker/queue health, and execute fenced run aggregates in the dedicated worker process
-- `mediaObjectStorage.ts` — S3-compatible object storage (SeaweedFS in current production; Tigris retained for rollback), presigned URLs
+- `mediaObjectStorage.ts` — S3-compatible object storage (Cloudflare R2 in current production; the pre-cutover SeaweedFS copy is retained locally), presigned URLs
 - `clientAuth.ts` — password hashing, token-based auth
 - `googleAuth.ts` — Google OAuth credential verification
 - `pushNotifications.ts` — web-push notifications
@@ -105,7 +105,7 @@ Desktop uses a sidebar layout (`DesktopSidebar`); mobile uses bottom navigation 
 
 ### Media Pipeline
 
-Upload: client requests a presigned URL → uploads to the configured S3-compatible store (SeaweedFS in current production) or explicit local development storage → confirms to the server → the server creates a `MediaAsset` record. Download: the server generates signed read URLs on demand. Legacy base64 image cleanup is available through `npm run migrate:media-to-object-storage`; it defaults to dry-run and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL.
+Upload: client requests a presigned URL → uploads to the configured S3-compatible store (Cloudflare R2 in current production) or explicit local development storage → confirms to the server → the server creates a `MediaAsset` record. Download: the server generates signed read URLs on demand. R2 uses a private Standard bucket and its account S3 API endpoint for both server operations and browser signatures. Legacy base64 image cleanup is available through `npm run migrate:media-to-object-storage`; it defaults to dry-run and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL.
 
 ### AI Streaming
 
@@ -130,7 +130,7 @@ The browser workspace includes files/search/editing, asset previews, Git diff/re
 
 ## Deployment
 
-`master` is the release branch. Production at [https://room.ruit.me/](https://room.ruit.me/) runs the root multi-stage image on the local MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL 17 owns durable business state and the bounded room-event log. Redis 7 serves both rebuildable realtime/cache keys and AOF-backed BullMQ state through separate connections and namespaces. The same image runs as an App process and a dedicated `ai-worker`; SeaweedFS 4.29 provides the S3-compatible object boundary, and E2B provides per-room execution sandboxes. `roomtalk.ruit.me` remains a compatibility hostname and `roomtalk-objects.ruit.me` carries presigned browser object transfers. Because `wenlin.dev` is managed in a separate Cloudflare account, `ai-chat.wenlin.dev` uses its own remotely managed Tunnel and `cloudflared-wenlin` connector while reaching the same App service.
+`master` is the release branch. Production at [https://room.ruit.me/](https://room.ruit.me/) runs the root multi-stage image on the local MacBook through Docker Compose and Cloudflare Tunnel. PostgreSQL 17 owns durable business state and the bounded room-event log. Redis 7 serves both rebuildable realtime/cache keys and AOF-backed BullMQ state through separate connections and namespaces. The same image runs as an App process and a dedicated `ai-worker`; Cloudflare R2 provides the S3-compatible object boundary, and E2B provides per-room execution sandboxes. Objects moved to the private `roomtalk-media` Standard bucket in Western North America on 2026-10-21; App, Worker, PostgreSQL, and Redis remain on the Mac. The original SeaweedFS data and configuration are retained for rollback, and `roomtalk-objects.ruit.me` remains available for previously issued URLs. New media URLs use R2's S3 API endpoint. `roomtalk.ruit.me` remains a compatibility hostname. Because `wenlin.dev` is managed in a separate Cloudflare account, `ai-chat.wenlin.dev` uses its own remotely managed Tunnel and `cloudflared-wenlin` connector while reaching the same App service.
 
 A source push does not deploy production. Runtime changes are applied from the production checkout with `node scripts/local-production.mjs --profile edge up -d --build`, which loads secrets from the macOS Keychain; verify Compose health plus loopback/public `/api/status`. Documentation-only changes do not require a rebuild. The former scheduled Fly workflow is manually disabled and the Fly app is suspended; Supabase, Tigris, and Upstash remain rollback sources only. Current production selects `CODE_AGENT_RUNNER_CLIENT=daemon`, `CODE_AGENT_BACKEND=codex-app-server`, a two-minute idle sandbox TTL, and a one-hour active TTL.
 
