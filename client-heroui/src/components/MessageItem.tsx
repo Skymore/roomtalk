@@ -15,6 +15,7 @@ import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters
 import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, MessageReactionType, RoomMemberRole, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
+import { useMessageSpeech } from "../hooks/useMessageSpeech";
 import { useCachedMedia } from "../hooks/useCachedMedia";
 import { useStickerUrl, useStickerName } from "../hooks/useStickers";
 import { MediaViewerModal } from "./MediaViewerModal";
@@ -353,6 +354,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const stickerName = useStickerName(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
   const isStreaming = isAI && message.status === 'streaming';
+  const speech = useMessageSpeech(message.id, message.content);
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
   const queuedInput = message.codeAgentQueuedInput;
@@ -1549,6 +1551,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu aria-label={t('moreActions')}>
+                  {isAI && !isStreaming && message.content.trim() ? (
+                    <DropdownItem
+                      key="read-aloud"
+                      startContent={<Icon icon={speech.isSpeaking ? 'lucide:square' : 'lucide:volume-2'} />}
+                      onPress={speech.toggleSpeech}
+                    >
+                      {t(speech.isSpeaking ? 'stopReadingAloud' : 'readAloud')}
+                    </DropdownItem>
+                  ) : null}
                   {canEditMessage ? (
                     <DropdownItem
                       key="edit"
@@ -1598,6 +1609,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   ) : null}
                 </DropdownMenu>
               </Dropdown>
+              {speech.error && <span role="alert" className="text-xs text-danger">{t(`readAloudError_${speech.error}`)}</span>}
             </div>
         </div>
       </div>

@@ -158,6 +158,39 @@ describe('MessageItem replies', () => {
     expect(onReply).toHaveBeenCalledWith(message);
   });
 
+  it('offers read aloud only for completed AI replies and lets the reader stop it', async () => {
+    class Utterance {
+      lang = '';
+      constructor(public text: string) {}
+    }
+    const synthesis = { cancel: vi.fn(), speak: vi.fn(), getVoices: () => [] };
+    vi.stubGlobal('speechSynthesis', synthesis);
+    vi.stubGlobal('SpeechSynthesisUtterance', Utterance);
+    const props = {
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+    const rendered = render(<MessageItem {...props} message={message} />);
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    expect(await screen.findByText('like')).toBeTruthy();
+    expect(screen.queryByText('readAloud')).toBeNull();
+    rendered.unmount();
+
+    const reply = { ...message, messageType: 'ai' as const, content: '你好。Hello.' };
+    const ai = render(<MessageItem {...props} message={{ ...reply, status: 'streaming' }} />);
+    expect((screen.getByRole('button', { name: 'moreActions' }) as HTMLButtonElement).disabled).toBe(true);
+    ai.rerender(<MessageItem {...props} message={reply} />);
+    fireEvent.click(screen.getByRole('button', { name: 'moreActions' }));
+    fireEvent.click(await screen.findByText('readAloud'));
+    expect(synthesis.speak).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'moreActions' }));
+    fireEvent.click(await screen.findByText('stopReadingAloud'));
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('renders the referenced sticker image', () => {
     render(
       <MessageItem
