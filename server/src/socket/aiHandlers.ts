@@ -187,6 +187,7 @@ const streamOpenAICompatibleWithA2UI = async (params: {
   client: any;
   model: string;
   messages: any[];
+  enableA2UI: boolean;
   emitA2UIUpdate: EmitA2UIUpdate;
   emitTextChunk: (chunk: string) => void;
   logger: { warn(message: string, meta?: unknown): void; debug(message: string, meta?: unknown): void };
@@ -206,8 +207,7 @@ const streamOpenAICompatibleWithA2UI = async (params: {
         model: params.model,
         messages: providerMessages,
         stream: true,
-        tools: [openAIA2UITool],
-        tool_choice: 'auto',
+        ...(params.enableA2UI ? { tools: [openAIA2UITool], tool_choice: 'auto' } : {}),
         stream_options: { include_usage: true },
       } as any, params.signal ? { signal: params.signal } : undefined);
 
@@ -320,6 +320,7 @@ const streamAnthropicWithA2UI = async (params: {
   model: string;
   systemPrompt: string;
   messages: any[];
+  enableA2UI: boolean;
   emitA2UIUpdate: EmitA2UIUpdate;
   emitTextChunk: (chunk: string) => void;
   logger: { warn(message: string, meta?: unknown): void };
@@ -338,7 +339,7 @@ const streamAnthropicWithA2UI = async (params: {
         max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
         system: [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: providerMessages,
-        tools: [anthropicA2UITool],
+        ...(params.enableA2UI ? { tools: [anthropicA2UITool] } : {}),
         ...(/claude-(?:opus-5-5|fable-5-1)/.test(params.model) ? { thinking: { type: 'adaptive' } } : {}),
       } as any, params.signal ? { signal: params.signal } : undefined);
 
@@ -507,9 +508,11 @@ const shouldIncludeA2UIDemoTrigger = (roleName: string, systemPrompt: string): b
 );
 
 const buildSystemPromptWithA2UI = (systemPrompt: string, roleName: string) => (
-  buildA2UIToolSystemPrompt(systemPrompt, {
-    includeDemoTrigger: shouldIncludeA2UIDemoTrigger(roleName, systemPrompt),
-  })
+  /\bA2UI\b/i.test(systemPrompt)
+    ? buildA2UIToolSystemPrompt(systemPrompt, {
+        includeDemoTrigger: shouldIncludeA2UIDemoTrigger(roleName, systemPrompt),
+      })
+    : systemPrompt
 );
 
 const emitAssistantRunProjection = async (
@@ -665,13 +668,17 @@ export const executeAssistantRun = async (
     model: selectedModel,
   });
   const contextMessages = request?.contextMessages;
+  let reportedCostUsd: number | undefined;
   let streamedTextContent = '';
   let streamedA2UIPayload: Message['uiPayload'];
   let fallbackUsageMessages: Array<{ content: any }> = [];
 
   const stageAndProject = async (terminal: AssistantRunTerminalPayloadV1): Promise<void> => {
     execution.signal.throwIfAborted();
-    const staged = await store.stageAssistantRunTerminal(run.id, token, terminal);
+    const payload = typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0 && terminal.message.cost
+      ? { ...terminal, metadata: { ...terminal.metadata, reportedCostUsd } }
+      : terminal;
+    const staged = await store.stageAssistantRunTerminal(run.id, token, payload);
     if (!staged) {
       openaiLogger.info('Discarded assistant run terminal result after its claim was replaced', {
         runId: run.id,
@@ -833,6 +840,7 @@ export const executeAssistantRun = async (
             model: selectedModel.apiModel,
             systemPrompt: systemPromptWithA2UI,
             messages: buildAnthropicMessages(contextMessages) as any[],
+            enableA2UI: /\bA2UI\b/i.test(request?.systemPrompt || DEFAULT_SYSTEM_MESSAGE),
             emitA2UIUpdate,
             emitTextChunk,
             logger: openaiLogger,
@@ -848,6 +856,7 @@ export const executeAssistantRun = async (
             client: aiClientWrapper.client,
             model: selectedModel.apiModel,
             messages: validMessagesForAPI as any[],
+            enableA2UI: /\bA2UI\b/i.test(request?.systemPrompt || DEFAULT_SYSTEM_MESSAGE),
             emitA2UIUpdate,
             emitTextChunk,
             logger: openaiLogger,
@@ -862,7 +871,8 @@ export const executeAssistantRun = async (
 
         execution.signal.throwIfAborted();
         const usage = normalizeUsage(reportedUsage, usageMessages, fullContent);
-        const cost = calculateAICost(selectedModel, usage, reportedUsage?.cost);
+        reportedCostUsd = reportedUsage?.cost;
+        const cost = calculateAICost(selectedModel, usage, reportedCostUsd);
         terminal = {
           schemaVersion: 1,
           outcome: 'complete',
@@ -891,6 +901,7 @@ export const executeAssistantRun = async (
     });
 
     const partial = getPartialAIStreamResult(error);
+    reportedCostUsd = partial?.reportedUsage?.cost;
     const partialContent = partial?.fullContent || streamedTextContent;
     streamedTextContent = partialContent;
     const hasPartialContent = partialContent.trim().length > 0;

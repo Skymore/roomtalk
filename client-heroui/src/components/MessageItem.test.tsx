@@ -180,7 +180,7 @@ describe('MessageItem replies', () => {
 
     const reply = { ...message, messageType: 'ai' as const, content: '你好。Hello.' };
     const ai = render(<MessageItem {...props} message={{ ...reply, status: 'streaming' }} />);
-    expect((screen.getByRole('button', { name: 'moreActions' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'moreActions' }) as HTMLButtonElement).disabled).toBe(false);
     ai.rerender(<MessageItem {...props} message={reply} />);
     fireEvent.click(screen.getByRole('button', { name: 'moreActions' }));
     fireEvent.click(await screen.findByText('readAloud'));
@@ -730,6 +730,23 @@ describe('MessageItem replies', () => {
     fireEvent.click(screen.getByLabelText('moreActions'));
     expect(await screen.findByText('editMessage')).toBeTruthy();
     expect(await screen.findByText('deleteMessage')).toBeTruthy();
+  });
+
+  it('allows the room owner to delete an AI reply while it is streaming', async () => {
+    const onDeleteMessage = vi.fn();
+    render(
+      <MessageItem
+        message={{ ...message, clientId: 'ai_assistant', messageType: 'ai', status: 'streaming', timestamp: new Date().toISOString() }}
+        roomPermissions={{ roomId: 'room-1', clientId: 'viewer', role: 'owner', canDeleteAnyMessage: true } as any}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+        onReply={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'moreActions' }));
+    fireEvent.click(await screen.findByText('deleteMessage'));
+    expect(onDeleteMessage).toHaveBeenCalledWith(message.id);
+    expect(screen.queryByText('editMessage')).toBeNull();
   });
 
   it('hides editing and deletion after 24 hours', () => {

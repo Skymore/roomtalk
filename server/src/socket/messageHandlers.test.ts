@@ -1066,6 +1066,17 @@ describe('message socket handlers', () => {
     assert.deepEqual(expired.store.deletedMessages, []);
   });
 
+  it('allows an owner to delete a streaming AI message', async () => {
+    const harness = createHarness();
+    harness.store.messages = [message({ clientId: 'ai_assistant', messageType: 'ai', status: 'streaming' })];
+    let response: unknown;
+    await harness.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (result: unknown) => {
+      response = result;
+    });
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(harness.store.deletedMessages, [{ roomId: 'room-1', messageId: 'message-1' }]);
+  });
+
   it('does not expose a ghost deletion when message mutation fails', async () => {
     const failing = createHarness();
     failing.store.deleteMessageById = async (roomId: string, messageId: string) => {

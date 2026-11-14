@@ -1,3 +1,4 @@
+import { decodeAssistantRunTerminalPayload } from '../repositories/assistantRunPayload';
 import assert from 'assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { executeAssistantRun, registerAIHandlers } from './aiHandlers';
@@ -959,7 +960,7 @@ describe('AI socket handlers', () => {
     assert.doesNotMatch(String(userMessages[0].content), /old prompt/);
   });
 
-  it('does not include the automatic A2UI hi demo trigger for the default assistant role', async () => {
+  it('keeps ordinary role prompts unchanged and does not expose UI tools', async () => {
     process.env.E2E_FAKE_AI = 'false';
     const createCalls: any[] = [];
     const openAIClient = {
@@ -969,13 +970,13 @@ describe('AI socket handlers', () => {
             createCalls.push(request);
             return asyncIterable([
               { choices: [{ delta: { content: 'hello' } }] },
-              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6, cost: 0.000123 } },
             ]);
           },
         },
       },
     };
-    const { socket } = createHarness({
+    const { socket, store } = createHarness({
       messages: [message({ content: 'hi' })],
       aiClientWrapper: { provider: 'deepseek', client: openAIClient },
     });
@@ -988,7 +989,14 @@ describe('AI socket handlers', () => {
     });
 
     const providerMessages = createCalls[0].messages as Array<{ role: string; content: string }>;
-    assert.match(String(providerMessages[0].content), /A2UI streaming UI capability/);
+    assert.equal(providerMessages[0].content, 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.');
+    assert.equal(createCalls[0].tools, undefined);
+    assert.equal(createCalls[0].tool_choice, undefined);
+    const terminal = store.assistantRuns[0].terminalPayload;
+    assert.equal(terminal.metadata.reportedCostUsd, 0.000123);
+    assert.ok(decodeAssistantRunTerminalPayload(terminal, {
+      roomId: 'room-1', messageId: terminal.message.id, model: selectedModel,
+    }));
     assert.doesNotMatch(String(providerMessages[0].content), /latest user message is exactly "hi"/);
   });
 
@@ -1066,7 +1074,7 @@ describe('AI socket handlers', () => {
       aiClientWrapper: { provider: 'deepseek', client: openAIClient },
     });
 
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, systemPrompt: 'Use A2UI for visual answers.' });
 
     assert.equal(createCalls.length, 2);
     assert.equal('temperature' in createCalls[0], false);
@@ -1120,7 +1128,7 @@ describe('AI socket handlers', () => {
       aiClientWrapper: { provider: 'anthropic', client: anthropicClient },
     });
 
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: anthropicModel.id });
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: anthropicModel.id, systemPrompt: 'Use A2UI for visual answers.' });
 
     assert.equal(streamCalls.length, 2);
     assert.equal(streamCalls[0].tools?.[0]?.name, 'a2ui_update');

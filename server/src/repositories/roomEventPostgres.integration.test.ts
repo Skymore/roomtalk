@@ -1,3 +1,4 @@
+import { calculateAICost } from '../services/aiModels';
 import assert from 'assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { MediaAsset, Message, Room, RoomAgentTurn } from '../types';
@@ -2905,6 +2906,38 @@ describe('PostgreSQL room event integration', { skip: !databaseUrl }, () => {
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.000015);
     assert.deepEqual(await store.projectAssistantRunTerminal(runId, execution.token), { outcome: 'stale' });
     assert.equal((await store.readRoomAICost(roomId)).totalUsd, 0.000015);
+  });
+
+  it('stages and projects provider-reported cost exactly once', async () => {
+    const roomId = 'assistant-provider-cost-room';
+    const messageId = 'assistant-provider-cost-message';
+    const runId = 'assistant-provider-cost-run';
+    assert.ok(await store.saveRoom(room(roomId)));
+    const placeholder = message(roomId, messageId, {
+      clientId: 'ai_assistant', messageType: 'ai', content: '', status: 'streaming', aiModel: assistantMessageModel,
+    });
+    assert.ok(await createFundedAssistantRun(placeholder, {
+      id: runId, roomId, requestedByClientId: 'event-test-owner', aiMessageId: messageId,
+      status: 'queued', modelId: assistantTestModel.id, apiModel: assistantTestModel.apiModel,
+      provider: assistantTestModel.provider, createdAt, queuedAt: createdAt, updatedAt: createdAt,
+      requestPayload: assistantRequest(roomId), generation: 0, attempt: 0, availableAt: createdAt,
+    }));
+    const execution = await store.claimAssistantRun({ workerId: 'worker-1', now: createdAt });
+    assert.ok(execution);
+    const usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15, source: 'reported' as const };
+    const reportedCostUsd = 0.000123;
+    assert.ok(await store.stageAssistantRunTerminal(runId, execution.token, {
+      schemaVersion: 1, outcome: 'complete', metadata: { reportedCostUsd },
+      message: {
+        ...placeholder, content: 'saved answer', status: 'complete', usage,
+        cost: calculateAICost(assistantTestModel, usage, reportedCostUsd),
+      },
+    }));
+    assert.equal((await store.projectAssistantRunTerminal(runId, execution.token)).outcome, 'applied');
+    assert.equal((await store.getAssistantRun(runId))?.status, 'complete');
+    assert.equal((await store.readRoomAICost(roomId)).totalUsd, reportedCostUsd);
+    assert.equal((await store.projectAssistantRunTerminal(runId, execution.token)).outcome, 'stale');
+    assert.equal((await store.readRoomAICost(roomId)).totalUsd, reportedCostUsd);
   });
 
   it('terminalizes a corrupted durable request exactly once without accepting a normal result', async () => {

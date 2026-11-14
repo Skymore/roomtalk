@@ -1,3 +1,4 @@
+import { calculateAICost, getMessageAIModel } from '../services/aiModels';
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { decodeAssistantRunRequestPayload, decodeAssistantRunTerminalPayload } from './assistantRunPayload';
@@ -180,4 +181,26 @@ describe('assistant run payload protocol', () => {
       message: { ...terminal.message, cost: undefined },
     }, expected), null);
   });
+  it('accepts provider-reported totals while validating their breakdown and model pricing', () => {
+    const usage = { promptTokens: 1000, completionTokens: 100, totalTokens: 1100, source: 'reported' as const };
+    const reportedCostUsd = 0.0123;
+    const cost = calculateAICost(model, usage, reportedCostUsd)!;
+    const terminal = {
+      schemaVersion: 1,
+      outcome: 'complete',
+      metadata: { reportedCostUsd },
+      message: message({ status: 'complete', aiModel: getMessageAIModel(model), usage, cost }),
+    };
+    const expected = { roomId: 'room-1', messageId: 'message-1', model };
+    assert.ok(decodeAssistantRunTerminalPayload(terminal, expected));
+    assert.equal(decodeAssistantRunTerminalPayload({ ...terminal, metadata: {} }, expected), null);
+    assert.equal(decodeAssistantRunTerminalPayload({ ...terminal, metadata: { reportedCostUsd: -1 } }, expected), null);
+    assert.equal(decodeAssistantRunTerminalPayload({
+      ...terminal, message: { ...terminal.message, cost: { ...cost, inputUsd: 0, outputUsd: reportedCostUsd } },
+    }, expected), null);
+    assert.equal(decodeAssistantRunTerminalPayload({
+      ...terminal, message: { ...terminal.message, cost: { ...cost, inputPerMillion: 99 } },
+    }, expected), null);
+  });
+
 });

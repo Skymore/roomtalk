@@ -1,3 +1,4 @@
+import { calculateAICost } from '../services/aiModels';
 import type { AIModelOption, AIModelProvider, Message } from '../types';
 import type { AssistantRunRequestPayloadV1, AssistantRunTerminalPayloadV1 } from './store';
 
@@ -158,7 +159,7 @@ const isMessageSnapshot = (value: unknown, roomId: string): value is Message => 
     || value.status === 'error';
 };
 
-const matchesModelAccounting = (message: Message, model: AIModelOption): boolean => {
+const matchesModelAccounting = (message: Message, model: AIModelOption, reportedCostUsd?: number): boolean => {
   if (
     !message.aiModel
     || message.aiModel.id !== model.id
@@ -181,19 +182,10 @@ const matchesModelAccounting = (message: Message, model: AIModelOption): boolean
     || cost.estimated !== (message.usage.source === 'estimated')
   ) return false;
 
-  const cachedPromptTokens = Math.min(
-    message.usage.cachedPromptTokens || 0,
-    message.usage.promptTokens,
-  );
-  const uncachedPromptTokens = Math.max(message.usage.promptTokens - cachedPromptTokens, 0);
-  const expectedInput = (
-    (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillion
-    + (cachedPromptTokens / 1_000_000) * (pricing.cachedInputPerMillion ?? pricing.inputPerMillion)
-  );
-  const expectedOutput = (message.usage.completionTokens / 1_000_000) * pricing.outputPerMillion;
-  return Math.abs(cost.inputUsd - expectedInput) <= 1e-9
-    && Math.abs(cost.outputUsd - expectedOutput) <= 1e-9
-    && Math.abs(cost.totalUsd - (expectedInput + expectedOutput)) <= 1e-9;
+  const expectedCost = calculateAICost(model, message.usage, reportedCostUsd)!;
+  return Math.abs(cost.inputUsd - expectedCost.inputUsd) <= 1e-9
+    && Math.abs(cost.outputUsd - expectedCost.outputUsd) <= 1e-9
+    && Math.abs(cost.totalUsd - expectedCost.totalUsd) <= 1e-9;
 };
 
 export const decodeAssistantRunRequestPayload = (
@@ -245,7 +237,13 @@ export const decodeAssistantRunTerminalPayload = (
     || (value.outcome === 'error' && value.message.isError !== true)
     || (value.outcome === 'complete' && value.message.isError === true)
     || (value.metadata !== undefined && !isRecord(value.metadata))
-    || (expected.model !== undefined && !matchesModelAccounting(value.message, expected.model))
+    || (isRecord(value.metadata) && value.metadata.reportedCostUsd !== undefined
+      && !isNonNegativeFinite(value.metadata.reportedCostUsd))
+    || (expected.model !== undefined && !matchesModelAccounting(
+      value.message,
+      expected.model,
+      isRecord(value.metadata) ? value.metadata.reportedCostUsd as number | undefined : undefined,
+    ))
   ) {
     return null;
   }

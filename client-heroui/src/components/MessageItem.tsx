@@ -1545,7 +1545,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     variant="light"
                     aria-label={t('moreActions')}
                     className="h-8 w-8 min-w-8 text-[#5e5d59] dark:text-[#b0aea5] md:h-5 md:w-5 md:min-w-0"
-                    isDisabled={isStreaming || isInteractionDisabled}
+                    isDisabled={isInteractionDisabled}
                   >
                     <Icon icon="lucide:more-horizontal" className="h-3.5 w-3.5 md:h-3 md:w-3" />
                   </Button>
